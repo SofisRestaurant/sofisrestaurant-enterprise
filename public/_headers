@@ -1,5 +1,0 @@
-/*
-  X-Frame-Options: DENY
-  X-Content-Type-Options: nosniff
-  Referrer-Policy: strict-origin-when-cross-origin
-  Content-Security-Policy: default-src 'self'; script-src 'self' https://js.stripe.com; connect-src 'self' https://*.supabase.co https://api.stripe.com; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; font-src 'self' https:; frame-src https://js.stripe.com https://hooks.stripe.com;*/

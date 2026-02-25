@@ -75,9 +75,20 @@ async signIn(
   }
 
   // 🔐 Apply session returned from guard
-  const { error: sessionError } = await supabase.auth.setSession(
-    result.session
-  )
+ const { error: sessionError } = await supabase.auth.setSession(result.session)
+if (sessionError) {
+  return { data: null, error: sessionError }
+}
+
+// 🔐 Wait for session to be fully applied
+await new Promise<void>((resolve) => {
+  const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+    if (session?.access_token === result.session.access_token) {
+      sub.subscription.unsubscribe()
+      resolve()
+    }
+  })
+})
 
   if (sessionError) {
     return {

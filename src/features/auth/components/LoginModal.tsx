@@ -1,84 +1,62 @@
 // src/features/auth/components/LoginModal.tsx
-import { useCallback, useEffect } from 'react'
-import { Modal } from '@/components/ui/Modal'
-import { useModal } from '@/components/ui/useModal'
+// ============================================================================
+// LOGIN MODAL — PRODUCTION GRADE 2026
+// ============================================================================
+// Pure shell: wraps LoginForm in a Modal. All navigation and switching is
+// delegated upward to the AuthModal coordinator via props.
+// This component has zero knowledge of routing or other modals.
+// ============================================================================
+
+import { useCallback } from 'react'
+import { Modal } from '@/components/ui/Modal';
 import LoginForm from './LoginForm'
 
-type AuthTarget = 'signup' | 'forgot-password'
+// ============================================================================
+// TYPES
+// ============================================================================
 
 export interface LoginModalProps {
-  isOpen: boolean
-  onClose: () => void
-
-  // ✅ Added: used by AuthModals coordinator
-  onSwitchToSignup?: () => void
-  onForgotPassword?: () => void
+  isOpen: boolean;
+  onClose: () => void;
+  /** Coordinator handles switching — never reach into modal context here */
+  onSwitchToSignup?: () => void;
+  onForgotPassword?: () => void;
+  /** Coordinator handles redirect after successful login */
+  onLoginSuccess?: () => void;
 }
+
+// ============================================================================
+// COMPONENT
+// ============================================================================
 
 export function LoginModal({
   isOpen,
   onClose,
   onSwitchToSignup,
   onForgotPassword,
+  onLoginSuccess,
 }: LoginModalProps) {
-  const modal = useModal()
-
-  // Close using the coordinator if present; fallback to modal context; always call onClose.
-  const handleClose = useCallback(() => {
-    // If parent controls modal state, onClose will close it.
-    // Still close modal context in case this is used standalone.
-    modal.closeModal()
-    onClose()
-  }, [modal, onClose])
-
-  const openNext = useCallback(
-    (next: AuthTarget) => {
-      // Prefer parent-provided navigation (AuthModals), fallback to modal context.
-      const go =
-        next === 'signup'
-          ? onSwitchToSignup ?? (() => modal.openModal?.('signup'))
-          : onForgotPassword ?? (() => modal.openModal?.('forgot-password'))
-
-      // Close current first, then open next on a microtask to avoid focus/overlay conflicts.
-      handleClose()
-
-      if (typeof queueMicrotask === 'function') {
-        queueMicrotask(go)
-      } else {
-        Promise.resolve().then(go)
-      }
-    },
-    [handleClose, modal, onSwitchToSignup, onForgotPassword]
-  )
-
+  // Prefer coordinator's success handler; fall back to just closing.
   const handleSuccess = useCallback(() => {
-    handleClose()
-  }, [handleClose])
+    if (onLoginSuccess) {
+      onLoginSuccess();
+    } else {
+      onClose();
+    }
+  }, [onLoginSuccess, onClose]);
 
   const handleSwitchToSignup = useCallback(() => {
-    openNext('signup')
-  }, [openNext])
+    onSwitchToSignup?.();
+  }, [onSwitchToSignup]);
 
   const handleForgotPassword = useCallback(() => {
-    openNext('forgot-password')
-  }, [openNext])
-
-  // Optional: ESC close safety (Modal also handles it, but this won’t hurt)
-  useEffect(() => {
-    if (!isOpen) return
-
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') handleClose()
-    }
-
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [isOpen, handleClose])
+    onForgotPassword?.();
+  }, [onForgotPassword]);
 
   return (
     <Modal
       isOpen={isOpen}
-      onClose={handleClose}
+      onClose={onClose}
       title="Log In"
       description="Welcome back. Log in to continue your order."
     >
@@ -90,17 +68,17 @@ export function LoginModal({
 
       <div className="mt-4 text-center text-xs text-gray-500">
         By continuing, you agree to our{' '}
-        <a href="/terms-of-service" className="underline hover:text-gray-700">
+        <a href="/terms-of-service" className="underline hover:text-gray-700 transition-colors">
           Terms
         </a>{' '}
         and{' '}
-        <a href="/privacy-policy" className="underline hover:text-gray-700">
+        <a href="/privacy-policy" className="underline hover:text-gray-700 transition-colors">
           Privacy Policy
         </a>
         .
       </div>
     </Modal>
-  )
+  );
 }
 
 export default LoginModal

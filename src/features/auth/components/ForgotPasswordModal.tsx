@@ -6,8 +6,9 @@ import { Spinner } from '@/components/ui/Spinner'
 import { formatAuthError } from '../auth.utils'
 
 interface ForgotPasswordModalProps {
-  isOpen: boolean
-  onClose: () => void
+  isOpen: boolean;
+  onClose: () => void;
+  onSwitchToLogin?: () => void;
 }
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -15,54 +16,61 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 export default function ForgotPasswordModal({
   isOpen,
   onClose,
+  onSwitchToLogin,
 }: ForgotPasswordModalProps) {
-  const { resetPassword } = useAuth()
+  const { resetPassword } = useAuth();
 
-  const [email, setEmail] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState(false)
+  const [email, setEmail] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
 
   const resetState = () => {
-    setEmail('')
-    setError(null)
-    setSuccess(false)
-    setLoading(false)
-  }
+    setEmail('');
+    setError(null);
+    setSuccess(false);
+    setLoading(false);
+  };
 
   const handleClose = () => {
-    resetState()
-    onClose()
-  }
+    resetState();
+    onClose();
+  };
+
+  const handleSwitchToLoginClick = () => {
+    resetState();
+    onSwitchToLogin?.();
+  };
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault()
-    setError(null)
+    e.preventDefault();
+    setError(null);
 
-    const cleanedEmail = email.trim()
+    const cleanedEmail = email.trim();
 
     if (!cleanedEmail) {
-      setError('Please enter your email.')
-      return
+      setError('Please enter your email.');
+      return;
     }
 
     if (!EMAIL_REGEX.test(cleanedEmail)) {
-      setError('Please enter a valid email address.')
-      return
+      setError('Please enter a valid email address.');
+      return;
     }
 
-    setLoading(true)
+    setLoading(true);
+
     try {
       await resetPassword(cleanedEmail, {
         redirectTo: `${window.location.origin}/update-password`,
-      })
-      setSuccess(true)
+      });
+      setSuccess(true);
     } catch (err) {
-      setError(formatAuthError(err as Error))
+      setError(formatAuthError(err as Error));
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   return (
     <Modal isOpen={isOpen} onClose={handleClose} title="Reset Password">
@@ -85,18 +93,22 @@ export default function ForgotPasswordModal({
             </svg>
           </div>
 
-          <h3 className="mb-2 text-lg font-semibold text-gray-900">
-            Check your email
-          </h3>
+          <h3 className="mb-2 text-lg font-semibold text-gray-900">Check your email</h3>
 
           <p className="mb-6 text-sm text-gray-600">
             We&apos;ve sent a password reset link to{' '}
             <strong className="text-gray-900">{email.trim()}</strong>
           </p>
 
-          <Button onClick={handleClose} className="w-full">
-            Done
-          </Button>
+          <div className="space-y-3">
+            <Button onClick={handleClose} className="w-full">
+              Done
+            </Button>
+
+            <Button variant="secondary" onClick={handleSwitchToLoginClick} className="w-full">
+              Back to Login
+            </Button>
+          </div>
         </div>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -105,10 +117,7 @@ export default function ForgotPasswordModal({
           </p>
 
           <div>
-            <label
-              htmlFor="reset-email"
-              className="mb-1 block text-sm font-medium text-gray-700"
-            >
+            <label htmlFor="reset-email" className="mb-1 block text-sm font-medium text-gray-700">
               Email
             </label>
             <input
@@ -147,8 +156,18 @@ export default function ForgotPasswordModal({
               {loading ? <Spinner size="sm" /> : 'Send Reset Link'}
             </Button>
           </div>
+
+          <div className="pt-2 text-center">
+            <button
+              type="button"
+              onClick={handleSwitchToLoginClick}
+              className="text-sm font-semibold text-orange-600 hover:text-orange-700 transition-colors"
+            >
+              Back to Login
+            </button>
+          </div>
         </form>
       )}
     </Modal>
-  )
+  );
 }

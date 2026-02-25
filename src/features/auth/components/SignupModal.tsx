@@ -1,30 +1,26 @@
 import { Modal } from '@/components/ui/Modal';
 import { SignupForm } from './SignupForm';
-import { useModal } from '@/components/ui/useModal';
 
-interface SignupModalProps {
+export interface SignupModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onSwitchToLogin?: () => void;
 }
 
-export function SignupModal({ isOpen, onClose }: SignupModalProps) {
-  const { openModal } = useModal();
-
+export function SignupModal({ isOpen, onClose, onSwitchToLogin }: SignupModalProps) {
   const handleSuccess = () => {
     onClose();
   };
 
-  const handleSwitchToLogin = () => {
-    onClose();
-    openModal('login');
+  const handleSwitchToLoginClick = () => {
+    onSwitchToLogin?.();
   };
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Create Account">
-      <SignupForm
-        onSuccess={handleSuccess}
-        onSwitchToLogin={handleSwitchToLogin}
-      />
+      <SignupForm onSuccess={handleSuccess} onSwitchToLogin={handleSwitchToLoginClick} />
     </Modal>
   );
 }
+
+export default SignupModal;
