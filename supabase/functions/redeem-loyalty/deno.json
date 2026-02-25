@@ -15,7 +15,6 @@
     "singleQuote": false
   },
   "imports": {
-    "@supabase/supabase-js": "npm:@supabase/supabase-js@2",
-    "stripe": "npm:stripe@14"
+    "@supabase/supabase-js": "npm:@supabase/supabase-js@2"
   }
 }

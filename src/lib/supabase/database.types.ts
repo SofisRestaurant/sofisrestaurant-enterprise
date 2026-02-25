@@ -669,10 +669,8 @@ export type Database = {
           id: string
           last_order_date: string | null
           lifetime_points: number
-          // ── Loyalty QR ──────────────────────────────────────────────────
-          /** Public random UUID for QR codes — NOT the auth user UUID */
-          loyalty_public_id: string
           loyalty_points: number
+          loyalty_public_id: string
           loyalty_streak: number
           loyalty_tier: string
           phone: string | null
@@ -685,8 +683,8 @@ export type Database = {
           id: string
           last_order_date?: string | null
           lifetime_points?: number
-          loyalty_public_id?: string
           loyalty_points?: number
+          loyalty_public_id: string
           loyalty_streak?: number
           loyalty_tier?: string
           phone?: string | null
@@ -699,13 +697,107 @@ export type Database = {
           id?: string
           last_order_date?: string | null
           lifetime_points?: number
-          loyalty_public_id?: string
           loyalty_points?: number
+          loyalty_public_id?: string
           loyalty_streak?: number
           loyalty_tier?: string
           phone?: string | null
           role?: string
           updated_at?: string
+        }
+        Relationships: []
+      }
+      promo_redemptions: {
+        Row: {
+          checkout_session_id: string | null
+          discount_cents: number
+          id: string
+          promotion_id: string
+          used_at: string
+          user_id: string
+        }
+        Insert: {
+          checkout_session_id?: string | null
+          discount_cents: number
+          id?: string
+          promotion_id: string
+          used_at?: string
+          user_id: string
+        }
+        Update: {
+          checkout_session_id?: string | null
+          discount_cents?: number
+          id?: string
+          promotion_id?: string
+          used_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "promo_redemptions_promotion_id_fkey"
+            columns: ["promotion_id"]
+            isOneToOne: false
+            referencedRelation: "promotions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "promo_redemptions_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "loyalty_leaderboard"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "promo_redemptions_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      promotions: {
+        Row: {
+          active: boolean
+          code: string
+          created_at: string
+          current_uses: number
+          expires_at: string | null
+          id: string
+          max_uses: number | null
+          min_order_cents: number
+          per_user_limit: number
+          type: string
+          updated_at: string
+          value: number
+        }
+        Insert: {
+          active?: boolean
+          code: string
+          created_at?: string
+          current_uses?: number
+          expires_at?: string | null
+          id?: string
+          max_uses?: number | null
+          min_order_cents?: number
+          per_user_limit?: number
+          type: string
+          updated_at?: string
+          value: number
+        }
+        Update: {
+          active?: boolean
+          code?: string
+          created_at?: string
+          current_uses?: number
+          expires_at?: string | null
+          id?: string
+          max_uses?: number | null
+          min_order_cents?: number
+          per_user_limit?: number
+          type?: string
+          updated_at?: string
+          value?: number
         }
         Relationships: []
       }
@@ -813,6 +905,57 @@ export type Database = {
         }
         Relationships: []
       }
+      user_credits: {
+        Row: {
+          amount_cents: number
+          checkout_session_id: string | null
+          created_at: string
+          expires_at: string | null
+          id: string
+          source: string
+          used: boolean
+          used_at: string | null
+          user_id: string
+        }
+        Insert: {
+          amount_cents: number
+          checkout_session_id?: string | null
+          created_at?: string
+          expires_at?: string | null
+          id?: string
+          source: string
+          used?: boolean
+          used_at?: string | null
+          user_id: string
+        }
+        Update: {
+          amount_cents?: number
+          checkout_session_id?: string | null
+          created_at?: string
+          expires_at?: string | null
+          id?: string
+          source?: string
+          used?: boolean
+          used_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_credits_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "loyalty_leaderboard"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "user_credits_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       financial_revenue_view: {
@@ -854,7 +997,7 @@ export type Database = {
           last_order_date?: string | null
           lifetime_points?: number | null
           loyalty_points?: number | null
-          loyalty_streak?: string | null
+          loyalty_streak?: number | null
           loyalty_tier?: string | null
           points_to_next_tier?: never
           tier_threshold?: never
@@ -865,7 +1008,7 @@ export type Database = {
           last_order_date?: string | null
           lifetime_points?: number | null
           loyalty_points?: number | null
-          loyalty_streak?: string | null
+          loyalty_streak?: number | null
           loyalty_tier?: string | null
           points_to_next_tier?: never
           tier_threshold?: never
@@ -927,6 +1070,10 @@ export type Database = {
       custom_access_token_hook: { Args: { event: Json }; Returns: Json }
       get_next_order_number: { Args: never; Returns: number }
       is_admin: { Args: { uid: string }; Returns: boolean }
+      promotions_decrement_uses: {
+        Args: { p_promo_id: string }
+        Returns: undefined
+      }
       redeem_loyalty_points: {
         Args: { p_order_id?: string; p_points: number; p_user_id: string }
         Returns: Json
@@ -978,6 +1125,7 @@ export type Database = {
 }
 
 type DatabaseWithoutInternals = Omit<Database, "__InternalSupabase">
+
 type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "public">]
 
 export type Tables<

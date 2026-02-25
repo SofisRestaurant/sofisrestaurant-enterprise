@@ -16,12 +16,17 @@ import {
 // TYPES
 // ============================================================================
 
-export interface CheckoutCustomerData {
+interface CheckoutCustomerData {
+  customer_uid: string
   email: string
   name?: string
   phone?: string
+
+  // ✅ 2026 upgrade
   address?: string
-  customer_uid: string
+
+  promo_code?: string
+  credit_id?: string
 }
 
 export interface CheckoutState {

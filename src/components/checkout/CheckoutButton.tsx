@@ -1,13 +1,14 @@
 // src/components/checkout/CheckoutButton.tsx
 // ============================================================================
-// 2026 PRODUCTION CHECKOUT BUTTON
+// 2026 PRODUCTION CHECKOUT BUTTON (PROMO + CREDIT READY)
 // ============================================================================
-// ✅ No cart mutation before Stripe redirect
-// ✅ Stable redirect behavior
+// ✅ Typed props
+// ✅ Promo + credit support
+// ✅ No cart mutation before redirect
 // ✅ Auth validation
 // ✅ Retry handling
-// ✅ Race-condition safe
-// ✅ Clean UX states
+// ✅ Error propagation to parent
+// ✅ No setError dependency internally
 // ============================================================================
 
 import { useState, useEffect, useRef, useCallback } from 'react'
@@ -15,22 +16,32 @@ import { useCheckout } from '@/hooks/useCheckout'
 import { useUserContext } from '@/contexts/useUserContext'
 import { AlertCircle, Loader2, CreditCard, RefreshCw } from 'lucide-react'
 
-export default function CheckoutButton() {
-  const { user, loading: authLoading, isAuthenticated } = useUserContext()
+// ============================================================================
+// PROPS
+// ============================================================================
 
-  const {
-    checkout,
-    isLoading,
-    error,
-    errorCode,
-    canRetry,
-    retryAfter,
-    reset,
-    canCheckout,
-  } = useCheckout()
+interface CheckoutButtonProps {
+  promoCode?: string
+  creditId?: string
+  onPromoError?: (msg: string) => void
+}
 
-  const [countdown, setCountdown] = useState<number | null>(null)
-  const mountedRef = useRef(true)
+// ============================================================================
+// COMPONENT
+// ============================================================================
+
+export default function CheckoutButton({
+  promoCode,
+  creditId,
+  onPromoError,
+}: CheckoutButtonProps) {
+  const { user, loading: authLoading, isAuthenticated } = useUserContext();
+
+  const { checkout, isLoading, error, errorCode, canRetry, retryAfter, reset, canCheckout } =
+    useCheckout();
+
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const mountedRef = useRef(true);
 
   // ============================================================================
   // LIFECYCLE
@@ -38,49 +49,47 @@ export default function CheckoutButton() {
 
   useEffect(() => {
     return () => {
-      mountedRef.current = false
-    }
-  }, [])
+      mountedRef.current = false;
+    };
+  }, []);
 
   // ============================================================================
   // RETRY COUNTDOWN
   // ============================================================================
 
   useEffect(() => {
-    if (!retryAfter) return
+    if (!retryAfter) return;
 
-    const endTime = Date.now() + retryAfter
+    const endTime = Date.now() + retryAfter;
 
     const interval = setInterval(() => {
-      const remaining = Math.ceil((endTime - Date.now()) / 1000)
+      const remaining = Math.ceil((endTime - Date.now()) / 1000);
 
       if (remaining <= 0) {
-        setCountdown(null)
-        reset()
-        clearInterval(interval)
+        setCountdown(null);
+        reset();
+        clearInterval(interval);
       } else {
-        setCountdown(remaining)
+        setCountdown(remaining);
       }
-    }, 250)
+    }, 250);
 
-    return () => clearInterval(interval)
-  }, [retryAfter, reset])
+    return () => clearInterval(interval);
+  }, [retryAfter, reset]);
 
   // ============================================================================
   // CHECKOUT HANDLER
   // ============================================================================
 
   const handleCheckout = useCallback(async () => {
-    if (isLoading) return
+    if (isLoading) return;
 
-    // Auth validation
     if (!isAuthenticated || !user) {
-      alert('Please log in to continue')
-      return
+      alert('Please log in to continue');
+      return;
     }
 
-    // Cart validation
-    if (!canCheckout) return
+    if (!canCheckout) return;
 
     try {
       await checkout({
@@ -88,18 +97,23 @@ export default function CheckoutButton() {
         email: user.email,
         name: user.name ?? undefined,
         phone: user.phone ?? undefined,
-      })
-    } catch {
-      // Error handled inside useCheckout
+        promo_code: promoCode,
+        credit_id: creditId,
+      });
+    } catch (err) {
+      // Forward promo-related errors to parent if provided
+      if (onPromoError && err instanceof Error) {
+        onPromoError(err.message);
+      }
     }
-  }, [checkout, isAuthenticated, user, canCheckout, isLoading])
+  }, [checkout, isAuthenticated, user, canCheckout, isLoading, promoCode, creditId, onPromoError]);
 
   const handleRetry = useCallback(() => {
-    reset()
-  }, [reset])
+    reset();
+  }, [reset]);
 
   // ============================================================================
-  // AUTH LOADING STATE
+  // AUTH LOADING
   // ============================================================================
 
   if (authLoading) {
@@ -113,7 +127,7 @@ export default function CheckoutButton() {
           <span className="text-base font-semibold">Loading...</span>
         </div>
       </button>
-    )
+    );
   }
 
   // ============================================================================
@@ -127,11 +141,7 @@ export default function CheckoutButton() {
           <AlertCircle className="h-5 w-5 shrink-0 text-red-600 mt-0.5" />
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-red-900">{error}</p>
-            {errorCode && (
-              <p className="mt-1 text-xs text-red-700">
-                Error code: {errorCode}
-              </p>
-            )}
+            {errorCode && <p className="mt-1 text-xs text-red-700">Error code: {errorCode}</p>}
           </div>
         </div>
 
@@ -150,14 +160,11 @@ export default function CheckoutButton() {
           </button>
         )}
 
-        <button
-          onClick={reset}
-          className="w-full text-sm text-gray-600 hover:text-gray-900"
-        >
+        <button onClick={reset} className="w-full text-sm text-gray-600 hover:text-gray-900">
           ← Back to checkout
         </button>
       </div>
-    )
+    );
   }
 
   // ============================================================================
@@ -188,5 +195,5 @@ export default function CheckoutButton() {
         </span>
       </div>
     </button>
-  )
+  );
 }

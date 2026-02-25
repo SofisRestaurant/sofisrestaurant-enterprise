@@ -1,33 +1,41 @@
 // src/features/checkout/checkout.api.ts
-// ============================================================================
-// SECURE CHECKOUT API — v2 WITH LOYALTY POINTS PREVIEW
-// ============================================================================
+// =============================================================================
+// CHECKOUT API — ENTERPRISE GRADE
+// =============================================================================
+// Frontend NEVER calculates:
+//   - discount amounts
+//   - promo value
+//   - loyalty deduction
+//   - tax on discounted total
 //
-// Tier config moved to @/domain/loyalty/tiers (single source of truth).
-// All checkout logic, retry loop, and preview math unchanged.
-// ============================================================================
+// Frontend ONLY sends:
+//   - item IDs + quantities
+//   - optional promo_code (string)
+//   - optional credit_id (UUID of a user_credit row)
+//
+// Server returns the computed session. Frontend displays what server confirms.
+// =============================================================================
 
 import { supabase } from '@/lib/supabase/supabaseClient'
 import type { CheckoutData, CheckoutSession } from './checkout.types'
 import { LOYALTY_TIERS, TIER_ORDER, type LoyaltyTier } from '@/domain/loyalty/tiers'
 
-// Re-export so existing imports from checkout.api still resolve during migration
 export { LOYALTY_TIERS, type LoyaltyTier } from '@/domain/loyalty/tiers'
 
-// ============================================================================
+// =============================================================================
 // CONFIG
-// ============================================================================
+// =============================================================================
 
 const CHECKOUT_CONFIG = {
   MAX_RETRIES:    3,
   RETRY_DELAY_MS: 1000,
-  TIMEOUT_MS:     30000,
+  TIMEOUT_MS:     30_000,
   MAX_ITEMS:      100,
 } as const
 
-// ============================================================================
+// =============================================================================
 // ERRORS
-// ============================================================================
+// =============================================================================
 
 export class CheckoutValidationError extends Error {
   constructor(message: string, public field?: string) {
@@ -37,7 +45,7 @@ export class CheckoutValidationError extends Error {
 }
 
 export class CheckoutNetworkError extends Error {
-  constructor(message: string, public retryable: boolean = true) {
+  constructor(message: string, public retryable = true) {
     super(message)
     this.name = 'CheckoutNetworkError'
   }
@@ -50,9 +58,23 @@ export class CheckoutRateLimitError extends Error {
   }
 }
 
-// ============================================================================
+export class CheckoutPromoError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'CheckoutPromoError'
+  }
+}
+
+export class CheckoutCreditError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'CheckoutCreditError'
+  }
+}
+
+// =============================================================================
 // TYPES
-// ============================================================================
+// =============================================================================
 
 export interface LoyaltyProfile {
   points:         number
@@ -76,24 +98,44 @@ export interface LoyaltyPreview {
   willLevelUp:      boolean
 }
 
-// ============================================================================
+// What the server returns about applied discounts — used only for display
+export interface ServerDiscount {
+  promo_code?:     string
+  promo_cents?:    number
+  credit_cents?:   number
+  total_discount?: number
+  // Server-confirmed totals for display
+  subtotal_cents:  number
+  tax_cents:       number
+  grand_total:     number
+}
+
+export interface UserCredit {
+  id:           string
+  amount_cents: number
+  source:       string
+  expires_at:   string | null
+  created_at:   string
+}
+
+// =============================================================================
 // UTILITIES
-// ============================================================================
+// =============================================================================
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  const timeoutPromise = new Promise<never>((_, reject) =>
+  const timeout = new Promise<never>((_, reject) =>
     setTimeout(() => reject(new Error('Request timeout')), timeoutMs)
   )
-  return Promise.race([promise, timeoutPromise])
+  return Promise.race([promise, timeout])
 }
 
 async function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
-// ============================================================================
-// VALIDATION
-// ============================================================================
+// =============================================================================
+// VALIDATION (client-side: catch obvious errors before hitting network)
+// =============================================================================
 
 function validateCheckoutData(payload: CheckoutData) {
   if (!Array.isArray(payload.items) || payload.items.length === 0) {
@@ -110,9 +152,9 @@ function validateCheckoutData(payload: CheckoutData) {
   }
 }
 
-// ============================================================================
+// =============================================================================
 // LOYALTY: getLoyaltyProfile
-// ============================================================================
+// =============================================================================
 
 export async function getLoyaltyProfile(): Promise<LoyaltyProfile | null> {
   try {
@@ -128,104 +170,94 @@ export async function getLoyaltyProfile(): Promise<LoyaltyProfile | null> {
     if (error || !data) return null
 
     return {
-      points:         data.loyalty_points   ?? 0,
-      lifetimePoints: data.lifetime_points  ?? 0,
-      tier:           (data.loyalty_tier    ?? 'bronze') as LoyaltyTier,
-      streak:         data.loyalty_streak   ?? 0,
-      lastOrderDate:  data.last_order_date  ?? null,
+      points:         data.loyalty_points  ?? 0,
+      lifetimePoints: data.lifetime_points ?? 0,
+      tier:           (data.loyalty_tier   ?? 'bronze') as LoyaltyTier,
+      streak:         data.loyalty_streak  ?? 0,
+      lastOrderDate:  data.last_order_date ?? null,
     }
   } catch {
     return null
   }
 }
 
-// ============================================================================
-// LOYALTY: calculatePointsPreview
-//
-// Pure function — no DB calls, no side effects.
-// Mirrors award_loyalty_points() Postgres function math exactly.
-// ============================================================================
+// =============================================================================
+// LOYALTY: getAvailableCredits
+// Returns unused, non-expired credits for the authenticated user.
+// =============================================================================
+
+export async function getAvailableCredits(): Promise<UserCredit[]> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.user?.id) return []
+
+    const { data, error } = await supabase
+      .from('user_credits')
+      .select('id, amount_cents, source, expires_at, created_at')
+      .eq('user_id', session.user.id)
+      .eq('used', false)
+      .or('expires_at.is.null,expires_at.gt.' + new Date().toISOString())
+      .order('created_at', { ascending: true })
+
+    if (error || !data) return []
+    return data as UserCredit[]
+  } catch {
+    return []
+  }
+}
+
+// =============================================================================
+// LOYALTY: calculatePointsPreview (pure, no DB — mirrors server math exactly)
+// =============================================================================
 
 export function calculatePointsPreview(
   amountCents: number,
-  profile: LoyaltyProfile | null
+  profile:     LoyaltyProfile | null
 ): LoyaltyPreview {
   const tier:     LoyaltyTier = profile?.tier           ?? 'bronze'
   const streak:   number      = profile?.streak         ?? 0
   const balance:  number      = profile?.points         ?? 0
   const lifetime: number      = profile?.lifetimePoints ?? 0
 
-  const tierConfig = LOYALTY_TIERS[tier]
-
-  // Base: 1 point per $1
+  const tierConfig     = LOYALTY_TIERS[tier]
   const basePoints     = Math.max(Math.floor(amountCents / 100), 0)
   const tierMultiplier = tierConfig.multiplier
 
-  // Streak multiplier — mirrors Postgres CASE exactly
-  const streakForPreview = streak + 1
+  const nextStreak = streak + 1
   const streakMultiplier =
-    streakForPreview >= 30 ? 1.50 :
-    streakForPreview >= 7  ? 1.25 :
-    streakForPreview >= 3  ? 1.10 :
-                             1.0
+    nextStreak >= 30 ? 1.50 :
+    nextStreak >= 7  ? 1.25 :
+    nextStreak >= 3  ? 1.10 :
+                       1.00
 
-  const pointsToEarn = Math.max(
-    Math.floor(basePoints * tierMultiplier * streakMultiplier),
-    0
-  )
+  const pointsToEarn = Math.max(Math.floor(basePoints * tierMultiplier * streakMultiplier), 0)
+  const balanceAfter = balance + pointsToEarn
 
- const balanceAfter = balance + pointsToEarn
+  const currentIndex     = TIER_ORDER.indexOf(tier)
+  const nextTier         = currentIndex < TIER_ORDER.length - 1 ? TIER_ORDER[currentIndex + 1] : null
+  const nextTierThreshold = nextTier ? LOYALTY_TIERS[nextTier].threshold : null
+  const pointsToNextTier = nextTierThreshold !== null ? Math.max(nextTierThreshold - lifetime, 0) : null
+  const willLevelUp      = nextTierThreshold !== null && lifetime + pointsToEarn >= nextTierThreshold
 
-// ───────────────────────────────────────────────────────────
-// Tier progression logic (hierarchy-driven using TIER_ORDER)
-// ───────────────────────────────────────────────────────────
+  const today            = new Date().toISOString().slice(0, 10)
+  const willExtendStreak = profile?.lastOrderDate !== today
 
-const currentIndex = TIER_ORDER.indexOf(tier)
-
-const nextTier =
-  currentIndex >= 0 && currentIndex < TIER_ORDER.length - 1
-    ? TIER_ORDER[currentIndex + 1]
-    : null
-
-const nextTierThreshold =
-  nextTier ? LOYALTY_TIERS[nextTier].threshold : null
-
-const pointsToNextTier =
-  nextTierThreshold !== null
-    ? Math.max(nextTierThreshold - lifetime, 0)
-    : null
-
-const willLevelUp =
-  nextTierThreshold !== null &&
-  lifetime + pointsToEarn >= nextTierThreshold
-
-// ───────────────────────────────────────────────────────────
-// Streak extension logic
-// ───────────────────────────────────────────────────────────
-
-const today = new Date().toISOString().slice(0, 10)
-const willExtendStreak = profile?.lastOrderDate !== today
   return {
-    pointsToEarn,
-    basePoints,
-    tierMultiplier,
-    streakMultiplier,
-    tier,
-    streak,
-    currentBalance:   balance,
-    balanceAfter,
-    willExtendStreak,
-    pointsToNextTier,
-    willLevelUp,
+    pointsToEarn, basePoints, tierMultiplier, streakMultiplier,
+    tier, streak, currentBalance: balance, balanceAfter,
+    willExtendStreak, pointsToNextTier, willLevelUp,
   }
 }
 
-// ============================================================================
-// CORE API (SECURE) — unchanged
-// ============================================================================
+// =============================================================================
+// CORE: createCheckoutSession
+// =============================================================================
+// Sends item IDs + optional promo/credit to the Edge Function.
+// Server computes all totals. Frontend never does discount math.
+// =============================================================================
 
 export async function createCheckoutSession(
-  payload: CheckoutData
+  payload: CheckoutData & { promoCode?: string; creditId?: string }
 ): Promise<CheckoutSession> {
   const start     = Date.now()
   const requestId = crypto.randomUUID()
@@ -234,28 +266,35 @@ export async function createCheckoutSession(
 
   try {
     validateCheckoutData(payload)
-    console.log('✅ Validation passed')
 
-    // 🔒 SEND ONLY ID + QUANTITY + NOTES (NO PRICE, NO TOTALS)
+    // 🔒 SEND ONLY: item ID + quantity + notes (NO prices, NO totals)
     const secureItems = payload.items.map((item) => ({
       id:       item.menuItemId,
       quantity: Math.max(1, Math.min(100, Math.round(item.quantity))),
       notes:    item.specialInstructions?.slice(0, 500) || undefined,
     }))
 
-    const requestBody = {
+    const requestBody: Record<string, unknown> = {
       items:      secureItems,
       email:      payload.email.toLowerCase().trim(),
-      name:       payload.name?.slice(0, 200) || '',
-      phone:      payload.phone?.slice(0, 50) || '',
+      name:       payload.name?.slice(0, 200)  || '',
+      phone:      payload.phone?.slice(0, 50)  || '',
       successUrl: payload.successUrl,
       cancelUrl:  payload.cancelUrl,
     }
 
-    const { data: { session } } = await supabase.auth.getSession()
-    const accessToken = session?.access_token
+    // Attach promo code if provided (server validates — never trust client amount)
+    if (payload.promoCode?.trim()) {
+      requestBody.promo_code = payload.promoCode.trim().toUpperCase()
+    }
 
-    if (!accessToken) {
+    // Attach credit ID if provided (server validates ownership + balance)
+    if (payload.creditId?.trim()) {
+      requestBody.credit_id = payload.creditId.trim()
+    }
+
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.access_token) {
       throw new CheckoutNetworkError('User not authenticated', false)
     }
 
@@ -267,17 +306,23 @@ export async function createCheckoutSession(
 
         const { data, error } = await withTimeout(
           supabase.functions.invoke('create-checkout', {
-            body: requestBody,
-            headers: { Authorization: `Bearer ${accessToken}` },
+            body:    requestBody,
+            headers: { Authorization: `Bearer ${session.access_token}` },
           }),
           CHECKOUT_CONFIG.TIMEOUT_MS
         )
 
         if (error) {
           if (error.context?.status === 429) {
-            const retryAfter =
-              Number(error.context?.headers?.['retry-after']) * 1000 || 15000
+            const retryAfter = Number(error.context?.headers?.['retry-after']) * 1000 || 15_000
             throw new CheckoutRateLimitError('Too many checkout attempts', retryAfter)
+          }
+          // Surface promo / credit errors directly (HTTP 422)
+          if (error.context?.status === 422) {
+            const body = await error.context.json?.() ?? {}
+            const msg  = body?.error ?? error.message
+            if (/promo|code|coupon/i.test(msg)) throw new CheckoutPromoError(msg)
+            if (/credit/i.test(msg))            throw new CheckoutCreditError(msg)
           }
           throw error
         }
@@ -290,7 +335,14 @@ export async function createCheckoutSession(
 
       } catch (err) {
         lastError = err as Error
-        if (err instanceof CheckoutRateLimitError) throw err
+        // Don't retry validation / promo / credit / rate-limit errors
+        if (
+          err instanceof CheckoutRateLimitError ||
+          err instanceof CheckoutPromoError     ||
+          err instanceof CheckoutCreditError    ||
+          err instanceof CheckoutValidationError
+        ) throw err
+
         if (attempt < CHECKOUT_CONFIG.MAX_RETRIES) {
           const delay = CHECKOUT_CONFIG.RETRY_DELAY_MS * Math.pow(2, attempt - 1)
           console.warn(`⚠️ Retry in ${delay}ms`)
@@ -307,11 +359,11 @@ export async function createCheckoutSession(
 
     if (
       err instanceof CheckoutValidationError ||
-      err instanceof CheckoutNetworkError   ||
-      err instanceof CheckoutRateLimitError
-    ) {
-      throw err
-    }
+      err instanceof CheckoutNetworkError    ||
+      err instanceof CheckoutRateLimitError  ||
+      err instanceof CheckoutPromoError      ||
+      err instanceof CheckoutCreditError
+    ) throw err
 
     throw new CheckoutNetworkError(
       err instanceof Error ? err.message : 'Checkout failed',
@@ -320,9 +372,9 @@ export async function createCheckoutSession(
   }
 }
 
-// ============================================================================
+// =============================================================================
 // REDIRECT
-// ============================================================================
+// =============================================================================
 
 export function redirectToCheckout(session: CheckoutSession) {
   console.log('🔀 Redirecting to Stripe...')

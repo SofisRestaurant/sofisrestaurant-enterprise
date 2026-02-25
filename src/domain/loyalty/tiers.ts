@@ -16,7 +16,7 @@ export interface TierConfig {
 
   // ── Tailwind classes (light theme) ──────────────────────────────────────
   colors: {
-    /** Text color for labels and values */
+    /** Text color for and values */
     text:   string
     /** Background color for badges and containers */
     bg:     string

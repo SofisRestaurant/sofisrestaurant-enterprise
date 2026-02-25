@@ -1,78 +1,111 @@
 // src/router.tsx
 import { createBrowserRouter } from 'react-router-dom'
 import RootLayout from '@/app/RootLayout'
-import { AuthGuard, RoleGuard } from '@/components/auth/AuthGuard'
-import UpdatePassword from '@/pages/UpdatePassword'
-import OrderStatusPage from '@/pages/OrderStatus'
-
-// Account
-import AccountLayout from '@/pages/Account/AccountLayout'
-import AccountHome from '@/pages/Account/AccountHome'
-import EditProfile from '@/pages/Account/EditProfile'
-import OrderHistory from '@/pages/Account/OrderHistory'
-
-// Public pages
-import Home from '@/pages/Home'
-import Menu from '@/pages/Menu'
-import About from '@/pages/About/About'
-import Contact from '@/pages/Contact/Contact'
-import Gallery from '@/pages/Gallery/Gallery'
-import Catering from '@/pages/Catering/Catering'
-import Reservations from '@/pages/Reservations/Reservations'
-import Reviews from '@/pages/Reviews/Reviews'
-import Checkout from '@/pages/Checkout'
-import OrderSuccess from '@/pages/OrderSuccess'
-import OrderCanceled from '@/pages/OrderCanceled'
-import PrivacyPolicy from '@/pages/Legal/PrivacyPolicy'
-import TermsOfService from '@/pages/Legal/TermsOfService'
-import RefundPolicy from '@/pages/Legal/RefundPolicy'
-
-// Admin
-import AdminDashboard from '@/pages/Admin/Dashboard'
-import AdminOrders from '@/pages/Admin/Orders'
-import AdminMenuEditor from '@/pages/Admin/MenuEditor'
-import AdminLayout from '@/pages/Admin/AdminLayout'
-import LoyaltyScan from '@/pages/Admin/LoyaltyScan'
-
-// Staff / Operations
-import KitchenScreen from '@/features/orders/KitchenScreen'
-import ExpoCommandCenter from '@/features/orders/ExpoCommandCenter';
-
-// Fallback
-import NotFound from '@/pages/NotFound'
+import { AuthGuard, RoleGuard } from '@/components/auth/AuthGuard';
 
 export const router = createBrowserRouter([
   {
     path: '/',
     element: <RootLayout />,
-    errorElement: <NotFound />,
+    errorElement: <div>Loading...</div>,
     children: [
       // ==================================================
       // PUBLIC ROUTES
       // ==================================================
-      { index: true, element: <Home /> },
-      { path: 'menu', element: <Menu /> },
-      { path: 'about', element: <About /> },
-      { path: 'contact', element: <Contact /> },
-      { path: 'gallery', element: <Gallery /> },
-      { path: 'catering', element: <Catering /> },
-      { path: 'reservations', element: <Reservations /> },
-      { path: 'reviews', element: <Reviews /> },
+      {
+        index: true,
+        lazy: async () => {
+          const module = await import('@/pages/Home');
+          return { Component: module.default };
+        },
+      },
+      {
+        path: 'menu',
+        lazy: async () => {
+          const module = await import('@/pages/Menu');
+          return { Component: module.default };
+        },
+      },
+      {
+        path: 'about',
+        lazy: async () => {
+          const module = await import('@/pages/About/About');
+          return { Component: module.default };
+        },
+      },
+      {
+        path: 'contact',
+        lazy: async () => {
+          const module = await import('@/pages/Contact/Contact');
+          return { Component: module.default };
+        },
+      },
+      {
+        path: 'gallery',
+        lazy: async () => {
+          const module = await import('@/pages/Gallery/Gallery');
+          return { Component: module.default };
+        },
+      },
+      {
+        path: 'catering',
+        lazy: async () => {
+          const module = await import('@/pages/Catering/Catering');
+          return { Component: module.default };
+        },
+      },
+      {
+        path: 'reservations',
+        lazy: async () => {
+          const module = await import('@/pages/Reservations/Reservations');
+          return { Component: module.default };
+        },
+      },
+      {
+        path: 'reviews',
+        lazy: async () => {
+          const module = await import('@/pages/Reviews/Reviews');
+          return { Component: module.default };
+        },
+      },
 
       // ==================================================
       // ACCOUNT (AUTH REQUIRED)
       // ==================================================
       {
         path: 'account',
-        element: (
-          <AuthGuard requireAuth>
-            <AccountLayout />
-          </AuthGuard>
-        ),
+        lazy: async () => {
+          const layoutModule = await import('@/pages/Account/AccountLayout');
+          return {
+            Component: () => (
+              <AuthGuard requireAuth>
+                <layoutModule.default />
+              </AuthGuard>
+            ),
+          };
+        },
         children: [
-          { index: true, element: <AccountHome /> },
-          { path: 'edit', element: <EditProfile /> },
-          { path: 'orders', element: <OrderHistory /> },
+          {
+            index: true,
+            lazy: async () => {
+              const module = await import('@/pages/Account/AccountHome');
+              return { Component: module.default };
+            },
+          },
+          {
+            path: 'edit',
+            lazy: async () => {
+              const module = await import('@/pages/Account/EditProfile');
+              return { Component: module.default };
+            },
+          },
+          {
+            path: 'orders',
+            lazy: async () => {
+              const module = await import('@/pages/Account/OrderHistory');
+              return { Component: module.default };
+            },
+          },
         ],
       },
 
@@ -81,82 +114,174 @@ export const router = createBrowserRouter([
       // ==================================================
       {
         path: 'checkout',
-        element: (
-          <AuthGuard requireAuth>
-            <Checkout />
-          </AuthGuard>
-        ),
+        lazy: async () => {
+          const module = await import('@/pages/Checkout');
+          return {
+            Component: () => (
+              <AuthGuard requireAuth>
+                <module.default />
+              </AuthGuard>
+            ),
+          };
+        },
       },
 
       // ==================================================
       // STRIPE RESULTS
       // ==================================================
-      { path: 'order-success', element: <OrderSuccess /> },
-      { path: 'order-canceled', element: <OrderCanceled /> },
+      {
+        path: 'order-success',
+        lazy: async () => {
+          const module = await import('@/pages/OrderSuccess');
+          return { Component: module.default };
+        },
+      },
+      {
+        path: 'order-canceled',
+        lazy: async () => {
+          const module = await import('@/pages/OrderCanceled');
+          return { Component: module.default };
+        },
+      },
 
       // ==================================================
-      // ORDER TRACKING (PUBLIC)
+      // ORDER TRACKING
       // ==================================================
-      { path: 'order-status/:orderId', element: <OrderStatusPage /> },
+      {
+        path: 'order-status/:orderId',
+        lazy: async () => {
+          const module = await import('@/pages/OrderStatus');
+          return { Component: module.default };
+        },
+      },
 
       // ==================================================
       // PASSWORD
       // ==================================================
-      { path: 'update-password', element: <UpdatePassword /> },
+      {
+        path: 'update-password',
+        lazy: async () => {
+          const module = await import('@/pages/UpdatePassword');
+          return { Component: module.default };
+        },
+      },
 
       // ==================================================
       // LEGAL
       // ==================================================
-      { path: 'privacy-policy', element: <PrivacyPolicy /> },
-      { path: 'terms-of-service', element: <TermsOfService /> },
-      { path: 'refund-policy', element: <RefundPolicy /> },
+      {
+        path: 'privacy-policy',
+        lazy: async () => {
+          const module = await import('@/pages/Legal/PrivacyPolicy');
+          return { Component: module.default };
+        },
+      },
+      {
+        path: 'terms-of-service',
+        lazy: async () => {
+          const module = await import('@/pages/Legal/TermsOfService');
+          return { Component: module.default };
+        },
+      },
+      {
+        path: 'refund-policy',
+        lazy: async () => {
+          const module = await import('@/pages/Legal/RefundPolicy');
+          return { Component: module.default };
+        },
+      },
 
       // ==================================================
-      // KITCHEN (ADMIN + STAFF)
+      // KITCHEN
       // ==================================================
       {
         path: 'kitchen',
-        element: (
-          <RoleGuard allowedRoles={['admin', 'staff']}>
-            <KitchenScreen />
-          </RoleGuard>
-        ),
+        lazy: async () => {
+          const module = await import('@/features/orders/KitchenScreen');
+          return {
+            Component: () => (
+              <RoleGuard allowedRoles={['admin', 'staff']}>
+                <module.default />
+              </RoleGuard>
+            ),
+          };
+        },
       },
 
       // ==================================================
-      // EXPO (ADMIN + STAFF)
+      // EXPO
       // ==================================================
       {
         path: 'expo',
-        element: (
-          <RoleGuard allowedRoles={['admin', 'staff']}>
-            <ExpoCommandCenter />
-          </RoleGuard>
-        ),
+        lazy: async () => {
+          const module = await import('@/features/orders/ExpoCommandCenter');
+          return {
+            Component: () => (
+              <RoleGuard allowedRoles={['admin', 'staff']}>
+                <module.default />
+              </RoleGuard>
+            ),
+          };
+        },
       },
 
       // ==================================================
-      // ADMIN (ADMIN ONLY)
+      // ADMIN
       // ==================================================
       {
         path: 'admin',
-        element: (
-          <AuthGuard requireAdmin>
-            <AdminLayout />
-          </AuthGuard>
-        ),
+        lazy: async () => {
+          const layoutModule = await import('@/pages/Admin/AdminLayout');
+          return {
+            Component: () => (
+              <AuthGuard requireAdmin>
+                <layoutModule.default />
+              </AuthGuard>
+            ),
+          };
+        },
         children: [
-          { index: true, element: <AdminDashboard /> },
-          { path: 'orders', element: <AdminOrders /> },
-          { path: 'menu', element: <AdminMenuEditor /> },
-          { path: 'loyalty-scan', element: <LoyaltyScan /> }, // ✅ QR Scanner Added
+          {
+            index: true,
+            lazy: async () => {
+              const module = await import('@/pages/Admin/Dashboard');
+              return { Component: module.default };
+            },
+          },
+          {
+            path: 'orders',
+            lazy: async () => {
+              const module = await import('@/pages/Admin/Orders');
+              return { Component: module.default };
+            },
+          },
+          {
+            path: 'menu',
+            lazy: async () => {
+              const module = await import('@/pages/Admin/MenuEditor');
+              return { Component: module.default };
+            },
+          },
+          {
+            path: 'loyalty-scan',
+            lazy: async () => {
+              const module = await import('@/pages/Admin/LoyaltyScan');
+              return { Component: module.default };
+            },
+          },
         ],
       },
 
       // ==================================================
       // FALLBACK
       // ==================================================
-      { path: '*', element: <NotFound /> },
+      {
+        path: '*',
+        lazy: async () => {
+          const module = await import('@/pages/NotFound');
+          return { Component: module.default };
+        },
+      },
     ],
   },
 ]);
