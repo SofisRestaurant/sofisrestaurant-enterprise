@@ -44,9 +44,7 @@ interface AwardResult {
 export default function LoyaltyScan() {
   const navigate = useNavigate()
 
-  const [adminReady,    setAdminReady]    = useState(false)
-  const [adminToken,    setAdminToken]    = useState<string | null>(null)
-  const [adminUserId,   setAdminUserId]   = useState<string | null>(null)
+  const [adminReady, setAdminReady] = useState(false);
   const [authChecking,  setAuthChecking]  = useState(true)
 
   const [scanState,      setScanState]      = useState<ScanState>('scanning')
@@ -79,27 +77,27 @@ export default function LoyaltyScan() {
   useEffect(() => {
     async function checkAdmin() {
       try {
-        const { data: { session } } = await supabase.auth.getSession()
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
 
         if (!session?.access_token || !session?.user?.id) {
-          navigate('/login', { replace: true })
-          return
+          navigate('/login', { replace: true });
+          return;
         }
 
         const { data: prof, error } = await supabase
           .from('profiles')
           .select('role')
           .eq('id', session.user.id)
-          .single()
+          .single();
 
         if (error || prof?.role !== 'admin') {
-          navigate('/', { replace: true })
-          return
+          navigate('/', { replace: true });
+          return;
         }
 
-        setAdminToken(session.access_token)
-        setAdminUserId(session.user.id)
-        setAdminReady(true)
+        setAdminReady(true);
       } finally {
         setAuthChecking(false)
       }
@@ -112,45 +110,53 @@ export default function LoyaltyScan() {
   // QR SCANNED → VERIFY
   // ============================================================================
 
-  const handleQRScanned = useCallback(async (raw: string) => {
-    if (scannerRef.current?.isScanning) {
-      await scannerRef.current.stop().catch(() => {})
+const handleQRScanned = useCallback(async (raw: string) => {
+  if (scannerRef.current?.isScanning) {
+    await scannerRef.current.stop().catch(() => {});
+  }
+
+  setScannerStarted(false);
+  setScanState('loading');
+  setErrorMsg(null);
+
+  const UUID_RE = /^[0-9a-f-]{36}$/i;
+  const trimmed = raw.trim();
+
+  if (!UUID_RE.test(trimmed)) {
+    setErrorMsg('Not a valid loyalty QR code. Try again.');
+    setScanState('error');
+    return;
+  }
+
+  try {
+    // ✅ ALWAYS GET FRESH SESSION
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session?.access_token) {
+      throw new Error('Not authenticated');
     }
-    setScannerStarted(false)
-    setScanState('loading')
-    setErrorMsg(null)
 
-    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-    const trimmed = raw.trim()
+    const res = await supabase.functions.invoke('verify-loyalty-qr', {
+      body: { loyalty_public_id: trimmed },
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+    });
 
-    if (!UUID_RE.test(trimmed)) {
-      setErrorMsg('Not a valid loyalty QR code. Try again.')
-      setScanState('error')
-      return
+    if (res.error || !res.data) {
+      throw new Error(res.error?.message ?? 'Customer not found');
     }
 
-    try {
-      const res = await supabase.functions.invoke('verify-loyalty-qr', {
-        body:    { loyalty_public_id: trimmed },
-        headers: { Authorization: `Bearer ${adminToken}` },
-      })
-
-      if (res.error || !res.data) {
-        throw new Error(res.error?.message ?? 'Customer not found')
-      }
-
-      const data = res.data as CustomerProfile & { error?: string }
-      if (data.error) throw new Error(data.error)
-
-      setScannedId(trimmed)
-      setCustomer(data)
-      setScanState('found')
-
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Verification failed')
-      setScanState('error')
-    }
-  }, [adminToken])
+    setScannedId(trimmed);
+    setCustomer(res.data);
+    setScanState('found');
+  } catch (err) {
+    setErrorMsg(err instanceof Error ? err.message : 'Verification failed');
+    setScanState('error');
+  }
+}, []);
 
   // ============================================================================
   // SCANNER LIFECYCLE
@@ -198,41 +204,50 @@ export default function LoyaltyScan() {
   // AWARD POINTS
   // ============================================================================
 
-  async function handleAwardPoints() {
-    if (!scannedId || !customer || !adminUserId) return
+ async function handleAwardPoints() {
+   if (!scannedId || !customer) return;
 
-    const dollars = parseFloat(amountDollars)
-    if (isNaN(dollars) || dollars <= 0 || dollars > 99999) {
-      setErrorMsg('Enter a valid purchase amount (e.g. 24.50)')
-      return
-    }
+   const dollars = parseFloat(amountDollars);
+   if (isNaN(dollars) || dollars <= 0 || dollars > 99999) {
+     setErrorMsg('Enter a valid purchase amount (e.g. 24.50)');
+     return;
+   }
 
-    const amountCents = Math.round(dollars * 100)
-    setScanState('awarding')
-    setErrorMsg(null)
+   const amountCents = Math.round(dollars * 100);
+   setScanState('awarding');
+   setErrorMsg(null);
 
-    try {
-      const res = await supabase.functions.invoke('award-loyalty-qr', {
-        body:    { loyalty_public_id: scannedId, amount_cents: amountCents },
-        headers: { Authorization: `Bearer ${adminToken}` },
-      })
+   try {
+     // ✅ ALWAYS GET FRESH SESSION
+     const {
+       data: { session },
+     } = await supabase.auth.getSession();
 
-      if (res.error || !res.data) {
-        throw new Error(res.error?.message ?? 'Award failed')
-      }
+     if (!session?.access_token) {
+       throw new Error('Not authenticated');
+     }
 
-      const result = res.data as AwardResult & { error?: string }
-      if (result.error) throw new Error(result.error)
+     const res = await supabase.functions.invoke('award-loyalty-qr', {
+       body: {
+         loyalty_public_id: scannedId,
+         amount_cents: amountCents,
+       },
+       headers: {
+         Authorization: `Bearer ${session.access_token}`,
+       },
+     });
 
-      setAwardResult(result)
-      setScanState('success')
+     if (res.error || !res.data) {
+       throw new Error(res.error?.message ?? 'Award failed');
+     }
 
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Award failed. Try again.')
-      setScanState('found')
-    }
-  }
-
+     setAwardResult(res.data);
+     setScanState('success');
+   } catch (err) {
+     setErrorMsg(err instanceof Error ? err.message : 'Award failed. Try again.');
+     setScanState('found');
+   }
+ }
   // ============================================================================
   // RESET
   // ============================================================================

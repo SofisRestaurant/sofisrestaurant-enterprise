@@ -13,7 +13,8 @@ const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE, {
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin":  "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Authorization, Content-Type",
+  "Access-Control-Allow-Headers":
+    "authorization, content-type, apikey, x-client-info",
 };
 
 Deno.serve(async (req: Request): Promise<Response> => {
