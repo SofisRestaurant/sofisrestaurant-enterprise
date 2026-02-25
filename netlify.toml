@@ -1,4 +1,6 @@
 # netlify.toml
+# redeploy trigger
+
 [[headers]]
 for = "/*"
   [headers.values]
