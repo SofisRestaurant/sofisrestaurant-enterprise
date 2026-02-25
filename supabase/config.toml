@@ -53,3 +53,20 @@ entrypoint = "./functions/login-guard/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/login-guard/*.html" ]
+[functions.verify-loyalty-qr]
+enabled = true
+verify_jwt = false
+import_map = "./functions/verify-loyalty-qr/deno.json"
+entrypoint = "./functions/verify-loyalty-qr/index.ts"
+
+[functions.award-loyalty-qr]
+enabled = true
+verify_jwt = false
+import_map = "./functions/award-loyalty-qr/deno.json"
+entrypoint = "./functions/award-loyalty-qr/index.ts"
+
+[functions.redeem-loyalty]
+enabled = true
+verify_jwt = false
+import_map = "./functions/redeem-loyalty/deno.json"
+entrypoint = "./functions/redeem-loyalty/index.ts"

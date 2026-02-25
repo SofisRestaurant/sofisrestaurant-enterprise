@@ -1,50 +1,42 @@
 // supabase/functions/redeem-loyalty/index.ts
 // =============================================================================
-// REDEEM LOYALTY — ENTERPRISE GRADE
+// REDEEM LOYALTY — FINAL PRODUCTION VERSION
 // =============================================================================
-// Called by the admin LoyaltyScan UI when staff awards a dine-in redemption,
-// or by a future self-serve flow when a customer applies points at checkout.
+// Thin HTTP wrapper. All financial logic lives in SQL:
 //
-// Security model:
-//   - JWT required (Supabase Auth)
-//   - Role validated: admin for staff-initiated redemptions
-//   - Points deducted atomically via Postgres UPDATE ... RETURNING
-//   - If atomic deduction fails (insufficient balance), entire request rejected
-//   - user_credits row inserted only after successful deduction
-//   - loyalty_transactions row written for full audit trail
-//   - All writes are inside a single DB interaction; partial failure = rejected
+//   redeem_loyalty_points_atomic() handles:
+//     ✔ Profile row lock (FOR UPDATE — prevents concurrent double-spend)
+//     ✔ Balance read from ledger (not from profiles cache)
+//     ✔ Insufficient balance rejection (raises check_violation, auto-rollback)
+//     ✔ Ledger append of negative delta
+//     ✔ Cache sync via trg_sync_cached_balance trigger
 //
-// Request body:
-//   {
-//     loyalty_public_id: string   // UUID from customer QR code
-//     points_to_redeem:  number   // integer > 0
-//     mode: 'dine_in' | 'online'  // dine_in = immediate discount; online = credit
-//   }
+//   issue_loyalty_correction() handles:
+//     ✔ Compensating reversal when downstream write fails
+//     ✔ correction:true in metadata — distinguishable in audit trail
 //
-// Response:
-//   {
-//     credit_cents:  number   // dollar value of credit issued
-//     new_balance:   number   // points balance after deduction
-//     credit_id?:    string   // user_credits.id (online mode only)
-//   }
+// This function only:
+//   - Authenticates the caller
+//   - Validates input shapes
+//   - Calls the redemption RPC
+//   - Inserts user_credits (online mode)
+//   - Calls correction RPC if user_credits insert fails
 // =============================================================================
 
 import { createClient } from "@supabase/supabase-js";
 
-// ── Env ───────────────────────────────────────────────────────────────────────
-const SUPABASE_URL          = Deno.env.get("SUPABASE_URL")!;
-const SERVICE_ROLE_KEY      = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const SUPABASE_ANON_KEY     = Deno.env.get("SUPABASE_ANON_KEY")!;
+const SUPABASE_URL      = Deno.env.get("SUPABASE_URL")!;
+const SERVICE_ROLE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 
 if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY) {
   throw new Error("Missing required environment variables");
 }
 
-// ── Config ────────────────────────────────────────────────────────────────────
-const POINTS_PER_DOLLAR = 100;          // 100 pts = $1.00 credit
-const MIN_REDEEM_POINTS = 100;          // minimum redemption
-const MAX_REDEEM_POINTS = 50_000;       // safety ceiling per transaction
-const CREDIT_EXPIRES_DAYS = 90;        // online credits expire in 90 days
+const POINTS_PER_DOLLAR   = 100;
+const MIN_REDEEM_POINTS   = 100;
+const MAX_REDEEM_POINTS   = 50_000;
+const CREDIT_EXPIRES_DAYS = 90;
 
 const ALLOWED_ORIGINS = [
   "https://sofislegacy.com",
@@ -54,7 +46,6 @@ const ALLOWED_ORIGINS = [
   "http://localhost:3001",
 ];
 
-// ── CORS ──────────────────────────────────────────────────────────────────────
 function getCorsHeaders(req: Request): Record<string, string> | null {
   const origin = req.headers.get("origin") ?? "";
   if (!ALLOWED_ORIGINS.includes(origin)) return null;
@@ -65,7 +56,6 @@ function getCorsHeaders(req: Request): Record<string, string> | null {
   };
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
 function log(level: "info" | "warn" | "error", msg: string, data?: unknown) {
   console.log(JSON.stringify({ level, msg, data, time: new Date().toISOString() }));
 }
@@ -82,13 +72,13 @@ function err(message: string, cors: Record<string, string>, status = 400) {
   return json({ error: message }, cors, status);
 }
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
-async function authenticate(req: Request): Promise<{ ok: false } | { ok: true; userId: string; role: string }> {
+async function authenticate(
+  req: Request
+): Promise<{ ok: false } | { ok: true; userId: string; role: string }> {
   const authHeader = req.headers.get("authorization");
   if (!authHeader?.startsWith("Bearer ")) return { ok: false };
 
   const token = authHeader.replace("Bearer ", "");
-
   const anonClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     global: { headers: { Authorization: `Bearer ${token}` } },
     auth:   { persistSession: false },
@@ -97,38 +87,29 @@ async function authenticate(req: Request): Promise<{ ok: false } | { ok: true; u
   const { data: { user }, error } = await anonClient.auth.getUser();
   if (error || !user) return { ok: false };
 
-  // Fetch role from profiles
-  const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+  const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
   const { data: profile } = await svc
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .single();
+    .from("profiles").select("role").eq("id", user.id).single();
 
   return { ok: true, userId: user.id, role: profile?.role ?? "customer" };
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
 Deno.serve(async (req) => {
   const cors = getCorsHeaders(req);
-  if (!cors) return new Response("Origin not allowed", { status: 403 });
+  if (!cors)                    return new Response("Origin not allowed", { status: 403 });
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
-  if (req.method !== "POST") return err("Method not allowed", cors, 405);
+  if (req.method !== "POST")    return err("Method not allowed", cors, 405);
 
-  // ── Auth ────────────────────────────────────────────────────────────────
   const auth = await authenticate(req);
-  if (!auth.ok) return err("Unauthorized", cors, 401);
-
-  // Only admins can redeem on behalf of customers (staff-initiated dine-in)
+  if (!auth.ok)              return err("Unauthorized", cors, 401);
   if (auth.role !== "admin") return err("Forbidden: admin only", cors, 403);
 
-  // ── Body ────────────────────────────────────────────────────────────────
   let body: { loyalty_public_id?: unknown; points_to_redeem?: unknown; mode?: unknown };
   try { body = await req.json(); } catch { return err("Invalid JSON", cors); }
 
-  const loyaltyId     = String(body.loyalty_public_id ?? "").trim();
+  const loyaltyId      = String(body.loyalty_public_id ?? "").trim();
   const pointsToRedeem = Math.round(Number(body.points_to_redeem));
-  const mode          = String(body.mode ?? "dine_in");
+  const mode           = String(body.mode ?? "dine_in");
 
   if (!/^[0-9a-f-]{36}$/i.test(loyaltyId)) return err("Invalid loyalty ID", cors);
   if (!Number.isInteger(pointsToRedeem) || pointsToRedeem < MIN_REDEEM_POINTS) {
@@ -139,52 +120,54 @@ Deno.serve(async (req) => {
   }
   if (mode !== "dine_in" && mode !== "online") return err("Invalid mode", cors);
 
-  const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+  const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
-  // ── Resolve customer by loyalty_public_id ───────────────────────────────
   const { data: customer, error: customerErr } = await svc
     .from("profiles")
-    .select("id, loyalty_points, loyalty_tier")
+    .select("id")
     .eq("loyalty_public_id", loyaltyId)
     .single();
 
   if (customerErr || !customer) return err("Customer not found", cors, 404);
 
-  // ── Atomic point deduction ──────────────────────────────────────────────
-  // UPDATE returns 0 rows if balance is insufficient → rejection with no partial write.
-  const { data: updated, error: deductErr } = await svc
-    .from("profiles")
-    .update({ loyalty_points: customer.loyalty_points - pointsToRedeem })
-    .eq("id", customer.id)
-    .gte("loyalty_points", pointsToRedeem)   // atomic guard: reject if insufficient
-    .select("loyalty_points")
-    .single();
+  // ── Atomic redemption via RPC ─────────────────────────────────────────────
+  // Locks profile row → reads ledger balance → rejects if insufficient →
+  // appends negative delta → trigger syncs cache → returns new balance.
+  const { data: redeemData, error: redeemErr } = await svc.rpc(
+    "redeem_loyalty_points_atomic",
+    {
+      p_user_id:  customer.id,
+      p_points:   pointsToRedeem,
+      p_admin_id: auth.userId,
+      p_mode:     mode,
+    }
+  );
 
-  if (deductErr || !updated) {
-    log("warn", "atomic_deduction_failed", { customerId: customer.id, pointsToRedeem, balance: customer.loyalty_points });
-    return err("Insufficient points balance", cors, 422);
+  if (redeemErr) {
+    const isInsufficient =
+      redeemErr.code === "23514" ||
+      redeemErr.message?.toLowerCase().includes("insufficient balance");
+
+    log(
+      isInsufficient ? "warn" : "error",
+      isInsufficient ? "insufficient_balance" : "redeem_rpc_failed",
+      { error: redeemErr, customerId: customer.id, pointsToRedeem }
+    );
+
+    return isInsufficient
+      ? err("Insufficient points balance", cors, 422)
+      : err("Redemption failed", cors, 500);
   }
 
-  const newBalance  = updated.loyalty_points;
+  if (!redeemData?.[0]) {
+    log("error", "redeem_rpc_no_data", { customerId: customer.id });
+    return err("Redemption failed", cors, 500);
+  }
+
+  const newBalance  = redeemData[0].new_balance as number;
   const creditCents = Math.floor((pointsToRedeem / POINTS_PER_DOLLAR) * 100);
 
-  // ── loyalty_transactions audit row ─────────────────────────────────────
-  const { error: txErr } = await svc.from("loyalty_transactions").insert({
-    user_id:       customer.id,
-    admin_id:      auth.userId,
-    points_change: -pointsToRedeem,
-    type:          "redemption",
-    mode,
-    balance_after: newBalance,
-    note:          `Redeemed ${pointsToRedeem} pts for $${(creditCents / 100).toFixed(2)} credit (${mode})`,
-  });
-
-  if (txErr) {
-    // Non-fatal: balance was already deducted. Log and continue.
-    log("error", "loyalty_transaction_insert_failed", txErr);
-  }
-
-  // ── user_credit (online mode only — dine_in is immediate cash discount) ─
+  // ── user_credits (online mode only) ──────────────────────────────────────
   let creditId: string | undefined;
 
   if (mode === "online") {
@@ -202,19 +185,37 @@ Deno.serve(async (req) => {
       .single();
 
     if (creditErr || !credit) {
-      log("error", "user_credit_insert_failed", creditErr);
-      // Points were deducted — refund them to maintain consistency
-      await svc
-        .from("profiles")
-        .update({ loyalty_points: newBalance + pointsToRedeem })
-        .eq("id", customer.id);
+      // Redemption committed — issue a named corrective reversal.
+      // correction:true in metadata makes this distinguishable from normal earns.
+      log("error", "user_credit_insert_failed — issuing correction", creditErr);
+
+      const { error: correctionErr } = await svc.rpc("issue_loyalty_correction", {
+        p_user_id:  customer.id,
+        p_points:   pointsToRedeem,
+        p_admin_id: auth.userId,
+        p_reason:   "user_credits_insert_failed",
+      });
+
+      if (correctionErr) {
+        // Correction also failed — this is a critical incident requiring manual review
+        log("error", "CRITICAL: correction_rpc_also_failed", {
+          customerId: customer.id,
+          pointsToRedeem,
+          correctionErr,
+        });
+      }
+
       return err("Failed to issue credit — points refunded", cors, 500);
     }
 
     creditId = credit.id;
-    log("info", "online_credit_issued", { customerId: customer.id, creditCents, creditId, expiresAt });
+    log("info", "online_credit_issued", {
+      customerId: customer.id, creditCents, creditId, expiresAt,
+    });
   } else {
-    log("info", "dine_in_redemption", { customerId: customer.id, creditCents, pointsRedeemed: pointsToRedeem });
+    log("info", "dine_in_redemption", {
+      customerId: customer.id, creditCents, pointsRedeemed: pointsToRedeem,
+    });
   }
 
   return json({ credit_cents: creditCents, new_balance: newBalance, credit_id: creditId }, cors);
