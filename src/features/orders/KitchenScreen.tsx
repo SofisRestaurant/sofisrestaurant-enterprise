@@ -42,7 +42,30 @@ export default function KitchenScreen() {
   )
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
+useEffect(() => {
+  const unlock = () => {
+    if (audioRef.current) {
+      audioRef.current
+        .play()
+        .then(() => {
+          audioRef.current?.pause();
+          audioRef.current!.currentTime = 0;
+        })
+        .catch(() => {});
+    }
 
+    window.removeEventListener('touchstart', unlock);
+    window.removeEventListener('click', unlock);
+  };
+
+  window.addEventListener('touchstart', unlock);
+  window.addEventListener('click', unlock);
+
+  return () => {
+    window.removeEventListener('touchstart', unlock);
+    window.removeEventListener('click', unlock);
+  };
+}, []);
   // ============================================================================
   // LOAD ORDERS
   // ============================================================================
