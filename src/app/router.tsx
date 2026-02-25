@@ -32,12 +32,14 @@ import AdminDashboard from '@/pages/Admin/Dashboard'
 import AdminOrders from '@/pages/Admin/Orders'
 import AdminMenuEditor from '@/pages/Admin/MenuEditor'
 import AdminLayout from '@/pages/Admin/AdminLayout'
-// Kitchen (NEW)
+import LoyaltyScan from '@/pages/Admin/LoyaltyScan'
+
+// Staff / Operations
 import KitchenScreen from '@/features/orders/KitchenScreen'
+import ExpoCommandCenter from '@/features/orders/ExpoCommandCenter';
 
+// Fallback
 import NotFound from '@/pages/NotFound'
-
-import ExpoCommandCenter from "@/features/orders/ExpoCommandCenter";
 
 export const router = createBrowserRouter([
   {
@@ -46,7 +48,7 @@ export const router = createBrowserRouter([
     errorElement: <NotFound />,
     children: [
       // ==================================================
-      // PUBLIC
+      // PUBLIC ROUTES
       // ==================================================
       { index: true, element: <Home /> },
       { path: 'menu', element: <Menu /> },
@@ -91,10 +93,12 @@ export const router = createBrowserRouter([
       // ==================================================
       { path: 'order-success', element: <OrderSuccess /> },
       { path: 'order-canceled', element: <OrderCanceled /> },
+
       // ==================================================
       // ORDER TRACKING (PUBLIC)
       // ==================================================
       { path: 'order-status/:orderId', element: <OrderStatusPage /> },
+
       // ==================================================
       // PASSWORD
       // ==================================================
@@ -108,7 +112,7 @@ export const router = createBrowserRouter([
       { path: 'refund-policy', element: <RefundPolicy /> },
 
       // ==================================================
-      // KITCHEN (ADMIN ONLY) - NEW
+      // KITCHEN (ADMIN + STAFF)
       // ==================================================
       {
         path: 'kitchen',
@@ -118,6 +122,7 @@ export const router = createBrowserRouter([
           </RoleGuard>
         ),
       },
+
       // ==================================================
       // EXPO (ADMIN + STAFF)
       // ==================================================
@@ -144,8 +149,10 @@ export const router = createBrowserRouter([
           { index: true, element: <AdminDashboard /> },
           { path: 'orders', element: <AdminOrders /> },
           { path: 'menu', element: <AdminMenuEditor /> },
+          { path: 'loyalty-scan', element: <LoyaltyScan /> }, // ✅ QR Scanner Added
         ],
       },
+
       // ==================================================
       // FALLBACK
       // ==================================================
