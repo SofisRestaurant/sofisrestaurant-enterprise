@@ -1,30 +1,22 @@
 // supabase/functions/award-loyalty-qr/index.ts
 // =============================================================================
-// AWARD LOYALTY QR — FINAL PRODUCTION VERSION
+// AWARD LOYALTY QR — V2 (LOYALTY_ACCOUNTS ARCHITECTURE)
 // =============================================================================
-// This function is now a thin HTTP wrapper. All financial logic lives in SQL:
+// Thin HTTP wrapper for v2_award_points() SQL function.
 //
-//   award_loyalty_points_atomic() handles:
-//     ✔ Profile row lock (FOR UPDATE — serialises concurrent awards)
-//     ✔ Balance read from ledger (never from TypeScript)
-//     ✔ Lifetime points from ledger (never computed in TypeScript)
-//     ✔ Ledger append with ON CONFLICT DO NOTHING (idempotency)
-//     ✔ Tier resolution via resolve_loyalty_tier() SQL function
-//     ✔ Tier + streak written to profiles in same transaction
-//     ✔ Cache sync via trg_sync_cached_balance trigger
+// V2 Changes:
+//   - Calls v2_award_points(p_account_id, ...) not award_loyalty_points_atomic(p_user_id, ...)
+//   - Uses account_id from scanner (not profile user_id)
+//   - Idempotency via p_idempotency_key
+//   - Returns was_duplicate flag for UI handling
 //
-// This function only:
-//   - Authenticates the caller
-//   - Validates input shapes
-//   - Computes streak (date arithmetic — appropriate in application layer)
-//   - Computes multipliers (mirrors SQL tier config, passed for audit only)
-//   - Calls the RPC
-//   - Returns the response
-//
-// Nothing financial is computed in TypeScript.
+// All financial logic lives in SQL:
+//   ✔ Ledger append with idempotency
+//   ✔ Account balance/tier/streak update
+//   ✔ Trigger-synced cache
 // =============================================================================
 
-import { createClient } from "@supabase/supabase-js";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL      = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -60,11 +52,19 @@ const ALLOWED_ORIGINS = [
   "https://sofisrestaurant.netlify.app",
   "http://localhost:3000",
   "http://localhost:3001",
+  "http://localhost:5173",
 ];
 
 function getCorsHeaders(req: Request): Record<string, string> | null {
   const origin = req.headers.get("origin") ?? "";
-  if (!ALLOWED_ORIGINS.includes(origin)) return null;
+  if (!ALLOWED_ORIGINS.includes(origin)) {
+    const allowedOrigin = ALLOWED_ORIGINS[0];
+    return {
+      "Access-Control-Allow-Origin":  allowedOrigin,
+      "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+    };
+  }
   return {
     "Access-Control-Allow-Origin":  origin,
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -118,44 +118,51 @@ Deno.serve(async (req): Promise<Response> => {
   if (!auth.ok)              return err("Unauthorized", cors, 401);
   if (auth.role !== "admin") return err("Forbidden: admin only", cors, 403);
 
-  let body: { loyalty_public_id?: unknown; amount_cents?: unknown; order_id?: unknown };
+  let body: { 
+    account_id?: unknown;      // ✅ V2: account_id required
+    amount_cents?: unknown; 
+    order_id?: unknown;
+    idempotency_key?: unknown; // ✅ V2: idempotency support
+  };
   try { body = await req.json(); } catch { return err("Invalid JSON", cors); }
 
-  const loyaltyId   = String(body.loyalty_public_id ?? "").trim();
+  const accountId  = String(body.account_id ?? "").trim();
   const amountCents = Math.round(Number(body.amount_cents));
   const orderId     = body.order_id ? String(body.order_id).trim() : null;
+  const idempotencyKey = body.idempotency_key 
+    ? String(body.idempotency_key).trim() 
+    : orderId 
+      ? `admin_scan:${orderId}` 
+      : `admin_scan:${Date.now()}:${crypto.randomUUID()}`;
 
-  if (!/^[0-9a-f-]{36}$/i.test(loyaltyId)) return err("Invalid loyalty ID", cors);
+  if (!/^[0-9a-f-]{36}$/i.test(accountId)) return err("Invalid account ID", cors);
   if (!Number.isFinite(amountCents) || amountCents <= 0 || amountCents > 9_999_900) {
     return err("Invalid amount", cors);
-  }
-  if (orderId && !/^[0-9a-f-]{36}$/i.test(orderId)) {
-    return err("Invalid order ID", cors);
   }
 
   const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
-  // Read only tier/streak context — SQL owns all financial state
-  const { data: customer, error: fetchErr } = await svc
-    .from("profiles")
-    .select("id, loyalty_tier, loyalty_streak, last_order_date")
-    .eq("loyalty_public_id", loyaltyId)
+  // ── Read account context ───────────────────────────────────────────────────
+  const { data: account, error: fetchErr } = await svc
+    .from("loyalty_accounts")
+    .select("tier, streak, last_order_date")
+    .eq("id", accountId)
     .single();
 
-  if (fetchErr || !customer) return err("Customer not found", cors, 404);
+  if (fetchErr || !account) return err("Account not found", cors, 404);
 
-  // ── Streak (date arithmetic — safe in application layer) ──────────────────
+  // ── Streak calculation (date arithmetic) ──────────────────────────────────
   const today     = new Date().toISOString().slice(0, 10);
   const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-  const lastOrder = customer.last_order_date?.slice(0, 10) ?? null;
+  const lastOrder = account.last_order_date?.slice(0, 10) ?? null;
 
   let newStreak: number;
-  if      (lastOrder === today)     newStreak = customer.loyalty_streak;
-  else if (lastOrder === yesterday) newStreak = customer.loyalty_streak + 1;
+  if      (lastOrder === today)     newStreak = account.streak;
+  else if (lastOrder === yesterday) newStreak = account.streak + 1;
   else                              newStreak = 1;
 
-  // ── Multipliers (passed to RPC for audit only — SQL resolves tier authoritatively) ──
-  const tier         = asTier(customer.loyalty_tier);
+  // ── Multipliers (for audit metadata only) ─────────────────────────────────
+  const tier         = asTier(account.tier);
   const tierMult     = TIERS[tier].multiplier;
   const streakMult   = getStreakMultiplier(newStreak);
   const basePoints   = Math.max(Math.floor(amountCents / 100), 0);
@@ -165,25 +172,26 @@ Deno.serve(async (req): Promise<Response> => {
     return err("Purchase amount too small to earn points", cors, 422);
   }
 
-  // ── Single atomic RPC — all state committed in one DB transaction ─────────
+  // ── ✅ V2: Single atomic RPC with idempotency ──────────────────────────────
   const { data: result, error: rpcErr } = await svc.rpc(
-    "award_loyalty_points_atomic",
+    "v2_award_points",
     {
-      p_user_id:      customer.id,
-      p_points:       pointsEarned,
-      p_admin_id:     auth.userId,
-      p_base_points:  basePoints,
-      p_tier:         tier,
-      p_tier_mult:    tierMult,
-      p_streak:       newStreak,
-      p_streak_mult:  streakMult,
-      p_amount_cents: amountCents,
-      p_order_id:     orderId,
+      p_account_id:      accountId,          // ✅ V2: account_id not user_id
+      p_points:          pointsEarned,
+      p_admin_id:        auth.userId,
+      p_base_points:     basePoints,
+      p_tier:            tier,
+      p_tier_mult:       tierMult,
+      p_streak:          newStreak,
+      p_streak_mult:     streakMult,
+      p_amount_cents:    amountCents,
+      p_order_id:        orderId,
+      p_idempotency_key: idempotencyKey,    // ✅ V2: idempotency
     }
   );
 
   if (rpcErr || !result?.[0]) {
-    log("error", "award_rpc_failed", { error: rpcErr, customerId: customer.id });
+    log("error", "award_rpc_failed", { error: rpcErr, accountId });
     return err("Failed to award points", cors, 500);
   }
 
@@ -192,14 +200,14 @@ Deno.serve(async (req): Promise<Response> => {
     new_lifetime:  number;
     new_tier:      string;
     tier_changed:  boolean;
-    was_duplicate: boolean;
+    was_duplicate: boolean;  // ✅ V2: idempotency detection
   };
 
   if (row.was_duplicate) {
-    log("info", "award_duplicate_ignored", { customerId: customer.id, orderId });
+    log("info", "award_duplicate_ignored", { accountId, orderId, idempotencyKey });
   } else {
     log("info", "points_awarded", {
-      customerId:  customer.id,
+      accountId,
       pointsEarned,
       newBalance:  row.new_balance,
       newTier:     row.new_tier,
@@ -216,6 +224,6 @@ Deno.serve(async (req): Promise<Response> => {
     tier_changed:  row.tier_changed,
     tier_before:   tier,
     streak:        newStreak,
-    was_duplicate: row.was_duplicate,
+    was_duplicate: row.was_duplicate,  // ✅ V2: Frontend can show "already awarded"
   }, cors);
 });

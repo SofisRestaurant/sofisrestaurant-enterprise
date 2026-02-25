@@ -1,29 +1,24 @@
 // supabase/functions/redeem-loyalty/index.ts
 // =============================================================================
-// REDEEM LOYALTY — FINAL PRODUCTION VERSION
+// REDEEM LOYALTY — V2 (LOYALTY_ACCOUNTS ARCHITECTURE)
 // =============================================================================
-// Thin HTTP wrapper. All financial logic lives in SQL:
+// Thin HTTP wrapper for v2_redeem_points() SQL function.
 //
-//   redeem_loyalty_points_atomic() handles:
-//     ✔ Profile row lock (FOR UPDATE — prevents concurrent double-spend)
-//     ✔ Balance read from ledger (not from profiles cache)
-//     ✔ Insufficient balance rejection (raises check_violation, auto-rollback)
-//     ✔ Ledger append of negative delta
-//     ✔ Cache sync via trg_sync_cached_balance trigger
+// V2 Changes:
+//   - Calls v2_redeem_points(p_account_id, ...) not redeem_loyalty_points_atomic(p_user_id, ...)
+//   - Uses account_id from scanner (not profile user_id)
+//   - Idempotency via p_idempotency_key
+//   - Returns was_duplicate flag
 //
-//   issue_loyalty_correction() handles:
-//     ✔ Compensating reversal when downstream write fails
-//     ✔ correction:true in metadata — distinguishable in audit trail
-//
-// This function only:
-//   - Authenticates the caller
-//   - Validates input shapes
-//   - Calls the redemption RPC
-//   - Inserts user_credits (online mode)
-//   - Calls correction RPC if user_credits insert fails
+// All financial logic lives in SQL:
+//   ✔ Account row lock (FOR UPDATE)
+//   ✔ Balance read from ledger
+//   ✔ Insufficient balance rejection
+//   ✔ Ledger append of negative delta
+//   ✔ Trigger-synced cache
 // =============================================================================
 
-import { createClient } from "@supabase/supabase-js";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL      = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -44,11 +39,19 @@ const ALLOWED_ORIGINS = [
   "https://sofisrestaurant.netlify.app",
   "http://localhost:3000",
   "http://localhost:3001",
+  "http://localhost:5173",
 ];
 
 function getCorsHeaders(req: Request): Record<string, string> | null {
   const origin = req.headers.get("origin") ?? "";
-  if (!ALLOWED_ORIGINS.includes(origin)) return null;
+  if (!ALLOWED_ORIGINS.includes(origin)) {
+    const allowedOrigin = ALLOWED_ORIGINS[0];
+    return {
+      "Access-Control-Allow-Origin":  allowedOrigin,
+      "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+    };
+  }
   return {
     "Access-Control-Allow-Origin":  origin,
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -104,14 +107,22 @@ Deno.serve(async (req) => {
   if (!auth.ok)              return err("Unauthorized", cors, 401);
   if (auth.role !== "admin") return err("Forbidden: admin only", cors, 403);
 
-  let body: { loyalty_public_id?: unknown; points_to_redeem?: unknown; mode?: unknown };
+  let body: { 
+    account_id?: unknown;         // ✅ V2: account_id required
+    points_to_redeem?: unknown; 
+    mode?: unknown;
+    idempotency_key?: unknown;    // ✅ V2: idempotency support
+  };
   try { body = await req.json(); } catch { return err("Invalid JSON", cors); }
 
-  const loyaltyId      = String(body.loyalty_public_id ?? "").trim();
+  const accountId      = String(body.account_id ?? "").trim();
   const pointsToRedeem = Math.round(Number(body.points_to_redeem));
   const mode           = String(body.mode ?? "dine_in");
+  const idempotencyKey = body.idempotency_key 
+    ? String(body.idempotency_key).trim()
+    : `admin_redeem:${Date.now()}:${crypto.randomUUID()}`;
 
-  if (!/^[0-9a-f-]{36}$/i.test(loyaltyId)) return err("Invalid loyalty ID", cors);
+  if (!/^[0-9a-f-]{36}$/i.test(accountId)) return err("Invalid account ID", cors);
   if (!Number.isInteger(pointsToRedeem) || pointsToRedeem < MIN_REDEEM_POINTS) {
     return err(`Minimum redemption is ${MIN_REDEEM_POINTS} points`, cors);
   }
@@ -122,24 +133,24 @@ Deno.serve(async (req) => {
 
   const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
-  const { data: customer, error: customerErr } = await svc
-    .from("profiles")
-    .select("id")
-    .eq("loyalty_public_id", loyaltyId)
+  // ── Get user_id for user_credits insert ───────────────────────────────────
+  const { data: account, error: accountErr } = await svc
+    .from("loyalty_accounts")
+    .select("user_id")
+    .eq("id", accountId)
     .single();
 
-  if (customerErr || !customer) return err("Customer not found", cors, 404);
+  if (accountErr || !account) return err("Account not found", cors, 404);
 
-  // ── Atomic redemption via RPC ─────────────────────────────────────────────
-  // Locks profile row → reads ledger balance → rejects if insufficient →
-  // appends negative delta → trigger syncs cache → returns new balance.
+  // ── ✅ V2: Atomic redemption via RPC with idempotency ──────────────────────
   const { data: redeemData, error: redeemErr } = await svc.rpc(
-    "redeem_loyalty_points_atomic",
+    "v2_redeem_points",
     {
-      p_user_id:  customer.id,
-      p_points:   pointsToRedeem,
-      p_admin_id: auth.userId,
-      p_mode:     mode,
+      p_account_id:      accountId,         // ✅ V2: account_id not user_id
+      p_points:          pointsToRedeem,
+      p_admin_id:        auth.userId,
+      p_mode:            mode,
+      p_idempotency_key: idempotencyKey,    // ✅ V2: idempotency
     }
   );
 
@@ -151,7 +162,7 @@ Deno.serve(async (req) => {
     log(
       isInsufficient ? "warn" : "error",
       isInsufficient ? "insufficient_balance" : "redeem_rpc_failed",
-      { error: redeemErr, customerId: customer.id, pointsToRedeem }
+      { error: redeemErr, accountId, pointsToRedeem }
     );
 
     return isInsufficient
@@ -160,11 +171,24 @@ Deno.serve(async (req) => {
   }
 
   if (!redeemData?.[0]) {
-    log("error", "redeem_rpc_no_data", { customerId: customer.id });
+    log("error", "redeem_rpc_no_data", { accountId });
     return err("Redemption failed", cors, 500);
   }
 
-  const newBalance  = redeemData[0].new_balance as number;
+  const row = redeemData[0] as {
+    new_balance:   number;
+    was_duplicate: boolean;  // ✅ V2: idempotency detection
+  };
+
+  if (row.was_duplicate) {
+    log("info", "redeem_duplicate_ignored", { accountId, idempotencyKey });
+    return json({
+      credit_cents: 0,
+      new_balance: row.new_balance,
+      was_duplicate: true,
+    }, cors);
+  }
+
   const creditCents = Math.floor((pointsToRedeem / POINTS_PER_DOLLAR) * 100);
 
   // ── user_credits (online mode only) ──────────────────────────────────────
@@ -176,7 +200,7 @@ Deno.serve(async (req) => {
     const { data: credit, error: creditErr } = await svc
       .from("user_credits")
       .insert({
-        user_id:      customer.id,
+        user_id:      account.user_id,
         amount_cents: creditCents,
         source:       "loyalty_redemption",
         expires_at:   expiresAt,
@@ -185,21 +209,19 @@ Deno.serve(async (req) => {
       .single();
 
     if (creditErr || !credit) {
-      // Redemption committed — issue a named corrective reversal.
-      // correction:true in metadata makes this distinguishable from normal earns.
+      // Redemption committed — issue corrective reversal
       log("error", "user_credit_insert_failed — issuing correction", creditErr);
 
-      const { error: correctionErr } = await svc.rpc("issue_loyalty_correction", {
-        p_user_id:  customer.id,
-        p_points:   pointsToRedeem,
-        p_admin_id: auth.userId,
-        p_reason:   "user_credits_insert_failed",
+      const { error: correctionErr } = await svc.rpc("v2_issue_correction", {
+        p_account_id: accountId,
+        p_points:     pointsToRedeem,
+        p_admin_id:   auth.userId,
+        p_reason:     "user_credits_insert_failed",
       });
 
       if (correctionErr) {
-        // Correction also failed — this is a critical incident requiring manual review
         log("error", "CRITICAL: correction_rpc_also_failed", {
-          customerId: customer.id,
+          accountId,
           pointsToRedeem,
           correctionErr,
         });
@@ -210,13 +232,18 @@ Deno.serve(async (req) => {
 
     creditId = credit.id;
     log("info", "online_credit_issued", {
-      customerId: customer.id, creditCents, creditId, expiresAt,
+      accountId, creditCents, creditId, expiresAt,
     });
   } else {
     log("info", "dine_in_redemption", {
-      customerId: customer.id, creditCents, pointsRedeemed: pointsToRedeem,
+      accountId, creditCents, pointsRedeemed: pointsToRedeem,
     });
   }
 
-  return json({ credit_cents: creditCents, new_balance: newBalance, credit_id: creditId }, cors);
+  return json({ 
+    credit_cents: creditCents, 
+    new_balance: row.new_balance, 
+    credit_id: creditId,
+    was_duplicate: false,
+  }, cors);
 });

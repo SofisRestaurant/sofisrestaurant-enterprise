@@ -1,15 +1,18 @@
 // supabase/functions/verify-loyalty-qr/index.ts
 // =============================================================================
-// VERIFY LOYALTY QR — PRODUCTION GRADE
+// VERIFY LOYALTY QR — V2 (LOYALTY_ACCOUNTS ARCHITECTURE)
 // =============================================================================
-// Reads a customer profile by loyalty_public_id for display in the admin scanner.
-// Returns only display-safe fields — no id, email, phone, or auth details.
+// Reads a customer's loyalty account by loyalty_public_id for display in scanner.
+// Returns account balance, tier, streak from loyalty_accounts (source of truth).
+//
+// V2 Changes:
+//   - Queries loyalty_accounts table (not profiles cache)
+//   - Returns account_id (required for award/redeem operations)
+//   - Balance from ledger-backed view, not profiles.loyalty_points
 //
 // Auth: JWT required, role must be 'admin'.
-//
-// CRITICAL: Supabase Edge Function runtime lowercases ALL incoming HTTP headers.
-// Always use req.headers.get("authorization") — lowercase — never "Authorization".
 // =============================================================================
+
 
 import { createClient } from "supabase";
 
@@ -23,18 +26,17 @@ if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY) {
 }
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
-// Origin-scoped (not wildcard) — admin tool should only be called from known origins.
 const ALLOWED_ORIGINS = [
   "https://sofislegacy.com",
   "https://www.sofislegacy.com",
   "https://sofisrestaurant.netlify.app",
   "http://localhost:3000",
   "http://localhost:3001",
+  "http://localhost:5173",
 ];
 
 function getCorsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get("origin") ?? "";
-  // Fall back to first allowed origin for non-browser calls (e.g. Supabase dashboard tests)
   const allowedOrigin = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
   return {
     "Access-Control-Allow-Origin":  allowedOrigin,
@@ -72,8 +74,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // ── Auth ────────────────────────────────────────────────────────────────
-  // MUST be lowercase — Supabase Edge Function runtime lowercases all headers.
-  // req.headers.get("Authorization") always returns null here.
   const authHeader = req.headers.get("authorization");
 
   if (!authHeader?.startsWith("Bearer ")) {
@@ -82,10 +82,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   const jwt = authHeader.slice(7);
-log("info", "env_check", {
-  supabase_url: SUPABASE_URL
-});
-  // Validate the caller's JWT via the anon client (does not bypass RLS)
+
+  // Validate caller's JWT
   const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     auth:   { persistSession: false },
     global: { headers: { Authorization: `Bearer ${jwt}` } },
@@ -98,7 +96,7 @@ log("info", "env_check", {
     return respond(401, { error: "Invalid token" }, cors);
   }
 
-  // Verify admin role via service role client (bypasses RLS safely)
+  // Verify admin role
   const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
   });
@@ -128,7 +126,6 @@ log("info", "env_check", {
     return respond(400, { error: "loyalty_public_id is required" }, cors);
   }
 
-  // Strict UUID v4 pattern — QR codes always contain valid UUIDs
   const UUID_PATTERN =
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -136,13 +133,24 @@ log("info", "env_check", {
     return respond(400, { error: "Invalid loyalty_public_id format" }, cors);
   }
 
-  // ── Lookup ──────────────────────────────────────────────────────────────
-  const { data: profile, error: lookupError } = await adminClient
-    .from("profiles")
-    .select(
-      "full_name, loyalty_tier, loyalty_points, lifetime_points, loyalty_streak, last_order_date"
-    )
-    .eq("loyalty_public_id", loyalty_public_id.trim())
+  // ── V2 Lookup ───────────────────────────────────────────────────────────
+  // Query loyalty_accounts table (source of truth) with profile join
+  const { data: account, error: lookupError } = await adminClient
+    .from("loyalty_accounts")
+    .select(`
+      id,
+      balance,
+      lifetime_earned,
+      tier,
+      streak,
+      last_order_date,
+      profiles!inner (
+        id,
+        loyalty_public_id,
+        full_name
+      )
+    `)
+    .eq("profiles.loyalty_public_id", loyalty_public_id.trim())
     .maybeSingle();
 
   if (lookupError) {
@@ -150,19 +158,31 @@ log("info", "env_check", {
     return respond(500, { error: "Lookup failed" }, cors);
   }
 
-  if (!profile) {
+  if (!account || !account.profiles) {
     return respond(404, { error: "Customer not found" }, cors);
   }
 
-  log("info", "customer_verified", { adminId: user.id });
+  log("info", "customer_verified", { 
+    adminId: user.id,
+    accountId: account.id 
+  });
+// Extract profile safely (Supabase returns relations as arrays)
+const profile = account.profiles?.[0];
 
-  // Return only display-safe fields — deliberately excludes id, email, phone
-  return respond(200, {
-    full_name:       profile.full_name       ?? null,
-    loyalty_tier:    profile.loyalty_tier    ?? "bronze",
-    loyalty_points:  profile.loyalty_points  ?? 0,
-    lifetime_points: profile.lifetime_points ?? 0,
-    loyalty_streak:  profile.loyalty_streak  ?? 0,
-    last_order_date: profile.last_order_date ?? null,
+if (!profile) {
+  return respond(500, {
+    error: "Data integrity error: loyalty account missing profile"
   }, cors);
-});
+}
+
+// Return account data + profile info
+return respond(200, {
+  account_id:      account.id,
+  balance:         account.balance,
+  lifetime_earned: account.lifetime_earned,
+  tier:            account.tier ?? "bronze",
+  streak:          account.streak ?? 0,
+  last_order_date: account.last_order_date ?? null,
+  full_name:       profile.full_name ?? null,
+  profile_id:      profile.id,   // Kept for reference
+}, cors)})
