@@ -9,7 +9,7 @@
 // Security:
 //   - Admin auth check on mount (separate from AuthGuard for defense-in-depth)
 //   - All point math happens server-side
-//   - Fresh session token fetched before each Edge Function call
+//   - supabase.functions.invoke() attaches the session token automatically
 // =============================================================================
 
 import { useEffect, useRef, useState, useCallback } from 'react'
@@ -94,7 +94,7 @@ export default function LoyaltyScan() {
       try {
         const {
           data: { session },
-        } = await supabase.auth.getSession();
+        } = await supabase.auth.refreshSession();
         if (!session?.access_token || !session?.user?.id) {
           navigate('/login', { replace: true });
           return;
@@ -121,7 +121,7 @@ export default function LoyaltyScan() {
     if (next === mode) return;
     setMode(next);
     reset();
-  };
+  }
 
   // ── QR scanned → verify customer ──────────────────────────────────────
   const handleQRScanned = useCallback(async (raw: string) => {
@@ -142,16 +142,17 @@ export default function LoyaltyScan() {
     }
 
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session?.access_token) throw new Error('Not authenticated');
+      const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
 
-      const res = await supabase.functions.invoke('verify-loyalty-qr', {
-        body: { loyalty_public_id: trimmed },
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
+      if (refreshError || !refreshed?.session?.access_token) {
+        throw new Error('Session expired. Please log in again.');
+      }
+      const { data } = await supabase.auth.getSession();
+      console.log('SESSION TOKEN:', data.session?.access_token);
 
+const res = await supabase.functions.invoke('verify-loyalty-qr', {
+  body: { loyalty_public_id: trimmed },
+});
       if (res.error || !res.data) throw new Error(res.error?.message ?? 'Customer not found');
 
       setScannedId(trimmed);
@@ -214,14 +215,8 @@ export default function LoyaltyScan() {
     setErrorMsg(null);
 
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session?.access_token) throw new Error('Not authenticated');
-
       const res = await supabase.functions.invoke('award-loyalty-qr', {
         body: { loyalty_public_id: scannedId, amount_cents: Math.round(dollars * 100) },
-        headers: { Authorization: `Bearer ${session.access_token}` },
       });
 
       if (res.error || !res.data) throw new Error(res.error?.message ?? 'Award failed');
@@ -250,14 +245,8 @@ export default function LoyaltyScan() {
     setErrorMsg(null);
 
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session?.access_token) throw new Error('Not authenticated');
-
       const res = await supabase.functions.invoke('redeem-loyalty', {
         body: { loyalty_public_id: scannedId, points_to_redeem: pts, mode: 'dine_in' },
-        headers: { Authorization: `Bearer ${session.access_token}` },
       });
 
       if (res.error || !res.data) throw new Error(res.error?.message ?? 'Redemption failed');

@@ -1,13 +1,22 @@
 // src/router.tsx
-import { createBrowserRouter } from 'react-router-dom'
-import RootLayout from '@/app/RootLayout'
+import { createBrowserRouter } from 'react-router-dom';
+import RootLayout from '@/app/RootLayout';
 import { AuthGuard, RoleGuard } from '@/components/auth/AuthGuard';
 
 export const router = createBrowserRouter([
   {
     path: '/',
     element: <RootLayout />,
+
+    // ✅ REQUIRED in React Router v7 when using lazy routes
+    HydrateFallback: () => (
+      <div className="flex min-h-screen items-center justify-center bg-gray-950">
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-700 border-t-amber-500" />
+      </div>
+    ),
+
     errorElement: <div>Loading...</div>,
+
     children: [
       // ==================================================
       // PUBLIC ROUTES
@@ -192,7 +201,7 @@ export const router = createBrowserRouter([
       },
 
       // ==================================================
-      // KITCHEN
+      // KITCHEN (ROLE PROTECTED)
       // ==================================================
       {
         path: 'kitchen',
@@ -209,7 +218,7 @@ export const router = createBrowserRouter([
       },
 
       // ==================================================
-      // EXPO
+      // EXPO (ROLE PROTECTED)
       // ==================================================
       {
         path: 'expo',
@@ -226,7 +235,7 @@ export const router = createBrowserRouter([
       },
 
       // ==================================================
-      // ADMIN
+      // ADMIN (AUTH + ADMIN REQUIRED)
       // ==================================================
       {
         path: 'admin',
