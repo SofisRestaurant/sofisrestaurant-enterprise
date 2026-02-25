@@ -1,0 +1,95 @@
+@theme {
+
+  /* ── TYPEFACES ───────────────────────────────────────────── */
+  --font-display: "Cormorant Garamond", Georgia, serif;
+  --font-sans:    "DM Sans", -apple-system, sans-serif;
+
+  /* ── COLOR — Clay (Primary brand) ───────────────────────── */
+  --color-brand-50:  #fdf8f4;
+  --color-brand-100: #f5ebe0;
+  --color-brand-200: #e8d2b8;
+  --color-brand-300: #d4a97a;
+  --color-brand-400: #c08455;
+  --color-brand:     #a96840;
+  --color-brand-600: #8a4f2e;
+  --color-brand-700: #6b3820;
+
+  /* ── COLOR — Forest (Success / Confirmation only) ────────── */
+  --color-success-50:  #f2f6f2;
+  --color-success-100: #d8e8d8;
+  --color-success-300: #6a9e6a;
+  --color-success:     #1f5c1f;
+  --color-success-600: #154015;
+
+  /* ── COLOR — Gold (Accent / premium CTA only) ────────────── */
+  --color-accent-300: #e8c97a;
+  --color-accent:     #d4aa40;
+  --color-accent-600: #b8912a;
+
+  /* ── COLOR — Ink (All text + UI neutrals) ────────────────── */
+  --color-ink-50:  #fdf8f4;
+  --color-ink-100: #c8b8a8;
+  --color-ink-300: #8a7a6a;
+  --color-ink-500: #5a4a3a;
+  --color-ink-700: #2d2520;
+  --color-ink-900: #1a1512;
+
+  /* ── COLOR — Semantic surfaces ───────────────────────────── */
+  --color-cream:       #fdf8f4;
+  --color-surface:     #ffffff;
+  --color-surface-alt: #fdf8f4;
+  --color-border:      #f5ebe0;
+  --color-border-mid:  #e8d2b8;
+
+  /* ── COLOR — State ───────────────────────────────────────── */
+  --color-error:   #c0392b;
+  --color-error-50: #fdf2f2;
+  --color-warning: #d4aa40;
+
+  /* ── SPACING — semantic additions to Tailwind's scale ────── */
+  /* Use standard Tailwind spacing (4, 6, 8...) for everything */
+  /* These names are for section-level rhythm only             */
+  --spacing-section: 5rem;    /* 80px  — vertical section gap */
+  --spacing-card:    1.25rem; /* 20px  — card internal padding */
+
+  /* ── BORDER RADIUS ───────────────────────────────────────── */
+  --radius-card:  0.75rem;  /* 12px — menu cards, checkout    */
+  --radius-btn:   9999px;   /* pill — all buttons             */
+  --radius-input: 0.5rem;   /* 8px  — form inputs             */
+  --radius-badge: 9999px;   /* pill — status badges           */
+
+  /* ── SHADOWS ─────────────────────────────────────────────── */
+  --shadow-sm:         0 1px 3px rgb(26 21 18 / 0.06), 0 1px 2px rgb(26 21 18 / 0.04);
+  --shadow-card:       0 4px 12px rgb(26 21 18 / 0.08), 0 2px 4px rgb(26 21 18 / 0.04);
+  --shadow-card-hover: 0 16px 40px rgb(26 21 18 / 0.14);
+  --shadow-lg:         0 12px 32px rgb(26 21 18 / 0.10), 0 4px 8px rgb(26 21 18 / 0.06);
+  --shadow-brand:      0 8px 24px rgb(169 104 64 / 0.25);
+  --shadow-brand-lg:   0 12px 32px rgb(169 104 64 / 0.35);
+  --shadow-gold:       0 8px 24px rgb(212 170 64 / 0.30);
+  --shadow-popover:    0 24px 48px rgb(26 21 18 / 0.14), 0 8px 16px rgb(26 21 18 / 0.08);
+
+  /* ── MOTION ─────────────────────────────────────────────── */
+  --ease-standard: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --ease-spring:   cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-out:      cubic-bezier(0.0,  0.0,  0.2,  1);
+
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 350ms;
+  --duration-enter: 450ms;
+
+  /* Shorthand used in className for transition-[...] */
+  --transition-base: 200ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+
+  /* ── TYPOGRAPHY — letter spacing ─────────────────────────── */
+  --tracking-display: -0.03em;
+  --tracking-ui:       0.04em;
+  --tracking-label:    0.10em;
+  --tracking-caps:     0.12em;
+
+  /* ── GLASS (dark surface overlay variant) ────────────────── */
+  --glass-bg:     rgb(255 255 255 / 0.07);
+  --glass-border: rgb(255 255 255 / 0.12);
+  --glass-blur:   12px;
+
+}

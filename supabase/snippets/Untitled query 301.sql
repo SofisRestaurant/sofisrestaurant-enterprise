@@ -1,0 +1,1 @@
+drop index if exists idx_orders_customer_uid;

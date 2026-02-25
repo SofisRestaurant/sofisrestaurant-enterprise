@@ -1,0 +1,120 @@
+/* ============================================================
+   SOFIS — UTILITIES
+   Animation keyframes + pseudo-state utilities ONLY.
+   ─────────────────────────────────────────────────────────────
+   RULE: Only put something here if it is IMPOSSIBLE to express
+   in a Tailwind className. This means:
+     ✅ Keyframe @keyframes blocks
+     ✅ Multi-child state changes driven by a parent class
+     ✅ ::before / ::after content that can't live in JSX
+   ─────────────────────────────────────────────────────────────
+   ❌ NOT for colors. ❌ NOT for spacing. ❌ NOT for components.
+   ============================================================ */
+
+/* ── Cart button — multi-child state swap ────────────────── */
+/* JS toggles .btn-cart-added on the <button>.               */
+/* Children .btn-cart-label and .btn-cart-check respond.     */
+/* Impossible in Tailwind because it requires sibling state. */
+
+.btn-cart-label {
+  transition:
+    opacity var(--duration-base) var(--ease-standard),
+    transform var(--duration-base) var(--ease-standard);
+}
+
+.btn-cart-check {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: scale(0.6);
+  transition:
+    opacity var(--duration-slow) var(--ease-spring),
+    transform var(--duration-slow) var(--ease-spring);
+}
+
+.btn-cart-added .btn-cart-label {
+  opacity: 0;
+  transform: scale(0.6);
+}
+
+.btn-cart-added .btn-cart-check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* ── Scroll containers ───────────────────────────────────── */
+.scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.scroll-x::-webkit-scrollbar { display: none; }
+
+/* ── Card image hover zoom (child responds to parent hover) ─ */
+/* group-hover:scale-[1.04] in Tailwind works for this.      */
+/* Using a class here only as a fallback for non-React HTML. */
+.group:hover .card-zoom {
+  transform: scale(1.04);
+}
+.card-zoom {
+  transition: transform var(--duration-slow) var(--ease-standard);
+}
+
+/* ── Keyframes ───────────────────────────────────────────── */
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fade-up {
+  from { transform: translateY(12px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+@keyframes confirm-pop {
+  0%   { transform: scale(0.5); opacity: 0; }
+  70%  { transform: scale(1.08); }
+  100% { transform: scale(1);   opacity: 1; }
+}
+
+@keyframes ripple {
+  from { transform: scale(0);   opacity: 0.2; }
+  to   { transform: scale(2.5); opacity: 0; }
+}
+
+@keyframes toast-in {
+  from { transform: translateY(16px) scale(0.94); opacity: 0; }
+  to   { transform: translateY(0)    scale(1);    opacity: 1; }
+}
+
+@keyframes step-done {
+  0%   { transform: scale(0.7); opacity: 0; }
+  100% { transform: scale(1);   opacity: 1; }
+}
+
+/* ── Animation utility classes ───────────────────────────── */
+/* Only applied via JS or conditional className in React.    */
+
+.animate-confirm-pop { animation: confirm-pop 0.45s var(--ease-spring) both; }
+.animate-toast-in    { animation: toast-in    0.35s var(--ease-spring) both; }
+.animate-step-done   { animation: step-done   0.35s var(--ease-spring) both; }
+
+/* Staggered fade-ups for confirmation screen */
+.animate-fade-up-1 { animation: fade-up 0.5s 0.08s var(--ease-out) both; }
+.animate-fade-up-2 { animation: fade-up 0.5s 0.16s var(--ease-out) both; }
+.animate-fade-up-3 { animation: fade-up 0.5s 0.24s var(--ease-out) both; }
+.animate-fade-up-4 { animation: fade-up 0.5s 0.32s var(--ease-out) both; }
+
+/* One-shot ripple (added via JS, removed after 400ms) */
+.animate-ripple::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgb(255 255 255 / 0.2);
+  animation: ripple 0.4s var(--ease-out) both;
+  pointer-events: none;
+}
