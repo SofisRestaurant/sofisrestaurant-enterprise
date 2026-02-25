@@ -73,7 +73,7 @@ export const router = createBrowserRouter([
           { path: 'orders', element: <OrderHistory /> },
         ],
       },
-       
+
       // ==================================================
       // CHECKOUT (AUTH REQUIRED)
       // ==================================================
@@ -92,9 +92,9 @@ export const router = createBrowserRouter([
       { path: 'order-success', element: <OrderSuccess /> },
       { path: 'order-canceled', element: <OrderCanceled /> },
       // ==================================================
-// ORDER TRACKING (PUBLIC)
-// ==================================================
-{ path: 'order-status/:orderId', element: <OrderStatusPage /> },
+      // ORDER TRACKING (PUBLIC)
+      // ==================================================
+      { path: 'order-status/:orderId', element: <OrderStatusPage /> },
       // ==================================================
       // PASSWORD
       // ==================================================
@@ -113,39 +113,23 @@ export const router = createBrowserRouter([
       {
         path: 'kitchen',
         element: (
-          <RoleGuard allowedRoles={['admin','staff']}>
+          <RoleGuard allowedRoles={['admin', 'staff']}>
             <KitchenScreen />
           </RoleGuard>
         ),
       },
-          // ==================================================
-// ADMIN (ADMIN ONLY)
-// ==================================================
-{
-  path: 'admin',
-  element: (
-    <AuthGuard requireAdmin>
-      <AdminLayout />
-    </AuthGuard>
-  ),
-  children: [
-    { index: true, element: <AdminDashboard /> },
-    { path: 'orders', element: <AdminOrders /> },
-    { path: 'menu', element: <AdminMenuEditor /> },
-  ],
-},
-         // ==================================================
-// EXPO (ADMIN + STAFF)
-// ==================================================
-{
-  path: 'expo',
-  element: (
-    <RoleGuard allowedRoles={['admin', 'staff']}>
-      <ExpoCommandCenter />
-    </RoleGuard>
-  ),
-},
- 
+      // ==================================================
+      // EXPO (ADMIN + STAFF)
+      // ==================================================
+      {
+        path: 'expo',
+        element: (
+          <RoleGuard allowedRoles={['admin', 'staff']}>
+            <ExpoCommandCenter />
+          </RoleGuard>
+        ),
+      },
+
       // ==================================================
       // ADMIN (ADMIN ONLY)
       // ==================================================
@@ -153,19 +137,19 @@ export const router = createBrowserRouter([
         path: 'admin',
         element: (
           <AuthGuard requireAdmin>
-            <AdminDashboard />
+            <AdminLayout />
           </AuthGuard>
         ),
         children: [
+          { index: true, element: <AdminDashboard /> },
           { path: 'orders', element: <AdminOrders /> },
           { path: 'menu', element: <AdminMenuEditor /> },
         ],
       },
-
       // ==================================================
       // FALLBACK
       // ==================================================
       { path: '*', element: <NotFound /> },
     ],
   },
-])
+]);
