@@ -122,18 +122,34 @@ function n(v: unknown, min: number, max: number) {
 // ============================================================================
 async function authenticate(req: Request) {
   const authHeader = req.headers.get("authorization");
-  if (!authHeader?.startsWith("Bearer ")) return { ok: false };
+
+  if (!authHeader?.startsWith("Bearer ")) {
+    return { ok: false };
+  }
 
   const token = authHeader.replace("Bearer ", "");
 
-  const client = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-    global: { headers: { Authorization: `Bearer ${token}` } },
-  });
+  // 👇 USE ANON KEY TO VALIDATE USER JWT
+  const anonClient = createClient(
+    SUPABASE_URL,
+    Deno.env.get("SUPABASE_ANON_KEY")!, // make sure this exists in Edge Secrets
+    {
+      global: {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+      auth: { persistSession: false },
+    }
+  );
 
-  const { data } = await client.auth.getUser();
-  if (!data?.user) return { ok: false };
+  const { data: { user }, error } = await anonClient.auth.getUser();
 
-  return { ok: true, userId: data.user.id };
+  if (error || !user) {
+    return { ok: false };
+  }
+
+  return { ok: true, userId: user.id };
 }
 
 // ============================================================================
