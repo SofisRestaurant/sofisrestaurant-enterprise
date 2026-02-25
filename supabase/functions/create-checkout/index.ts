@@ -40,6 +40,7 @@ const stripe = new Stripe(STRIPE_SECRET_KEY, {
 const ALLOWED_ORIGINS = [
   "https://sofislegacy.com",
   "https://www.sofislegacy.com",
+  "https://sofisrestaurant.netlify.app", // ← ADD THIS
   "http://localhost:3000",
   "http://localhost:3001",
 ];
