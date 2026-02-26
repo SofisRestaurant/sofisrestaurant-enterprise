@@ -143,16 +143,16 @@ Deno.serve(async (req) => {
   if (accountErr || !account) return err("Account not found", cors, 404);
 
   // ── ✅ V2: Atomic redemption via RPC with idempotency ──────────────────────
-  const { data: redeemData, error: redeemErr } = await svc.rpc(
-    "v2_redeem_points",
-    {
-      p_account_id:      accountId,         // ✅ V2: account_id not user_id
-      p_points:          pointsToRedeem,
-      p_admin_id:        auth.userId,
-      p_mode:            mode,
-      p_idempotency_key: idempotencyKey,    // ✅ V2: idempotency
-    }
-  );
+const { data: redeemData, error: redeemErr } = await svc.rpc(
+  "v2_redeem_points",
+  {
+    p_account_id: accountId,
+    p_amount: pointsToRedeem,
+    p_admin_id: auth.userId,
+    p_reference_id: null,
+    p_idempotency_key: idempotencyKey,
+  }
+);
 
   if (redeemErr) {
     const isInsufficient =
