@@ -1,38 +1,36 @@
 // supabase/functions/redeem-loyalty/index.ts
 // =============================================================================
-// REDEEM LOYALTY — V2 (LOYALTY_ACCOUNTS ARCHITECTURE)
+// REDEEM LOYALTY — V2 PRODUCTION
 // =============================================================================
-// Thin HTTP wrapper for v2_redeem_points() SQL function.
+// Calls v2_redeem_points() — exact signature confirmed from live DB:
 //
-// V2 Changes:
-//   - Calls v2_redeem_points(p_account_id, ...) not redeem_loyalty_points_atomic(p_user_id, ...)
-//   - Uses account_id from scanner (not profile user_id)
-//   - Idempotency via p_idempotency_key
-//   - Returns was_duplicate flag
+//   v2_redeem_points(
+//     p_account_id      uuid,
+//     p_amount          integer,     ← points (not cents)
+//     p_admin_id        uuid,
+//     p_reference_id    uuid DEFAULT NULL,
+//     p_idempotency_key text DEFAULT NULL
+//   ) RETURNS TABLE(new_balance integer, was_duplicate boolean)
 //
-// All financial logic lives in SQL:
-//   ✔ Account row lock (FOR UPDATE)
-//   ✔ Balance read from ledger
-//   ✔ Insufficient balance rejection
-//   ✔ Ledger append of negative delta
-//   ✔ Trigger-synced cache
+// DB handles: FOR UPDATE lock, idempotency check, balance validation,
+//             ledger insert, all accounting. Zero financial logic here.
+//
+// Response fields match LoyaltyScan RedeemResult exactly:
+//   new_balance, credit_cents, was_duplicate
 // =============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const SUPABASE_URL      = Deno.env.get("SUPABASE_URL")!;
-const SERVICE_ROLE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+// ── Environment ───────────────────────────────────────────────────────────────
+const SUPABASE_URL     = Deno.env.get("SUPABASE_URL")!;
+const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const ANON_KEY         = Deno.env.get("SUPABASE_ANON_KEY")!;
 
-if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY) {
+if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !ANON_KEY) {
   throw new Error("Missing required environment variables");
 }
 
-const POINTS_PER_DOLLAR   = 100;
-const MIN_REDEEM_POINTS   = 100;
-const MAX_REDEEM_POINTS   = 50_000;
-const CREDIT_EXPIRES_DAYS = 90;
-
+// ── CORS ──────────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
   "https://sofislegacy.com",
   "https://www.sofislegacy.com",
@@ -42,208 +40,138 @@ const ALLOWED_ORIGINS = [
   "http://localhost:5173",
 ];
 
-function getCorsHeaders(req: Request): Record<string, string> | null {
+function corsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get("origin") ?? "";
-  if (!ALLOWED_ORIGINS.includes(origin)) {
-    const allowedOrigin = ALLOWED_ORIGINS[0];
-    return {
-      "Access-Control-Allow-Origin":  allowedOrigin,
-      "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
-    };
-  }
   return {
-    "Access-Control-Allow-Origin":  origin,
-    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Origin":  ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0],
     "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "authorization, content-type, apikey, x-client-info",
   };
 }
 
-function log(level: "info" | "warn" | "error", msg: string, data?: unknown) {
-  console.log(JSON.stringify({ level, msg, data, time: new Date().toISOString() }));
-}
-
-function json(data: unknown, cors: Record<string, string>, status = 200) {
+function json(data: unknown, headers: Record<string, string>, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { ...cors, "Content-Type": "application/json" },
+    headers: { ...headers, "Content-Type": "application/json" },
   });
 }
 
-function err(message: string, cors: Record<string, string>, status = 400) {
-  log("error", message);
-  return json({ error: message }, cors, status);
+function log(level: "info" | "warn" | "error", msg: string, data?: unknown) {
+  console.log(JSON.stringify({ level, msg, data, ts: new Date().toISOString() }));
 }
 
-async function authenticate(
-  req: Request
-): Promise<{ ok: false } | { ok: true; userId: string; role: string }> {
+// ── Auth: validate JWT + re-verify admin from DB ──────────────────────────────
+async function authenticate(req: Request): Promise<{ ok: true; userId: string } | { ok: false }> {
   const authHeader = req.headers.get("authorization");
   if (!authHeader?.startsWith("Bearer ")) return { ok: false };
 
-  const token = authHeader.replace("Bearer ", "");
-  const anonClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    global: { headers: { Authorization: `Bearer ${token}` } },
+  const token = authHeader.slice(7);
+
+  const caller = createClient(SUPABASE_URL, ANON_KEY, {
     auth:   { persistSession: false },
+    global: { headers: { Authorization: `Bearer ${token}` } },
   });
 
-  const { data: { user }, error } = await anonClient.auth.getUser();
+  const { data: { user }, error } = await caller.auth.getUser();
   if (error || !user) return { ok: false };
 
   const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
   const { data: profile } = await svc
-    .from("profiles").select("role").eq("id", user.id).single();
-
-  return { ok: true, userId: user.id, role: profile?.role ?? "customer" };
-}
-
-Deno.serve(async (req) => {
-  const cors = getCorsHeaders(req);
-  if (!cors)                    return new Response("Origin not allowed", { status: 403 });
-  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
-  if (req.method !== "POST")    return err("Method not allowed", cors, 405);
-
-  const auth = await authenticate(req);
-  if (!auth.ok)              return err("Unauthorized", cors, 401);
-  if (auth.role !== "admin") return err("Forbidden: admin only", cors, 403);
-
-  let body: { 
-    account_id?: unknown;         // ✅ V2: account_id required
-    points_to_redeem?: unknown; 
-    mode?: unknown;
-    idempotency_key?: unknown;    // ✅ V2: idempotency support
-  };
-  try { body = await req.json(); } catch { return err("Invalid JSON", cors); }
-
-  const accountId      = String(body.account_id ?? "").trim();
-  const pointsToRedeem = Math.round(Number(body.points_to_redeem));
-  const mode           = String(body.mode ?? "dine_in");
-  const idempotencyKey = body.idempotency_key 
-    ? String(body.idempotency_key).trim()
-    : `admin_redeem:${Date.now()}:${crypto.randomUUID()}`;
-
-  if (!/^[0-9a-f-]{36}$/i.test(accountId)) return err("Invalid account ID", cors);
-  if (!Number.isInteger(pointsToRedeem) || pointsToRedeem < MIN_REDEEM_POINTS) {
-    return err(`Minimum redemption is ${MIN_REDEEM_POINTS} points`, cors);
-  }
-  if (pointsToRedeem > MAX_REDEEM_POINTS) {
-    return err(`Maximum redemption is ${MAX_REDEEM_POINTS} points per transaction`, cors);
-  }
-  if (mode !== "dine_in" && mode !== "online") return err("Invalid mode", cors);
-
-  const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
-
-  // ── Get user_id for user_credits insert ───────────────────────────────────
-  const { data: account, error: accountErr } = await svc
-    .from("loyalty_accounts")
-    .select("user_id")
-    .eq("id", accountId)
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
     .single();
 
-  if (accountErr || !account) return err("Account not found", cors, 404);
+  if (profile?.role !== "admin") {
+    log("warn", "non_admin_attempt", { userId: user.id });
+    return { ok: false };
+  }
 
-  // ── ✅ V2: Atomic redemption via RPC with idempotency ──────────────────────
-const { data: redeemData, error: redeemErr } = await svc.rpc(
-  "v2_redeem_points",
-  {
-    p_account_id: accountId,
-    p_amount: pointsToRedeem,
-    p_admin_id: auth.userId,
-    p_reference_id: null,
+  return { ok: true, userId: user.id };
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+Deno.serve(async (req: Request): Promise<Response> => {
+  const headers = corsHeaders(req);
+
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers });
+  if (req.method !== "POST")    return json({ error: "Method not allowed" }, headers, 405);
+
+  const auth = await authenticate(req);
+  if (!auth.ok) return json({ error: "Unauthorized" }, headers, 401);
+
+  // ── Parse + validate body ──────────────────────────────────────────────────
+  let body: Record<string, unknown>;
+  try { body = await req.json(); } catch { return json({ error: "Invalid JSON" }, headers, 400); }
+
+  const accountId = typeof body.account_id === "string" ? body.account_id.trim() : "";
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(accountId)) {
+    return json({ error: "Invalid or missing account_id" }, headers, 400);
+  }
+
+  const points = Math.round(Number(body.points_to_redeem));
+  if (!Number.isFinite(points) || points < 100 || points > 50_000) {
+    return json({ error: "points_to_redeem must be between 100 and 50000" }, headers, 400);
+  }
+
+  // Stable idempotency key — caller may supply one for retry safety
+  const idempotencyKey =
+    typeof body.idempotency_key === "string" && body.idempotency_key.trim()
+      ? body.idempotency_key.trim()
+      : `redeem:${accountId}:${points}:${Date.now()}:${crypto.randomUUID()}`;
+
+  const referenceId =
+    typeof body.reference_id === "string" && body.reference_id.trim()
+      ? body.reference_id.trim()
+      : null;
+
+  log("info", "redeem_request", { accountId, points, idempotencyKey });
+
+  // ── Call v2_redeem_points ──────────────────────────────────────────────────
+  const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+
+  const { data: rows, error: rpcErr } = await svc.rpc("v2_redeem_points", {
+    p_account_id:      accountId,
+    p_amount:          points,       // integer points — matches DB signature exactly
+    p_admin_id:        auth.userId,
+    p_reference_id:    referenceId,
     p_idempotency_key: idempotencyKey,
-  }
-);
+  });
 
-  if (redeemErr) {
-    const isInsufficient =
-      redeemErr.code === "23514" ||
-      redeemErr.message?.toLowerCase().includes("insufficient balance");
-
-    log(
-      isInsufficient ? "warn" : "error",
-      isInsufficient ? "insufficient_balance" : "redeem_rpc_failed",
-      { error: redeemErr, accountId, pointsToRedeem }
-    );
-
-    return isInsufficient
-      ? err("Insufficient points balance", cors, 422)
-      : err("Redemption failed", cors, 500);
+  // ── Error handling ─────────────────────────────────────────────────────────
+  if (rpcErr) {
+    if (rpcErr.code === "23514" || rpcErr.message?.toLowerCase().includes("insufficient")) {
+      log("warn", "insufficient_balance", { accountId, points });
+      return json({ error: "Insufficient points balance" }, headers, 422);
+    }
+    if (rpcErr.message?.toLowerCase().includes("not found")) {
+      return json({ error: "Account not found" }, headers, 404);
+    }
+    log("error", "rpc_failed", { error: rpcErr, accountId });
+    return json({ error: "Redemption failed" }, headers, 500);
   }
 
-  if (!redeemData?.[0]) {
-    log("error", "redeem_rpc_no_data", { accountId });
-    return err("Redemption failed", cors, 500);
+  if (!rows || rows.length === 0) {
+    log("error", "rpc_empty", { accountId });
+    return json({ error: "Redemption failed — no result" }, headers, 500);
   }
 
-  const row = redeemData[0] as {
-    new_balance:   number;
-    was_duplicate: boolean;  // ✅ V2: idempotency detection
-  };
+  const row = rows[0] as { new_balance: number; was_duplicate: boolean };
 
   if (row.was_duplicate) {
-    log("info", "redeem_duplicate_ignored", { accountId, idempotencyKey });
-    return json({
-      credit_cents: 0,
-      new_balance: row.new_balance,
-      was_duplicate: true,
-    }, cors);
+    log("info", "duplicate_ignored", { accountId, idempotencyKey });
+    // ✅ Return new_balance so UI can still update optimistically if needed
+    return json({ new_balance: row.new_balance, credit_cents: 0, was_duplicate: true }, headers);
   }
 
-  const creditCents = Math.floor((pointsToRedeem / POINTS_PER_DOLLAR) * 100);
+  // 1 point = $0.01 → credit_cents = points
+  const creditCents = points;
+  log("info", "redeemed", { accountId, points, creditCents, newBalance: row.new_balance });
 
-  // ── user_credits (online mode only) ──────────────────────────────────────
-  let creditId: string | undefined;
-
-  if (mode === "online") {
-    const expiresAt = new Date(Date.now() + CREDIT_EXPIRES_DAYS * 86_400_000).toISOString();
-
-    const { data: credit, error: creditErr } = await svc
-      .from("user_credits")
-      .insert({
-        user_id:      account.user_id,
-        amount_cents: creditCents,
-        source:       "loyalty_redemption",
-        expires_at:   expiresAt,
-      })
-      .select("id")
-      .single();
-
-    if (creditErr || !credit) {
-      // Redemption committed — issue corrective reversal
-      log("error", "user_credit_insert_failed — issuing correction", creditErr);
-
-      const { error: correctionErr } = await svc.rpc("v2_issue_correction", {
-        p_account_id: accountId,
-        p_points:     pointsToRedeem,
-        p_admin_id:   auth.userId,
-        p_reason:     "user_credits_insert_failed",
-      });
-
-      if (correctionErr) {
-        log("error", "CRITICAL: correction_rpc_also_failed", {
-          accountId,
-          pointsToRedeem,
-          correctionErr,
-        });
-      }
-
-      return err("Failed to issue credit — points refunded", cors, 500);
-    }
-
-    creditId = credit.id;
-    log("info", "online_credit_issued", {
-      accountId, creditCents, creditId, expiresAt,
-    });
-  } else {
-    log("info", "dine_in_redemption", {
-      accountId, creditCents, pointsRedeemed: pointsToRedeem,
-    });
-  }
-
-  return json({ 
-    credit_cents: creditCents, 
-    new_balance: row.new_balance, 
-    credit_id: creditId,
+  // ✅ Response matches LoyaltyScan RedeemResult exactly
+  return json({
+    new_balance:   row.new_balance,
+    credit_cents:  creditCents,
     was_duplicate: false,
-  }, cors);
+  }, headers);
 });

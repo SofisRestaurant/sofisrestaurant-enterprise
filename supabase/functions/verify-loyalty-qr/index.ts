@@ -1,27 +1,19 @@
 // supabase/functions/verify-loyalty-qr/index.ts
 // =============================================================================
-// VERIFY LOYALTY QR — V2 (LOYALTY_ACCOUNTS ARCHITECTURE)
+// VERIFY LOYALTY QR — V2 PRODUCTION
 // =============================================================================
-// Reads a customer's loyalty account by loyalty_public_id for display in scanner.
-// Returns account balance, tier, streak from loyalty_accounts (source of truth).
-//
-// V2 Changes:
-//   - Queries loyalty_accounts table (not profiles cache)
-//   - Returns account_id (required for award/redeem operations)
-//   - Balance from ledger-backed view, not profiles.loyalty_points
-//
-// Auth: JWT required, role must be 'admin'.
+// Returns field names that match LoyaltyScan CustomerProfile exactly:
+//   account_id, full_name, tier, balance, lifetime_earned, streak, last_activity
 // =============================================================================
-
 
 import { createClient } from "supabase";
 
-// ── Env ───────────────────────────────────────────────────────────────────────
-const SUPABASE_URL      = Deno.env.get("SUPABASE_URL")!;
-const SERVICE_ROLE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+// ── Environment ───────────────────────────────────────────────────────────────
+const SUPABASE_URL     = Deno.env.get("SUPABASE_URL")!;
+const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const ANON_KEY         = Deno.env.get("SUPABASE_ANON_KEY")!;
 
-if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY) {
+if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !ANON_KEY) {
   throw new Error("Missing required environment variables");
 }
 
@@ -35,154 +27,136 @@ const ALLOWED_ORIGINS = [
   "http://localhost:5173",
 ];
 
-function getCorsHeaders(req: Request): Record<string, string> {
+function corsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get("origin") ?? "";
-  const allowedOrigin = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
   return {
-    "Access-Control-Allow-Origin":  allowedOrigin,
+    "Access-Control-Allow-Origin":  ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0],
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Headers": "authorization, content-type, apikey, x-client-info",
   };
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function respond(
-  status: number,
-  body: Record<string, unknown>,
-  cors: Record<string, string>
-): Response {
-  return new Response(JSON.stringify(body), {
+function json(data: unknown, headers: Record<string, string>, status = 200): Response {
+  return new Response(JSON.stringify(data), {
     status,
-    headers: { ...cors, "Content-Type": "application/json" },
+    headers: { ...headers, "Content-Type": "application/json" },
   });
 }
 
 function log(level: "info" | "warn" | "error", msg: string, data?: unknown) {
-  console.log(JSON.stringify({ level, msg, data, time: new Date().toISOString() }));
+  console.log(JSON.stringify({ level, msg, data, ts: new Date().toISOString() }));
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
-Deno.serve(async (req: Request): Promise<Response> => {
-  const cors = getCorsHeaders(req);
-
-  if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: cors });
-  }
-
-  if (req.method !== "POST") {
-    return respond(405, { error: "Method not allowed" }, cors);
-  }
-
-  // ── Auth ────────────────────────────────────────────────────────────────
+// ── Auth: validate JWT + re-verify admin from DB ──────────────────────────────
+async function authenticate(req: Request): Promise<{ ok: true; userId: string } | { ok: false }> {
   const authHeader = req.headers.get("authorization");
+  if (!authHeader?.startsWith("Bearer ")) return { ok: false };
 
-  if (!authHeader?.startsWith("Bearer ")) {
-    log("warn", "missing_auth_header", { method: req.method });
-    return respond(401, { error: "Missing authorization" }, cors);
-  }
+  const token = authHeader.slice(7);
 
-  const jwt = authHeader.slice(7);
-
-  // Validate caller's JWT
-  const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  const caller = createClient(SUPABASE_URL, ANON_KEY, {
     auth:   { persistSession: false },
-    global: { headers: { Authorization: `Bearer ${jwt}` } },
+    global: { headers: { Authorization: `Bearer ${token}` } },
   });
 
-  const { data: { user }, error: authError } = await callerClient.auth.getUser();
+  const { data: { user }, error } = await caller.auth.getUser();
+  if (error || !user) return { ok: false };
 
-  if (authError || !user) {
-    log("warn", "invalid_token", { error: authError?.message });
-    return respond(401, { error: "Invalid token" }, cors);
-  }
-
-  // Verify admin role
-  const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-    auth: { persistSession: false },
-  });
-
-  const { data: callerProfile, error: profileError } = await adminClient
+  const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+  const { data: profile } = await svc
     .from("profiles")
     .select("role")
     .eq("id", user.id)
     .single();
 
-  if (profileError || callerProfile?.role !== "admin") {
-    log("warn", "non_admin_access_attempt", { userId: user.id, role: callerProfile?.role });
-    return respond(403, { error: "Admin access required" }, cors);
+  if (profile?.role !== "admin") {
+    log("warn", "non_admin_attempt", { userId: user.id });
+    return { ok: false };
   }
 
-  // ── Body ────────────────────────────────────────────────────────────────
-  let body: { loyalty_public_id?: string };
-  try {
-    body = await req.json();
-  } catch {
-    return respond(400, { error: "Invalid JSON body" }, cors);
-  }
-
-  const { loyalty_public_id } = body;
-
-  if (!loyalty_public_id || typeof loyalty_public_id !== "string") {
-    return respond(400, { error: "loyalty_public_id is required" }, cors);
-  }
-
-  const UUID_PATTERN =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-  if (!UUID_PATTERN.test(loyalty_public_id.trim())) {
-    return respond(400, { error: "Invalid loyalty_public_id format" }, cors);
-  }
-
-  // ── V2 Lookup ───────────────────────────────────────────────────────────
-  // Query loyalty_accounts table (source of truth) with profile join
-  const { data: account, error: lookupError } = await adminClient
-    .from("loyalty_accounts")
-    .select(`
-      id,
-      balance,
-      lifetime_earned,
-      tier,
-      streak,
-      last_order_date,
-      profiles!inner (
-        id,
-        loyalty_public_id,
-        full_name
-      )
-    `)
-    .eq("profiles.loyalty_public_id", loyalty_public_id.trim())
-    .maybeSingle();
-
-  if (lookupError) {
-    log("error", "db_lookup_failed", { error: lookupError.message });
-    return respond(500, { error: "Lookup failed" }, cors);
-  }
-
-  if (!account || !account.profiles) {
-    return respond(404, { error: "Customer not found" }, cors);
-  }
-
-  log("info", "customer_verified", { 
-    adminId: user.id,
-    accountId: account.id 
-  });
-// Extract profile safely (Supabase returns relations as arrays)
-const profile = account.profiles?.[0];
-
-if (!profile) {
-  return respond(500, {
-    error: "Data integrity error: loyalty account missing profile"
-  }, cors);
+  return { ok: true, userId: user.id };
 }
 
-// Return account data + profile info
-return respond(200, {
-  account_id:      account.id,
-  balance:         account.balance,
-  lifetime_earned: account.lifetime_earned,
-  tier:            account.tier ?? "bronze",
-  streak:          account.streak ?? 0,
-  last_order_date: account.last_order_date ?? null,
-  full_name:       profile.full_name ?? null,
-  profile_id:      profile.id,   // Kept for reference
-}, cors)})
+// ── Main ──────────────────────────────────────────────────────────────────────
+Deno.serve(async (req: Request): Promise<Response> => {
+  const headers = corsHeaders(req);
+
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers });
+  if (req.method !== "POST")    return json({ error: "Method not allowed" }, headers, 405);
+
+  const auth = await authenticate(req);
+  if (!auth.ok) return json({ error: "Unauthorized" }, headers, 401);
+
+  // ── Parse body ─────────────────────────────────────────────────────────────
+  let body: { loyalty_public_id?: string };
+  try { body = await req.json(); } catch { return json({ error: "Invalid JSON" }, headers, 400); }
+
+  const loyalty_public_id = body.loyalty_public_id?.trim() ?? "";
+  if (!loyalty_public_id) {
+    return json({ error: "loyalty_public_id is required" }, headers, 400);
+  }
+
+  // Must be a v4 UUID
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!UUID_RE.test(loyalty_public_id)) {
+    return json({ error: "Invalid loyalty_public_id format" }, headers, 400);
+  }
+
+  const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+
+  // ── Step 1: Profile lookup ─────────────────────────────────────────────────
+  const { data: profile, error: profileErr } = await svc
+    .from("profiles")
+    .select("id, full_name")
+    .eq("loyalty_public_id", loyalty_public_id)
+    .maybeSingle();
+
+  if (profileErr) {
+    log("error", "profile_lookup_failed", profileErr.message);
+    return json({ error: "Lookup failed" }, headers, 500);
+  }
+  if (!profile) {
+    return json({ error: "Customer not found" }, headers, 404);
+  }
+
+  // ── Step 2: Loyalty account lookup ────────────────────────────────────────
+  const { data: account, error: accountErr } = await svc
+    .from("loyalty_accounts")
+    .select("id, balance, lifetime_earned, tier, streak, last_activity, status")
+    .eq("user_id", profile.id)
+    .maybeSingle();
+
+  if (accountErr) {
+    log("error", "account_lookup_failed", accountErr.message);
+    return json({ error: "Lookup failed" }, headers, 500);
+  }
+  if (!account) {
+    return json({ error: "Loyalty account not found" }, headers, 404);
+  }
+
+  // Suspended / closed accounts cannot be scanned
+  if (account.status === "suspended" || account.status === "closed") {
+    log("warn", "suspended_account_scan", { accountId: account.id, status: account.status });
+    return json({ error: `Account is ${account.status}` }, headers, 403);
+  }
+
+  log("info", "customer_verified", { adminId: auth.userId, accountId: account.id });
+
+  // ── Response — V2 field names match LoyaltyScan CustomerProfile exactly ────
+  return json({
+    // Identity
+    account_id:      account.id,               // ✅ used by award-loyalty-qr + redeem-loyalty
+    profile_id:      profile.id,
+
+    // ✅ V2: exact CustomerProfile field names
+    full_name:       profile.full_name    ?? null,
+    tier:            account.tier         ?? "bronze",
+    balance:         account.balance      ?? 0,
+    lifetime_earned: account.lifetime_earned ?? 0,
+    streak:          account.streak       ?? 0,
+    last_activity:   account.last_activity ?? null,
+
+    // Status (for UI awareness)
+    account_status:  account.status       ?? "active",
+  }, headers);
+});

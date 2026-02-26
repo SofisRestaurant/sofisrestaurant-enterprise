@@ -1,6 +1,6 @@
 // src/pages/Admin/LoyaltyScan.tsx
 // =============================================================================
-// ADMIN LOYALTY SCANNER — ENTERPRISE GRADE
+// ADMIN LOYALTY SCANNER — ENTERPRISE GRADE (V2 Clean)
 // =============================================================================
 // Two modes:
 //   AWARD   — scan + enter purchase amount → calls award-loyalty-qr
@@ -9,7 +9,11 @@
 // Security:
 //   - Admin auth check on mount (separate from AuthGuard for defense-in-depth)
 //   - All point math happens server-side
-//   - supabase.functions.invoke() attaches the session token automatically
+//   - Session token passed explicitly in Authorization header on every invoke call
+//
+// V2 Field Alignment:
+//   CustomerProfile uses DB schema names exactly:
+//     balance, lifetime_earned, streak, tier, last_activity
 // =============================================================================
 
 import { useEffect, useRef, useState, useCallback } from 'react'
@@ -23,13 +27,15 @@ import { formatCurrency } from '@/utils/currency';
 type ScanMode  = 'award' | 'redeem'
 type ScanState = 'scanning' | 'loading' | 'found' | 'awarding' | 'success' | 'error'
 
+// ✅ V2: Matches loyalty_accounts table schema exactly
 interface CustomerProfile {
-  full_name:       string | null
-  loyalty_tier:    string
-  loyalty_points:  number
-  lifetime_points: number
-  loyalty_streak:  number
-  last_order_date: string | null
+  account_id: string;
+  full_name: string | null;
+  tier: string;
+  balance: number;
+  lifetime_earned: number;
+  streak: number;
+  last_activity: string | null;
 }
 
 interface AwardResult {
@@ -45,6 +51,7 @@ interface RedeemResult {
   credit_cents: number;
   new_balance: number;
   credit_id?: string;
+  was_duplicate?: boolean;
 }
 
 // Quick-select redemption presets
@@ -94,7 +101,7 @@ export default function LoyaltyScan() {
       try {
         const {
           data: { session },
-        } = await supabase.auth.refreshSession();
+        } = await supabase.auth.getSession();
         if (!session?.access_token || !session?.user?.id) {
           navigate('/login', { replace: true });
           return;
@@ -121,13 +128,14 @@ export default function LoyaltyScan() {
     if (next === mode) return;
     setMode(next);
     reset();
-  }
+  };
 
   // ── QR scanned → verify customer ──────────────────────────────────────
   const handleQRScanned = useCallback(async (raw: string) => {
     if (scannerRef.current?.isScanning) {
       await scannerRef.current.stop().catch(() => {});
     }
+
     setScannerStarted(false);
     setScanState('loading');
     setErrorMsg(null);
@@ -142,24 +150,39 @@ export default function LoyaltyScan() {
     }
 
     try {
-      const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
 
-      if (refreshError || !refreshed?.session?.access_token) {
-        throw new Error('Session expired. Please log in again.');
+      if (sessionError || !session?.access_token) {
+        throw new Error('Authentication expired. Please log in again.');
       }
-      const { data } = await supabase.auth.getSession();
-      console.log('SESSION TOKEN:', data.session?.access_token);
 
-const res = await supabase.functions.invoke('verify-loyalty-qr', {
-  body: { loyalty_public_id: trimmed },
-});
-      if (res.error || !res.data) throw new Error(res.error?.message ?? 'Customer not found');
+      const { data, error } = await supabase.functions.invoke('verify-loyalty-qr', {
+        body: { loyalty_public_id: trimmed },
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+
+      if (error) throw new Error(error.message);
+      if (!data || typeof data !== 'object') throw new Error('Invalid response from server.');
+
+      // ✅ V2: Sanitize using DB field names exactly
+      const safeCustomer: CustomerProfile = {
+        account_id: String(data.account_id),
+        full_name: data.full_name ?? null,
+        tier: data.tier ?? 'bronze',
+        balance: Number(data.balance ?? 0),
+        lifetime_earned: Number(data.lifetime_earned ?? 0),
+        streak: Number(data.streak ?? 0),
+        last_activity: data.last_activity ?? null,
+      };
 
       setScannedId(trimmed);
-      setCustomer(res.data);
+      setCustomer(safeCustomer);
       setScanState('found');
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Verification failed');
+      setErrorMsg(err instanceof Error ? err.message : 'Verification failed. Please try again.');
       setScanState('error');
     }
   }, []);
@@ -215,8 +238,15 @@ const res = await supabase.functions.invoke('verify-loyalty-qr', {
     setErrorMsg(null);
 
     try {
+      const {
+        data: { session: awardSession },
+      } = await supabase.auth.getSession();
       const res = await supabase.functions.invoke('award-loyalty-qr', {
-        body: { loyalty_public_id: scannedId, amount_cents: Math.round(dollars * 100) },
+        body: {
+          account_id: customer.account_id,
+          amount_cents: Math.round(dollars * 100),
+        },
+        headers: { Authorization: `Bearer ${awardSession?.access_token}` },
       });
 
       if (res.error || !res.data) throw new Error(res.error?.message ?? 'Award failed');
@@ -228,16 +258,20 @@ const res = await supabase.functions.invoke('verify-loyalty-qr', {
     }
   }
 
-  // ── Redeem points ──────────────────────────────────────────────────────
+  // ── Redeem points — V2 ────────────────────────────────────────────────
   async function handleRedeemPoints() {
-    if (!scannedId || !customer) return;
+    if (!customer) return;
+
     const pts = Number(redeemPoints);
+
     if (!pts || pts < 100 || pts > 50000) {
       setErrorMsg('Enter a valid point amount (min 100, max 50,000)');
       return;
     }
-    if (pts > customer.loyalty_points) {
-      setErrorMsg(`Customer only has ${customer.loyalty_points.toLocaleString()} points`);
+
+    // ✅ V2: Use balance
+    if (pts > customer.balance) {
+      setErrorMsg(`Customer only has ${customer.balance.toLocaleString()} points`);
       return;
     }
 
@@ -245,12 +279,31 @@ const res = await supabase.functions.invoke('verify-loyalty-qr', {
     setErrorMsg(null);
 
     try {
-      const res = await supabase.functions.invoke('redeem-loyalty', {
-        body: { loyalty_public_id: scannedId, points_to_redeem: pts, mode: 'dine_in' },
+      const {
+        data: { session: redeemSession },
+      } = await supabase.auth.getSession();
+      const { data, error } = await supabase.functions.invoke('redeem-loyalty', {
+        body: {
+          account_id: customer.account_id,
+          points_to_redeem: pts,
+          mode: 'dine_in',
+        },
+        headers: { Authorization: `Bearer ${redeemSession?.access_token}` },
       });
 
-      if (res.error || !res.data) throw new Error(res.error?.message ?? 'Redemption failed');
-      setRedeemResult(res.data);
+      if (error) throw new Error(error.message);
+      if (!data) throw new Error('No response from server');
+
+      if (data.was_duplicate) {
+        setErrorMsg('This redemption was already processed.');
+        setScanState('found');
+        return;
+      }
+
+      // ✅ V2: Optimistic update using balance
+      setCustomer((prev) => (prev ? { ...prev, balance: data.new_balance } : prev));
+
+      setRedeemResult(data);
       setScanState('success');
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Redemption failed. Try again.');
@@ -363,7 +416,7 @@ const res = await supabase.functions.invoke('verify-loyalty-qr', {
         {scanState === 'found' &&
           customer &&
           (() => {
-            const tier = asTier(customer.loyalty_tier);
+            const tier = asTier(customer.tier); // ✅ V2
             const tierCfg = LOYALTY_TIERS[tier];
             return (
               <div className="space-y-4">
@@ -387,9 +440,12 @@ const res = await supabase.functions.invoke('verify-loyalty-qr', {
 
                   <div className="mt-4 grid grid-cols-3 gap-2">
                     {[
-                      { label: 'Balance', value: customer.loyalty_points.toLocaleString() },
-                      { label: 'Lifetime', value: customer.lifetime_points.toLocaleString() },
-                      { label: 'Streak', value: `${customer.loyalty_streak}d` },
+                      { label: 'Balance', value: Number(customer.balance ?? 0).toLocaleString() }, // ✅ V2
+                      {
+                        label: 'Lifetime',
+                        value: Number(customer.lifetime_earned ?? 0).toLocaleString(),
+                      }, // ✅ V2
+                      { label: 'Streak', value: `${Number(customer.streak ?? 0)}d` }, // ✅ V2
                     ].map(({ label, value }) => (
                       <div key={label} className="rounded-lg bg-white/4 px-3 py-2.5 text-center">
                         <p className="text-[10px] uppercase tracking-wider text-gray-500">
@@ -408,10 +464,11 @@ const res = await supabase.functions.invoke('verify-loyalty-qr', {
                       {copied ? '✓ Copied Loyalty ID' : 'Copy Loyalty ID'}
                     </button>
                   )}
-                  {customer.last_order_date && (
+
+                  {customer.last_activity && ( // ✅ V2
                     <p className="mt-3 text-[11px] text-gray-600">
-                      Last order:{' '}
-                      {new Date(customer.last_order_date).toLocaleDateString('en-US', {
+                      Last activity:{' '}
+                      {new Date(customer.last_activity).toLocaleDateString('en-US', {
                         month: 'short',
                         day: 'numeric',
                         year: 'numeric',
@@ -467,13 +524,12 @@ const res = await supabase.functions.invoke('verify-loyalty-qr', {
                       Points to Redeem
                     </label>
 
-                    {/* Quick presets */}
                     <div className="mt-3 grid grid-cols-3 gap-2">
                       {REDEEM_PRESETS.map(({ label, points }) => (
                         <button
                           key={points}
                           onClick={() => setRedeemPoints(points)}
-                          disabled={points > customer.loyalty_points}
+                          disabled={points > customer.balance} // ✅ V2
                           className={`rounded-lg border py-2 text-xs font-bold transition ${
                             redeemPoints === points
                               ? 'border-amber-500 bg-amber-500/20 text-amber-300'
@@ -569,7 +625,7 @@ const res = await supabase.functions.invoke('verify-loyalty-qr', {
                 <div className="text-center">
                   <p className="text-sm font-medium text-emerald-400">Points Awarded</p>
                   <p className="mt-1 font-mono text-4xl font-bold text-white">
-                    +{awardResult.points_earned.toLocaleString()}
+                    +{Number(awardResult.points_earned ?? 0).toLocaleString()}
                   </p>
                   <p className="mt-0.5 text-xs text-gray-500">points</p>
                 </div>
@@ -582,7 +638,7 @@ const res = await supabase.functions.invoke('verify-loyalty-qr', {
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-500">New balance</span>
                   <span className="font-mono font-bold text-amber-400">
-                    {awardResult.new_balance.toLocaleString()} pts
+                    {Number(awardResult.new_balance ?? 0).toLocaleString()} pts
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
@@ -638,7 +694,7 @@ const res = await supabase.functions.invoke('verify-loyalty-qr', {
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-500">Remaining balance</span>
                   <span className="font-mono font-bold text-amber-400">
-                    {redeemResult.new_balance.toLocaleString()} pts
+                    {Number(redeemResult.new_balance ?? 0).toLocaleString()} pts
                   </span>
                 </div>
               </div>

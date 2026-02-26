@@ -145,7 +145,7 @@ Deno.serve(async (req): Promise<Response> => {
   // ── Read account context ───────────────────────────────────────────────────
   const { data: account, error: fetchErr } = await svc
     .from("loyalty_accounts")
-    .select("tier, streak, last_order_date")
+    .select("tier, streak, last_activity")
     .eq("id", accountId)
     .single();
 
@@ -154,7 +154,7 @@ Deno.serve(async (req): Promise<Response> => {
   // ── Streak calculation (date arithmetic) ──────────────────────────────────
   const today     = new Date().toISOString().slice(0, 10);
   const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-  const lastOrder = account.last_order_date?.slice(0, 10) ?? null;
+  const lastOrder = account.last_activity?.slice(0, 10) ?? null;
 
   let newStreak: number;
   if      (lastOrder === today)     newStreak = account.streak;
