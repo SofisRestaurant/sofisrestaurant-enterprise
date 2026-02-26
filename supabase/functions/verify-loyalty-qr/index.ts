@@ -1,162 +1,182 @@
 // supabase/functions/verify-loyalty-qr/index.ts
-// =============================================================================
-// VERIFY LOYALTY QR — V2 PRODUCTION
-// =============================================================================
-// Returns field names that match LoyaltyScan CustomerProfile exactly:
-//   account_id, full_name, tier, balance, lifetime_earned, streak, last_activity
-// =============================================================================
 
 import { createClient } from "supabase";
 
-// ── Environment ───────────────────────────────────────────────────────────────
-const SUPABASE_URL     = Deno.env.get("SUPABASE_URL")!;
+// ─────────────────────────────────────────────
+// Environment
+// ─────────────────────────────────────────────
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const ANON_KEY         = Deno.env.get("SUPABASE_ANON_KEY")!;
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 
-if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !ANON_KEY) {
-  throw new Error("Missing required environment variables");
-}
-
-// ── CORS ──────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// Allowed Origins (Strict CORS)
+// ─────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
   "https://sofislegacy.com",
   "https://www.sofislegacy.com",
   "https://sofisrestaurant.netlify.app",
-  "http://localhost:3000",
-  "http://localhost:3001",
   "http://localhost:5173",
+  "http://localhost:3000",
 ];
 
-function corsHeaders(req: Request): Record<string, string> {
-  const origin = req.headers.get("origin") ?? "";
+// ─────────────────────────────────────────────
+// CORS Helper
+// ─────────────────────────────────────────────
+function corsHeaders(origin: string | null) {
+  const allowed =
+    origin && ALLOWED_ORIGINS.includes(origin)
+      ? origin
+      : ALLOWED_ORIGINS[0];
+
   return {
-    "Access-Control-Allow-Origin":  ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0],
+    "Access-Control-Allow-Origin": allowed,
+    "Access-Control-Allow-Headers":
+      "authorization, x-client-info, apikey, content-type",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "authorization, content-type, apikey, x-client-info",
+    "Vary": "Origin",
   };
 }
 
-function json(data: unknown, headers: Record<string, string>, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { ...headers, "Content-Type": "application/json" },
-  });
-}
-
-function log(level: "info" | "warn" | "error", msg: string, data?: unknown) {
-  console.log(JSON.stringify({ level, msg, data, ts: new Date().toISOString() }));
-}
-
-// ── Auth: validate JWT + re-verify admin from DB ──────────────────────────────
-async function authenticate(req: Request): Promise<{ ok: true; userId: string } | { ok: false }> {
+// ─────────────────────────────────────────────
+// Authenticate & Verify Admin
+// ─────────────────────────────────────────────
+async function authenticateAdmin(req: Request) {
   const authHeader = req.headers.get("authorization");
-  if (!authHeader?.startsWith("Bearer ")) return { ok: false };
+  if (!authHeader?.startsWith("Bearer ")) return null;
 
-  const token = authHeader.slice(7);
+  const token = authHeader.replace("Bearer ", "");
 
-  const caller = createClient(SUPABASE_URL, ANON_KEY, {
-    auth:   { persistSession: false },
+  const anon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     global: { headers: { Authorization: `Bearer ${token}` } },
+    auth: { persistSession: false },
   });
 
-  const { data: { user }, error } = await caller.auth.getUser();
-  if (error || !user) return { ok: false };
+  const { data: { user }, error } = await anon.auth.getUser();
+  if (error || !user) return null;
 
-  const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+  // Verify admin role
+  const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
   const { data: profile } = await svc
     .from("profiles")
     .select("role")
     .eq("id", user.id)
     .single();
 
-  if (profile?.role !== "admin") {
-    log("warn", "non_admin_attempt", { userId: user.id });
-    return { ok: false };
-  }
+  if (!profile || profile.role !== "admin") return null;
 
-  return { ok: true, userId: user.id };
+  return user.id;
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
-Deno.serve(async (req: Request): Promise<Response> => {
-  const headers = corsHeaders(req);
+// ─────────────────────────────────────────────
+// UUID Validator
+// ─────────────────────────────────────────────
+function isValidUUID(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
 
-  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers });
-  if (req.method !== "POST")    return json({ error: "Method not allowed" }, headers, 405);
+// ─────────────────────────────────────────────
+// Main Handler
+// ─────────────────────────────────────────────
+Deno.serve(async (req) => {
+  const headers = corsHeaders(req.headers.get("origin"));
 
-  const auth = await authenticate(req);
-  if (!auth.ok) return json({ error: "Unauthorized" }, headers, 401);
+  try {
+    // Preflight
+    if (req.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers });
+    }
 
-  // ── Parse body ─────────────────────────────────────────────────────────────
-  let body: { loyalty_public_id?: string };
-  try { body = await req.json(); } catch { return json({ error: "Invalid JSON" }, headers, 400); }
+    if (req.method !== "POST") {
+      return new Response(
+        JSON.stringify({ error: "Method not allowed" }),
+        { status: 405, headers }
+      );
+    }
 
-  const loyalty_public_id = body.loyalty_public_id?.trim() ?? "";
-  if (!loyalty_public_id) {
-    return json({ error: "loyalty_public_id is required" }, headers, 400);
+    // Authenticate Admin
+    const adminId = await authenticateAdmin(req);
+    if (!adminId) {
+      return new Response(
+        JSON.stringify({ error: "Unauthorized" }),
+        { status: 401, headers }
+      );
+    }
+
+    // Parse Body
+    const body = await req.json();
+    const loyalty_public_id = body?.loyalty_public_id;
+
+    if (
+  !loyalty_public_id ||
+  typeof loyalty_public_id !== "string" ||
+  !isValidUUID(loyalty_public_id)
+) {
+  return new Response(
+    JSON.stringify({ error: "Invalid loyalty_public_id format" }),
+    { status: 400, headers }
+  );
+}
+
+    const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+    // Lookup profile
+    const { data: profile, error: profileError } = await svc
+      .from("profiles")
+      .select("id, full_name")
+      .eq("loyalty_public_id", loyalty_public_id)
+      .single();
+
+    if (profileError || !profile) {
+      return new Response(
+        JSON.stringify({ error: "Customer not found" }),
+        { status: 404, headers }
+      );
+    }
+
+    // Lookup loyalty account
+    const { data: account, error: accountError } = await svc
+      .from("v2_account_summary")
+      .select("account_id, balance, lifetime_earned, tier, streak")
+      .eq("user_id", profile.id)
+      .single();
+
+    if (accountError || !account) {
+      return new Response(
+        JSON.stringify({ error: "Loyalty account not found" }),
+        { status: 404, headers }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        account_id: account.account_id,
+        profile_id: profile.id,
+        full_name: profile.full_name,
+        balance: account.balance,
+        lifetime_earned: account.lifetime_earned,
+        tier: account.tier,
+        streak: account.streak,
+      }),
+      {
+        status: 200,
+        headers: {
+          ...headers,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+  } catch (err) {
+    console.error("VERIFY LOYALTY QR ERROR:", err);
+
+    return new Response(
+      JSON.stringify({ error: "Internal server error" }),
+      {
+        status: 500,
+        headers,
+      }
+    );
   }
-
-  // Must be a v4 UUID
-  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  if (!UUID_RE.test(loyalty_public_id)) {
-    return json({ error: "Invalid loyalty_public_id format" }, headers, 400);
-  }
-
-  const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
-
-  // ── Step 1: Profile lookup ─────────────────────────────────────────────────
-  const { data: profile, error: profileErr } = await svc
-    .from("profiles")
-    .select("id, full_name")
-    .eq("loyalty_public_id", loyalty_public_id)
-    .maybeSingle();
-
-  if (profileErr) {
-    log("error", "profile_lookup_failed", profileErr.message);
-    return json({ error: "Lookup failed" }, headers, 500);
-  }
-  if (!profile) {
-    return json({ error: "Customer not found" }, headers, 404);
-  }
-
-  // ── Step 2: Loyalty account lookup ────────────────────────────────────────
-  const { data: account, error: accountErr } = await svc
-    .from("loyalty_accounts")
-    .select("id, balance, lifetime_earned, tier, streak, last_activity, status")
-    .eq("user_id", profile.id)
-    .maybeSingle();
-
-  if (accountErr) {
-    log("error", "account_lookup_failed", accountErr.message);
-    return json({ error: "Lookup failed" }, headers, 500);
-  }
-  if (!account) {
-    return json({ error: "Loyalty account not found" }, headers, 404);
-  }
-
-  // Suspended / closed accounts cannot be scanned
-  if (account.status === "suspended" || account.status === "closed") {
-    log("warn", "suspended_account_scan", { accountId: account.id, status: account.status });
-    return json({ error: `Account is ${account.status}` }, headers, 403);
-  }
-
-  log("info", "customer_verified", { adminId: auth.userId, accountId: account.id });
-
-  // ── Response — V2 field names match LoyaltyScan CustomerProfile exactly ────
-  return json({
-    // Identity
-    account_id:      account.id,               // ✅ used by award-loyalty-qr + redeem-loyalty
-    profile_id:      profile.id,
-
-    // ✅ V2: exact CustomerProfile field names
-    full_name:       profile.full_name    ?? null,
-    tier:            account.tier         ?? "bronze",
-    balance:         account.balance      ?? 0,
-    lifetime_earned: account.lifetime_earned ?? 0,
-    streak:          account.streak       ?? 0,
-    last_activity:   account.last_activity ?? null,
-
-    // Status (for UI awareness)
-    account_status:  account.status       ?? "active",
-  }, headers);
 });

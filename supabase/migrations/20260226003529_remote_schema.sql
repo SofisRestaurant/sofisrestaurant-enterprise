@@ -467,9 +467,10 @@ BEGIN
 
   IF v_same_day THEN
     v_new_streak := v_profile.loyalty_streak;
-  ELSIF v_profile.last_order_date = (v_today - INTERVAL '1 day') THEN
+  ELSIF v_account.last_activity = CURRENT_DATE - 1 THEN
     v_new_streak := v_profile.loyalty_streak + 1;
   ELSE
+  
     v_new_streak := 1;
   END IF;
 
@@ -1092,7 +1093,7 @@ create or replace view "public"."order_timeline" as  SELECT o.id AS order_id,
   ORDER BY o.created_at DESC, oe.created_at;
 
 
-CREATE OR REPLACE FUNCTION public.v2_award_points(p_user_id uuid, p_amount integer, p_admin_id uuid, p_reference_id uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text)
+CREATE OR REPLACE FUNCTION public.v2_award_points(p_account_id uuid, p_amount integer, p_admin_id uuid, p_reference_id uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text)
  RETURNS TABLE(new_balance integer, new_lifetime integer, new_tier text)
  LANGUAGE plpgsql
  SECURITY DEFINER

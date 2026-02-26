@@ -27,22 +27,21 @@ import { LOYALTY_TIERS, asTier } from '@/domain/loyalty/tiers'
 // ============================================================================
 // TYPES
 // ============================================================================
-
+type Json = Database['public']['Tables']['orders']['Row']['metadata'];
 type PageState = 'loading' | 'found' | 'timeout' | 'error'
 type DbOrder   = Database['public']['Tables']['orders']['Row']
 
 interface LoyaltyResult {
-  points_delta:      number
-  points_balance:    number
-  lifetime_balance:  number
-  tier_at_time:      string
-  streak_at_time:    number
-  tier_multiplier:   number
-  streak_multiplier: number
-  base_points:       number
-  metadata:          Record<string, unknown> | null
+  points_delta: number;
+  points_balance: number;
+  lifetime_balance: number;
+  tier_at_time: string;
+  streak_at_time: number;
+  tier_multiplier: number;
+  streak_multiplier: number;
+  base_points: number;
+  metadata: Json | null;
 }
-
 // ============================================================================
 // CONFIG
 // ============================================================================
@@ -108,37 +107,37 @@ function mapDbOrderToDomain(db: DbOrder): Order {
       : null
 
   return {
-    id:                       db.id,
-    stripe_session_id:        db.stripe_session_id,
+    id: db.id,
+    stripe_session_id: db.stripe_session_id,
     stripe_payment_intent_id: db.stripe_payment_intent_id,
-    customer_uid:             db.customer_uid,
-    customer_email:           db.customer_email,
-    customer_name:            db.customer_name,
-    customer_phone:           db.customer_phone,
-    amount_subtotal:          db.amount_subtotal,
-    amount_tax:               db.amount_tax,
-    amount_shipping:          db.amount_shipping,
-    amount_total:             db.amount_total,
-    assigned_to:              db.assigned_to,
-    currency:                 db.currency,
-    order_type:               db.order_type as OrderType,
-    payment_status:           db.payment_status as PaymentStatus,
-    status:                   db.status as OrderStatus,
-    cart_items:               parsedCart,
-    estimated_ready_time:     null,
-    order_number:             db.order_number,
-    shipping_name:            db.shipping_name,
-    shipping_phone:           db.shipping_phone,
-    shipping_address:         shipping,
-    shipping_city:            shipping?.city        ?? null,
-    shipping_state:           shipping?.state       ?? null,
-    shipping_zip:             shipping?.postal_code ?? null,
-    shipping_country:         shipping?.country     ?? null,
-    metadata:                 db.metadata as Record<string, unknown> | null,
-    notes:                    db.notes,
-    created_at:               db.created_at,
-    updated_at:               db.updated_at,
-  }
+    customer_uid: db.customer_uid,
+    customer_email: db.customer_email,
+    customer_name: db.customer_name,
+    customer_phone: db.customer_phone,
+    amount_subtotal: db.amount_subtotal,
+    amount_tax: db.amount_tax,
+    amount_shipping: db.amount_shipping,
+    amount_total: db.amount_total,
+    assigned_to: db.assigned_to,
+    currency: db.currency,
+    order_type: db.order_type as OrderType,
+    payment_status: db.payment_status as PaymentStatus,
+    status: db.status as OrderStatus,
+    cart_items: parsedCart,
+    estimated_ready_time: null,
+    order_number: db.order_number,
+    shipping_name: db.shipping_name,
+    shipping_phone: db.shipping_phone,
+    shipping_address: shipping,
+    shipping_city: shipping?.city ?? null,
+    shipping_state: shipping?.state ?? null,
+    shipping_zip: shipping?.postal_code ?? null,
+    shipping_country: shipping?.country ?? null,
+    metadata: db.metadata,
+    notes: db.notes,
+    created_at: db.created_at,
+    updated_at: db.updated_at,
+  };
 }
 
 // ============================================================================
@@ -286,8 +285,16 @@ function ReceiptTotals({ order }: { order: Order }) {
 function LoyaltyResultCard({ loyalty }: { loyalty: LoyaltyResult }) {
   const tier      = asTier(loyalty.tier_at_time)   // ← domain helper, safe cast
   const tierCfg   = LOYALTY_TIERS[tier]
-  const hasTierUp  = loyalty.metadata?.tier_changed === true
-  const tierBefore = asTier(loyalty.metadata?.tier_before as string | undefined)
+  const meta =
+    typeof loyalty.metadata === 'object' &&
+    loyalty.metadata !== null &&
+    !Array.isArray(loyalty.metadata)
+      ? loyalty.metadata
+      : null;
+
+  const hasTierUp = meta?.tier_changed === true;
+
+  const tierBefore = typeof meta?.tier_before === 'string' ? asTier(meta.tier_before) : tier;
 
   const hasStreakBonus = loyalty.streak_multiplier > 1
   const hasTierBonus   = loyalty.tier_multiplier > 1
@@ -357,8 +364,16 @@ function LoyaltyResultCard({ loyalty }: { loyalty: LoyaltyResult }) {
   )
 }
 
-function CampaignBanner({ metadata }: { metadata: Record<string, unknown> | null }) {
-  if (!metadata?.double_points) return null
+function CampaignBanner({ metadata }: { metadata: Json }) {
+  if (
+    typeof metadata !== 'object' ||
+    metadata === null ||
+    Array.isArray(metadata) ||
+    metadata.double_points !== true
+  ) {
+    return null;
+  }
+
   return (
     <div className="flex items-center gap-3 rounded-xl border border-orange-500/30 bg-orange-500/10 px-4 py-3">
       <span className="text-xl">🔥</span>
@@ -369,7 +384,7 @@ function CampaignBanner({ metadata }: { metadata: Record<string, unknown> | null
         </p>
       </div>
     </div>
-  )
+  );
 }
 
 function StreakNudge({ streak }: { streak: number }) {
@@ -589,7 +604,12 @@ export default function OrderSuccess() {
     return () => { supabase.removeChannel(channel) }
   }, [order?.id])
 
-  const isDoublePoints = !!(order?.metadata?.double_points)
+  const isDoublePoints =
+    typeof order?.metadata === 'object' &&
+    order.metadata !== null &&
+    !Array.isArray(order.metadata) &&
+    'double_points' in order.metadata &&
+    Boolean((order.metadata as { double_points?: unknown }).double_points);
   const hasCartItems   = Array.isArray(order?.cart_items) && (order?.cart_items?.length ?? 0) > 0
 
   return (

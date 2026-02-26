@@ -328,6 +328,149 @@ export type Database = {
         }
         Relationships: []
       }
+      loyalty_accounts: {
+        Row: {
+          balance: number
+          created_at: string
+          id: string
+          last_activity: string | null
+          last_award_at: string | null
+          last_redeem_at: string | null
+          lifetime_earned: number
+          status: string
+          streak: number
+          tier: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          balance?: number
+          created_at?: string
+          id?: string
+          last_activity?: string | null
+          last_award_at?: string | null
+          last_redeem_at?: string | null
+          lifetime_earned?: number
+          status?: string
+          streak?: number
+          tier?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          balance?: number
+          created_at?: string
+          id?: string
+          last_activity?: string | null
+          last_award_at?: string | null
+          last_redeem_at?: string | null
+          lifetime_earned?: number
+          status?: string
+          streak?: number
+          tier?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "loyalty_accounts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "loyalty_leaderboard"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_accounts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      loyalty_ledger: {
+        Row: {
+          account_id: string
+          admin_id: string | null
+          amount: number
+          balance_after: number
+          created_at: string
+          entry_type: string
+          id: string
+          idempotency_key: string | null
+          metadata: Json
+          prev_hash: string | null
+          reference_id: string | null
+          row_hash: string | null
+          source: string
+          streak_at_time: number
+          tier_at_time: string
+        }
+        Insert: {
+          account_id: string
+          admin_id?: string | null
+          amount: number
+          balance_after: number
+          created_at?: string
+          entry_type: string
+          id?: string
+          idempotency_key?: string | null
+          metadata?: Json
+          prev_hash?: string | null
+          reference_id?: string | null
+          row_hash?: string | null
+          source: string
+          streak_at_time?: number
+          tier_at_time?: string
+        }
+        Update: {
+          account_id?: string
+          admin_id?: string | null
+          amount?: number
+          balance_after?: number
+          created_at?: string
+          entry_type?: string
+          id?: string
+          idempotency_key?: string | null
+          metadata?: Json
+          prev_hash?: string | null
+          reference_id?: string | null
+          row_hash?: string | null
+          source?: string
+          streak_at_time?: number
+          tier_at_time?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "loyalty_ledger_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "loyalty_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_ledger_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v2_account_summary"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "loyalty_ledger_admin_id_fkey"
+            columns: ["admin_id"]
+            isOneToOne: false
+            referencedRelation: "loyalty_leaderboard"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_ledger_admin_id_fkey"
+            columns: ["admin_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       loyalty_transactions: {
         Row: {
           base_points: number
@@ -410,28 +553,55 @@ export type Database = {
       }
       menu_items: {
         Row: {
+          allergens: string[] | null
+          available: boolean
           category: string
           created_at: string | null
           description: string | null
+          featured: boolean
           id: string
+          image_url: string | null
+          is_gluten_free: boolean | null
+          is_vegan: boolean | null
+          is_vegetarian: boolean | null
           name: string
           price: number
+          sort_order: number | null
+          spicy_level: number | null
         }
         Insert: {
+          allergens?: string[] | null
+          available?: boolean
           category: string
           created_at?: string | null
           description?: string | null
+          featured?: boolean
           id?: string
+          image_url?: string | null
+          is_gluten_free?: boolean | null
+          is_vegan?: boolean | null
+          is_vegetarian?: boolean | null
           name: string
           price: number
+          sort_order?: number | null
+          spicy_level?: number | null
         }
         Update: {
+          allergens?: string[] | null
+          available?: boolean
           category?: string
           created_at?: string | null
           description?: string | null
+          featured?: boolean
           id?: string
+          image_url?: string | null
+          is_gluten_free?: boolean | null
+          is_vegan?: boolean | null
+          is_vegetarian?: boolean | null
           name?: string
           price?: number
+          sort_order?: number | null
+          spicy_level?: number | null
         }
         Relationships: []
       }
@@ -638,25 +808,40 @@ export type Database = {
       pending_carts: {
         Row: {
           created_at: string | null
+          credit_id: string | null
+          discount_cents: number
           expires_at: string | null
           id: string
           items: Json
+          promo_id: string | null
+          subtotal_cents: number
+          tax_cents: number
           total_cents: number
           user_id: string
         }
         Insert: {
           created_at?: string | null
+          credit_id?: string | null
+          discount_cents?: number
           expires_at?: string | null
           id: string
           items: Json
+          promo_id?: string | null
+          subtotal_cents?: number
+          tax_cents?: number
           total_cents?: number
           user_id: string
         }
         Update: {
           created_at?: string | null
+          credit_id?: string | null
+          discount_cents?: number
           expires_at?: string | null
           id?: string
           items?: Json
+          promo_id?: string | null
+          subtotal_cents?: number
+          tax_cents?: number
           total_cents?: number
           user_id?: string
         }
@@ -1060,8 +1245,128 @@ export type Database = {
         }
         Relationships: []
       }
+      v2_account_summary: {
+        Row: {
+          account_id: string | null
+          balance: number | null
+          last_activity: string | null
+          lifetime_earned: number | null
+          streak: number | null
+          tier: string | null
+          user_id: string | null
+        }
+        Insert: {
+          account_id?: string | null
+          balance?: number | null
+          last_activity?: string | null
+          lifetime_earned?: number | null
+          streak?: number | null
+          tier?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          account_id?: string | null
+          balance?: number | null
+          last_activity?: string | null
+          lifetime_earned?: number | null
+          streak?: number | null
+          tier?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "loyalty_accounts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "loyalty_leaderboard"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_accounts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      v2_loyalty_audit: {
+        Row: {
+          admin_id: string | null
+          amount: number | null
+          balance_after: number | null
+          created_at: string | null
+          entry_type: string | null
+          idempotency_key: string | null
+          source: string | null
+          tier_at_time: string | null
+          user_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "loyalty_accounts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "loyalty_leaderboard"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_accounts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_ledger_admin_id_fkey"
+            columns: ["admin_id"]
+            isOneToOne: false
+            referencedRelation: "loyalty_leaderboard"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_ledger_admin_id_fkey"
+            columns: ["admin_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
+      _deprecated_award_v1: {
+        Args: {
+          p_admin_id: string
+          p_amount_cents: number
+          p_base_points: number
+          p_order_id?: string
+          p_points: number
+          p_streak: number
+          p_streak_mult: number
+          p_tier: string
+          p_tier_mult: number
+          p_user_id: string
+        }
+        Returns: {
+          new_balance: number
+          new_lifetime: number
+          new_tier: string
+          tier_changed: boolean
+          was_duplicate: boolean
+        }[]
+      }
+      _deprecated_redeem_v1: {
+        Args: {
+          p_admin_id: string
+          p_mode?: string
+          p_points: number
+          p_user_id: string
+        }
+        Returns: {
+          new_balance: number
+        }[]
+      }
       award_loyalty_points: {
         Args: { p_amount_cents: number; p_order_id: string; p_user_id: string }
         Returns: Json
@@ -1070,9 +1375,30 @@ export type Database = {
       custom_access_token_hook: { Args: { event: Json }; Returns: Json }
       get_next_order_number: { Args: never; Returns: number }
       is_admin: { Args: { uid: string }; Returns: boolean }
+      issue_loyalty_correction: {
+        Args: {
+          p_admin_id: string
+          p_points: number
+          p_reason: string
+          p_user_id: string
+        }
+        Returns: {
+          new_balance: number
+        }[]
+      }
       promotions_decrement_uses: {
         Args: { p_promo_id: string }
         Returns: undefined
+      }
+      reconcile_v2_accounts: {
+        Args: never
+        Returns: {
+          drift: number
+          user_id: string
+          v1_balance: number
+          v2_account_exists: boolean
+          v2_balance: number
+        }[]
       }
       redeem_loyalty_points: {
         Args: { p_order_id?: string; p_points: number; p_user_id: string }
@@ -1113,6 +1439,36 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      v2_award_points: {
+        Args: {
+          p_account_id: string
+          p_admin_id: string
+          p_amount_cents: number
+          p_idempotency_key: string
+        }
+        Returns: {
+          new_balance: number
+          new_lifetime: number
+          new_tier: string
+          points_earned: number
+          streak: number
+          tier_changed: boolean
+          was_duplicate: boolean
+        }[]
+      }
+      v2_redeem_points: {
+        Args: {
+          p_account_id: string
+          p_admin_id: string
+          p_amount: number
+          p_idempotency_key?: string
+          p_reference_id?: string
+        }
+        Returns: {
+          new_balance: number
+          was_duplicate: boolean
+        }[]
       }
     }
     Enums: {

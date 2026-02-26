@@ -2,13 +2,6 @@
 -- V2: Award Points (Atomic, Idempotent, Ledger-Safe)
 -- =============================================================================
 
-create or replace function public.v2_award_points(
-  p_user_id uuid,
-  p_amount integer,
-  p_admin_id uuid,
-  p_reference_id uuid default null,
-  p_idempotency_key text default null
-)
 returns table(
   new_balance integer,
   new_lifetime integer,
@@ -24,6 +17,13 @@ declare
   v_new_lifetime integer;
   v_new_tier text;
 begin
+
+
+if current_setting('request.jwt.claim.role', true) is not null
+     and current_setting('request.jwt.claim.role', true) <> 'service_role'
+  then
+     raise exception 'Direct execution not allowed';
+  end if;
 
   if p_amount <= 0 then
     raise exception 'Award amount must be positive';

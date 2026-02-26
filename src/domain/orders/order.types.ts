@@ -1,7 +1,9 @@
 // ============================================================================
 // ORDER DOMAIN MODEL — SINGLE SOURCE OF TRUTH (PRODUCTION 2026)
 // ============================================================================
-
+import type { Database } from '@/lib/supabase/database.types'
+type Json =
+  Database['public']['Tables']['orders']['Row']['metadata']
 /**
  * Cart item stored in JSONB
  */
@@ -97,7 +99,7 @@ export interface Order {
   shipping_zip: string | null
   shipping_country: string | null
 
-  metadata: Record<string, unknown> | null
+  metadata: Json
   notes: string | null
 
   created_at: string

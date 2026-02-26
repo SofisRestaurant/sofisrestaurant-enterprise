@@ -1,101 +1,66 @@
+// =============================================================================
 // src/pages/Admin/LoyaltyScan.tsx
-// =============================================================================
-// ADMIN LOYALTY SCANNER — ENTERPRISE GRADE (V2 Clean)
-// =============================================================================
-// Two modes:
-//   AWARD   — scan + enter purchase amount → calls award-loyalty-qr
-//   REDEEM  — scan + choose point amount   → calls redeem-loyalty
-//
-// Security:
-//   - Admin auth check on mount (separate from AuthGuard for defense-in-depth)
-//   - All point math happens server-side
-//   - Session token passed explicitly in Authorization header on every invoke call
-//
-// V2 Field Alignment:
-//   CustomerProfile uses DB schema names exactly:
-//     balance, lifetime_earned, streak, tier, last_activity
+// Owns: auth guard, state, scanner lifecycle, event handlers.
+// UI → features/loyalty/components   API → domain/loyalty/loyalty.service
 // =============================================================================
 
-import { useEffect, useRef, useState, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { Html5Qrcode } from 'html5-qrcode'
-import { supabase } from '@/lib/supabase/supabaseClient'
-import { LOYALTY_TIERS, asTier } from '@/domain/loyalty/tiers'
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Html5Qrcode } from 'html5-qrcode';
+import { supabase } from '@/lib/supabase/supabaseClient';
+import { LOYALTY_TIERS, asTier } from '@/domain/loyalty/tiers';
 import { formatCurrency } from '@/utils/currency';
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-type ScanMode  = 'award' | 'redeem'
-type ScanState = 'scanning' | 'loading' | 'found' | 'awarding' | 'success' | 'error'
+import {
+  verifyLoyaltyQR,
+  awardLoyaltyPoints,
+  redeemLoyaltyPoints,
+} from '@/domain/loyalty/loyalty.service';
+import type {
+  ScanMode,
+  ScanState,
+  CustomerProfile,
+  AwardResult,
+  RedeemResult,
+} from '@/domain/loyalty/loyalty.types';
+import { CustomerCard } from '@/features/loyalty/components/CustomerCard';
+import { AwardSection } from '@/features/loyalty/components/AwardSection';
+import { RedeemSection } from '@/features/loyalty/components/RedeemSection';
 
-// ✅ V2: Matches loyalty_accounts table schema exactly
-interface CustomerProfile {
-  account_id: string;
-  full_name: string | null;
-  tier: string;
-  balance: number;
-  lifetime_earned: number;
-  streak: number;
-  last_activity: string | null;
-}
+// ── Constants ─────────────────────────────────────────────────────────────────
+const SCANNER_DIV_ID = 'qr-scanner-region';
+const UUID_RE = /^[0-9a-f-]{36}$/i;
 
-interface AwardResult {
-  points_earned: number
-  new_balance:   number
-  tier:          string
-  tier_changed:  boolean
-  tier_before:   string
-  streak:        number
-}
-
-interface RedeemResult {
-  credit_cents: number;
-  new_balance: number;
-  credit_id?: string;
-  was_duplicate?: boolean;
-}
-
-// Quick-select redemption presets
-const REDEEM_PRESETS = [
-  { label: '$5 off',  points: 500  },
-  { label: '$10 off', points: 1000 },
-  { label: '$25 off', points: 2500 },
-]
-
-// ── Component ──────────────────────────────────────────────────────────────────
+// ── Page ──────────────────────────────────────────────────────────────────────
 export default function LoyaltyScan() {
-  const navigate = useNavigate()
+  const navigate = useNavigate();
 
-  const [adminReady, setAdminReady] = useState(false);
+  // auth
   const [authChecking, setAuthChecking] = useState(true);
+  const [adminReady, setAdminReady] = useState(false);
+
+  // scanner
   const [mode, setMode] = useState<ScanMode>('award');
   const [scanState, setScanState] = useState<ScanState>('scanning');
+  const [scannerStarted, setScannerStarted] = useState(false);
+
+  // data
   const [scannedId, setScannedId] = useState<string | null>(null);
   const [customer, setCustomer] = useState<CustomerProfile | null>(null);
-  const [amountDollars, setAmountDollars] = useState('');
-  const [redeemPoints, setRedeemPoints] = useState<number | ''>('');
   const [awardResult, setAwardResult] = useState<AwardResult | null>(null);
   const [redeemResult, setRedeemResult] = useState<RedeemResult | null>(null);
+
+  // inputs
+  const [amountDollars, setAmountDollars] = useState('');
+  const [redeemPoints, setRedeemPoints] = useState('');
+
+  // ui
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [scannerStarted, setScannerStarted] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const hasScannedRef = useRef(false);
-  const scannerDivId = 'qr-scanner-region';
 
-  // ── Copy loyalty ID ─────────────────────────────────────────────────────
-  async function handleCopy() {
-    if (!scannedId) return;
-    try {
-      await navigator.clipboard.writeText(scannedId);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      /* ignore */
-    }
-  }
-
-  // ── Auth check ─────────────────────────────────────────────────────────
+  // ── Auth ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     async function checkAdmin() {
       try {
@@ -123,26 +88,16 @@ export default function LoyaltyScan() {
     checkAdmin();
   }, [navigate]);
 
-  // ── Mode switch resets scan ────────────────────────────────────────────
-  const handleModeSwitch = (next: ScanMode) => {
-    if (next === mode) return;
-    setMode(next);
-    reset();
-  };
-
-  // ── QR scanned → verify customer ──────────────────────────────────────
+  // ── QR scanned ───────────────────────────────────────────────────────────
   const handleQRScanned = useCallback(async (raw: string) => {
     if (scannerRef.current?.isScanning) {
       await scannerRef.current.stop().catch(() => {});
     }
-
     setScannerStarted(false);
     setScanState('loading');
     setErrorMsg(null);
 
-    const UUID_RE = /^[0-9a-f-]{36}$/i;
     const trimmed = raw.trim();
-
     if (!UUID_RE.test(trimmed)) {
       setErrorMsg('Not a valid loyalty QR code. Try again.');
       setScanState('error');
@@ -150,36 +105,9 @@ export default function LoyaltyScan() {
     }
 
     try {
-      const {
-        data: { session },
-        error: sessionError,
-      } = await supabase.auth.getSession();
-
-      if (sessionError || !session?.access_token) {
-        throw new Error('Authentication expired. Please log in again.');
-      }
-
-      const { data, error } = await supabase.functions.invoke('verify-loyalty-qr', {
-        body: { loyalty_public_id: trimmed },
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
-
-      if (error) throw new Error(error.message);
-      if (!data || typeof data !== 'object') throw new Error('Invalid response from server.');
-
-      // ✅ V2: Sanitize using DB field names exactly
-      const safeCustomer: CustomerProfile = {
-        account_id: String(data.account_id),
-        full_name: data.full_name ?? null,
-        tier: data.tier ?? 'bronze',
-        balance: Number(data.balance ?? 0),
-        lifetime_earned: Number(data.lifetime_earned ?? 0),
-        streak: Number(data.streak ?? 0),
-        last_activity: data.last_activity ?? null,
-      };
-
+      const profile = await verifyLoyaltyQR(trimmed);
       setScannedId(trimmed);
-      setCustomer(safeCustomer);
+      setCustomer(profile);
       setScanState('found');
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Verification failed. Please try again.');
@@ -187,25 +115,23 @@ export default function LoyaltyScan() {
     }
   }, []);
 
-  // ── Scanner lifecycle ──────────────────────────────────────────────────
+  // ── Scanner lifecycle ────────────────────────────────────────────────────
   useEffect(() => {
     if (!adminReady || scanState !== 'scanning' || scannerStarted) return;
 
-    let scanner: Html5Qrcode | null = null;
-
     async function startScanner() {
       try {
-        scanner = new Html5Qrcode(scannerDivId);
+        const scanner = new Html5Qrcode(SCANNER_DIV_ID);
         scannerRef.current = scanner;
         hasScannedRef.current = false;
 
         await scanner.start(
           { facingMode: 'environment' },
           { fps: 15, qrbox: { width: 240, height: 240 }, aspectRatio: 1.0, disableFlip: false },
-          (decodedText) => {
+          (decoded) => {
             if (hasScannedRef.current) return;
             hasScannedRef.current = true;
-            handleQRScanned(decodedText);
+            handleQRScanned(decoded);
           },
           () => {},
         );
@@ -217,40 +143,52 @@ export default function LoyaltyScan() {
     }
 
     startScanner();
-
     return () => {
-      if (scannerRef.current?.isScanning) {
-        scannerRef.current.stop().catch(() => {});
+      const scanner = scannerRef.current;
+
+      if (scanner?.isScanning) {
+        void scanner.stop().catch(() => {});
       }
     };
   }, [adminReady, scanState, scannerStarted, handleQRScanned]);
 
-  // ── Award points ───────────────────────────────────────────────────────
-  async function handleAwardPoints() {
-    if (!scannedId || !customer) return;
+  // ── Award ────────────────────────────────────────────────────────────────
+  async function handleAward() {
+    if (!customer) return;
+
     const dollars = parseFloat(amountDollars);
     if (isNaN(dollars) || dollars <= 0 || dollars > 99999) {
       setErrorMsg('Enter a valid purchase amount (e.g. 24.50)');
       return;
     }
 
+    const previousTier = customer.tier; // 👈 capture BEFORE update
+
     setScanState('awarding');
     setErrorMsg(null);
 
     try {
-      const {
-        data: { session: awardSession },
-      } = await supabase.auth.getSession();
-      const res = await supabase.functions.invoke('award-loyalty-qr', {
-        body: {
-          account_id: customer.account_id,
-          amount_cents: Math.round(dollars * 100),
-        },
-        headers: { Authorization: `Bearer ${awardSession?.access_token}` },
+      const result = await awardLoyaltyPoints(customer.account_id, Math.round(dollars * 100));
+
+      // Update live customer state
+      setCustomer((prev) =>
+        prev
+          ? {
+              ...prev,
+              balance: result.new_balance,
+              lifetime_earned: result.new_lifetime,
+              tier: result.new_tier,
+              streak: result.streak,
+            }
+          : prev,
+      );
+
+      // Store result + previous tier for animation
+      setAwardResult({
+        ...result,
+        tier_before: previousTier,
       });
 
-      if (res.error || !res.data) throw new Error(res.error?.message ?? 'Award failed');
-      setAwardResult(res.data);
       setScanState('success');
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Award failed. Try again.');
@@ -258,60 +196,44 @@ export default function LoyaltyScan() {
     }
   }
 
-  // ── Redeem points — V2 ────────────────────────────────────────────────
-  async function handleRedeemPoints() {
+  // ── Redeem ───────────────────────────────────────────────────────────────
+  async function handleRedeem() {
     if (!customer) return;
-
-    const pts = Number(redeemPoints);
-
+    const pts = parseInt(redeemPoints, 10);
     if (!pts || pts < 100 || pts > 50000) {
       setErrorMsg('Enter a valid point amount (min 100, max 50,000)');
       return;
     }
-
-    // ✅ V2: Use balance
     if (pts > customer.balance) {
-      setErrorMsg(`Customer only has ${customer.balance.toLocaleString()} points`);
+      setErrorMsg(`Customer only has ${Number(customer?.balance ?? 0).toLocaleString()} points`);
       return;
     }
-
     setScanState('awarding');
     setErrorMsg(null);
-
     try {
-      const {
-        data: { session: redeemSession },
-      } = await supabase.auth.getSession();
-      const { data, error } = await supabase.functions.invoke('redeem-loyalty', {
-        body: {
-          account_id: customer.account_id,
-          points_to_redeem: pts,
-          mode: 'dine_in',
-        },
-        headers: { Authorization: `Bearer ${redeemSession?.access_token}` },
-      });
-
-      if (error) throw new Error(error.message);
-      if (!data) throw new Error('No response from server');
-
-      if (data.was_duplicate) {
+      const result = await redeemLoyaltyPoints(customer.account_id, pts);
+      setCustomer((prev) =>
+        prev
+          ? {
+              ...prev,
+              balance: result.new_balance,
+            }
+          : prev,
+      );
+      setRedeemResult(result);
+      setScanState('success');
+    } catch (err) {
+      if (err instanceof Error && err.message === 'DUPLICATE') {
         setErrorMsg('This redemption was already processed.');
         setScanState('found');
         return;
       }
-
-      // ✅ V2: Optimistic update using balance
-      setCustomer((prev) => (prev ? { ...prev, balance: data.new_balance } : prev));
-
-      setRedeemResult(data);
-      setScanState('success');
-    } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Redemption failed. Try again.');
       setScanState('found');
     }
   }
 
-  // ── Reset ──────────────────────────────────────────────────────────────
+  // ── Reset ────────────────────────────────────────────────────────────────
   function reset() {
     setScannedId(null);
     setCustomer(null);
@@ -325,21 +247,25 @@ export default function LoyaltyScan() {
     setScannerStarted(false);
   }
 
-  // ── Render guards ──────────────────────────────────────────────────────
-  if (authChecking) {
+  function handleModeSwitch(next: ScanMode) {
+    if (next === mode) return;
+    setMode(next);
+    reset();
+  }
+
+  // ── Guards ───────────────────────────────────────────────────────────────
+  if (authChecking)
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50">
         <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-gray-700" />
       </div>
     );
-  }
   if (!adminReady) return null;
 
-  // ── Render ─────────────────────────────────────────────────────────────
+  // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gray-950 px-4 py-8">
       <div className="mx-auto max-w-sm">
-        {/* Header */}
         <div className="mb-6 text-center">
           <h1 className="text-xl font-bold tracking-tight text-white">Loyalty Scanner</h1>
           <p className="mt-1 text-sm text-gray-500">Scan a customer's QR code</p>
@@ -352,9 +278,8 @@ export default function LoyaltyScan() {
               <button
                 key={m}
                 onClick={() => handleModeSwitch(m)}
-                className={`flex-1 rounded-lg py-2 text-sm font-semibold capitalize transition ${
-                  mode === m ? 'bg-amber-500 text-white shadow' : 'text-gray-400 hover:text-white'
-                }`}
+                className={`flex-1 rounded-lg py-2 text-sm font-semibold capitalize transition
+                  ${mode === m ? 'bg-amber-500 text-white shadow' : 'text-gray-400 hover:text-white'}`}
               >
                 {m === 'award' ? '⭐ Award Points' : '🎁 Redeem Points'}
               </button>
@@ -362,33 +287,20 @@ export default function LoyaltyScan() {
           </div>
         )}
 
-        {/* ── SCANNING ─────────────────────────────────────────────────── */}
+        {/* ── SCANNING ──────────────────────────────────────────────────── */}
         {scanState === 'scanning' && (
           <div className="overflow-hidden rounded-2xl border border-white/8 bg-gray-900">
             <div className="relative aspect-square w-full overflow-hidden bg-black">
-              <div id={scannerDivId} className="h-full w-full" />
+              <div id={SCANNER_DIV_ID} className="h-full w-full" />
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                 <div className="relative h-52 w-52">
-                  {(
-                    [
-                      'top-0 left-0',
-                      'top-0 right-0',
-                      'bottom-0 left-0',
-                      'bottom-0 right-0',
-                    ] as const
-                  ).map((pos, i) => (
-                    <div
-                      key={i}
-                      className={`absolute h-8 w-8 ${pos} border-amber-400 ${
-                        i === 0
-                          ? 'border-t-2 border-l-2 rounded-tl-md'
-                          : i === 1
-                            ? 'border-t-2 border-r-2 rounded-tr-md'
-                            : i === 2
-                              ? 'border-b-2 border-l-2 rounded-bl-md'
-                              : 'border-b-2 border-r-2 rounded-br-md'
-                      }`}
-                    />
+                  {[
+                    'top-0 left-0 border-t-2 border-l-2 rounded-tl-md',
+                    'top-0 right-0 border-t-2 border-r-2 rounded-tr-md',
+                    'bottom-0 left-0 border-b-2 border-l-2 rounded-bl-md',
+                    'bottom-0 right-0 border-b-2 border-r-2 rounded-br-md',
+                  ].map((cls, i) => (
+                    <div key={i} className={`absolute h-8 w-8 border-amber-400 ${cls}`} />
                   ))}
                   <div className="absolute left-2 right-2 top-0 h-0.5 animate-[scan_2s_ease-in-out_infinite] bg-amber-400/60" />
                 </div>
@@ -404,217 +316,46 @@ export default function LoyaltyScan() {
           </div>
         )}
 
-        {/* ── LOADING ──────────────────────────────────────────────────── */}
-        {scanState === 'loading' && (
-          <div className="flex flex-col items-center gap-4 rounded-2xl border border-white/8 bg-gray-900 px-6 py-12">
-            <div className="h-10 w-10 animate-spin rounded-full border-2 border-gray-700 border-t-amber-400" />
-            <p className="text-sm text-gray-400">Verifying customer…</p>
-          </div>
-        )}
-
-        {/* ── FOUND ────────────────────────────────────────────────────── */}
-        {scanState === 'found' &&
-          customer &&
-          (() => {
-            const tier = asTier(customer.tier); // ✅ V2
-            const tierCfg = LOYALTY_TIERS[tier];
-            return (
-              <div className="space-y-4">
-                {/* Customer card */}
-                <div className="rounded-2xl border border-white/8 bg-gray-900 p-5">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-gray-500">
-                        Customer Found
-                      </p>
-                      <p className="mt-1 text-lg font-bold text-white">
-                        {customer.full_name ?? 'Anonymous Member'}
-                      </p>
-                    </div>
-                    <span
-                      className={`rounded-full border px-2.5 py-1 text-xs font-bold ${tierCfg.colors.text} ${tierCfg.colors.bg} ${tierCfg.colors.border}`}
-                    >
-                      {tierCfg.icon} {tierCfg.label}
-                    </span>
-                  </div>
-
-                  <div className="mt-4 grid grid-cols-3 gap-2">
-                    {[
-                      { label: 'Balance', value: Number(customer.balance ?? 0).toLocaleString() }, // ✅ V2
-                      {
-                        label: 'Lifetime',
-                        value: Number(customer.lifetime_earned ?? 0).toLocaleString(),
-                      }, // ✅ V2
-                      { label: 'Streak', value: `${Number(customer.streak ?? 0)}d` }, // ✅ V2
-                    ].map(({ label, value }) => (
-                      <div key={label} className="rounded-lg bg-white/4 px-3 py-2.5 text-center">
-                        <p className="text-[10px] uppercase tracking-wider text-gray-500">
-                          {label}
-                        </p>
-                        <p className="mt-0.5 font-mono text-base font-bold text-white">{value}</p>
-                      </div>
-                    ))}
-                  </div>
-
-                  {scannedId && (
-                    <button
-                      onClick={handleCopy}
-                      className="mt-4 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 font-mono text-xs text-gray-400 transition hover:bg-white/10"
-                    >
-                      {copied ? '✓ Copied Loyalty ID' : 'Copy Loyalty ID'}
-                    </button>
-                  )}
-
-                  {customer.last_activity && ( // ✅ V2
-                    <p className="mt-3 text-[11px] text-gray-600">
-                      Last activity:{' '}
-                      {new Date(customer.last_activity).toLocaleDateString('en-US', {
-                        month: 'short',
-                        day: 'numeric',
-                        year: 'numeric',
-                      })}
-                    </p>
-                  )}
-                </div>
-
-                {/* ── AWARD input ──────────────────────────────────────────── */}
-                {mode === 'award' && (
-                  <div className="rounded-2xl border border-white/8 bg-gray-900 p-5">
-                    <label className="block text-xs font-bold uppercase tracking-[0.15em] text-gray-500">
-                      Purchase Amount
-                    </label>
-                    <div className="mt-2 flex items-center overflow-hidden rounded-xl border border-white/10 bg-white/4 focus-within:border-amber-500/50 focus-within:ring-1 focus-within:ring-amber-500/30">
-                      <span className="pl-4 font-mono text-lg text-gray-400">$</span>
-                      <input
-                        type="number"
-                        inputMode="decimal"
-                        step="0.01"
-                        min="0.01"
-                        max="99999"
-                        placeholder="0.00"
-                        value={amountDollars}
-                        onChange={(e) => setAmountDollars(e.target.value)}
-                        className="flex-1 bg-transparent px-2 py-3.5 font-mono text-xl text-white placeholder-gray-700 outline-none"
-                        autoFocus
-                      />
-                    </div>
-                    {amountDollars &&
-                      !isNaN(parseFloat(amountDollars)) &&
-                      parseFloat(amountDollars) > 0 && (
-                        <p className="mt-2 text-center text-xs text-gray-500">
-                          ≈{' '}
-                          <span className="font-semibold text-amber-400">
-                            {Math.floor(parseFloat(amountDollars))} base pts
-                          </span>{' '}
-                          before tier &amp; streak multipliers
-                        </p>
-                      )}
-                    {errorMsg && (
-                      <p className="mt-2 text-center text-xs font-medium text-red-400">
-                        {errorMsg}
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                {/* ── REDEEM input ─────────────────────────────────────────── */}
-                {mode === 'redeem' && (
-                  <div className="rounded-2xl border border-white/8 bg-gray-900 p-5">
-                    <label className="block text-xs font-bold uppercase tracking-[0.15em] text-gray-500">
-                      Points to Redeem
-                    </label>
-
-                    <div className="mt-3 grid grid-cols-3 gap-2">
-                      {REDEEM_PRESETS.map(({ label, points }) => (
-                        <button
-                          key={points}
-                          onClick={() => setRedeemPoints(points)}
-                          disabled={points > customer.balance} // ✅ V2
-                          className={`rounded-lg border py-2 text-xs font-bold transition ${
-                            redeemPoints === points
-                              ? 'border-amber-500 bg-amber-500/20 text-amber-300'
-                              : 'border-white/10 bg-white/4 text-gray-400 hover:bg-white/10 disabled:opacity-30'
-                          }`}
-                        >
-                          {label}
-                          <span className="block text-[10px] font-normal opacity-70">
-                            {points.toLocaleString()} pts
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-
-                    <input
-                      type="number"
-                      inputMode="numeric"
-                      min="100"
-                      max="50000"
-                      placeholder="or enter custom amount"
-                      value={redeemPoints === '' ? '' : redeemPoints}
-                      onChange={(e) =>
-                        setRedeemPoints(e.target.value === '' ? '' : parseInt(e.target.value, 10))
-                      }
-                      className="mt-3 w-full rounded-xl border border-white/10 bg-white/4 px-4 py-3 font-mono text-base text-white placeholder-gray-700 outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/30"
-                    />
-
-                    {redeemPoints && Number(redeemPoints) >= 100 && (
-                      <p className="mt-2 text-center text-xs text-gray-500">
-                        ={' '}
-                        <span className="font-semibold text-amber-400">
-                          {formatCurrency(Number(redeemPoints) / 100)}
-                        </span>{' '}
-                        discount
-                      </p>
-                    )}
-
-                    {errorMsg && (
-                      <p className="mt-2 text-center text-xs font-medium text-red-400">
-                        {errorMsg}
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                <div className="flex gap-2">
-                  <button
-                    onClick={reset}
-                    className="rounded-xl border border-white/8 px-4 py-3 text-sm font-medium text-gray-400 transition hover:bg-white/4"
-                  >
-                    Cancel
-                  </button>
-                  {mode === 'award' ? (
-                    <button
-                      onClick={handleAwardPoints}
-                      disabled={!amountDollars || parseFloat(amountDollars) <= 0}
-                      className="flex-1 rounded-xl bg-amber-500 py-3 text-sm font-bold text-white shadow-lg shadow-amber-500/20 transition hover:bg-amber-400 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Award Points
-                    </button>
-                  ) : (
-                    <button
-                      onClick={handleRedeemPoints}
-                      disabled={!redeemPoints || Number(redeemPoints) < 100}
-                      className="flex-1 rounded-xl bg-emerald-600 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Redeem Points
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })()}
-
-        {/* ── AWARDING ─────────────────────────────────────────────────── */}
-        {scanState === 'awarding' && (
+        {/* ── LOADING / PROCESSING ──────────────────────────────────────── */}
+        {(scanState === 'loading' || scanState === 'awarding') && (
           <div className="flex flex-col items-center gap-4 rounded-2xl border border-white/8 bg-gray-900 px-6 py-12">
             <div className="h-10 w-10 animate-spin rounded-full border-2 border-gray-700 border-t-amber-400" />
             <p className="text-sm text-gray-400">
-              {mode === 'award' ? 'Awarding points…' : 'Processing redemption…'}
+              {scanState === 'loading'
+                ? 'Verifying customer…'
+                : mode === 'award'
+                  ? 'Awarding points…'
+                  : 'Processing redemption…'}
             </p>
           </div>
         )}
 
-        {/* ── AWARD SUCCESS ────────────────────────────────────────────── */}
+        {/* ── FOUND ─────────────────────────────────────────────────────── */}
+        {scanState === 'found' && customer && scannedId && (
+          <div className="space-y-4">
+            <CustomerCard customer={customer} loyaltyId={scannedId} />
+            {mode === 'award' ? (
+              <AwardSection
+                amountDollars={amountDollars}
+                errorMsg={errorMsg}
+                onChange={setAmountDollars}
+                onAward={handleAward}
+                onCancel={reset}
+              />
+            ) : (
+              <RedeemSection
+                balance={customer.balance}
+                redeemPoints={redeemPoints}
+                errorMsg={errorMsg}
+                onChange={setRedeemPoints}
+                onRedeem={handleRedeem}
+                onCancel={reset}
+              />
+            )}
+          </div>
+        )}
+
+        {/* ── AWARD SUCCESS ──────────────────────────────────────────────── */}
         {scanState === 'success' && mode === 'award' && awardResult && customer && (
           <div className="space-y-4">
             <div className="overflow-hidden rounded-2xl border border-emerald-500/20 bg-gray-900">
@@ -625,7 +366,7 @@ export default function LoyaltyScan() {
                 <div className="text-center">
                   <p className="text-sm font-medium text-emerald-400">Points Awarded</p>
                   <p className="mt-1 font-mono text-4xl font-bold text-white">
-                    +{Number(awardResult.points_earned ?? 0).toLocaleString()}
+                    +{Number(awardResult?.points_earned ?? 0).toLocaleString()}
                   </p>
                   <p className="mt-0.5 text-xs text-gray-500">points</p>
                 </div>
@@ -638,23 +379,23 @@ export default function LoyaltyScan() {
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-500">New balance</span>
                   <span className="font-mono font-bold text-amber-400">
-                    {Number(awardResult.new_balance ?? 0).toLocaleString()} pts
+                    {Number(awardResult?.new_balance ?? 0).toLocaleString()} pts
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-500">Streak</span>
-                  <span className="font-medium text-white">{awardResult.streak} days</span>
+                  <span className="font-medium text-white">
+                    {Number(awardResult?.streak ?? 0)} days
+                  </span>
                 </div>
-                {awardResult.tier_changed &&
+                {awardResult?.tier_changed &&
                   (() => {
-                    const before = asTier(awardResult.tier_before);
-                    const after = asTier(awardResult.tier);
+                    const prev = LOYALTY_TIERS[asTier(awardResult.tier_before!)];
+                    const next = LOYALTY_TIERS[asTier(awardResult.new_tier)];
                     return (
                       <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-center">
                         <p className="text-xs font-semibold text-amber-300">
-                          🎊 Tier upgrade! {LOYALTY_TIERS[before].icon}{' '}
-                          {LOYALTY_TIERS[before].label} → {LOYALTY_TIERS[after].icon}{' '}
-                          {LOYALTY_TIERS[after].label}
+                          🎊 Tier upgrade! {prev.icon} {prev.label} → {next.icon} {next.label}
                         </p>
                       </div>
                     );
@@ -670,7 +411,7 @@ export default function LoyaltyScan() {
           </div>
         )}
 
-        {/* ── REDEEM SUCCESS ───────────────────────────────────────────── */}
+        {/* ── REDEEM SUCCESS ─────────────────────────────────────────────── */}
         {scanState === 'success' && mode === 'redeem' && redeemResult && customer && (
           <div className="space-y-4">
             <div className="overflow-hidden rounded-2xl border border-emerald-500/20 bg-gray-900">
@@ -681,7 +422,7 @@ export default function LoyaltyScan() {
                 <div className="text-center">
                   <p className="text-sm font-medium text-emerald-400">Redemption Applied</p>
                   <p className="mt-1 font-mono text-4xl font-bold text-white">
-                    {formatCurrency(redeemResult.credit_cents / 100)}
+                    {formatCurrency((parseInt(redeemPoints || '0', 10) || 0) / 100)}
                   </p>
                   <p className="mt-0.5 text-xs text-gray-500">discount applied to order</p>
                 </div>
@@ -694,7 +435,7 @@ export default function LoyaltyScan() {
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-500">Remaining balance</span>
                   <span className="font-mono font-bold text-amber-400">
-                    {Number(redeemResult.new_balance ?? 0).toLocaleString()} pts
+                    {Number(redeemResult?.new_balance ?? 0).toLocaleString()} pts
                   </span>
                 </div>
               </div>
@@ -708,7 +449,7 @@ export default function LoyaltyScan() {
           </div>
         )}
 
-        {/* ── ERROR ────────────────────────────────────────────────────── */}
+        {/* ── ERROR ─────────────────────────────────────────────────────── */}
         {scanState === 'error' && (
           <div className="space-y-4">
             <div className="flex flex-col items-center gap-4 rounded-2xl border border-red-500/20 bg-gray-900 px-6 py-10 text-center">

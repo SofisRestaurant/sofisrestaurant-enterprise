@@ -69,13 +69,6 @@ function parseCartItems(value: unknown): OrderCartItem[] | null {
     }))
 }
 
-function parseMetadata(value: unknown): Record<string, unknown> | null {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return value as Record<string, unknown>
-  }
-  return null
-}
-
 function parseShippingAddress(value: unknown): ShippingAddress | null {
   return isShippingAddress(value) ? value : null
 }
@@ -130,7 +123,7 @@ export function mapOrderRowToDomain(row: OrderRow): Order {
     shipping_country: shippingAddr?.country ?? null,
 
     // Metadata
-    metadata: parseMetadata(row.metadata),
+    metadata: row.metadata,
     notes: row.notes ?? null,
 
     // Timestamps

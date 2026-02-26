@@ -6,13 +6,14 @@
 // Tier config sourced entirely from @/domain/loyalty/tiers.
 // No tier data is defined in this file.
 // ============================================================================
-
+import type { Database } from '@/lib/supabase/database.types';
 import { useEffect, useRef, useState } from 'react'
 import { QRCodeSVG, QRCodeCanvas } from 'qrcode.react'
 import { useUserContext } from '@/contexts/useUserContext'
 import { supabase } from '@/lib/supabase/supabaseClient'
 import { LOYALTY_TIERS, TIER_ORDER, getNextTier, type LoyaltyTier } from '@/domain/loyalty/tiers'
 import type { LoyaltyProfile } from '@/features/checkout/checkout.api'
+
 
 // ============================================================================
 // STREAK HELPERS (display-only, not business logic)
@@ -39,89 +40,124 @@ const STREAK_COLOR = (streak: number): string => {
 // TYPES
 // ============================================================================
 
+type LedgerRow = Database['public']['Tables']['loyalty_ledger']['Row'];
+
+type Json = Database['public']['Tables']['loyalty_ledger']['Row']['metadata'];
+
 interface LoyaltyTransaction {
-  id:                string
-  transaction_type:  'earned' | 'redeemed' | 'bonus' | 'expired' | 'adjusted'
-  points_delta:      number
-  points_balance:    number
-  tier_at_time:      string
-  streak_at_time:    number
-  tier_multiplier:   number
-  streak_multiplier: number
-  created_at:        string
-  metadata:          Record<string, unknown> | null
+  id: string;
+  transaction_type: 'earned' | 'redeemed' | 'bonus' | 'expired' | 'adjusted';
+  points_delta: number;
+  points_balance: number;
+  tier_at_time: string;
+  streak_at_time: number;
+  tier_multiplier: number;
+  streak_multiplier: number;
+  created_at: string;
+  metadata: Json;
 }
 
 interface LoyaltyProfileWithQR extends LoyaltyProfile {
   loyaltyPublicId: string | null
 }
 
+const ENTRY_TYPE_MAP: Record<LedgerRow['entry_type'], LoyaltyTransaction['transaction_type']> = {
+  earn: 'earned',
+  redeem: 'redeemed',
+  bonus: 'bonus',
+  expired: 'expired',
+  adjusted: 'adjusted',
+};
+
 // ============================================================================
 // HOOK: useLoyaltyData
 // ============================================================================
 
 function useLoyaltyData() {
-  const [profile,      setProfile]      = useState<LoyaltyProfileWithQR | null>(null)
-  const [transactions, setTransactions] = useState<LoyaltyTransaction[]>([])
-  const [loading,      setLoading]      = useState(true)
-  const [error,        setError]        = useState<string | null>(null)
+  const [profile, setProfile] = useState<LoyaltyProfileWithQR | null>(null);
+  const [transactions, setTransactions] = useState<LoyaltyTransaction[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false
+    let cancelled = false;
 
     async function load() {
       try {
-        setLoading(true)
-        setError(null)
+        setLoading(true);
+        setError(null);
 
-        const { data: { session } } = await supabase.auth.getSession()
-        if (!session?.user?.id) return
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
 
-        const uid = session.user.id
-
-        const [profileRes, txRes] = await Promise.all([
-          supabase
-            .from('profiles')
-            .select('loyalty_points, lifetime_points, loyalty_tier, loyalty_streak, last_order_date, loyalty_public_id')
-            .eq('id', uid)
-            .single(),
-          supabase
-            .from('loyalty_transactions')
-            .select('*')
-            .eq('user_id', uid)
-            .order('created_at', { ascending: false })
-            .limit(10),
-        ])
-
-        if (cancelled) return
-
-        if (profileRes.data) {
-          setProfile({
-            points:          profileRes.data.loyalty_points    ?? 0,
-            lifetimePoints:  profileRes.data.lifetime_points   ?? 0,
-            tier:            (profileRes.data.loyalty_tier     ?? 'bronze') as LoyaltyTier,
-            streak:          profileRes.data.loyalty_streak    ?? 0,
-            lastOrderDate:   profileRes.data.last_order_date   ?? null,
-            loyaltyPublicId: profileRes.data.loyalty_public_id ?? null,
-          })
+        if (!session?.user?.id) {
+          setLoading(false);
+          return;
         }
 
-        if (txRes.data) setTransactions(txRes.data as LoyaltyTransaction[])
+        const uid = session.user.id;
 
+        const [accountRes, profileRes] = await Promise.all([
+          supabase.from('v2_account_summary').select('*').eq('user_id', uid).single(),
+
+          supabase.from('profiles').select('loyalty_public_id').eq('id', uid).single(),
+        ]);
+
+        if (cancelled) return;
+
+        if (accountRes.data) {
+          setProfile({
+            points: accountRes.data.balance ?? 0,
+            lifetimePoints: accountRes.data.lifetime_earned ?? 0,
+            tier: accountRes.data.tier as LoyaltyTier,
+            streak: accountRes.data.streak ?? 0,
+            lastOrderDate: accountRes.data.last_activity ?? null,
+            loyaltyPublicId: profileRes.data?.loyalty_public_id ?? null,
+          });
+        }
+
+        const accountId = accountRes.data?.account_id;
+        if (!accountId) return;
+
+        const { data: ledger } = await supabase
+          .from('loyalty_ledger')
+          .select('*')
+          .eq('account_id', accountId)
+          .order('created_at', { ascending: false })
+          .limit(10);
+
+        if (!ledger) return;
+
+        setTransactions(
+          ledger.map((row) => ({
+            id: row.id,
+            transaction_type: ENTRY_TYPE_MAP[row.entry_type] ?? 'adjusted',
+            points_delta: row.amount,
+            points_balance: row.balance_after,
+            tier_at_time: row.tier_at_time ?? 'bronze',
+            streak_at_time: 0,
+            tier_multiplier: 1,
+            streak_multiplier: 1,
+            created_at: row.created_at,
+            metadata: row.metadata,
+          })),
+        );
       } catch {
-        if (!cancelled) setError('Unable to load loyalty data')
+        if (!cancelled) setError('Unable to load loyalty data');
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) setLoading(false);
       }
     }
 
-    load()
-    return () => { cancelled = true }
-  }, [])
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  return { profile, transactions, loading, error }
+  return { profile, transactions, loading, error };
 }
-
 // ============================================================================
 // SUB-COMPONENTS
 // ============================================================================
