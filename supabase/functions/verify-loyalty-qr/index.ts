@@ -137,10 +137,10 @@ Deno.serve(async (req) => {
 
     // Lookup loyalty account
     const { data: account, error: accountError } = await svc
-      .from("v2_account_summary")
-      .select("account_id, balance, lifetime_earned, tier, streak")
-      .eq("user_id", profile.id)
-      .single();
+     .from("v2_account_summary")
+     .select("id, balance, lifetime_earned, tier, streak")
+     .eq("user_id", profile.id)
+     .single();
 
     if (accountError || !account) {
       return new Response(
@@ -151,7 +151,7 @@ Deno.serve(async (req) => {
 
     return new Response(
       JSON.stringify({
-        account_id: account.account_id,
+        account_id: account.id,
         profile_id: profile.id,
         full_name: profile.full_name,
         balance: account.balance,

@@ -257,18 +257,33 @@ export function UserProvider({ children }: UserProviderProps) {
 
     init();
 
-    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
-      if (!mounted) return;
+   const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+     if (!mounted) return;
 
-      if (event === 'INITIAL_SESSION') {
-        if (initResolved) return;
-        applyUserRef.current(session?.user ?? null, session, event);
-        setLoading(false);
-        return;
-      }
+     // 🔹 Prevent duplicate initial session handling
+     if (event === 'INITIAL_SESSION') {
+       if (initResolved) return;
+       applyUserRef.current(session?.user ?? null, session, event);
+       setLoading(false);
+       return;
+     }
 
-      applyUserRef.current(session?.user ?? null, session, event);
-    });
+     // 🔹 Token refresh succeeded
+     if (event === 'TOKEN_REFRESHED') {
+       applyUserRef.current(session?.user ?? null, session, event);
+       return;
+     }
+
+     // 🔹 Handle signed out cleanly (refresh token invalid, manual logout, etc)
+     if (event === 'SIGNED_OUT') {
+       clearProfileCache();
+       applyUserRef.current(null, null, event);
+       return;
+     }
+
+     // 🔹 Default case (SIGNED_IN, USER_UPDATED, etc)
+     applyUserRef.current(session?.user ?? null, session, event);
+   });
 
     return () => {
       mounted = false;

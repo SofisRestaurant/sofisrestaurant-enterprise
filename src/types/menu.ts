@@ -1,85 +1,121 @@
-import type {
-  Tables,
-  TablesInsert,
-  TablesUpdate,
-} from '@/lib/supabase/types'
+// src/types/menu.ts
+// Type-safe menu system with strict validation
 
-/* =========================================================
-   DATABASE SOURCE OF TRUTH
-========================================================= */
+export type MenuCategory = 'appetizers' | 'entrees' | 'desserts' | 'drinks';
 
-export type MenuItemRow = Tables<'menu_items'>
-export type MenuItemInsert = TablesInsert<'menu_items'>
-export type MenuItemUpdate = TablesUpdate<'menu_items'>
+export type ModifierGroupType = 'radio' | 'checkbox' | 'quantity';
 
-/* =========================================================
-   UI CATEGORY UNION
-   Controlled vocabulary for frontend filtering
-========================================================= */
+export interface Modifier {
+  id: string;
+  modifier_group_id: string;
+  name: string;
+  price_adjustment: number;
+  available: boolean;
+  sort_order: number;
+}
 
-export const MENU_CATEGORIES = [
-  'appetizers',
-  'entrees',
-  'desserts',
-  'drinks',
-] as const
+export interface ModifierGroup {
+  id: string;
+  name: string;
+  description?: string;
+  type: ModifierGroupType;
+  min_selections: number;
+  max_selections: number | null;
+  required: boolean;
+  sort_order: number;
+  modifiers: Modifier[];
+}
 
-export type MenuCategory = (typeof MENU_CATEGORIES)[number]
-
-/* =========================================================
-   UI DIETARY / BADGE ABSTRACTION
-   Presentation helpers (NOT DB)
-========================================================= */
-
-export interface DietaryInfo {
-  vegetarian?: boolean
-  vegan?: boolean
-  gluten_free?: boolean
-  dairy_free?: boolean
-  spicy?: boolean
+export interface MenuItem {
+  id: string;
+  name: string;
+  description?: string;
+  price: number;
+  image_url?: string;
+  category: MenuCategory;
+  featured: boolean;
+  available: boolean;
+  sort_order: number;
+  
+  // Dietary flags
+  spicy_level?: number;
+  is_vegetarian: boolean;
+  is_vegan: boolean;
+  is_gluten_free: boolean;
   allergens?: string[]
+  
+  // Inventory
+  inventory_count?: number;
+  low_stock_threshold: number;
+  
+  // Engagement
+  popularity_score: number;
+  pairs_with?: string[];
+  
+  // Modifiers (from database view)
+  modifier_groups?: ModifierGroup[];
+  
+  created_at: string;
+  updated_at: string;
 }
 
-/* =========================================================
-   APPLICATION MODEL
-   What the app guarantees exists after mapping
-========================================================= */
-
-export interface MenuItem extends MenuItemRow {
-  /**
-   * Runtime guarantees added by mapper
-   */
-  available: boolean
-
-  /**
-   * Optional visual helpers
-   */
-  featured?: boolean
-  image_url?: string
-  allergens?: string[]
-
-  /**
-   * Derived / marketing / AI tags
-   */
-  dietary_info?: DietaryInfo
+export interface SelectedModifier {
+  id: string;
+  name: string;
+  price_adjustment: number;
 }
 
-/* =========================================================
-   ADMIN / FORM TYPES
-========================================================= */
-
-export interface MenuItemFormData {
-  name: string
-  description: string | null
-  price: number
-  category: MenuCategory
+export interface CartItemModifier {
+  group_id: string;
+  group_name: string;
+  selections: SelectedModifier[];
 }
 
-/* =========================================================
-   TYPE GUARDS
-   Prevents "string is not assignable"
-========================================================= */
-
-export function isMenuCategory(value: string): value is MenuCategory {
-  return (MENU_CATEGORIES as readonly string[]).includes(value)
+export interface CartItem {
+  item_id: string;
+  name: string;
+  quantity: number;
+  base_price: number;
+  modifiers: CartItemModifier[];
+  subtotal: number;
+  special_instructions?: string;
+  image_url?: string;
 }
+
+// Validation helpers
+export const isValidModifierSelection = (
+  group: ModifierGroup,
+  selections: SelectedModifier[]
+): { valid: boolean; error?: string } => {
+  if (group.required && selections.length === 0) {
+    return { valid: false, error: 'This selection is required' };
+  }
+  
+  if (group.min_selections && selections.length < group.min_selections) {
+    return { 
+      valid: false, 
+      error: `Please select at least ${group.min_selections}` 
+    };
+  }
+  
+  if (group.max_selections && selections.length > group.max_selections) {
+    return { 
+      valid: false, 
+      error: `Maximum ${group.max_selections} selections allowed` 
+    };
+  }
+  
+  return { valid: true };
+};
+
+export const calculateItemPrice = (
+  basePrice: number,
+  modifiers: CartItemModifier[],
+  quantity: number = 1
+): number => {
+  const modifierTotal = modifiers.reduce((sum, mod) => {
+    return sum + mod.selections.reduce((s, sel) => s + sel.price_adjustment, 0);
+  }, 0);
+  
+  return (basePrice + modifierTotal) * quantity;
+};

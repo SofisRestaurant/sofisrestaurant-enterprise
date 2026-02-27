@@ -545,26 +545,26 @@ export default function OrderSuccess() {
             finalizeOrder()
           }
 
-          if (normalized.customer_uid) {
-            const [txRes, profileRes] = await Promise.all([
-              supabase
-                .from('loyalty_transactions')
-                .select('*')
-                .eq('order_id', normalized.id)
-                .eq('transaction_type', 'earned')
-                .maybeSingle(),
-              supabase
-                .from('profiles')
-                .select('loyalty_streak')
-                .eq('id', normalized.customer_uid)
-                .single(),
-            ])
+       if (normalized.customer_uid) {
+         const [txRes, profileRes] = await Promise.all([
+           supabase
+             .rpc('get_loyalty_for_order', {
+               p_order_id: normalized.id,
+             })
+             .maybeSingle(),
 
-            if (!cancelled) {
-              if (txRes.data) setLoyalty(txRes.data as LoyaltyResult)
-              if (profileRes.data) setLoyaltyStreak(profileRes.data.loyalty_streak ?? 0)
-            }
-          }
+           supabase
+             .from('profiles')
+             .select('loyalty_streak')
+             .eq('id', normalized.customer_uid)
+             .single(),
+         ]);
+
+         if (!cancelled) {
+           if (txRes.data) setLoyalty(txRes.data as LoyaltyResult);
+           if (profileRes.data) setLoyaltyStreak(profileRes.data.loyalty_streak ?? 0);
+         }
+       }
 
           return
         }

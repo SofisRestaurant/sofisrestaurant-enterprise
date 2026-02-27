@@ -88,13 +88,14 @@ interface RawBody {
 function getCorsHeaders(req: Request): Record<string, string> | null {
   const origin = req.headers.get("origin") ?? "";
   if (!ALLOWED_ORIGINS.includes(origin)) return null;
+
   return {
-    "Access-Control-Allow-Origin":  origin,
-    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-idempotency-key",
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Headers":
+      "authorization, x-client-info, apikey, content-type, x-idempotency-key, x-application-name",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
   };
 }
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function log(level: "info" | "warn" | "error", msg: string, data?: unknown) {
   console.log(JSON.stringify({ level, msg, data, time: new Date().toISOString() }));

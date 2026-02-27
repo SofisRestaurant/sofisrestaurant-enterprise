@@ -5,39 +5,20 @@ interface HealthResult {
   reason?: string
 }
 
-async function checkDatabase(): Promise<HealthResult> {
+export async function runStartupHealthCheck(): Promise<HealthResult> {
   try {
-    const { error } = await supabase
-      .from("orders")
-      .select("id")
-      .limit(1)
+    const { error } = await supabase.rpc("health_ping")
 
-    if (error) return { ok: false, reason: "DB offline" }
+    if (error) {
+      if ('status' in error && error.status === 401) {
+        return { ok: true }
+      }
+
+      return { ok: false, reason: error.message }
+    }
 
     return { ok: true }
   } catch {
-    return { ok: false, reason: "DB connection failed" }
+    return { ok: false, reason: "network_error" }
   }
-}
-
-async function checkAuth(): Promise<HealthResult> {
-  try {
-    const { error } = await supabase.auth.getSession()
-    if (error) return { ok: false, reason: "Auth offline" }
-
-    return { ok: true }
-  } catch {
-    return { ok: false, reason: "Auth check failed" }
-  }
-}
-
-export async function runStartupHealthCheck() {
-  const checks = await Promise.all([
-    checkDatabase(),
-    checkAuth(),
-  ])
-
-  const failed = checks.find(c => !c.ok)
-
-  return failed ?? { ok: true }
 }

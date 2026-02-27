@@ -12,31 +12,6 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.1"
   }
-  graphql_public: {
-    Tables: {
-      [_ in never]: never
-    }
-    Views: {
-      [_ in never]: never
-    }
-    Functions: {
-      graphql: {
-        Args: {
-          extensions?: Json
-          operationName?: string
-          query?: string
-          variables?: Json
-        }
-        Returns: Json
-      }
-    }
-    Enums: {
-      [_ in never]: never
-    }
-    CompositeTypes: {
-      [_ in never]: never
-    }
-  }
   public: {
     Tables: {
       account_lockouts: {
@@ -453,7 +428,7 @@ export type Database = {
             columns: ["account_id"]
             isOneToOne: false
             referencedRelation: "v2_account_summary"
-            referencedColumns: ["account_id"]
+            referencedColumns: ["id"]
           },
           {
             foreignKeyName: "loyalty_ledger_admin_id_fkey"
@@ -551,6 +526,49 @@ export type Database = {
           },
         ]
       }
+      menu_item_modifier_groups: {
+        Row: {
+          id: string
+          menu_item_id: string
+          modifier_group_id: string
+          sort_order: number
+        }
+        Insert: {
+          id?: string
+          menu_item_id: string
+          modifier_group_id: string
+          sort_order?: number
+        }
+        Update: {
+          id?: string
+          menu_item_id?: string
+          modifier_group_id?: string
+          sort_order?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "menu_item_modifier_groups_menu_item_id_fkey"
+            columns: ["menu_item_id"]
+            isOneToOne: false
+            referencedRelation: "menu_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "menu_item_modifier_groups_menu_item_id_fkey"
+            columns: ["menu_item_id"]
+            isOneToOne: false
+            referencedRelation: "menu_items_full"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "menu_item_modifier_groups_modifier_group_id_fkey"
+            columns: ["modifier_group_id"]
+            isOneToOne: false
+            referencedRelation: "modifier_groups"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       menu_items: {
         Row: {
           allergens: string[] | null
@@ -604,6 +622,89 @@ export type Database = {
           spicy_level?: number | null
         }
         Relationships: []
+      }
+      modifier_groups: {
+        Row: {
+          active: boolean
+          created_at: string
+          description: string | null
+          id: string
+          max_selections: number | null
+          min_selections: number | null
+          name: string
+          required: boolean
+          sort_order: number
+          type: string
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          description?: string | null
+          id?: string
+          max_selections?: number | null
+          min_selections?: number | null
+          name: string
+          required?: boolean
+          sort_order?: number
+          type: string
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          description?: string | null
+          id?: string
+          max_selections?: number | null
+          min_selections?: number | null
+          name?: string
+          required?: boolean
+          sort_order?: number
+          type?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      modifiers: {
+        Row: {
+          available: boolean
+          created_at: string
+          id: string
+          modifier_group_id: string
+          name: string
+          price_adjustment: number
+          sort_order: number
+          updated_at: string
+        }
+        Insert: {
+          available?: boolean
+          created_at?: string
+          id?: string
+          modifier_group_id: string
+          name: string
+          price_adjustment?: number
+          sort_order?: number
+          updated_at?: string
+        }
+        Update: {
+          available?: boolean
+          created_at?: string
+          id?: string
+          modifier_group_id?: string
+          name?: string
+          price_adjustment?: number
+          sort_order?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "modifiers_modifier_group_id_fkey"
+            columns: ["modifier_group_id"]
+            isOneToOne: false
+            referencedRelation: "modifier_groups"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       order_events: {
         Row: {
@@ -1200,6 +1301,57 @@ export type Database = {
         }
         Relationships: []
       }
+      menu_items_full: {
+        Row: {
+          available: boolean | null
+          category: string | null
+          description: string | null
+          featured: boolean | null
+          id: string | null
+          image_url: string | null
+          is_gluten_free: boolean | null
+          is_vegan: boolean | null
+          is_vegetarian: boolean | null
+          modifier_groups: Json | null
+          name: string | null
+          price: number | null
+          sort_order: number | null
+          spicy_level: number | null
+        }
+        Insert: {
+          available?: boolean | null
+          category?: string | null
+          description?: string | null
+          featured?: boolean | null
+          id?: string | null
+          image_url?: string | null
+          is_gluten_free?: boolean | null
+          is_vegan?: boolean | null
+          is_vegetarian?: boolean | null
+          modifier_groups?: never
+          name?: string | null
+          price?: number | null
+          sort_order?: number | null
+          spicy_level?: number | null
+        }
+        Update: {
+          available?: boolean | null
+          category?: string | null
+          description?: string | null
+          featured?: boolean | null
+          id?: string | null
+          image_url?: string | null
+          is_gluten_free?: boolean | null
+          is_vegan?: boolean | null
+          is_vegetarian?: boolean | null
+          modifier_groups?: never
+          name?: string | null
+          price?: number | null
+          sort_order?: number | null
+          spicy_level?: number | null
+        }
+        Relationships: []
+      }
       order_performance: {
         Row: {
           created_at: string | null
@@ -1247,30 +1399,45 @@ export type Database = {
       }
       v2_account_summary: {
         Row: {
-          account_id: string | null
           balance: number | null
+          created_at: string | null
+          id: string | null
           last_activity: string | null
+          last_award_at: string | null
+          last_redeem_at: string | null
           lifetime_earned: number | null
+          status: string | null
           streak: number | null
           tier: string | null
+          updated_at: string | null
           user_id: string | null
         }
         Insert: {
-          account_id?: string | null
           balance?: number | null
+          created_at?: string | null
+          id?: string | null
           last_activity?: string | null
+          last_award_at?: string | null
+          last_redeem_at?: string | null
           lifetime_earned?: number | null
+          status?: string | null
           streak?: number | null
           tier?: string | null
+          updated_at?: string | null
           user_id?: string | null
         }
         Update: {
-          account_id?: string | null
           balance?: number | null
+          created_at?: string | null
+          id?: string | null
           last_activity?: string | null
+          last_award_at?: string | null
+          last_redeem_at?: string | null
           lifetime_earned?: number | null
+          status?: string | null
           streak?: number | null
           tier?: string | null
+          updated_at?: string | null
           user_id?: string | null
         }
         Relationships: [
@@ -1373,7 +1540,84 @@ export type Database = {
       }
       cleanup_pending_carts: { Args: never; Returns: undefined }
       custom_access_token_hook: { Args: { event: Json }; Returns: Json }
+      get_loyalty_by_order: {
+        Args: { p_order_id: string }
+        Returns: {
+          base_points: number
+          created_at: string
+          id: string
+          lifetime_balance: number
+          metadata: Json | null
+          order_id: string | null
+          points_balance: number
+          points_delta: number
+          streak_at_time: number
+          streak_multiplier: number
+          tier_at_time: string
+          tier_multiplier: number
+          transaction_type: string
+          user_id: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "loyalty_transactions"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      get_loyalty_for_order: {
+        Args: { p_order_id: string }
+        Returns: {
+          base_points: number
+          created_at: string
+          id: string
+          lifetime_balance: number
+          metadata: Json | null
+          order_id: string | null
+          points_balance: number
+          points_delta: number
+          streak_at_time: number
+          streak_multiplier: number
+          tier_at_time: string
+          tier_multiplier: number
+          transaction_type: string
+          user_id: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "loyalty_transactions"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      get_loyalty_ledger_secure: {
+        Args: { p_account_id: string }
+        Returns: {
+          account_id: string
+          admin_id: string | null
+          amount: number
+          balance_after: number
+          created_at: string
+          entry_type: string
+          id: string
+          idempotency_key: string | null
+          metadata: Json
+          prev_hash: string | null
+          reference_id: string | null
+          row_hash: string | null
+          source: string
+          streak_at_time: number
+          tier_at_time: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "loyalty_ledger"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       get_next_order_number: { Args: never; Returns: number }
+      health_ping: { Args: never; Returns: boolean }
       is_admin: { Args: { uid: string }; Returns: boolean }
       issue_loyalty_correction: {
         Args: {
@@ -1598,9 +1842,6 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
-  graphql_public: {
-    Enums: {},
-  },
   public: {
     Enums: {},
   },

@@ -117,16 +117,12 @@ function useLoyaltyData() {
           });
         }
 
-        const accountId = accountRes.data?.account_id;
+       const accountId = accountRes.data?.id;
         if (!accountId) return;
 
-        const { data: ledger } = await supabase
-          .from('loyalty_ledger')
-          .select('*')
-          .eq('account_id', accountId)
-          .order('created_at', { ascending: false })
-          .limit(10);
-
+        const { data: ledger } = await supabase.rpc('get_loyalty_ledger_secure', {
+          p_account_id: accountId,
+        });
         if (!ledger) return;
 
         setTransactions(

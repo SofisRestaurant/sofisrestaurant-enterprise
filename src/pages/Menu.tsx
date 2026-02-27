@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { MenuGrid } from '@/components/menu/MenuGrid'
 import { CategoryTabs } from '@/components/menu/CategoryTabs'
-import { getMenuItems } from '@/features/restaurant/menu.api'
+import { menuService } from '@/services/menu.service';
 import type { MenuItem, MenuCategory } from '@/types/menu'
 import { Spinner } from '@/components/ui/Spinner'
 
@@ -42,7 +42,7 @@ export default function Menu() {
       setError(null)
       setLoading(true)
 
-      const data = await getMenuItems()
+      const data = await menuService.getMenuItems();
       setItems(Array.isArray(data) ? data : [])
     } catch (e) {
       console.error('Menu load failed', e)
@@ -85,6 +85,7 @@ export default function Menu() {
 
   const filteredItems = useMemo(() => {
     if (selectedCategory === 'all') return items
+
     return items.filter(
       (item) =>
         isMenuCategory(item.category) &&

@@ -13,16 +13,23 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
 }
 
 export const supabase = createClient<Database>(
-  SUPABASE_URL!,
-  SUPABASE_ANON_KEY!
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY,
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+      flowType: 'pkce', // modern secure OAuth flow
+    },
+    global: {
+      headers: {
+        'x-application-name': 'sofis-restaurant-v2',
+      },
+    },
+  }
 )
 
-console.log('🔗 Supabase connected to:', SUPABASE_URL)
-
-declare global {
-  interface Window {
-    supabase: typeof supabase
-  }
+if (import.meta.env.DEV) {
+  console.log('🔗 Supabase connected to:', SUPABASE_URL)
 }
-
-window.supabase = supabase

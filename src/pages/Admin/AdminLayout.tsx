@@ -1,4 +1,8 @@
-import { Outlet, NavLink } from 'react-router-dom'
+// src/pages/Admin/AdminLayout.tsx
+
+import { useEffect, useState } from 'react';
+import { Outlet, NavLink, useNavigate } from 'react-router-dom';
+import { supabase } from '@/lib/supabase/supabaseClient';
 
 function navClass(isActive: boolean) {
   return isActive
@@ -7,35 +11,71 @@ function navClass(isActive: boolean) {
 }
 
 export default function AdminLayout() {
+  const navigate = useNavigate();
+  const [loading, setLoading] = useState(true);
+  const [authorized, setAuthorized] = useState(false);
+
+  useEffect(() => {
+    async function checkAdmin() {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.user?.id) {
+        navigate('/login', { replace: true });
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', session.user.id)
+        .single();
+
+      if (error || data?.role !== 'admin') {
+        navigate('/', { replace: true });
+        return;
+      }
+
+      setAuthorized(true);
+      setLoading(false);
+    }
+
+    checkAdmin();
+  }, [navigate]);
+
+  if (loading) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="animate-spin h-6 w-6 border-2 border-gray-300 border-t-gray-700 rounded-full" />
+      </div>
+    );
+  }
+
+  if (!authorized) return null;
+
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="mx-auto max-w-7xl px-4 py-8">
-        {/* Admin Header */}
         <div className="mb-6">
           <h1 className="text-2xl font-bold text-gray-900">Admin Panel</h1>
-          <p className="mt-1 text-sm text-gray-500">Manage restaurant operations and settings</p>
         </div>
 
-        {/* Admin Navigation */}
         <div className="mb-8 flex flex-wrap gap-3 border-b border-gray-200 pb-4">
           <NavLink to="/admin" end className={({ isActive }) => navClass(isActive)}>
             Dashboard
           </NavLink>
-
           <NavLink to="/admin/orders" className={({ isActive }) => navClass(isActive)}>
             Orders
           </NavLink>
-
           <NavLink to="/admin/menu" className={({ isActive }) => navClass(isActive)}>
             Menu Editor
           </NavLink>
-
           <NavLink to="/admin/loyalty-scan" className={({ isActive }) => navClass(isActive)}>
             Loyalty Scanner
           </NavLink>
         </div>
 
-        {/* Nested Routes Render Here */}
         <div className="rounded-2xl bg-white p-6 shadow-sm">
           <Outlet />
         </div>
