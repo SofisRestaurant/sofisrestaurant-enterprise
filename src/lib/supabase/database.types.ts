@@ -106,6 +106,33 @@ export type Database = {
         }
         Relationships: []
       }
+      checkout_rate_limits: {
+        Row: {
+          attempts: number
+          created_at: string
+          id: string
+          ip: string | null
+          last_attempt_at: string
+          user_id: string | null
+        }
+        Insert: {
+          attempts?: number
+          created_at?: string
+          id?: string
+          ip?: string | null
+          last_attempt_at?: string
+          user_id?: string | null
+        }
+        Update: {
+          attempts?: number
+          created_at?: string
+          id?: string
+          ip?: string | null
+          last_attempt_at?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       contact_messages: {
         Row: {
           created_at: string | null
@@ -579,13 +606,18 @@ export type Database = {
           featured: boolean
           id: string
           image_url: string | null
+          inventory_count: number | null
           is_gluten_free: boolean | null
           is_vegan: boolean | null
           is_vegetarian: boolean | null
+          low_stock_threshold: number | null
           name: string
+          pairs_with: string[] | null
+          popularity_score: number | null
           price: number
           sort_order: number | null
           spicy_level: number | null
+          updated_at: string | null
         }
         Insert: {
           allergens?: string[] | null
@@ -596,13 +628,18 @@ export type Database = {
           featured?: boolean
           id?: string
           image_url?: string | null
+          inventory_count?: number | null
           is_gluten_free?: boolean | null
           is_vegan?: boolean | null
           is_vegetarian?: boolean | null
+          low_stock_threshold?: number | null
           name: string
+          pairs_with?: string[] | null
+          popularity_score?: number | null
           price: number
           sort_order?: number | null
           spicy_level?: number | null
+          updated_at?: string | null
         }
         Update: {
           allergens?: string[] | null
@@ -613,13 +650,18 @@ export type Database = {
           featured?: boolean
           id?: string
           image_url?: string | null
+          inventory_count?: number | null
           is_gluten_free?: boolean | null
           is_vegan?: boolean | null
           is_vegetarian?: boolean | null
+          low_stock_threshold?: number | null
           name?: string
+          pairs_with?: string[] | null
+          popularity_score?: number | null
           price?: number
           sort_order?: number | null
           spicy_level?: number | null
+          updated_at?: string | null
         }
         Relationships: []
       }
@@ -1305,50 +1347,68 @@ export type Database = {
         Row: {
           available: boolean | null
           category: string | null
+          created_at: string | null
           description: string | null
           featured: boolean | null
           id: string | null
           image_url: string | null
+          inventory_count: number | null
           is_gluten_free: boolean | null
           is_vegan: boolean | null
           is_vegetarian: boolean | null
+          low_stock_threshold: number | null
           modifier_groups: Json | null
           name: string | null
+          pairs_with: string[] | null
+          popularity_score: number | null
           price: number | null
           sort_order: number | null
           spicy_level: number | null
+          updated_at: string | null
         }
         Insert: {
           available?: boolean | null
           category?: string | null
+          created_at?: string | null
           description?: string | null
           featured?: boolean | null
           id?: string | null
           image_url?: string | null
+          inventory_count?: number | null
           is_gluten_free?: boolean | null
           is_vegan?: boolean | null
           is_vegetarian?: boolean | null
+          low_stock_threshold?: number | null
           modifier_groups?: never
           name?: string | null
+          pairs_with?: string[] | null
+          popularity_score?: number | null
           price?: number | null
           sort_order?: number | null
           spicy_level?: number | null
+          updated_at?: string | null
         }
         Update: {
           available?: boolean | null
           category?: string | null
+          created_at?: string | null
           description?: string | null
           featured?: boolean | null
           id?: string | null
           image_url?: string | null
+          inventory_count?: number | null
           is_gluten_free?: boolean | null
           is_vegan?: boolean | null
           is_vegetarian?: boolean | null
+          low_stock_threshold?: number | null
           modifier_groups?: never
           name?: string | null
+          pairs_with?: string[] | null
+          popularity_score?: number | null
           price?: number | null
           sort_order?: number | null
           spicy_level?: number | null
+          updated_at?: string | null
         }
         Relationships: []
       }
@@ -1617,7 +1677,13 @@ export type Database = {
         }
       }
       get_next_order_number: { Args: never; Returns: number }
-      health_ping: { Args: never; Returns: boolean }
+      health_ping: {
+        Args: never
+        Returns: {
+          server_time: string
+          status: string
+        }[]
+      }
       is_admin: { Args: { uid: string }; Returns: boolean }
       issue_loyalty_correction: {
         Args: {

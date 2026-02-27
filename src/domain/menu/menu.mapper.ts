@@ -61,17 +61,18 @@ export class MenuMapper {
       available: dto.available,
       sort_order: dto.sort_order,
 
-      spicy_level: dto.spicy_level || undefined,
+      spicy_level: dto.spicy_level ?? undefined,
+
       is_vegetarian: dto.is_vegetarian,
       is_vegan: dto.is_vegan,
       is_gluten_free: dto.is_gluten_free,
-      allergens: dto.allergens,
 
-      inventory_count: dto.inventory_count || undefined,
+      inventory_count: dto.inventory_count ?? undefined,
+
       low_stock_threshold: dto.low_stock_threshold,
 
       popularity_score: dto.popularity_score,
-      pairs_with: dto.pairs_with || undefined,
+      pairs_with: dto.pairs_with ?? undefined,
 
       modifier_groups:
         dto.modifier_groups?.map((g) =>

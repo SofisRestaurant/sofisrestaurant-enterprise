@@ -3,8 +3,10 @@
 // ORDER SUCCESS — ENTERPRISE GRADE v2
 // ============================================================================
 //
-// Tier config sourced entirely from @/domain/loyalty/tiers.
-// Local TIER_LABEL object removed.
+// Schema-aligned to database.types.ts (Feb 2026):
+//   get_loyalty_for_order RPC removed — replaced with loyalty_transactions table query
+//   profiles.loyalty_streak used for streak display
+//   All tier display sourced from LOYALTY_TIERS domain config
 // ============================================================================
 
 import { useEffect, useRef, useState } from 'react'
@@ -27,9 +29,13 @@ import { LOYALTY_TIERS, asTier } from '@/domain/loyalty/tiers'
 // ============================================================================
 // TYPES
 // ============================================================================
+
 type Json = Database['public']['Tables']['orders']['Row']['metadata'];
 type PageState = 'loading' | 'found' | 'timeout' | 'error'
 type DbOrder   = Database['public']['Tables']['orders']['Row']
+
+// Sourced from loyalty_transactions table (which has all multiplier columns)
+type LoyaltyTxRow = Database['public']['Tables']['loyalty_transactions']['Row']
 
 interface LoyaltyResult {
   points_delta: number;
@@ -42,6 +48,7 @@ interface LoyaltyResult {
   base_points: number;
   metadata: Json | null;
 }
+
 // ============================================================================
 // CONFIG
 // ============================================================================
@@ -66,24 +73,53 @@ const STATUS_CONFIG: Record<
   OrderStatus,
   { bg: string; border: string; text: string; dot: string }
 > = {
-  [OrderStatus.CONFIRMED]: { bg: 'bg-amber-500/10',   border: 'border-amber-500/30',   text: 'text-amber-400',   dot: 'bg-amber-400'   },
-  [OrderStatus.PREPARING]: { bg: 'bg-yellow-500/10',  border: 'border-yellow-500/30',  text: 'text-yellow-400',  dot: 'bg-yellow-400'  },
-  [OrderStatus.READY]:     { bg: 'bg-emerald-500/10', border: 'border-emerald-500/30', text: 'text-emerald-400', dot: 'bg-emerald-400' },
-  [OrderStatus.DELIVERED]: { bg: 'bg-green-500/10',   border: 'border-green-500/30',   text: 'text-green-400',   dot: 'bg-green-400'   },
-  [OrderStatus.CANCELLED]: { bg: 'bg-red-500/10',     border: 'border-red-500/30',     text: 'text-red-400',     dot: 'bg-red-400'     },
-  [OrderStatus.SHIPPED]:   { bg: 'bg-sky-500/10',     border: 'border-sky-500/30',     text: 'text-sky-400',     dot: 'bg-sky-400'     },
-}
+  [OrderStatus.CONFIRMED]: {
+    bg: 'bg-amber-500/10',
+    border: 'border-amber-500/30',
+    text: 'text-amber-400',
+    dot: 'bg-amber-400',
+  },
+  [OrderStatus.PREPARING]: {
+    bg: 'bg-yellow-500/10',
+    border: 'border-yellow-500/30',
+    text: 'text-yellow-400',
+    dot: 'bg-yellow-400',
+  },
+  [OrderStatus.READY]: {
+    bg: 'bg-emerald-500/10',
+    border: 'border-emerald-500/30',
+    text: 'text-emerald-400',
+    dot: 'bg-emerald-400',
+  },
+  [OrderStatus.DELIVERED]: {
+    bg: 'bg-green-500/10',
+    border: 'border-green-500/30',
+    text: 'text-green-400',
+    dot: 'bg-green-400',
+  },
+  [OrderStatus.CANCELLED]: {
+    bg: 'bg-red-500/10',
+    border: 'border-red-500/30',
+    text: 'text-red-400',
+    dot: 'bg-red-400',
+  },
+  [OrderStatus.SHIPPED]: {
+    bg: 'bg-sky-500/10',
+    border: 'border-sky-500/30',
+    text: 'text-sky-400',
+    dot: 'bg-sky-400',
+  },
+};
 
 // ============================================================================
 // HELPERS
 // ============================================================================
 
 function cents(n: number): string {
-  return (n / 100).toFixed(2)
+  return (n / 100).toFixed(2);
 }
-
 function fmt(n: number): string {
-  return n.toLocaleString()
+  return n.toLocaleString();
 }
 
 function formatDate(iso: string): string {
@@ -91,6 +127,21 @@ function formatDate(iso: string): string {
     weekday: 'long', month: 'long', day: 'numeric',
     year: 'numeric', hour: 'numeric', minute: '2-digit',
   })
+}
+
+// Map loyalty_transactions row → LoyaltyResult display shape
+function mapTxToLoyalty(row: LoyaltyTxRow): LoyaltyResult {
+  return {
+    points_delta:     row.points_delta,
+    points_balance:   row.points_balance,
+    lifetime_balance: row.lifetime_balance,
+    tier_at_time:     row.tier_at_time,
+    streak_at_time:   row.streak_at_time,
+    tier_multiplier:  row.tier_multiplier,
+    streak_multiplier: row.streak_multiplier,
+    base_points:      row.base_points,
+    metadata:         row.metadata as Json | null,
+  }
 }
 
 // ============================================================================
@@ -157,7 +208,9 @@ function LoadingState({ attempt }: { attempt: number }) {
           {attempt > 5 ? 'Almost there…' : 'Confirming your order'}
         </p>
         <p className="mt-1 text-sm text-neutral-500">
-          {attempt > 5 ? 'Payment received — finalizing details.' : 'Verifying payment with Stripe.'}
+          {attempt > 5
+            ? 'Payment received — finalizing details.'
+            : 'Verifying payment with Stripe.'}
         </p>
       </div>
       <div className="flex gap-1.5">
@@ -170,15 +223,15 @@ function LoadingState({ attempt }: { attempt: number }) {
         ))}
       </div>
     </div>
-  )
+  );
 }
 
 function Divider({ dashed = false }: { dashed?: boolean }) {
   return (
-    <div className={`my-4 h-px w-full ${
-      dashed ? 'border-0 border-t border-dashed border-white/10' : 'bg-white/8'
-    }`} />
-  )
+    <div
+      className={`my-4 h-px w-full ${dashed ? 'border-0 border-t border-dashed border-white/10' : 'bg-white/8'}`}
+    />
+  );
 }
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
@@ -186,7 +239,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
     <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.2em] text-neutral-500">
       {children}
     </p>
-  )
+  );
 }
 
 function StatusBadge({ status }: { status: OrderStatus }) {
@@ -223,7 +276,7 @@ function OrderHeader({ order, liveStatus }: { order: Order; liveStatus: OrderSta
         <StatusBadge status={liveStatus} />
       </div>
     </div>
-  )
+  );
 }
 
 function CartItemsList({ items }: { items: OrderCartItem[] }) {
@@ -251,23 +304,26 @@ function CartItemsList({ items }: { items: OrderCartItem[] }) {
         </div>
       ))}
     </div>
-  )
+  );
 }
 
 function ReceiptTotals({ order }: { order: Order }) {
   return (
     <div className="space-y-2 font-mono text-sm">
       <div className="flex justify-between text-neutral-500">
-        <span>Subtotal</span><span>${cents(order.amount_subtotal)}</span>
+        <span>Subtotal</span>
+        <span>${cents(order.amount_subtotal)}</span>
       </div>
       {order.amount_tax > 0 && (
         <div className="flex justify-between text-neutral-500">
-          <span>Tax</span><span>${cents(order.amount_tax)}</span>
+          <span>Tax</span>
+          <span>${cents(order.amount_tax)}</span>
         </div>
       )}
       {order.amount_shipping > 0 && (
         <div className="flex justify-between text-neutral-500">
-          <span>Shipping</span><span>${cents(order.amount_shipping)}</span>
+          <span>Shipping</span>
+          <span>${cents(order.amount_shipping)}</span>
         </div>
       )}
       <div className="flex justify-between border-t border-white/10 pt-2 font-bold text-white">
@@ -275,27 +331,22 @@ function ReceiptTotals({ order }: { order: Order }) {
         <span className="text-amber-400">${cents(order.amount_total)}</span>
       </div>
     </div>
-  )
+  );
 }
 
-// ── LoyaltyResultCard ─────────────────────────────────────────────────────────
-// All tier display (icon, name, dark text color) comes from LOYALTY_TIERS[tier]
-// via the asTier() helper that safely resolves the string from the DB.
-
 function LoyaltyResultCard({ loyalty }: { loyalty: LoyaltyResult }) {
-  const tier      = asTier(loyalty.tier_at_time)   // ← domain helper, safe cast
-  const tierCfg   = LOYALTY_TIERS[tier]
+  const tier = asTier(loyalty.tier_at_time);
+  const tierCfg = LOYALTY_TIERS[tier];
+
   const meta =
     typeof loyalty.metadata === 'object' &&
     loyalty.metadata !== null &&
     !Array.isArray(loyalty.metadata)
-      ? loyalty.metadata
+      ? (loyalty.metadata as Record<string, unknown>)
       : null;
 
   const hasTierUp = meta?.tier_changed === true;
-
   const tierBefore = typeof meta?.tier_before === 'string' ? asTier(meta.tier_before) : tier;
-
   const hasStreakBonus = loyalty.streak_multiplier > 1
   const hasTierBonus   = loyalty.tier_multiplier > 1
 
@@ -312,37 +363,31 @@ function LoyaltyResultCard({ loyalty }: { loyalty: LoyaltyResult }) {
       </div>
 
       <div className="space-y-3 px-4 py-4 font-mono text-xs">
+        <div className="flex items-center justify-between rounded-lg bg-white/3 px-3 py-2">
+          <span className="text-neutral-400">Base Points</span>
+          <span className="font-semibold text-neutral-200">
+            {loyalty.base_points.toLocaleString()} pts
+          </span>
+        </div>
 
-  {/* Base Points */}
-  <div className="flex items-center justify-between rounded-lg bg-white/3 px-3 py-2">
-    <span className="text-neutral-400">
-      Base Points
-    </span>
-    <span className="font-semibold text-neutral-200">
-      {loyalty.base_points.toLocaleString()} pts
-    </span>
-  </div>
+        {hasTierBonus && (
+          <div className="flex items-center justify-between rounded-lg bg-white/3 px-3 py-2">
+            <span className={`flex items-center gap-1 ${tierCfg.dark.text}`}>
+              {tierCfg.icon} {tierCfg.label} Bonus
+            </span>
+            <span className="font-semibold text-neutral-200">
+              {loyalty.tier_multiplier}× Multiplier
+            </span>
+          </div>
+        )}
 
-  {/* Tier Bonus */}
-  {hasTierBonus && (
-    <div className="flex items-center justify-between rounded-lg bg-white/3 px-3 py-2">
-      <span className={`flex items-center gap-1 ${tierCfg.dark.text}`}>
-        {tierCfg.icon}
-        {tierCfg.label} Bonus
-      </span>
-      <span className="font-semibold text-neutral-200">
-        {loyalty.tier_multiplier}× Multiplier
-      </span>
-    </div>
-  )}
         {hasStreakBonus && (
           <div className="flex justify-between">
-            <span className="text-orange-400">
-              🔥 {loyalty.streak_at_time}-day streak
-            </span>
+            <span className="text-orange-400">🔥 {loyalty.streak_at_time}-day streak</span>
             <span className="text-neutral-400">{loyalty.streak_multiplier}×</span>
           </div>
         )}
+
         <div className="flex justify-between border-t border-white/5 pt-2 text-neutral-400">
           <span>New balance</span>
           <span className="font-bold text-neutral-200">{fmt(loyalty.points_balance)} pts</span>
@@ -353,7 +398,9 @@ function LoyaltyResultCard({ loyalty }: { loyalty: LoyaltyResult }) {
         <div className="border-t border-amber-500/20 bg-amber-500/10 px-4 py-3">
           <p className="text-center text-xs font-semibold text-amber-300">
             🎊 Tier Upgrade! {LOYALTY_TIERS[tierBefore].label} →{' '}
-            <span className={tierCfg.dark.text}>{tierCfg.icon} {tierCfg.label}</span>
+            <span className={tierCfg.dark.text}>
+              {tierCfg.icon} {tierCfg.label}
+            </span>
           </p>
           <p className="mt-0.5 text-center text-[10px] text-amber-500/70">
             You now earn {tierCfg.multiplier}× points on every order
@@ -361,7 +408,7 @@ function LoyaltyResultCard({ loyalty }: { loyalty: LoyaltyResult }) {
         </div>
       )}
     </div>
-  )
+  );
 }
 
 function CampaignBanner({ metadata }: { metadata: Json }) {
@@ -369,10 +416,9 @@ function CampaignBanner({ metadata }: { metadata: Json }) {
     typeof metadata !== 'object' ||
     metadata === null ||
     Array.isArray(metadata) ||
-    metadata.double_points !== true
-  ) {
+    (metadata as Record<string, unknown>).double_points !== true
+  )
     return null;
-  }
 
   return (
     <div className="flex items-center gap-3 rounded-xl border border-orange-500/30 bg-orange-500/10 px-4 py-3">
@@ -389,11 +435,13 @@ function CampaignBanner({ metadata }: { metadata: Json }) {
 
 function StreakNudge({ streak }: { streak: number }) {
   const next =
-    streak < 3  ? { days: 3,  bonus: '+10%', left: 3 - streak  } :
-    streak < 7  ? { days: 7,  bonus: '+25%', left: 7 - streak  } :
-    streak < 30 ? { days: 30, bonus: '+50%', left: 30 - streak } :
-    null
-
+    streak < 3
+      ? { days: 3, bonus: '+10%', left: 3 - streak }
+      : streak < 7
+        ? { days: 7, bonus: '+25%', left: 7 - streak }
+        : streak < 30
+          ? { days: 30, bonus: '+50%', left: 30 - streak }
+          : null;
   if (!next) return null
 
   return (
@@ -407,7 +455,7 @@ function StreakNudge({ streak }: { streak: number }) {
         <span className="font-semibold text-amber-400">{next.bonus}</span> more points
       </p>
     </div>
-  )
+  );
 }
 
 function CTASection() {
@@ -434,7 +482,7 @@ function CTASection() {
         </Link>
       </div>
     </div>
-  )
+  );
 }
 
 function TimeoutState() {
@@ -447,7 +495,9 @@ function TimeoutState() {
       </div>
       <div>
         <h2 className="text-lg font-bold text-white">Taking longer than usual</h2>
-        <p className="mt-1 text-sm text-neutral-500">Your payment was received. The order is being finalized.</p>
+        <p className="mt-1 text-sm text-neutral-500">
+          Your payment was received. The order is being finalized.
+        </p>
       </div>
       <Link
         to="/account/orders"
@@ -456,7 +506,7 @@ function TimeoutState() {
         View My Orders
       </Link>
     </div>
-  )
+  );
 }
 
 function ErrorState() {
@@ -486,7 +536,7 @@ function ErrorState() {
         </Link>
       </div>
     </div>
-  )
+  );
 }
 
 // ============================================================================
@@ -514,109 +564,114 @@ export default function OrderSuccess() {
   }, [sessionId, navigate])
 
   useEffect(() => {
-    if (!sessionId) return
-    const safeId = sessionId
-    let cancelled = false
-    let attempts  = 0
+    if (!sessionId) return;
+    const safeId = sessionId;
+    let cancelled = false;
+    let attempts = 0;
 
     async function tryFetch() {
-      if (cancelled) return
-      attempts++
-      setAttempt(attempts)
+      if (cancelled) return;
+      attempts++;
+      setAttempt(attempts);
 
       try {
         const { data, error } = await supabase
           .from('orders')
           .select('*')
           .eq('stripe_session_id', safeId)
-          .maybeSingle()
+          .maybeSingle();
 
-        if (cancelled) return
-        if (error) { setPageState('error'); return }
+        if (cancelled) return;
+        if (error) {
+          setPageState('error');
+          return;
+        }
 
         if (data && data.payment_status === PaymentStatus.PAID) {
-          const normalized = mapDbOrderToDomain(data as DbOrder)
-          setOrder(normalized)
-          setLiveStatus(normalized.status)
-          setPageState('found')
+          const normalized = mapDbOrderToDomain(data as DbOrder);
+          setOrder(normalized);
+          setLiveStatus(normalized.status);
+          setPageState('found');
 
           if (!cartFinalized.current) {
-            cartFinalized.current = true
-            finalizeOrder()
+            cartFinalized.current = true;
+            finalizeOrder();
           }
 
-       if (normalized.customer_uid) {
-         const [txRes, profileRes] = await Promise.all([
-           supabase
-             .rpc('get_loyalty_for_order', {
-               p_order_id: normalized.id,
-             })
-             .maybeSingle(),
+          // Fetch loyalty data from loyalty_transactions table
+          // (get_loyalty_for_order RPC does not exist in schema)
+          if (normalized.customer_uid) {
+            const [txRes, profileRes] = await Promise.all([
+              supabase
+                .from('loyalty_transactions')
+                .select('*')
+                .eq('user_id', normalized.customer_uid)
+                .eq('order_id', normalized.id)
+                .eq('transaction_type', 'earned')
+                .maybeSingle(),
+              supabase
+                .from('profiles')
+                .select('loyalty_streak')
+                .eq('id', normalized.customer_uid)
+                .single(),
+            ]);
 
-           supabase
-             .from('profiles')
-             .select('loyalty_streak')
-             .eq('id', normalized.customer_uid)
-             .single(),
-         ]);
+            if (!cancelled) {
+              if (txRes.data) setLoyalty(mapTxToLoyalty(txRes.data as LoyaltyTxRow));
+              if (profileRes.data) setLoyaltyStreak(profileRes.data.loyalty_streak ?? 0);
+            }
+          }
 
-         if (!cancelled) {
-           if (txRes.data) setLoyalty(txRes.data as LoyaltyResult);
-           if (profileRes.data) setLoyaltyStreak(profileRes.data.loyalty_streak ?? 0);
-         }
-       }
-
-          return
+          return;
         }
 
         if (attempts < POLL_MAX_ATTEMPTS) {
-          pollTimer.current = setTimeout(tryFetch, POLL_INTERVAL_MS)
+          pollTimer.current = setTimeout(tryFetch, POLL_INTERVAL_MS);
         } else {
-          setPageState('timeout')
+          setPageState('timeout');
         }
       } catch {
-        if (!cancelled) setPageState('error')
+        if (!cancelled) setPageState('error');
       }
     }
 
-    tryFetch()
-
+    tryFetch();
     return () => {
-      cancelled = true
-      if (pollTimer.current) clearTimeout(pollTimer.current)
-    }
-  }, [sessionId, finalizeOrder])
+      cancelled = true;
+      if (pollTimer.current) clearTimeout(pollTimer.current);
+    };
+  }, [sessionId, finalizeOrder]);
 
+  // Real-time order status subscription
   useEffect(() => {
-    if (!order?.id) return
-
+    if (!order?.id) return;
     const channel = supabase
       .channel(`order-success-${order.id}`)
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'orders', filter: `id=eq.${order.id}` },
         (payload) => {
-          if (payload.new?.status) setLiveStatus(payload.new.status as OrderStatus)
-        }
+          if (payload.new?.status) setLiveStatus(payload.new.status as OrderStatus);
+        },
       )
-      .subscribe()
-
-    return () => { supabase.removeChannel(channel) }
-  }, [order?.id])
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [order?.id]);
 
   const isDoublePoints =
     typeof order?.metadata === 'object' &&
     order.metadata !== null &&
     !Array.isArray(order.metadata) &&
-    'double_points' in order.metadata &&
-    Boolean((order.metadata as { double_points?: unknown }).double_points);
-  const hasCartItems   = Array.isArray(order?.cart_items) && (order?.cart_items?.length ?? 0) > 0
+    (order.metadata as Record<string, unknown>).double_points === true;
+
+  const hasCartItems = Array.isArray(order?.cart_items) && (order?.cart_items?.length ?? 0) > 0;
 
   return (
     <>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap');
-
         .success-page {
           font-family: 'Lora', Georgia, serif;
           background: #0a0a0a;
@@ -625,42 +680,26 @@ export default function OrderSuccess() {
             url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
           min-height: 100svh;
         }
-
-        .receipt-card {
-          font-family: 'Lora', Georgia, serif;
-          animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
-        }
-
+        .receipt-card { font-family: 'Lora', Georgia, serif; animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
         .mono { font-family: 'JetBrains Mono', 'Courier New', monospace; }
-
-        @keyframes slideUp {
-          from { opacity: 0; transform: translateY(16px); }
-          to   { opacity: 1; transform: translateY(0);    }
-        }
-
+        @keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
         .section-reveal { animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) both; }
-        .delay-1 { animation-delay: 0.08s; }
-        .delay-2 { animation-delay: 0.16s; }
-        .delay-3 { animation-delay: 0.24s; }
-        .delay-4 { animation-delay: 0.32s; }
-        .delay-5 { animation-delay: 0.40s; }
-        .delay-6 { animation-delay: 0.48s; }
+        .delay-1 { animation-delay: 0.08s; } .delay-2 { animation-delay: 0.16s; }
+        .delay-3 { animation-delay: 0.24s; } .delay-4 { animation-delay: 0.32s; }
+        .delay-5 { animation-delay: 0.40s; } .delay-6 { animation-delay: 0.48s; }
       `}</style>
 
       <div className="success-page flex min-h-svh items-start justify-center px-4 py-10 sm:items-center">
         <div className="receipt-card w-full max-w-md">
-
           <div className="overflow-hidden rounded-2xl border border-white/8 bg-neutral-950 shadow-2xl shadow-black/60">
             <div className="h-0.5 w-full bg-linear-to-r from-transparent via-amber-500/60 to-transparent" />
-
             <div className="p-6 sm:p-8">
               {pageState === 'loading' && <LoadingState attempt={attempt} />}
               {pageState === 'timeout' && <TimeoutState />}
-              {pageState === 'error'   && <ErrorState />}
+              {pageState === 'error' && <ErrorState />}
 
               {pageState === 'found' && order && liveStatus && (
                 <div className="space-y-5">
-
                   <div className="section-reveal">
                     <OrderHeader order={order} liveStatus={liveStatus} />
                   </div>
@@ -725,7 +764,6 @@ export default function OrderSuccess() {
                       {order.id.slice(0, 8).toUpperCase()} · {order.customer_email ?? ''}
                     </p>
                   </div>
-
                 </div>
               )}
             </div>
@@ -736,9 +774,8 @@ export default function OrderSuccess() {
               A confirmation has been sent to your email.
             </p>
           )}
-
         </div>
       </div>
     </>
-  )
+  );
 }

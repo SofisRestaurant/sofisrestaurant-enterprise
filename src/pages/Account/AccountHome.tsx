@@ -3,21 +3,18 @@
 // ACCOUNT HOME — LOYALTY DASHBOARD + QR CARD
 // ============================================================================
 //
-// Tier config sourced entirely from @/domain/loyalty/tiers.
-// No tier data is defined in this file.
+// DB queries aligned to database.types.ts (Feb 2026 schema):
+//   • loyalty_accounts  → replaces v2_account_summary (view doesn't exist in types)
+//   • loyalty_ledger    → direct select replaces get_loyalty_ledger_secure RPC
+//   • profiles          → loyalty_public_id
 // ============================================================================
 import type { Database } from '@/lib/supabase/database.types';
 import { useEffect, useRef, useState } from 'react'
-import { QRCodeSVG, QRCodeCanvas } from 'qrcode.react'
-import { useUserContext } from '@/contexts/useUserContext'
-import { supabase } from '@/lib/supabase/supabaseClient'
-import { LOYALTY_TIERS, TIER_ORDER, getNextTier, type LoyaltyTier } from '@/domain/loyalty/tiers'
-import type { LoyaltyProfile } from '@/features/checkout/checkout.api'
-
-
-// ============================================================================
-// STREAK HELPERS (display-only, not business logic)
-// ============================================================================
+import { QRCodeSVG, QRCodeCanvas } from 'qrcode.react';
+import { useUserContext } from '@/contexts/useUserContext';
+import { supabase } from '@/lib/supabase/supabaseClient';
+import { LOYALTY_TIERS, TIER_ORDER, getNextTier, type LoyaltyTier } from '@/domain/loyalty/tiers';
+import type { LoyaltyProfile } from '@/features/checkout/checkout.api';
 
 const STREAK_LABEL = (streak: number): string => {
   if (streak >= 30) return '🔥 Legendary'
@@ -36,12 +33,7 @@ const STREAK_COLOR = (streak: number): string => {
   return 'text-gray-500 bg-gray-50 border-gray-200'
 }
 
-// ============================================================================
-// TYPES
-// ============================================================================
-
 type LedgerRow = Database['public']['Tables']['loyalty_ledger']['Row'];
-
 type Json = Database['public']['Tables']['loyalty_ledger']['Row']['metadata'];
 
 interface LoyaltyTransaction {
@@ -61,17 +53,16 @@ interface LoyaltyProfileWithQR extends LoyaltyProfile {
   loyaltyPublicId: string | null
 }
 
-const ENTRY_TYPE_MAP: Record<LedgerRow['entry_type'], LoyaltyTransaction['transaction_type']> = {
-  earn: 'earned',
-  redeem: 'redeemed',
-  bonus: 'bonus',
-  expired: 'expired',
-  adjusted: 'adjusted',
-};
-
-// ============================================================================
-// HOOK: useLoyaltyData
-// ============================================================================
+function mapEntryType(raw: LedgerRow['entry_type']): LoyaltyTransaction['transaction_type'] {
+  const map: Record<string, LoyaltyTransaction['transaction_type']> = {
+    earn: 'earned',
+    redeem: 'redeemed',
+    bonus: 'bonus',
+    expired: 'expired',
+    adjusted: 'adjusted',
+  };
+  return map[raw] ?? 'adjusted';
+}
 
 function useLoyaltyData() {
   const [profile, setProfile] = useState<LoyaltyProfileWithQR | null>(null);
@@ -90,7 +81,6 @@ function useLoyaltyData() {
         const {
           data: { session },
         } = await supabase.auth.getSession();
-
         if (!session?.user?.id) {
           setLoading(false);
           return;
@@ -99,8 +89,11 @@ function useLoyaltyData() {
         const uid = session.user.id;
 
         const [accountRes, profileRes] = await Promise.all([
-          supabase.from('v2_account_summary').select('*').eq('user_id', uid).single(),
-
+          supabase
+            .from('loyalty_accounts')
+            .select('id, balance, lifetime_earned, tier, streak, last_activity')
+            .eq('user_id', uid)
+            .single(),
           supabase.from('profiles').select('loyalty_public_id').eq('id', uid).single(),
         ]);
 
@@ -117,22 +110,29 @@ function useLoyaltyData() {
           });
         }
 
-       const accountId = accountRes.data?.id;
+        const accountId = accountRes.data?.id;
         if (!accountId) return;
 
-        const { data: ledger } = await supabase.rpc('get_loyalty_ledger_secure', {
-          p_account_id: accountId,
-        });
-        if (!ledger) return;
+        // Direct table query — get_loyalty_ledger_secure RPC doesn't exist in types
+        const { data: ledger } = await supabase
+          .from('loyalty_ledger')
+          .select(
+            'id, entry_type, amount, balance_after, tier_at_time, streak_at_time, created_at, metadata',
+          )
+          .eq('account_id', accountId)
+          .order('created_at', { ascending: false })
+          .limit(50);
+
+        if (cancelled || !ledger) return;
 
         setTransactions(
           ledger.map((row) => ({
             id: row.id,
-            transaction_type: ENTRY_TYPE_MAP[row.entry_type] ?? 'adjusted',
+            transaction_type: mapEntryType(row.entry_type),
             points_delta: row.amount,
             points_balance: row.balance_after,
             tier_at_time: row.tier_at_time ?? 'bronze',
-            streak_at_time: 0,
+            streak_at_time: row.streak_at_time ?? 0,
             tier_multiplier: 1,
             streak_multiplier: 1,
             created_at: row.created_at,
@@ -154,25 +154,20 @@ function useLoyaltyData() {
 
   return { profile, transactions, loading, error };
 }
-// ============================================================================
-// SUB-COMPONENTS
-// ============================================================================
 
 function TierCard({ profile }: { profile: LoyaltyProfile }) {
   const tier   = profile.tier
   const config = LOYALTY_TIERS[tier]
   const next   = getNextTier(tier)
-
   const progressPct = config.nextAt
     ? Math.min((profile.lifetimePoints / config.nextAt) * 100, 100)
-    : 100
-  const pointsToNext = config.nextAt
-    ? Math.max(config.nextAt - profile.lifetimePoints, 0)
-    : 0
+    : 100;
+  const pointsToNext = config.nextAt ? Math.max(config.nextAt - profile.lifetimePoints, 0) : 0;
 
   return (
-    <div className={`relative overflow-hidden rounded-2xl ring-2 ${config.ring} shadow-lg ${config.glow}`}>
-      {/* Gradient header */}
+    <div
+      className={`relative overflow-hidden rounded-2xl ring-2 ${config.ring} shadow-lg ${config.glow}`}
+    >
       <div className={`bg-linear-to-br ${config.gradient} px-6 py-5`}>
         <div className="flex items-center justify-between">
           <div>
@@ -181,9 +176,7 @@ function TierCard({ profile }: { profile: LoyaltyProfile }) {
             </div>
             <div className="mt-1 flex items-center gap-2">
               <span className="text-2xl">{config.icon}</span>
-              <span className="text-2xl font-bold tracking-tight text-white">
-                {config.label}
-              </span>
+              <span className="text-2xl font-bold tracking-tight text-white">{config.label}</span>
             </div>
           </div>
           <div className="text-right">
@@ -195,8 +188,6 @@ function TierCard({ profile }: { profile: LoyaltyProfile }) {
           </div>
         </div>
       </div>
-
-      {/* Progress to next tier */}
       <div className="bg-white px-6 py-4">
         {config.nextAt && next ? (
           <>
@@ -206,9 +197,7 @@ function TierCard({ profile }: { profile: LoyaltyProfile }) {
               </span>
               <span>
                 {pointsToNext.toLocaleString()} pts until{' '}
-                <span className="font-semibold text-gray-700">
-                  {LOYALTY_TIERS[next].label}
-                </span>
+                <span className="font-semibold text-gray-700">{LOYALTY_TIERS[next].label}</span>
               </span>
             </div>
             <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
@@ -225,14 +214,13 @@ function TierCard({ profile }: { profile: LoyaltyProfile }) {
         )}
       </div>
     </div>
-  )
+  );
 }
 
 function StatsRow({ profile }: { profile: LoyaltyProfile }) {
   const streakLabel = STREAK_LABEL(profile.streak)
   const streakColor = STREAK_COLOR(profile.streak)
-  const tierConfig  = LOYALTY_TIERS[profile.tier]
-
+  const tierConfig = LOYALTY_TIERS[profile.tier];
   return (
     <div className="grid grid-cols-3 gap-3">
       <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
@@ -241,11 +229,12 @@ function StatsRow({ profile }: { profile: LoyaltyProfile }) {
           {profile.streak}
           <span className="ml-0.5 text-sm font-medium text-gray-400">d</span>
         </div>
-        <div className={`mt-2 inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${streakColor}`}>
+        <div
+          className={`mt-2 inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${streakColor}`}
+        >
           {streakLabel}
         </div>
       </div>
-
       <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
         <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">Lifetime</div>
         <div className="mt-1 text-2xl font-bold tabular-nums text-gray-900">
@@ -253,9 +242,10 @@ function StatsRow({ profile }: { profile: LoyaltyProfile }) {
         </div>
         <div className="mt-2 text-xs font-medium text-gray-400">total earned</div>
       </div>
-
       <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-        <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">Multiplier</div>
+        <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+          Multiplier
+        </div>
         <div className="mt-1 text-2xl font-bold tabular-nums text-gray-900">
           {tierConfig.multiplier}
           <span className="ml-0.5 text-sm font-medium text-gray-400">×</span>
@@ -263,16 +253,18 @@ function StatsRow({ profile }: { profile: LoyaltyProfile }) {
         <div className="mt-2 text-xs font-medium text-gray-400">pts per $1</div>
       </div>
     </div>
-  )
+  );
 }
 
 function StreakBonusInfo({ streak }: { streak: number }) {
   const nextMilestone =
-    streak < 3  ? { at: 3,  bonus: '+10%', label: '3-day streak'  } :
-    streak < 7  ? { at: 7,  bonus: '+25%', label: '7-day streak'  } :
-    streak < 30 ? { at: 30, bonus: '+50%', label: '30-day streak' } :
-    null
-
+    streak < 3
+      ? { at: 3, bonus: '+10%', label: '3-day streak' }
+      : streak < 7
+        ? { at: 7, bonus: '+25%', label: '7-day streak' }
+        : streak < 30
+          ? { at: 30, bonus: '+50%', label: '30-day streak' }
+          : null;
   if (!nextMilestone) {
     return (
       <div className="flex items-center gap-3 rounded-xl border border-orange-100 bg-orange-50 px-4 py-3">
@@ -281,9 +273,8 @@ function StreakBonusInfo({ streak }: { streak: number }) {
           Legendary 30-day streak active — earning +50% bonus points on every order
         </p>
       </div>
-    )
+    );
   }
-
   const daysLeft = nextMilestone.at - streak
   return (
     <div className="flex items-center gap-3 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
@@ -297,28 +288,26 @@ function StreakBonusInfo({ streak }: { streak: number }) {
 }
 
 function TransactionRow({ tx }: { tx: LoyaltyTransaction }) {
-  const isPositive = tx.points_delta > 0
-
+  const isPositive = tx.points_delta > 0;
   const typeLabel: Record<LoyaltyTransaction['transaction_type'], string> = {
-    earned:   'Points earned',
+    earned: 'Points earned',
     redeemed: 'Points redeemed',
-    bonus:    'Bonus awarded',
-    expired:  'Points expired',
+    bonus: 'Bonus awarded',
+    expired: 'Points expired',
     adjusted: 'Manual adjustment',
-  }
-
+  };
   const typeIcon: Record<LoyaltyTransaction['transaction_type'], string> = {
-    earned:   '⬆',
+    earned: '⬆',
     redeemed: '⬇',
-    bonus:    '🎁',
-    expired:  '⏱',
+    bonus: '🎁',
+    expired: '⏱',
     adjusted: '✏',
-  }
-
+  };
   const date = new Date(tx.created_at).toLocaleDateString('en-US', {
-    month: 'short', day: 'numeric', year: 'numeric',
-  })
-
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
   return (
     <div className="flex items-center justify-between py-3">
       <div className="flex items-center gap-3">
@@ -326,24 +315,35 @@ function TransactionRow({ tx }: { tx: LoyaltyTransaction }) {
           {typeIcon[tx.transaction_type]}
         </div>
         <div>
-          <div className="text-sm font-medium text-gray-900">
-            {typeLabel[tx.transaction_type]}
-          </div>
+          <div className="text-sm font-medium text-gray-900">{typeLabel[tx.transaction_type]}</div>
           <div className="text-xs text-gray-400">
             {date}
-            {tx.tier_multiplier > 1 && <><span className="ml-1.5 text-gray-300">·</span><span className="ml-1.5">{tx.tier_multiplier}× tier</span></>}
-            {tx.streak_multiplier > 1 && <><span className="ml-1.5 text-gray-300">·</span><span className="ml-1.5">{tx.streak_multiplier}× streak</span></>}
+            {tx.tier_multiplier > 1 && (
+              <>
+                <span className="ml-1.5 text-gray-300">·</span>
+                <span className="ml-1.5">{tx.tier_multiplier}× tier</span>
+              </>
+            )}
+            {tx.streak_multiplier > 1 && (
+              <>
+                <span className="ml-1.5 text-gray-300">·</span>
+                <span className="ml-1.5">{tx.streak_multiplier}× streak</span>
+              </>
+            )}
           </div>
         </div>
       </div>
       <div className="text-right">
-        <div className={`text-sm font-semibold tabular-nums ${isPositive ? 'text-emerald-600' : 'text-red-500'}`}>
-          {isPositive ? '+' : ''}{tx.points_delta.toLocaleString()} pts
+        <div
+          className={`text-sm font-semibold tabular-nums ${isPositive ? 'text-emerald-600' : 'text-red-500'}`}
+        >
+          {isPositive ? '+' : ''}
+          {tx.points_delta.toLocaleString()} pts
         </div>
         <div className="text-xs text-gray-400">Balance: {tx.points_balance.toLocaleString()}</div>
       </div>
     </div>
-  )
+  );
 }
 
 function LoadingSkeleton() {
@@ -351,52 +351,52 @@ function LoadingSkeleton() {
     <div className="animate-pulse space-y-4">
       <div className="h-36 rounded-2xl bg-gray-100" />
       <div className="grid grid-cols-3 gap-3">
-        {[0, 1, 2].map((i) => <div key={i} className="h-24 rounded-xl bg-gray-100" />)}
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="h-24 rounded-xl bg-gray-100" />
+        ))}
       </div>
       <div className="h-12 rounded-xl bg-gray-100" />
       <div className="h-48 rounded-xl bg-gray-100" />
     </div>
-  )
+  );
 }
-
-// ============================================================================
-// QR CARD
-// All QR colors come from LOYALTY_TIERS[tier].qr and .colors.border
-// ============================================================================
 
 function LoyaltyQRCard({
   loyaltyPublicId,
   tier,
   name,
 }: {
-  loyaltyPublicId: string
-  tier: LoyaltyTier
-  name: string | null | undefined
+  loyaltyPublicId: string;
+  tier: LoyaltyTier;
+  name: string | null | undefined;
 }) {
-  const config    = LOYALTY_TIERS[tier]
-  const canvasRef = useRef<HTMLDivElement>(null)
-  const [copied,  setCopied] = useState(false)
+  const config = LOYALTY_TIERS[tier];
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = useState(false);
 
   async function handleCopy() {
     try {
-      await navigator.clipboard.writeText(loyaltyPublicId)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch { /* ignore */ }
+      await navigator.clipboard.writeText(loyaltyPublicId);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* ignore */
+    }
   }
 
   function handleDownload() {
-    const canvas = canvasRef.current?.querySelector('canvas') as HTMLCanvasElement | null
-    if (!canvas) return
-    const link    = document.createElement('a')
-    link.download = `loyalty-qr-${loyaltyPublicId.slice(0, 8)}.png`
-    link.href     = canvas.toDataURL('image/png')
-    link.click()
+    const canvas = canvasRef.current?.querySelector('canvas') as HTMLCanvasElement | null;
+    if (!canvas) return;
+    const link = document.createElement('a');
+    link.download = `loyalty-qr-${loyaltyPublicId.slice(0, 8)}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
   }
 
   return (
-    <div className={`overflow-hidden rounded-2xl border ${config.colors.border} bg-white shadow-sm`}>
-      {/* Header — uses tier gradient from domain */}
+    <div
+      className={`overflow-hidden rounded-2xl border ${config.colors.border} bg-white shadow-sm`}
+    >
       <div className={`bg-linear-to-br ${config.gradient} px-5 py-3`}>
         <div className="flex items-center justify-between">
           <div>
@@ -410,10 +410,7 @@ function LoyaltyQRCard({
           <span className="text-2xl">{config.icon}</span>
         </div>
       </div>
-
-      {/* QR body */}
       <div className="flex flex-col items-center gap-4 px-6 py-6">
-        {/* Visible SVG — uses tier QR colors from domain */}
         <div className={`rounded-xl border-2 ${config.colors.border} bg-white p-3 shadow-sm`}>
           <QRCodeSVG
             value={loyaltyPublicId}
@@ -424,8 +421,6 @@ function LoyaltyQRCard({
             includeMargin={false}
           />
         </div>
-
-        {/* Hidden canvas — PNG download only */}
         <div ref={canvasRef} className="hidden" aria-hidden>
           <QRCodeCanvas
             value={loyaltyPublicId}
@@ -436,11 +431,8 @@ function LoyaltyQRCard({
             includeMargin
           />
         </div>
-
         <div className="text-center">
-          <p className="text-xs font-medium text-gray-500">
-            Show this code to staff at any visit
-          </p>
+          <p className="text-xs font-medium text-gray-500">Show this code to staff at any visit</p>
           <p className="mt-1 font-mono text-[11px] text-gray-400 select-all break-all">
             {loyaltyPublicId}
           </p>
@@ -451,29 +443,21 @@ function LoyaltyQRCard({
             {copied ? '✓ Copied' : 'Copy ID'}
           </button>
         </div>
-
-        <div className="flex w-full gap-2">
-          <button
-            onClick={handleDownload}
-            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-gray-50 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-100 active:scale-95"
-          >
-            ↓ Save QR
-          </button>
-        </div>
+        <button
+          onClick={handleDownload}
+          className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-gray-50 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-100 active:scale-95"
+        >
+          ↓ Save QR
+        </button>
       </div>
-
       <div className="border-t border-gray-100 px-5 py-2.5">
         <p className="text-center text-[10px] text-gray-400">
           This code is permanent and unique to your account
         </p>
       </div>
     </div>
-  )
+  );
 }
-
-// ============================================================================
-// HOW IT WORKS — dynamically built from LOYALTY_TIERS
-// ============================================================================
 
 function HowItWorks() {
   return (
@@ -482,36 +466,35 @@ function HowItWorks() {
         <span>How points work</span>
         <span className="text-gray-400 transition-transform group-open:rotate-180">▾</span>
       </summary>
-      <div className="border-t border-gray-100 px-4 py-3 text-xs text-gray-500 space-y-2">
+      <div className="space-y-2 border-t border-gray-100 px-4 py-3 text-xs text-gray-500">
         <p>
           <span className="font-semibold text-gray-700">Base rate</span> — 1 point per $1 spent
         </p>
         <p>
           <span className="font-semibold text-gray-700">Tier multipliers</span> —{' '}
-          {TIER_ORDER.map((t) => `${LOYALTY_TIERS[t].label} ${LOYALTY_TIERS[t].multiplier}×`).join(' · ')}
+          {TIER_ORDER.map((t) => `${LOYALTY_TIERS[t].label} ${LOYALTY_TIERS[t].multiplier}×`).join(
+            ' · ',
+          )}
         </p>
         <p>
-          <span className="font-semibold text-gray-700">Streak bonuses</span> —{' '}
-          3 days +10% · 7 days +25% · 30 days +50%
+          <span className="font-semibold text-gray-700">Streak bonuses</span> — 3 days +10% · 7 days
+          +25% · 30 days +50%
         </p>
         <p>
           <span className="font-semibold text-gray-700">Tier thresholds</span> —{' '}
-          {TIER_ORDER.filter(t => LOYALTY_TIERS[t].threshold > 0)
-            .map(t => `${LOYALTY_TIERS[t].label} ${LOYALTY_TIERS[t].threshold.toLocaleString()}`)
-            .join(' · ')} lifetime points
+          {TIER_ORDER.filter((t) => LOYALTY_TIERS[t].threshold > 0)
+            .map((t) => `${LOYALTY_TIERS[t].label} ${LOYALTY_TIERS[t].threshold.toLocaleString()}`)
+            .join(' · ')}{' '}
+          lifetime points
         </p>
         <p className="text-gray-400">
-          Tiers are based on lifetime points and are never downgraded.
-          Streaks reset if you miss a day.
+          Tiers are based on lifetime points and are never downgraded. Streaks reset if you miss a
+          day.
         </p>
       </div>
     </details>
-  )
+  );
 }
-
-// ============================================================================
-// MAIN COMPONENT
-// ============================================================================
 
 export default function AccountHome() {
   const { user }                                  = useUserContext()
@@ -519,49 +502,45 @@ export default function AccountHome() {
 
   return (
     <div className="space-y-6">
-
       <div>
         <h1 className="text-xl font-semibold text-gray-900">Account Overview</h1>
         <p className="mt-1 text-sm text-gray-500">
           Manage your profile and track your loyalty rewards.
         </p>
       </div>
-
       <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-        <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">Signed in as</div>
+        <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+          Signed in as
+        </div>
         <div className="mt-1 font-medium text-gray-900">{user?.email}</div>
         <div className="mt-0.5 text-sm text-gray-500">
           Role: <span className="font-medium text-gray-700 capitalize">{user?.role}</span>
         </div>
       </div>
-
       <div>
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-base font-semibold text-gray-900">Loyalty Rewards</h2>
           {profile && (
-            <span className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${LOYALTY_TIERS[profile.tier].badge}`}>
+            <span
+              className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${LOYALTY_TIERS[profile.tier].badge}`}
+            >
               {LOYALTY_TIERS[profile.tier].icon} {LOYALTY_TIERS[profile.tier].label}
             </span>
           )}
         </div>
-
         {loading && <LoadingSkeleton />}
-
         {error && (
           <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}
           </div>
         )}
-
         {!loading && !error && !profile && (
           <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-6 text-center text-sm text-gray-500">
             Place your first order to start earning loyalty points.
           </div>
         )}
-
         {!loading && !error && profile && (
           <div className="space-y-4">
-
             {profile.loyaltyPublicId && (
               <LoyaltyQRCard
                 loyaltyPublicId={profile.loyaltyPublicId}
@@ -569,36 +548,32 @@ export default function AccountHome() {
                 name={user?.email}
               />
             )}
-
             <TierCard profile={profile} />
             <StatsRow profile={profile} />
-
             {profile.streak > 0 && <StreakBonusInfo streak={profile.streak} />}
-
             <HowItWorks />
-
-            {transactions.length > 0 && (
+            {transactions.length > 0 ? (
               <div className="rounded-xl border border-gray-100 bg-white">
                 <div className="border-b border-gray-100 px-4 py-3">
                   <h3 className="text-sm font-semibold text-gray-900">Recent Activity</h3>
                 </div>
                 <div className="divide-y divide-gray-50 px-4">
-                  {transactions.map((tx) => <TransactionRow key={tx.id} tx={tx} />)}
+                  {transactions.map((tx) => (
+                    <TransactionRow key={tx.id} tx={tx} />
+                  ))}
                 </div>
               </div>
-            )}
-
-            {transactions.length === 0 && (
+            ) : (
               <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-5 text-center">
-                <p className="text-sm text-gray-500">Place your first order to start earning points.</p>
+                <p className="text-sm text-gray-500">
+                  Place your first order to start earning points.
+                </p>
                 <p className="mt-0.5 text-xs text-gray-400">Every $1 earns 1 point.</p>
               </div>
             )}
-
           </div>
         )}
       </div>
-
     </div>
-  )
+  );
 }

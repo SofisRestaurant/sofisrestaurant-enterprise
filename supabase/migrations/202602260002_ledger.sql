@@ -170,6 +170,15 @@ CREATE POLICY "loyalty_ledger: service role full access"
   ON loyalty_ledger FOR ALL TO service_role
   USING (true) WITH CHECK (true);
 
+  -- ── ENFORCE FULL IMMUTABILITY ───────────────────────────────────────────────
+
+ALTER TABLE public.loyalty_ledger
+  REPLICA IDENTITY FULL;
+
+-- Extra safety: prevent future accidental ALTERs
+REVOKE UPDATE, DELETE ON public.loyalty_ledger FROM PUBLIC;
+REVOKE UPDATE, DELETE ON public.loyalty_ledger FROM authenticated;
+
 COMMENT ON TABLE loyalty_ledger IS
   'Immutable append-only financial ledger. Every point movement lives here. '
   'balance_after is a snapshot for forensic queries. '

@@ -39,10 +39,7 @@ export default function MenuItemModal({
   /* ================= DERIVED ================= */
 
   const isLowStock =
-    item.inventory_count &&
-    item.low_stock_threshold &&
-    item.inventory_count <= item.low_stock_threshold
-
+    typeof item.inventory_count === 'number' && item.inventory_count <= item.low_stock_threshold;
   const total = useMemo(() => {
     let base = item.price
 
@@ -122,7 +119,7 @@ export default function MenuItemModal({
     setErrors(newErrors)
     return Object.keys(newErrors).length === 0
   }
-
+console.log('CARD ITEM:', item);
   const handleAddToCart = () => {
     if (!validateSelections()) return
 
@@ -154,47 +151,36 @@ export default function MenuItemModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
       <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl">
-
         {/* Hero Image */}
-        {item.image_url && (
-          <div className="relative h-64 bg-gray-100">
-            <img
-              src={item.image_url}
-              alt={item.name}
-              className="w-full h-full object-cover"
-            />
+        <div className="relative">
+          {item.image_url && (
+            <div className="h-64 bg-gray-100">
+              <img src={item.image_url} alt={item.name} className="w-full h-full object-cover" />
+            </div>
+          )}
 
-            {item.featured && (
-              <div className="absolute top-4 right-4 bg-amber-500 text-white px-3 py-1 rounded-full text-sm font-semibold shadow-lg">
-                ⭐ Featured
-              </div>
-            )}
+          {item.featured && (
+            <div className="absolute top-4 right-4 bg-amber-500 text-white px-3 py-1 rounded-full text-sm font-semibold shadow-lg">
+              ⭐ Featured
+            </div>
+          )}
 
-            {isLowStock && (
-              <div className="absolute top-4 left-4 bg-red-500 text-white px-3 py-1 rounded-full text-sm font-semibold shadow-lg animate-pulse">
-                Only {item.inventory_count} left!
-              </div>
-            )}
-          </div>
-        )}
-
+          {isLowStock && (
+            <div className="absolute top-4 left-4 bg-red-500 text-white px-3 py-1 rounded-full text-sm font-semibold shadow-lg animate-pulse">
+              Only {item.inventory_count} left!
+            </div>
+          )}
+        </div>
         {/* Content */}
         <div className="p-6">
           {/* Header */}
           <div className="flex justify-between items-start mb-4">
             <div className="flex-1">
-              <h2 className="text-3xl font-bold text-gray-900 mb-2">
-                {item.name}
-              </h2>
-              <p className="text-gray-600 mb-3">
-                {item.description}
-              </p>
+              <h2 className="text-3xl font-bold text-gray-900 mb-2">{item.name}</h2>
+              <p className="text-gray-600 mb-3">{item.description}</p>
             </div>
 
-            <button
-              onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 text-2xl ml-4"
-            >
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl ml-4">
               ×
             </button>
           </div>
@@ -206,22 +192,18 @@ export default function MenuItemModal({
                 <div key={group.id} className="border-t pt-4">
                   <h3 className="font-semibold text-lg mb-2">
                     {group.name}
-                    {group.required && (
-                      <span className="text-red-500 ml-1">*</span>
-                    )}
+                    {group.required && <span className="text-red-500 ml-1">*</span>}
                   </h3>
 
                   {errors[group.id] && (
-                    <p className="text-red-500 text-sm mb-2">
-                      {errors[group.id]}
-                    </p>
+                    <p className="text-red-500 text-sm mb-2">{errors[group.id]}</p>
                   )}
 
                   <div className="space-y-2">
                     {group.modifiers.map((modifier) => {
-                      const isSelected = (
-                        selectedModifiers[group.id] || []
-                      ).some((m) => m.id === modifier.id)
+                      const isSelected = (selectedModifiers[group.id] || []).some(
+                        (m) => m.id === modifier.id,
+                      );
 
                       return (
                         <button
@@ -230,8 +212,7 @@ export default function MenuItemModal({
                             handleModifierSelection(group, {
                               id: modifier.id,
                               name: modifier.name,
-                              price_adjustment:
-                                modifier.price_adjustment,
+                              price_adjustment: modifier.price_adjustment,
                             })
                           }
                           className={`w-full flex justify-between items-center p-3 rounded-lg border-2 transition ${
@@ -249,7 +230,7 @@ export default function MenuItemModal({
                             </span>
                           )}
                         </button>
-                      )
+                      );
                     })}
                   </div>
                 </div>
@@ -260,9 +241,7 @@ export default function MenuItemModal({
           {/* Special Instructions */}
           <textarea
             value={specialInstructions}
-            onChange={(e) =>
-              setSpecialInstructions(e.target.value)
-            }
+            onChange={(e) => setSpecialInstructions(e.target.value)}
             placeholder="Special requests..."
             className="w-full mb-6 px-4 py-3 border rounded-lg"
           />
@@ -271,17 +250,13 @@ export default function MenuItemModal({
           <div className="flex justify-between items-center mb-6">
             <div className="flex items-center gap-2">
               <button
-                onClick={() =>
-                  setQuantity((q) => Math.max(1, q - 1))
-                }
+                onClick={() => setQuantity((q) => Math.max(1, q - 1))}
                 className="w-8 h-8 border rounded-full"
               >
                 −
               </button>
 
-              <span className="w-8 text-center">
-                {quantity}
-              </span>
+              <span className="w-8 text-center">{quantity}</span>
 
               <button
                 onClick={() => setQuantity((q) => q + 1)}
@@ -291,9 +266,7 @@ export default function MenuItemModal({
               </button>
             </div>
 
-            <div className="text-xl font-bold text-amber-600">
-              ${total.toFixed(2)}
-            </div>
+            <div className="text-xl font-bold text-amber-600">${total.toFixed(2)}</div>
           </div>
 
           <button
@@ -305,5 +278,5 @@ export default function MenuItemModal({
         </div>
       </div>
     </div>
-  )
+  );
 }

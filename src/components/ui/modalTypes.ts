@@ -3,8 +3,9 @@ export type ModalType =
   | 'login'
   | 'signup'
   | 'forgot-password'
+  | 'menu-item'
   | 'custom'; // for future custom modals
-
+  
 /**
  * Generic modal configuration.
  * T represents the shape of data passed to the modal.

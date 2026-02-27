@@ -1,11 +1,10 @@
-// src/app/RootLayout.tsx
-
-import { Outlet } from 'react-router-dom'
-import Header from '@/components/layout/Header'
-import AuthModals from '@/features/auth/components/AuthModals'
-import Footer from '@/components/layout/Footer'
-import SessionExpiryWarning from '@/components/auth/SessionExpiryWarning'
-import AppBoot from './AppBoot'
+import { Outlet } from 'react-router-dom';
+import Header from '@/components/layout/Header';
+import AuthModals from '@/features/auth/components/AuthModals';
+import Footer from '@/components/layout/Footer';
+import SessionExpiryWarning from '@/components/auth/SessionExpiryWarning';
+import { ModalRenderer } from '@/components/ui/ModalRenderer';
+import AppBoot from './AppBoot';
 
 export default function RootLayout() {
   return (
@@ -21,7 +20,8 @@ export default function RootLayout() {
 
         <SessionExpiryWarning />
         <AuthModals />
+        <ModalRenderer />
       </div>
     </AppBoot>
-  )
+  );
 }

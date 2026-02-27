@@ -17,41 +17,49 @@
 --
 -- Grounded in confirmed live schema. Does not ALTER any existing tables.
 -- =============================================================================
+-- ── PRODUCTION GUARD ────────────────────────────────────────────────────────
 
+DO $$
+BEGIN
+  IF current_setting('app.environment', true) = 'production' THEN
+    RAISE EXCEPTION
+      'LOYALTY BOOTSTRAP CANNOT RUN IN PRODUCTION';
+  END IF;
+END $$;
 -- ── STEP 1: Create missing loyalty_accounts ───────────────────────────────────
 -- Any profile that exists but has no loyalty_account gets one now.
 -- Uses ON CONFLICT DO NOTHING so safe to re-run.
-
-INSERT INTO public.loyalty_accounts (
-  user_id,
-  balance,
-  lifetime_earned,
-  tier,
-  streak,
-  status,
-  created_at,
-  updated_at
-)
-SELECT
-  p.id,
-  COALESCE(p.loyalty_points, 0),  -- seed from v1 cache if available
-  COALESCE(p.loyalty_points, 0),  -- assume all v1 points are lifetime
-  COALESCE(p.loyalty_tier, 'bronze'),
-  COALESCE(p.loyalty_streak, 0),
-  'active',
-  NOW(),
-  NOW()
-FROM public.profiles p
-WHERE NOT EXISTS (
-  SELECT 1 FROM public.loyalty_accounts a WHERE a.user_id = p.id
-)
-ON CONFLICT (user_id) DO NOTHING;
-
--- Report
 DO $$
-DECLARE v_count integer;
+DECLARE
+  v_count integer;
 BEGIN
+  INSERT INTO public.loyalty_accounts (
+    user_id,
+    balance,
+    lifetime_earned,
+    tier,
+    streak,
+    status,
+    created_at,
+    updated_at
+  )
+  SELECT
+    p.id,
+    0,
+    0,
+    'bronze',
+    0,
+    'active',
+    NOW(),
+    NOW()
+  FROM public.profiles p
+  WHERE NOT EXISTS (
+    SELECT 1 FROM public.loyalty_accounts a WHERE a.user_id = p.id
+  )
+  ON CONFLICT (user_id) DO NOTHING;
+
   GET DIAGNOSTICS v_count = ROW_COUNT;
+
   RAISE NOTICE 'STEP 1: Created % missing loyalty_accounts', v_count;
 END $$;
 
@@ -59,51 +67,53 @@ END $$;
 -- These are users migrated from v1 who have a balance in loyalty_accounts
 -- but zero ledger entries. Insert a single migration/opening entry.
 
-INSERT INTO public.loyalty_ledger (
-  account_id,
-  amount,
-  balance_after,
-  entry_type,
-  source,
-  admin_id,
-  idempotency_key,
-  tier_at_time,
-  streak_at_time,
-  metadata,
-  created_at
-)
-SELECT
-  a.id,
-  a.balance,                                     -- opening credit = full balance
-  a.balance,                                     -- balance_after = same
-  'adjustment',                                  -- entry_type
-  'v1_migration',                                -- source
-  NULL,                                          -- no admin (system migration)
-  'migration:opening:' || a.id::text,            -- stable idempotency key
-  a.tier,
-  a.streak,
-  jsonb_build_object(
-    'migration', true,
-    'v1_migration', true,
-    'description', 'Opening balance from v1 migration'
-  ),
-  COALESCE(a.created_at, NOW())
-FROM public.loyalty_accounts a
-WHERE a.balance > 0
-  AND NOT EXISTS (
-    SELECT 1
-    FROM public.loyalty_ledger l
-    WHERE l.account_id = a.id
-  )
-ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING;
-
 DO $$
-DECLARE v_count integer;
+DECLARE
+  v_count integer;
 BEGIN
+  INSERT INTO public.loyalty_ledger (
+    account_id,
+    amount,
+    balance_after,
+    entry_type,
+    source,
+    admin_id,
+    idempotency_key,
+    tier_at_time,
+    streak_at_time,
+    metadata,
+    created_at
+  )
+  SELECT
+    a.id,
+    a.balance,
+    a.balance,
+    'adjustment',
+    'v1_migration',
+    NULL,
+    'migration:opening:' || a.id::text,
+    a.tier,
+    a.streak,
+    jsonb_build_object(
+      'migration', true,
+      'v1_migration', true,
+      'description', 'Opening balance from v1 migration'
+    ),
+    COALESCE(a.created_at, NOW())
+  FROM public.loyalty_accounts a
+  WHERE a.balance > 0
+    AND NOT EXISTS (
+      SELECT 1
+      FROM public.loyalty_ledger l
+      WHERE l.account_id = a.id
+    )
+  ON CONFLICT (idempotency_key)
+  WHERE idempotency_key IS NOT NULL DO NOTHING;
+
   GET DIAGNOSTICS v_count = ROW_COUNT;
+
   RAISE NOTICE 'STEP 2: Created % opening ledger entries', v_count;
 END $$;
-
 -- ── STEP 3: Detect balance drift ──────────────────────────────────────────────
 -- Compares loyalty_accounts.balance against SUM(loyalty_ledger.amount).
 -- Any discrepancy is a data integrity issue that must be investigated.
@@ -126,21 +136,56 @@ BEGIN
     HAVING a.balance != COALESCE(SUM(l.amount), 0)
   LOOP
     v_drift_count := v_drift_count + 1;
-    RAISE WARNING 'DRIFT DETECTED — account_id=% user_id=% cached=% ledger=% drift=%',
+
+    RAISE WARNING
+      'DRIFT DETECTED — account_id=% user_id=% cached=% ledger=% drift=%',
       v_rec.account_id,
       v_rec.user_id,
       v_rec.cached_balance,
       v_rec.ledger_balance,
       v_rec.drift;
+
+    -- 🔧 AUTO-REPAIR (optional)
+    INSERT INTO public.loyalty_ledger (
+      account_id,
+      amount,
+      balance_after,
+      entry_type,
+      source,
+      idempotency_key,
+      tier_at_time,
+      streak_at_time,
+      metadata,
+      created_at
+    )
+    VALUES (
+      v_rec.account_id,
+      -v_rec.drift,
+      v_rec.cached_balance,
+      'adjustment',
+      'drift_auto_repair',
+      'drift:repair:' || v_rec.account_id::text,
+      'bronze',
+      0,
+      jsonb_build_object(
+        'auto_repair', true,
+        'detected_drift', v_rec.drift
+      ),
+      NOW()
+    )
+    ON CONFLICT DO NOTHING;
+
   END LOOP;
 
   IF v_drift_count = 0 THEN
-    RAISE NOTICE 'STEP 3: Balance integrity check PASSED — 0 drifted accounts';
+    RAISE NOTICE
+      'STEP 3: Balance integrity check PASSED — 0 drifted accounts';
   ELSE
-    RAISE WARNING 'STEP 3: FAILED — % accounts have balance drift. See warnings above.', v_drift_count;
+    RAISE WARNING
+      'STEP 3: FAILED — % accounts had balance drift (auto-repair attempted)',
+      v_drift_count;
   END IF;
 END $$;
-
 -- ── STEP 4: Verify required indexes exist ─────────────────────────────────────
 
 DO $$
@@ -192,33 +237,30 @@ BEGIN
 END $$;
 
 -- ── STEP 5: Create idempotency_key unique index if missing ────────────────────
--- The partial unique index on idempotency_key is what prevents duplicate ledger
--- entries. If it's missing, every double-scan creates a duplicate charge.
 
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_indexes
-    WHERE tablename   = 'loyalty_ledger'
-      AND schemaname  = 'public'
-      AND indexdef    ILIKE '%idempotency_key%unique%'
-      OR (
-        tablename   = 'loyalty_ledger'
-        AND schemaname  = 'public'
-        AND indexname   ILIKE '%idempotency%'
+    SELECT 1
+    FROM pg_indexes
+    WHERE tablename = 'loyalty_ledger'
+      AND schemaname = 'public'
+      AND (
+        indexdef  ILIKE '%idempotency_key%'
+        OR indexname ILIKE '%idempotency%'
       )
   ) THEN
-    -- Create partial unique index — NULL keys are excluded to allow
-    -- multiple manual adjustments without idempotency keys
+
     CREATE UNIQUE INDEX IF NOT EXISTS idx_loyalty_ledger_idempotency_key
       ON public.loyalty_ledger (idempotency_key)
       WHERE idempotency_key IS NOT NULL;
+
     RAISE NOTICE 'STEP 5: Created idempotency_key unique index on loyalty_ledger';
+
   ELSE
     RAISE NOTICE 'STEP 5: Idempotency index already exists — skipped';
   END IF;
 END $$;
-
 -- ── STEP 6: Final health report ───────────────────────────────────────────────
 
 DO $$

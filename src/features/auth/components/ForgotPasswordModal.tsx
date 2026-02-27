@@ -1,173 +1,167 @@
-import { useState, type FormEvent } from 'react'
-import { useAuth } from '../useAuth'
-import { Modal } from '@/components/ui/Modal'
-import { Button } from '@/components/ui/Button'
-import { Spinner } from '@/components/ui/Spinner'
-import { formatAuthError } from '../auth.utils'
+// src/features/auth/components/ForgotPasswordModal.tsx
+// ============================================================================
+// FORGOT PASSWORD MODAL
+// ============================================================================
+// Props aligned to AuthModals.tsx usage:
+//   onSwitchToLogin — added (AuthModals passes this; was missing from props)
+// ============================================================================
+
+import { useState, useCallback, type FormEvent } from 'react';
+import { supabase } from '@/lib/supabase/supabaseClient';
 
 interface ForgotPasswordModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSwitchToLogin?: () => void;
+  onSwitchToLogin?: () => void; // AuthModals coordinator
 }
-
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 export default function ForgotPasswordModal({
   isOpen,
   onClose,
   onSwitchToLogin,
 }: ForgotPasswordModalProps) {
-  const { resetPassword } = useAuth();
-
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
-  const resetState = () => {
-    setEmail('');
-    setError(null);
-    setSuccess(false);
-    setLoading(false);
-  };
+  const handleSubmit = useCallback(
+    async (e: FormEvent) => {
+      e.preventDefault();
+      if (loading) return;
 
-  const handleClose = () => {
-    resetState();
-    onClose();
-  };
+      setError(null);
+      setLoading(true);
 
-  const handleSwitchToLoginClick = () => {
-    resetState();
-    onSwitchToLogin?.();
-  };
+      try {
+        const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+          redirectTo: `${window.location.origin}/update-password`,
+        });
 
-  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setError(null);
+        if (error) {
+          setError(error.message);
+          return;
+        }
+        setSuccess(true);
+      } catch {
+        setError('Something went wrong. Please try again.');
+      } finally {
+        setLoading(false);
+      }
+    },
+    [email, loading],
+  );
 
-    const cleanedEmail = email.trim();
-
-    if (!cleanedEmail) {
-      setError('Please enter your email.');
-      return;
-    }
-
-    if (!EMAIL_REGEX.test(cleanedEmail)) {
-      setError('Please enter a valid email address.');
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      await resetPassword(cleanedEmail, {
-        redirectTo: `${window.location.origin}/update-password`,
-      });
-      setSuccess(true);
-    } catch (err) {
-      setError(formatAuthError(err as Error));
-    } finally {
-      setLoading(false);
-    }
-  };
+  if (!isOpen) return null;
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="Reset Password">
-      {success ? (
-        <div className="py-4 text-center">
-          <div className="mb-4">
-            <svg
-              className="mx-auto h-14 w-14 text-green-500"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              aria-hidden="true"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-          </div>
-
-          <h3 className="mb-2 text-lg font-semibold text-gray-900">Check your email</h3>
-
-          <p className="mb-6 text-sm text-gray-600">
-            We&apos;ve sent a password reset link to{' '}
-            <strong className="text-gray-900">{email.trim()}</strong>
-          </p>
-
-          <div className="space-y-3">
-            <Button onClick={handleClose} className="w-full">
-              Done
-            </Button>
-
-            <Button variant="secondary" onClick={handleSwitchToLoginClick} className="w-full">
-              Back to Login
-            </Button>
-          </div>
+    <div className="w-full rounded-2xl bg-gray-900 border border-white/8 shadow-2xl overflow-hidden">
+      {/* Header */}
+      <div className="px-8 pt-8 pb-6 border-b border-white/6">
+        <div className="flex items-center gap-3 mb-1">
+          <span className="text-2xl">🔐</span>
+          <h2 className="text-lg font-bold text-white tracking-tight">Reset password</h2>
         </div>
-      ) : (
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <p className="text-sm text-gray-600">
-            Enter your email and we&apos;ll send you a link to reset your password.
-          </p>
+        <p className="text-sm text-gray-500 ml-9">We'll send you a reset link</p>
+      </div>
 
-          <div>
-            <label htmlFor="reset-email" className="mb-1 block text-sm font-medium text-gray-700">
-              Email
-            </label>
-            <input
-              id="reset-email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="your@email.com"
-              disabled={loading}
-              autoComplete="email"
-              className="w-full rounded-lg border border-gray-300 px-4 py-2 outline-none focus:border-transparent focus:ring-2 focus:ring-orange-500 disabled:cursor-not-allowed disabled:bg-gray-50"
-            />
-          </div>
-
-          {error && (
-            <div
-              className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700"
-              role="alert"
-            >
-              {error}
-            </div>
-          )}
-
-          <div className="flex gap-3">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={handleClose}
-              disabled={loading}
-              className="flex-1"
-            >
-              Cancel
-            </Button>
-
-            <Button type="submit" disabled={loading} className="flex-1">
-              {loading ? <Spinner size="sm" /> : 'Send Reset Link'}
-            </Button>
-          </div>
-
-          <div className="pt-2 text-center">
+      {/* Body */}
+      <div className="px-8 py-7">
+        {success ? (
+          <div className="space-y-5 text-center">
+            <div className="text-4xl">📩</div>
+            <p className="text-sm text-gray-400">
+              If an account exists for{' '}
+              <span className="text-white font-medium">{email.trim()}</span>, you'll receive a reset
+              email shortly.
+            </p>
             <button
               type="button"
-              onClick={handleSwitchToLoginClick}
-              className="text-sm font-semibold text-orange-600 hover:text-orange-700 transition-colors"
+              onClick={onSwitchToLogin ?? onClose}
+              className="w-full rounded-xl py-3 text-sm font-bold bg-amber-500 text-black hover:bg-amber-400 transition-all active:scale-[0.98]"
             >
               Back to Login
             </button>
           </div>
-        </form>
-      )}
-    </Modal>
+        ) : (
+          <form onSubmit={handleSubmit} noValidate className="space-y-5">
+            {error && (
+              <div
+                role="alert"
+                className="flex items-start gap-3 rounded-xl bg-red-500/10 border border-red-500/20 px-4 py-3"
+              >
+                <span className="mt-0.5 text-red-400 text-sm">⚠</span>
+                <p className="text-sm text-red-300">{error}</p>
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <label
+                htmlFor="reset-email"
+                className="block text-xs font-semibold uppercase tracking-wider text-gray-500"
+              >
+                Email
+              </label>
+              <input
+                id="reset-email"
+                type="email"
+                autoComplete="email"
+                required
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  setError(null);
+                }}
+                placeholder="you@example.com"
+                className={inputClass}
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading || !email}
+              className={[
+                'w-full rounded-xl py-3 text-sm font-bold transition-all duration-150',
+                'bg-amber-500 text-black shadow-lg shadow-amber-500/20',
+                'hover:bg-amber-400 active:scale-[0.98]',
+                'disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none',
+              ].join(' ')}
+            >
+              {loading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <Spinner /> Sending…
+                </span>
+              ) : (
+                'Send reset link'
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={onSwitchToLogin ?? onClose}
+              className="w-full text-sm text-gray-500 hover:text-gray-300 transition-colors"
+            >
+              Cancel
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const inputClass = [
+  'w-full rounded-xl border border-white/10 bg-white/4',
+  'px-4 py-3 text-sm text-white placeholder-gray-600',
+  'outline-none transition-all',
+  'focus:border-amber-500/60 focus:ring-2 focus:ring-amber-500/15',
+].join(' ');
+
+function Spinner() {
+  return (
+    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+    </svg>
   );
 }

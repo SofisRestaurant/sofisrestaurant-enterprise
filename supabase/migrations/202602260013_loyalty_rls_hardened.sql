@@ -183,11 +183,11 @@ END $$;
 -- RPCs are SECURITY DEFINER so they run as the definer (postgres), but
 -- restricting EXECUTE prevents direct psql/client invocation without service role.
 
-REVOKE EXECUTE ON FUNCTION public.v2_redeem_points(uuid, integer, uuid, uuid, text) FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION public.v2_redeem_points(uuid, integer, uuid, uuid, text) FROM authenticated;
+REVOKE EXECUTE ON FUNCTION public.v2_redeem_points(uuid, uuid, integer, text, uuid) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.v2_redeem_points(uuid, uuid, integer, text, uuid) FROM authenticated;
 
 -- Grant to service_role (used by edge functions) and postgres (for internal use)
-GRANT EXECUTE ON FUNCTION public.v2_redeem_points(uuid, integer, uuid, uuid, text)
+GRANT EXECUTE ON FUNCTION public.v2_redeem_points(uuid, uuid, integer, text, uuid)
   TO service_role, postgres;
 
 -- Same for v2_award_points if it exists

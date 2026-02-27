@@ -1,5 +1,3 @@
-// src/lib/supabase/supabaseClient.ts
-
 import { createClient } from '@supabase/supabase-js'
 import type { Database } from './database.types'
 
@@ -20,7 +18,7 @@ export const supabase = createClient<Database>(
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true,
-      flowType: 'pkce', // modern secure OAuth flow
+      flowType: 'pkce',
     },
     global: {
       headers: {
@@ -30,6 +28,15 @@ export const supabase = createClient<Database>(
   }
 )
 
+// DEV-ONLY: expose supabase to browser console for debugging
 if (import.meta.env.DEV) {
   console.log('🔗 Supabase connected to:', SUPABASE_URL)
+
+  if (typeof window !== 'undefined') {
+    Object.defineProperty(window, 'supabase', {
+      value: supabase,
+      writable: false,
+      configurable: false,
+    })
+  }
 }
