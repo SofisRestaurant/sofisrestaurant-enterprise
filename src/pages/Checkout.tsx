@@ -93,14 +93,14 @@ export default function Checkout() {
                 <div key={item.id} className="flex items-start justify-between gap-4 px-6 py-4">
                   <div className="flex-1">
                     <p className="font-medium">
-                      {item.menuItem.name} <span className="text-gray-500">× {item.quantity}</span>
+                      {item.name} <span className="text-gray-500">× {item.quantity}</span>
                     </p>
-                    {item.specialInstructions && (
-                      <p className="mt-1 text-xs text-gray-500">{item.specialInstructions}</p>
+                    {item.special_instructions && (
+                      <p className="mt-1 text-xs text-gray-500">{item.special_instructions}</p>
                     )}
                   </div>
                   <div className="font-semibold">
-                    {formatCurrency(item.menuItem.price * item.quantity)}
+                    {formatCurrency(item.base_price * item.quantity)}
                   </div>
                 </div>
               ))}

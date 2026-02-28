@@ -22,50 +22,8 @@ export interface ModifierDTO {
   updated_at: string
 }
 
-export interface ModifierGroupDTO {
-  id: string
-  name: string
-  description: string | null
-  type: 'radio' | 'checkbox' | 'quantity'
-  min_selections: number
-  max_selections: number | null
-  required: boolean
-  sort_order: number
-  modifiers: ModifierDTO[]
-  created_at: string
-  updated_at: string
-}
 
-export interface MenuItemDTO {
-  id: string
-  name: string
-  description: string | null
-  price: number
-  image_url: string | null
-  category: string
-  featured: boolean
-  available: boolean
-  sort_order: number
 
-  // Dietary
-  spicy_level: number | null
-  is_vegetarian: boolean
-  is_vegan: boolean
-  is_gluten_free: boolean
-
-  // Inventory (item-level)
-  inventory_count: number | null
-  low_stock_threshold: number
-
-  // Engagement
-  popularity_score: number
-  pairs_with: string[] | null
-
-  modifier_groups: ModifierGroupDTO[] | null
-
-  created_at: string
-  updated_at: string
-}
 
 // ── V2: Location Pricing ──────────────────────────────────────────────────────
 

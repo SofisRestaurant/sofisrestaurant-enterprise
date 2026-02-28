@@ -14,7 +14,23 @@ export interface OrderCartItem {
   price?: number
   notes?: string | null
 }
+export interface CartItemModifier {
+  modifier_group_id: string
+  selections: {
+    id: string
+    name: string
+    price_adjustment: number
+  }[]
+}
 
+export interface AddToCartPayload {
+  item_id: string
+  name: string
+  base_price: number
+  modifiers: CartItemModifier[]
+  quantity: number
+  special_instructions?: string
+}
 /**
  * Shipping address structure
  */

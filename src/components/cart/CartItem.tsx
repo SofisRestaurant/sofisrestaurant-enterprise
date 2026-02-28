@@ -24,25 +24,21 @@ export default function CartItem({ item }: CartItemProps) {
     removeItem(item.id);
   };
 
-  const itemTotal = item.menuItem.price * item.quantity;
+  const itemTotal = item.base_price * item.quantity;
 
   return (
     <div className="flex gap-4 py-4 border-b border-gray-200">
       {/* Image */}
-      {item.menuItem.image_url && (
-        <img
-          src={item.menuItem.image_url}
-          alt={item.menuItem.name}
-          className="w-20 h-20 object-cover rounded-lg"
-        />
+      {item.image_url && (
+        <img src={item.image_url} alt={item.name} className="w-20 h-20 object-cover rounded-lg" />
       )}
 
       {/* Details */}
       <div className="flex-1">
         <div className="flex justify-between">
           <div>
-            <h3 className="font-semibold text-gray-900">{item.menuItem.name}</h3>
-            <p className="text-sm text-gray-600">${item.menuItem.price.toFixed(2)}</p>
+            <h3 className="font-semibold text-gray-900">{item.name}</h3>
+            <p className="text-sm text-gray-600">${item.base_price.toFixed(2)}</p>
           </div>
           <button
             onClick={handleRemove}
@@ -54,16 +50,23 @@ export default function CartItem({ item }: CartItemProps) {
         </div>
 
         {/* Customizations */}
-        {item.customizations && (
+        {item.modifiers?.length > 0 && (
           <div className="mt-2 text-sm text-gray-600">
-            <span className="font-medium">Customizations:</span> {item.customizations}
+            <span className="font-medium">Options:</span>
+            <ul className="mt-1 space-y-1">
+              {item.modifiers.map((group) =>
+                group.selections.map((sel) => (
+                  <li key={`${group.group_id}-${sel.id}`}>{sel.name}</li>
+                )),
+              )}
+            </ul>
           </div>
         )}
 
         {/* Special Instructions */}
-        {item.specialInstructions && (
+        {item.special_instructions && (
           <div className="mt-1 text-sm text-gray-600">
-            <span className="font-medium">Note:</span> {item.specialInstructions}
+            <span className="font-medium">Note:</span> {item.special_instructions}
           </div>
         )}
 
@@ -88,9 +91,7 @@ export default function CartItem({ item }: CartItemProps) {
             </button>
           </div>
 
-          <span className="font-semibold text-gray-900">
-            ${itemTotal.toFixed(2)}
-          </span>
+          <span className="font-semibold text-gray-900">${itemTotal.toFixed(2)}</span>
         </div>
       </div>
     </div>

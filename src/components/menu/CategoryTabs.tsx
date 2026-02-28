@@ -1,4 +1,4 @@
-import type { MenuCategory } from '@/types/menu'
+import type { MenuCategory } from '@/domain/menu/menu.types';
 
 /* =========================================================
    MASTER CATEGORY LIST
@@ -6,28 +6,28 @@ import type { MenuCategory } from '@/types/menu'
 ========================================================= */
 
 const CATEGORIES: ReadonlyArray<{
-  value: MenuCategory | 'all'
-  label: string
+  value: MenuCategory | 'all';
+  label: string;
 }> = [
   { value: 'all', label: 'All' },
   { value: 'appetizers', label: 'Appetizers' },
   { value: 'entrees', label: 'Entrees' },
   { value: 'desserts', label: 'Desserts' },
   { value: 'drinks', label: 'Drinks' },
-]
+];
 
 /* =========================================================
    PROPS
 ========================================================= */
 
 interface CategoryTabsProps {
-  selectedCategory: MenuCategory | 'all'
-  onSelectCategory: (category: MenuCategory | 'all') => void
+  selectedCategory: MenuCategory | 'all';
+  onSelectCategory: (category: MenuCategory | 'all') => void;
 
   /**
    * If provided → hide empty categories
    */
-  availableCategories?: Set<MenuCategory>
+  availableCategories?: Set<MenuCategory>;
 }
 
 /* =========================================================
@@ -40,15 +40,15 @@ export function CategoryTabs({
   availableCategories,
 }: CategoryTabsProps) {
   const visibleCategories = CATEGORIES.filter(({ value }) => {
-    if (value === 'all') return true
-    if (!availableCategories) return true
-    return availableCategories.has(value)
-  })
+    if (value === 'all') return true;
+    if (!availableCategories) return true;
+    return availableCategories.has(value);
+  });
 
   return (
     <div className="mb-6 flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
       {visibleCategories.map(({ value, label }) => {
-        const active = selectedCategory === value
+        const active = selectedCategory === value;
 
         return (
           <button
@@ -64,8 +64,8 @@ export function CategoryTabs({
           >
             {label}
           </button>
-        )
+        );
       })}
     </div>
-  )
+  );
 }

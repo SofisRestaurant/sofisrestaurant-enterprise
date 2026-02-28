@@ -1,4 +1,4 @@
-import { MenuItem } from '@/types/menu';
+import { MenuItem } from '@/domain/menu/menu.types';
 import { useAuth } from '@/features/auth/useAuth';
 import { useModal } from '@/components/ui/useModal';
 import { formatCurrency } from '@/utils/currency';

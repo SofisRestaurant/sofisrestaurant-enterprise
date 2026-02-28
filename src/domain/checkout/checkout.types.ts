@@ -1,38 +1,59 @@
-// src/domain/checkout/checkout.types.ts
+// ============================================================================
+// SECURE CHECKOUT TYPES — SERVER AUTHORITATIVE (2026)
+// ============================================================================
+
+/* =========================================================
+   CHECKOUT ITEM (CLIENT → SERVER)
+========================================================= */
+
+/**
+ * Minimal cart snapshot.
+ * Client never sends prices or totals.
+ * Server recalculates everything.
+ */
 export interface CheckoutItem {
-  menuItemId: string
-  name: string
-  price: number
+  item_id: string
   quantity: number
-  specialInstructions?: string
-  customizations?: string
+
+  modifiers: {
+    group_id: string
+    selections: string[]
+  }[]
+
+  special_instructions?: string
+  pricing_hash: string
 }
 
-export interface Address {
-  street: string
-  city: string
-  state: string
-  zipCode: string
-  apartment?: string
-}
+/* =========================================================
+   CHECKOUT REQUEST
+========================================================= */
 
-export interface PaymentMethod {
-  type: 'card' | 'cash' | 'digital_wallet'
-  cardLast4?: string
-  cardBrand?: string
-}
+/* =========================================================
+   CHECKOUT REQUEST
+========================================================= */
 
 export interface CheckoutData {
   items: CheckoutItem[]
-  customerName: string
-  customerEmail: string
-  customerPhone: string
-  deliveryAddress: Address
-  paymentMethod: PaymentMethod
-  specialInstructions?: string
-  scheduledTime?: Date
-  subtotal: number
-  tax: number
-  deliveryFee: number
-  total: number
+
+  customer: {
+    email: string
+    name?: string
+    phone?: string
+    address?: string
+    customer_uid?: string | null
+  }
+
+  paymentMethodId?: string
+
+  successUrl: string
+  cancelUrl: string
+}
+/* =========================================================
+   CHECKOUT RESPONSE
+========================================================= */
+
+export interface CheckoutSession {
+  id: string
+  url: string
+  status: 'open' | 'complete' | 'expired'
 }

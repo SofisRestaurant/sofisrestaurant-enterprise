@@ -1,27 +1,9 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { MenuGrid } from '@/components/menu/MenuGrid'
 import { CategoryTabs } from '@/components/menu/CategoryTabs'
-import { menuService } from '@/services/menu.service';
-import type { MenuItem, MenuCategory } from '@/types/menu'
+import { MenuService } from '@/services/menu.service';
+import type { MenuItem, MenuCategory } from '@/domain/menu/menu.types'
 import { Spinner } from '@/components/ui/Spinner'
-
-/* ======================================================
-   CATEGORY RUNTIME SAFETY (DO NOT TRUST DB STRINGS)
-====================================================== */
-
-const VALID_CATEGORIES: readonly MenuCategory[] = [
-  'appetizers',
-  'entrees',
-  'desserts',
-  'drinks',
-]
-
-function isMenuCategory(value: unknown): value is MenuCategory {
-  return (
-    typeof value === 'string' &&
-    (VALID_CATEGORIES as readonly string[]).includes(value)
-  )
-}
 
 /* ======================================================
    MENU PAGE
@@ -37,38 +19,34 @@ export default function Menu() {
 
   /* ================= LOAD MENU ================= */
 
-  const loadMenu = useCallback(async () => {
-    try {
-      setError(null)
-      setLoading(true)
+const loadMenu = useCallback(async () => {
+  try {
+    setError(null);
+    setLoading(true);
 
-      const data = await menuService.getMenuItems();
-      setItems(Array.isArray(data) ? data : [])
-    } catch (e) {
-      console.error('Menu load failed', e)
-      setError('We couldn’t load the menu right now.')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+    const data = await MenuService.getMenuItems();
+    setItems(Array.isArray(data) ? data : []);
+  } catch (e) {
+    console.error('Menu load failed', e);
+    setError('We couldn’t load the menu right now.');
+  } finally {
+    setLoading(false);
+  }
+}, []);
 
-  useEffect(() => {
-    loadMenu()
-  }, [loadMenu])
+useEffect(() => {
+  loadMenu();
+}, [loadMenu]);
 
   /* ================= SAFE CATEGORY EXTRACTION ================= */
 
   const categoriesWithItems = useMemo(() => {
-    const set = new Set<MenuCategory>()
-
+    const set = new Set<MenuCategory>();
     for (const item of items) {
-      if (isMenuCategory(item.category)) {
-        set.add(item.category)
-      }
+      set.add(item.category);
     }
-
-    return set
-  }, [items])
+    return set;
+  }, [items]);
 
   /* ================= AUTO RESET IF CATEGORY DISAPPEARS ================= */
 
@@ -84,14 +62,9 @@ export default function Menu() {
   /* ================= FILTERING ================= */
 
   const filteredItems = useMemo(() => {
-    if (selectedCategory === 'all') return items
-
-    return items.filter(
-      (item) =>
-        isMenuCategory(item.category) &&
-        item.category === selectedCategory
-    )
-  }, [items, selectedCategory])
+    if (selectedCategory === 'all') return items;
+    return items.filter((item) => item.category === selectedCategory);
+  }, [items, selectedCategory]);
 
   /* ================= RENDER ================= */
 

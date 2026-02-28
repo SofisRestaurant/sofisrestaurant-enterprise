@@ -1,32 +1,25 @@
 // src/types/index.ts
-
 // ============================================================================
-// DOMAIN TYPES (truth)
+// CENTRAL TYPE BARREL
 // ============================================================================
-
-// Menu
-export type { MenuItem, MenuCategory } from './menu'
-
-// Orders
-export type { Order } from './order'
-
-// Stripe
-export type { StripeCheckoutSession } from './stripe'
-
-// ============================================================================
-// FEATURE TYPES
+// Re-exports from the real source-of-truth files.
+// Import paths verified against actual file structure (Feb 2026).
 // ============================================================================
 
-// Cart
-export type { CartItem, CartStore } from '@/features/cart/cart.types'
+// ============================================================================
+// DOMAIN TYPES
+// ============================================================================
+export type { CartItem } from '@/features/cart/cart.types'
+// Menu — source of truth is src/types/menu.ts
+export type { 
+  MenuItem, 
+  MenuCategory, 
+  ModifierGroup, 
+  Modifier 
+} from '@/domain/menu/menu.types'
 
-// Checkout
-export type {
-  CheckoutData,
-  CheckoutSession,
-  CheckoutError,
-  CheckoutItem,
-} from '@/features/checkout/checkout.types'
+// Cart store interface
+export type { CartStore, AddToCartPayload } from '@/features/cart/cart.types'
 
 // ============================================================================
 // USER / AUTH
@@ -38,7 +31,7 @@ export type {
   UserContextValue,
 } from '@/contexts/userTypes'
 
-// compatibility alias
+// Compatibility alias — existing code that imports `User` keeps working
 export type { AppUser as User } from '@/contexts/userTypes'
 
 // ============================================================================
@@ -48,20 +41,20 @@ export type { AppUser as User } from '@/contexts/userTypes'
 export type { Permission } from '@/security/permissions'
 
 // ============================================================================
-// COMMON
+// COMMON QUERY / PAGINATION
 // ============================================================================
 
 export interface ApiResponse<T = unknown> {
-  ok: boolean
-  data?: T
-  error?: string
+  ok:       boolean
+  data?:    T
+  error?:   string
   message?: string
 }
 
 export interface PaginationMeta {
-  page: number
-  perPage: number
-  total: number
+  page:       number
+  perPage:    number
+  total:      number
   totalPages: number
 }
 
@@ -73,7 +66,7 @@ export interface PaginatedResponse<T> {
 export type SortDirection = 'asc' | 'desc'
 
 export interface SortConfig {
-  field: string
+  field:     string
   direction: SortDirection
 }
 
@@ -88,17 +81,17 @@ export type FilterOperator =
   | 'in'
 
 export interface FilterConfig {
-  field: string
+  field:    string
   operator: FilterOperator
-  value: unknown
+  value:    unknown
 }
 
 export interface QueryParams {
-  page?: number
-  perPage?: number
-  sort?: SortConfig
-  filters?: FilterConfig[]
-  search?: string
+  page?:     number
+  perPage?:  number
+  sort?:     SortConfig
+  filters?:  FilterConfig[]
+  search?:   string
 }
 
 // ============================================================================
@@ -106,15 +99,15 @@ export interface QueryParams {
 // ============================================================================
 
 export interface FieldError {
-  field: string
+  field:   string
   message: string
 }
 
 export interface FormState<T> {
-  data: T
-  errors: FieldError[]
+  data:         T
+  errors:       FieldError[]
   isSubmitting: boolean
-  isValid: boolean
+  isValid:      boolean
 }
 
 // ============================================================================
@@ -125,29 +118,31 @@ export type LoadingState = 'idle' | 'loading' | 'success' | 'error'
 
 export interface AsyncState<T = unknown> {
   status: LoadingState
-  data: T | null
-  error: string | null
+  data:   T | null
+  error:  string | null
 }
 
+// ============================================================================
+// SCALARS
 // ============================================================================
 
 export type DateString = string
 export type TimeString = string
 
 // ============================================================================
+// CONTACT
+// ============================================================================
 
 export interface Address {
-  street: string
-  city: string
-  state: string
-  zipCode: string
+  street:   string
+  city:     string
+  state:    string
+  zipCode:  string
   country?: string
 }
 
 export interface ContactInfo {
-  email: string
-  phone?: string
+  email:    string
+  phone?:   string
   address?: Address
 }
-
-export {}

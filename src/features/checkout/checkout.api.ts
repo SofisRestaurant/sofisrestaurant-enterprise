@@ -16,11 +16,13 @@
 // Server returns the computed session. Frontend displays what server confirms.
 // =============================================================================
 
-import { supabase } from '@/lib/supabase/supabaseClient'
-import type { CheckoutData, CheckoutSession } from './checkout.types'
-import { LOYALTY_TIERS, TIER_ORDER, type LoyaltyTier } from '@/domain/loyalty/tiers'
+import { supabase }                          from '@/lib/supabase/supabaseClient'
+import { LOYALTY_TIERS, TIER_ORDER }         from '@/domain/loyalty/tiers'
+import type { LoyaltyTier }                  from '@/domain/loyalty/tiers'
+import type { CheckoutData, CheckoutSession } from '@/domain/checkout/checkout.types'
 
-export { LOYALTY_TIERS, type LoyaltyTier } from '@/domain/loyalty/tiers'
+export { LOYALTY_TIERS }
+export type { LoyaltyTier }
 
 // =============================================================================
 // CONFIG
@@ -98,7 +100,7 @@ export interface LoyaltyPreview {
   willLevelUp:      boolean
 }
 
-// What the server returns about applied discounts — used only for display
+/** What the server returns about applied discounts — used only for display */
 export interface ServerDiscount {
   promo_code?:     string
   promo_cents?:    number
@@ -124,7 +126,7 @@ export interface UserCredit {
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   const timeout = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error('Request timeout')), timeoutMs)
+    setTimeout(() => reject(new Error('Request timeout')), timeoutMs),
   )
   return Promise.race([promise, timeout])
 }
@@ -144,7 +146,8 @@ function validateCheckoutData(payload: CheckoutData) {
   if (payload.items.length > CHECKOUT_CONFIG.MAX_ITEMS) {
     throw new CheckoutValidationError('Too many items', 'items')
   }
-  if (!payload.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) {
+  const email = payload.customer?.email ?? ''
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new CheckoutValidationError('Invalid email', 'email')
   }
   if (!payload.successUrl || !payload.cancelUrl) {
@@ -212,7 +215,7 @@ export async function getAvailableCredits(): Promise<UserCredit[]> {
 
 export function calculatePointsPreview(
   amountCents: number,
-  profile:     LoyaltyProfile | null
+  profile:     LoyaltyProfile | null,
 ): LoyaltyPreview {
   const tier:     LoyaltyTier = profile?.tier           ?? 'bronze'
   const streak:   number      = profile?.streak         ?? 0
@@ -223,7 +226,7 @@ export function calculatePointsPreview(
   const basePoints     = Math.max(Math.floor(amountCents / 100), 0)
   const tierMultiplier = tierConfig.multiplier
 
-  const nextStreak = streak + 1
+  const nextStreak       = streak + 1
   const streakMultiplier =
     nextStreak >= 30 ? 1.50 :
     nextStreak >= 7  ? 1.25 :
@@ -233,11 +236,11 @@ export function calculatePointsPreview(
   const pointsToEarn = Math.max(Math.floor(basePoints * tierMultiplier * streakMultiplier), 0)
   const balanceAfter = balance + pointsToEarn
 
-  const currentIndex     = TIER_ORDER.indexOf(tier)
-  const nextTier         = currentIndex < TIER_ORDER.length - 1 ? TIER_ORDER[currentIndex + 1] : null
+  const currentIndex      = TIER_ORDER.indexOf(tier)
+  const nextTier          = currentIndex < TIER_ORDER.length - 1 ? TIER_ORDER[currentIndex + 1] : null
   const nextTierThreshold = nextTier ? LOYALTY_TIERS[nextTier].threshold : null
-  const pointsToNextTier = nextTierThreshold !== null ? Math.max(nextTierThreshold - lifetime, 0) : null
-  const willLevelUp      = nextTierThreshold !== null && lifetime + pointsToEarn >= nextTierThreshold
+  const pointsToNextTier  = nextTierThreshold !== null ? Math.max(nextTierThreshold - lifetime, 0) : null
+  const willLevelUp       = nextTierThreshold !== null && lifetime + pointsToEarn >= nextTierThreshold
 
   const today            = new Date().toISOString().slice(0, 10)
   const willExtendStreak = profile?.lastOrderDate !== today
@@ -257,7 +260,7 @@ export function calculatePointsPreview(
 // =============================================================================
 
 export async function createCheckoutSession(
-  payload: CheckoutData & { promoCode?: string; creditId?: string }
+  payload: CheckoutData & { promoCode?: string; creditId?: string },
 ): Promise<CheckoutSession> {
   const start     = Date.now()
   const requestId = crypto.randomUUID()
@@ -269,16 +272,22 @@ export async function createCheckoutSession(
 
     // 🔒 SEND ONLY: item ID + quantity + notes (NO prices, NO totals)
     const secureItems = payload.items.map((item) => ({
-      id:       item.menuItemId,
-      quantity: Math.max(1, Math.min(100, Math.round(item.quantity))),
-      notes:    item.specialInstructions?.slice(0, 500) || undefined,
+      id:           item.item_id,
+      quantity:     Math.max(1, Math.min(100, Math.round(item.quantity))),
+      notes:        item.special_instructions?.slice(0, 500) || undefined,
+      modifiers:    item.modifiers,
+      pricing_hash: item.pricing_hash,
     }))
+    if (!payload.customer?.email) {
+  throw new Error('Missing customer email')
+}
+    const email = payload.customer?.email ?? ''
 
     const requestBody: Record<string, unknown> = {
       items:      secureItems,
-      email:      payload.email.toLowerCase().trim(),
-      name:       payload.name?.slice(0, 200)  || '',
-      phone:      payload.phone?.slice(0, 50)  || '',
+      email:      email.toLowerCase().trim(),
+      name:       payload.customer?.name?.slice(0, 200)  || '',
+      phone:      payload.customer?.phone?.slice(0, 50)  || '',
       successUrl: payload.successUrl,
       cancelUrl:  payload.cancelUrl,
     }
@@ -309,7 +318,7 @@ export async function createCheckoutSession(
             body:    requestBody,
             headers: { Authorization: `Bearer ${session.access_token}` },
           }),
-          CHECKOUT_CONFIG.TIMEOUT_MS
+          CHECKOUT_CONFIG.TIMEOUT_MS,
         )
 
         if (error) {
@@ -367,7 +376,7 @@ export async function createCheckoutSession(
 
     throw new CheckoutNetworkError(
       err instanceof Error ? err.message : 'Checkout failed',
-      true
+      true,
     )
   }
 }

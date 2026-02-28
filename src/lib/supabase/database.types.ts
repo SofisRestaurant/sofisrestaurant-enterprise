@@ -480,7 +480,7 @@ export type Database = {
           id: string
           lifetime_balance: number
           metadata: Json | null
-          order_id: string | null
+          order_id: string
           points_balance: number
           points_delta: number
           streak_at_time: number
@@ -496,7 +496,7 @@ export type Database = {
           id?: string
           lifetime_balance: number
           metadata?: Json | null
-          order_id?: string | null
+          order_id: string
           points_balance: number
           points_delta: number
           streak_at_time?: number
@@ -512,7 +512,7 @@ export type Database = {
           id?: string
           lifetime_balance?: number
           metadata?: Json | null
-          order_id?: string | null
+          order_id?: string
           points_balance?: number
           points_delta?: number
           streak_at_time?: number
@@ -600,7 +600,7 @@ export type Database = {
         Row: {
           allergens: string[] | null
           available: boolean
-          category: string
+          category: Database["public"]["Enums"]["menu_category"]
           created_at: string | null
           description: string | null
           featured: boolean
@@ -622,7 +622,7 @@ export type Database = {
         Insert: {
           allergens?: string[] | null
           available?: boolean
-          category: string
+          category: Database["public"]["Enums"]["menu_category"]
           created_at?: string | null
           description?: string | null
           featured?: boolean
@@ -644,7 +644,7 @@ export type Database = {
         Update: {
           allergens?: string[] | null
           available?: boolean
-          category?: string
+          category?: Database["public"]["Enums"]["menu_category"]
           created_at?: string | null
           description?: string | null
           featured?: boolean
@@ -1345,8 +1345,9 @@ export type Database = {
       }
       menu_items_full: {
         Row: {
+          allergens: string[] | null
           available: boolean | null
-          category: string | null
+          category: Database["public"]["Enums"]["menu_category"] | null
           created_at: string | null
           description: string | null
           featured: boolean | null
@@ -1367,8 +1368,9 @@ export type Database = {
           updated_at: string | null
         }
         Insert: {
+          allergens?: string[] | null
           available?: boolean | null
-          category?: string | null
+          category?: Database["public"]["Enums"]["menu_category"] | null
           created_at?: string | null
           description?: string | null
           featured?: boolean | null
@@ -1389,8 +1391,9 @@ export type Database = {
           updated_at?: string | null
         }
         Update: {
+          allergens?: string[] | null
           available?: boolean | null
-          category?: string | null
+          category?: Database["public"]["Enums"]["menu_category"] | null
           created_at?: string | null
           description?: string | null
           featured?: boolean | null
@@ -1608,7 +1611,7 @@ export type Database = {
           id: string
           lifetime_balance: number
           metadata: Json | null
-          order_id: string | null
+          order_id: string
           points_balance: number
           points_delta: number
           streak_at_time: number
@@ -1628,27 +1631,12 @@ export type Database = {
       get_loyalty_for_order: {
         Args: { p_order_id: string }
         Returns: {
-          base_points: number
           created_at: string
-          id: string
-          lifetime_balance: number
-          metadata: Json | null
-          order_id: string | null
-          points_balance: number
+          new_balance: number
           points_delta: number
-          streak_at_time: number
-          streak_multiplier: number
-          tier_at_time: string
-          tier_multiplier: number
-          transaction_type: string
-          user_id: string
+          streak: number
+          tier: string
         }[]
-        SetofOptions: {
-          from: "*"
-          to: "loyalty_transactions"
-          isOneToOne: false
-          isSetofReturn: true
-        }
       }
       get_loyalty_ledger_secure: {
         Args: { p_account_id: string }
@@ -1782,7 +1770,14 @@ export type Database = {
       }
     }
     Enums: {
-      [_ in never]: never
+      menu_category:
+        | "appetizers"
+        | "entrees"
+        | "desserts"
+        | "drinks"
+        | "lunch"
+        | "breakfast"
+        | "specials"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1909,6 +1904,16 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      menu_category: [
+        "appetizers",
+        "entrees",
+        "desserts",
+        "drinks",
+        "lunch",
+        "breakfast",
+        "specials",
+      ],
+    },
   },
 } as const

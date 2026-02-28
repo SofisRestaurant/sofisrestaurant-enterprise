@@ -1,414 +1,262 @@
 // src/features/cart/cart.store.ts
 // ============================================================================
-// ENTERPRISE CART STORE WITH AUTO-RECOVERY
+// ENTERPRISE CART STORE — Immutable snapshot ledger
 // ============================================================================
-// ✅ Cart persistence
-// ✅ Cart backup before checkout
-// ✅ Cart restore on payment failure
-// ✅ Smart clearing on success
+// Key architecture decisions:
+//   • addItem() takes AddToCartPayload — cart never holds a MenuItem reference
+//   • Each item has a pricing_hash (locked at add-to-cart time)
+//   • Deduplication by itemId + pricingHash — same item with different
+//     modifiers = separate line items
+//   • Cart totals = sum of locked item subtotals (never re-priced in store)
+//   • Backup/restore for payment failure recovery
 // ============================================================================
 
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
+import type { CartStore, AddToCartPayload } from './cart.types'
+import type { CartItem } from '@/domain/menu/menu.types'
+import { PricingEngine, computePricingHashSync } from '@/domain/pricing/pricing.engine'
 
-import type { CartStore, CartItem } from './cart.types'
-import type { MenuItem } from '@/types/menu'
+// ─────────────────────────────────────────────────────────────────────────────
+// Config
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ============================================================================
-// Configuration
-// ============================================================================
+const TAX_RATE = 0.0875
 
-const TAX_RATE = 0.08
-
-const STORAGE_KEYS = {
-  CART: 'sofi-cart-storage',
-  BACKUP: 'sofi-cart-backup',
-  CHECKOUT_SESSION: 'sofi-checkout-session',
+const KEYS = {
+  CART:     'sofi-cart-v2',
+  BACKUP:   'sofi-cart-backup-v2',
+  CHECKOUT: 'sofi-checkout-session-v2',
 } as const
-// ============================================================================
-// Helpers
-// ============================================================================
 
-function generateId() {
-  return crypto.randomUUID()
+// ─────────────────────────────────────────────────────────────────────────────
+// Pure helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function round2(n: number) { return Math.round(n * 100) / 100 }
+
+function uid() {
+  return typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2)
 }
 
-function normalizeString(value?: string) {
-  return value?.trim() || undefined
+/** Fingerprint: same item + same modifier config → same key → merge quantities */
+function fingerprint(itemId: string, pricingHash: string): string {
+  return `${itemId}::${pricingHash}`
 }
 
-function clampQuantity(qty: number) {
-  if (!Number.isFinite(qty) || qty <= 0) return 1
-  return Math.floor(qty)
+function recalc(items: CartItem[]) {
+  const subtotal  = round2(items.reduce((s, i) => s + i.subtotal, 0))
+  const tax       = round2(subtotal * TAX_RATE)
+  const total     = round2(subtotal + tax)
+  const itemCount = items.reduce((s, i) => s + i.quantity, 0)
+  return { items, subtotal, tax, total, itemCount, deliveryFee: 0 }
 }
 
-function itemFingerprint(
-  id: string,
-  customizations?: string,
-  notes?: string
-) {
-  return `${id}-${customizations ?? ''}-${notes ?? ''}`
+// ─────────────────────────────────────────────────────────────────────────────
+// Backup helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function saveBackup(items: CartItem[]): void {
+  try { localStorage.setItem(KEYS.BACKUP, JSON.stringify({ items, ts: Date.now() })) }
+  catch { /* storage full */ }
 }
 
-function calculateTotals(items: CartItem[]) {
-  const subtotal = items.reduce(
-    (sum, item) => sum + item.menuItem.price * item.quantity,
-    0
-  )
-
-  const tax = subtotal * TAX_RATE
-  const total = subtotal + tax
-
-  return {
-    itemCount: items.reduce((sum, item) => sum + item.quantity, 0),
-    subtotal,
-    tax,
-    deliveryFee: 0,
-    total,
-  }
-}
-
-function mergeDuplicates(items: CartItem[]) {
-  const map = new Map<string, CartItem>()
-
-  for (const item of items) {
-    const key = itemFingerprint(
-      item.menuItem.id,
-      item.customizations,
-      item.specialInstructions
-    )
-
-    if (map.has(key)) {
-      const existing = map.get(key)!
-      existing.quantity += item.quantity
-    } else {
-      map.set(key, { ...item })
-    }
-  }
-
-  return Array.from(map.values())
-}
-
-// ============================================================================
-// Backup/Restore Functions
-// ============================================================================
-
-/**
- * Save cart backup to localStorage
- * Call this BEFORE redirecting to Stripe
- */
-function saveCartBackup(items: CartItem[]): void {
+function loadBackup(): CartItem[] | null {
   try {
-    const backup = {
-      items,
-      timestamp: Date.now(),
-      sessionId: crypto.randomUUID(),
-    }
-    localStorage.setItem(STORAGE_KEYS.BACKUP, JSON.stringify(backup))
-    console.log('💾 Cart backed up:', items.length, 'items')
-  } catch (err) {
-    console.error('Failed to backup cart:', err)
-  }
-}
-
-/**
- * Load cart backup from localStorage
- * Call this when payment fails or user returns without completing
- */
-function loadCartBackup(): CartItem[] | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEYS.BACKUP)
+    const raw = localStorage.getItem(KEYS.BACKUP)
     if (!raw) return null
-
-    const backup = JSON.parse(raw)
-    
-    // Check if backup is not too old (24 hours)
-    const age = Date.now() - backup.timestamp
-    const MAX_AGE = 24 * 60 * 60 * 1000
-    
-    if (age > MAX_AGE) {
-      console.log('🗑️ Cart backup too old, discarding')
-      clearCartBackup()
-      return null
-    }
-
-    console.log('📦 Cart backup loaded:', backup.items.length, 'items')
-    return backup.items as CartItem[]
-  } catch (err) {
-    console.error('Failed to load cart backup:', err)
-    return null
-  }
+    const { items, ts } = JSON.parse(raw)
+    if (Date.now() - ts > 86_400_000) { clearBackupStorage(); return null }
+    return items as CartItem[]
+  } catch { return null }
 }
 
-/**
- * Clear cart backup
- * Call this when order is confirmed
- */
-function clearCartBackup(): void {
+function clearBackupStorage(): void {
   try {
-    localStorage.removeItem(STORAGE_KEYS.BACKUP)
-    localStorage.removeItem(STORAGE_KEYS.CHECKOUT_SESSION)
-    console.log('🧹 Cart backup cleared')
-  } catch (err) {
-    console.error('Failed to clear cart backup:', err)
-  }
+    localStorage.removeItem(KEYS.BACKUP)
+    localStorage.removeItem(KEYS.CHECKOUT)
+  } catch { /* ignore */ }
 }
 
-/**
- * Mark that checkout is in progress
- */
-function markCheckoutInProgress(sessionId: string): void {
-  try {
-    localStorage.setItem(STORAGE_KEYS.CHECKOUT_SESSION, sessionId)
-  } catch (err) {
-    console.error('Failed to mark checkout:', err)
-  }
+function markCheckout(sessionId: string): void {
+  try { localStorage.setItem(KEYS.CHECKOUT, sessionId) } catch { /* ignore */ }
 }
 
-/**
- * Check if checkout is in progress
- */
-function isCheckoutInProgress(): boolean {
-  try {
-    return !!localStorage.getItem(STORAGE_KEYS.CHECKOUT_SESSION)
-  } catch {
-    return false
-  }
+function checkoutActive(): boolean {
+  try { return !!localStorage.getItem(KEYS.CHECKOUT) } catch { return false }
 }
 
-/**
- * Clear checkout in progress flag
- */
-function clearCheckoutInProgress(): void {
-  try {
-    localStorage.removeItem(STORAGE_KEYS.CHECKOUT_SESSION)
-  } catch (err) {
-    console.error('Failed to clear checkout flag:', err)
-  }
+function clearCheckout(): void {
+  try { localStorage.removeItem(KEYS.CHECKOUT) } catch { /* ignore */ }
 }
 
-// ============================================================================
+// ─────────────────────────────────────────────────────────────────────────────
 // Store
-// ============================================================================
+// ─────────────────────────────────────────────────────────────────────────────
 
 export const useCartStore = create<CartStore>()(
   persist(
-    (set, get) => {
-      const recalc = (items: CartItem[]) => ({
-        items,
-        ...calculateTotals(items),
+    (set, get) => ({
+      items: [], itemCount: 0, subtotal: 0, tax: 0, deliveryFee: 0, total: 0,
+
+      // ── addItem ─────────────────────────────────────────────────────────────
+      // Receives AddToCartPayload (not MenuItem).
+      // Computes PricingBreakdown → locks subtotal + hash into the cart item.
+    addItem: (payload: AddToCartPayload) => {
+  set((state) => {
+
+    const qty = Math.max(1, Math.floor(payload.quantity))
+
+    const pricing = PricingEngine.calculate(
+      payload.item_id,
+      payload.base_price,
+      payload.modifiers,
+      qty,
+    )
+
+    // Deterministic integrity hash
+    const verifiedHash = computePricingHashSync(
+      payload.item_id,
+      payload.base_price,
+      payload.modifiers,
+      qty,
+    )
+
+    // Force overwrite with verified hash
+    pricing.pricing_hash = verifiedHash
+
+    const fp = fingerprint(payload.item_id, pricing.pricing_hash)
+
+    const existIdx = state.items.findIndex(
+      (i) => fingerprint(i.item_id, i.pricing_hash) === fp,
+    )
+
+    let items: CartItem[]
+
+    if (existIdx >= 0) {
+      items = state.items.map((item, idx) => {
+        if (idx !== existIdx) return item
+
+        const newQty = item.quantity + qty
+
+        const newPricing = PricingEngine.calculate(
+          item.item_id,
+          item.base_price,
+          item.modifiers,
+          newQty,
+        )
+
+        const newHash = computePricingHashSync(
+          item.item_id,
+          item.base_price,
+          item.modifiers,
+          newQty,
+        )
+
+        return {
+          ...item,
+          quantity: newQty,
+          subtotal: newPricing.subtotal,
+          pricing_hash: newHash,
+        }
       })
-
-      return {
-        items: [],
-        itemCount: 0,
-        subtotal: 0,
-        tax: 0,
-        deliveryFee: 0,
-        total: 0,
-
-        // ========================================
-        // ADD ITEM
-        // ========================================
-        addItem: (menuItem: MenuItem, quantity = 1, specialInstructions) => {
-          set((state) => {
-            const qty = clampQuantity(quantity)
-            const notes = normalizeString(specialInstructions)
-
-            const incomingKey = itemFingerprint(menuItem.id, undefined, notes)
-
-            const existingIndex = state.items.findIndex(
-              (it) =>
-                itemFingerprint(
-                  it.menuItem.id,
-                  it.customizations,
-                  it.specialInstructions
-                ) === incomingKey
-            )
-
-            let items: CartItem[]
-
-            if (existingIndex >= 0) {
-              items = state.items.map((it, idx) =>
-                idx === existingIndex
-                  ? { ...it, quantity: it.quantity + qty }
-                  : it
-              )
-            } else {
-              items = [
-                ...state.items,
-                {
-                  id: generateId(),
-                  menuItem,
-                  quantity: qty,
-                  specialInstructions: notes,
-                  customizations: undefined,
-                },
-              ]
-            }
-
-            return recalc(items)
-          })
-        },
-
-        // ========================================
-        // REMOVE ITEM
-        // ========================================
-        removeItem: (id: string) => {
-          set((state) => recalc(state.items.filter((i) => i.id !== id)))
-        },
-
-        // ========================================
-        // UPDATE QUANTITY
-        // ========================================
-        updateQuantity: (id: string, quantity: number) => {
-          set((state) => {
-            if (!Number.isFinite(quantity) || quantity <= 0) {
-              return recalc(state.items.filter((i) => i.id !== id))
-            }
-
-            const qty = Math.floor(quantity)
-            const items = state.items.map((item) =>
-              item.id === id ? { ...item, quantity: qty } : item
-            )
-
-            return recalc(items)
-          })
-        },
-
-        // ========================================
-        // CLEAR CART
-        // ========================================
-        clearCart: () => {
-          console.log('🧹 Clearing cart')
-          set(recalc([]))
-        },
-
-        // ========================================
-        // GET ITEM
-        // ========================================
-        getItem: (id: string) => get().items.find((i) => i.id === id),
-
-        // ========================================
-        // UPDATE CUSTOMIZATIONS
-        // ========================================
-        updateCustomizations: (id: string, customizations: string) => {
-          set((state) => {
-            const updated = state.items.map((item) =>
-              item.id === id
-                ? { ...item, customizations: normalizeString(customizations) }
-                : item
-            )
-
-            return recalc(mergeDuplicates(updated))
-          })
-        },
-
-        // ========================================
-        // UPDATE NOTES
-        // ========================================
-        updateNotes: (id: string, notes: string) => {
-          set((state) => {
-            const updated = state.items.map((item) =>
-              item.id === id
-                ? {
-                    ...item,
-                    specialInstructions: normalizeString(notes),
-                  }
-                : item
-            )
-
-            return recalc(mergeDuplicates(updated))
-          })
-        },
-
-        // ========================================
-        // 🔥 NEW: BACKUP CART (before checkout)
-        // ========================================
-        backupCart: () => {
-          const items = get().items
-          if (items.length > 0) {
-            saveCartBackup(items)
-            console.log('💾 Cart backed up before checkout')
-          }
-        },
-
-        // ========================================
-        // 🔥 NEW: RESTORE CART (payment failed)
-        // ========================================
-        restoreCart: () => {
-          const backup = loadCartBackup()
-          if (backup && backup.length > 0) {
-            set(recalc(backup))
-            console.log('📦 Cart restored from backup')
-            return true
-          }
-          return false
-        },
-
-        // ========================================
-        // 🔥 NEW: CLEAR BACKUP (order confirmed)
-        // ========================================
-        clearBackup: () => {
-          clearCartBackup()
-          console.log('🧹 Cart backup cleared')
-        },
-
-        // ========================================
-        // 🔥 NEW: PREPARE FOR CHECKOUT
-        // ========================================
-        prepareForCheckout: (sessionId: string) => {
-          const items = get().items
-          saveCartBackup(items)
-          markCheckoutInProgress(sessionId)
-          console.log('🚀 Cart prepared for checkout')
-        },
-
-        // ========================================
-        // 🔥 NEW: FINALIZE ORDER (success)
-        // ========================================
-        finalizeOrder: () => {
-          set(recalc([]))
-          clearCartBackup()
-          clearCheckoutInProgress()
-          console.log('✅ Order finalized, cart cleared')
-        },
-
-        // ========================================
-        // 🔥 NEW: CANCEL CHECKOUT
-        // ========================================
-        cancelCheckout: () => {
-          const restored = get().restoreCart()
-          clearCheckoutInProgress()
-          if (restored) {
-            console.log('↩️ Checkout cancelled, cart restored')
-          }
-        },
-
-        // ========================================
-        // 🔥 NEW: CHECK IF CHECKOUT IN PROGRESS
-        // ========================================
-        isCheckoutInProgress: () => {
-          return isCheckoutInProgress()
-        },
+    } else {
+      const newItem: CartItem = {
+        id: uid(),
+        item_id: payload.item_id,
+        name: payload.name,
+        image_url: payload.image_url,
+        base_price: payload.base_price,
+        modifiers: payload.modifiers,
+        subtotal: pricing.subtotal,
+        quantity: qty,
+        special_instructions: payload.special_instructions,
+        pricing_hash: pricing.pricing_hash,
       }
-    },
-    {
-      name: STORAGE_KEYS.CART,
-      storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({ items: state.items }),
+
+      items = [...state.items, newItem]
     }
-  )
+
+    return recalc(items)
+  })
+},
+
+      // ── removeItem ─────────────────────────────────────────────────────────
+      removeItem: (id) =>
+        set((state) => recalc(state.items.filter((i) => i.id !== id))),
+
+      // ── updateQuantity ──────────────────────────────────────────────────────
+      updateQuantity: (id, quantity) => {
+        set((state) => {
+          if (!Number.isFinite(quantity) || quantity <= 0) {
+            return recalc(state.items.filter((i) => i.id !== id))
+          }
+          const qty   = Math.floor(quantity)
+          const items = state.items.map((item) => {
+            if (item.id !== id) return item
+            const p = PricingEngine.calculate(item.item_id, item.base_price, item.modifiers, qty)
+            return { ...item, quantity: qty, subtotal: p.subtotal, pricing_hash: p.pricing_hash }
+          })
+          return recalc(items)
+        })
+      },
+
+      // ── clearCart ───────────────────────────────────────────────────────────
+      clearCart: () => set(recalc([])),
+
+      // ── getItem ─────────────────────────────────────────────────────────────
+      getItem: (id) => get().items.find((i) => i.id === id),
+
+      // ── updateNotes ─────────────────────────────────────────────────────────
+      updateNotes: (id, notes) => {
+        set((state) => {
+          const items = state.items.map((item) =>
+            item.id === id
+              ? { ...item, special_instructions: notes.trim() || undefined }
+              : item,
+          )
+          return recalc(items)
+        })
+      },
+
+      // ── Checkout lifecycle ──────────────────────────────────────────────────
+      backupCart:  () => saveBackup(get().items),
+      clearBackup: () => clearBackupStorage(),
+
+      restoreCart: () => {
+        const backup = loadBackup()
+        if (backup?.length) { set(recalc(backup)); return true }
+        return false
+      },
+
+      prepareForCheckout: (sessionId) => {
+        saveBackup(get().items)
+        markCheckout(sessionId)
+      },
+
+      finalizeOrder: () => {
+        set(recalc([]))
+        clearBackupStorage()
+        clearCheckout()
+      },
+
+      cancelCheckout: () => {
+        const items = loadBackup()
+        if (items?.length) set(recalc(items))
+        clearCheckout()
+      },
+
+      isCheckoutInProgress: () => checkoutActive(),
+    }),
+    {
+      name:       KEYS.CART,
+      storage:    createJSONStorage(() => localStorage),
+      partialize: (state) => ({ items: state.items }),
+    },
+  ),
 )
 
-// ============================================================================
-// EXPORT UTILITIES
-// ============================================================================
-
-export {
-  saveCartBackup,
-  loadCartBackup,
-  clearCartBackup,
-  isCheckoutInProgress,
-  clearCheckoutInProgress,
-}
+// Named exports for non-store consumers (checkout page, etc.)
+export { saveBackup as saveCartBackup, loadBackup as loadCartBackup, clearBackupStorage as clearCartBackup }

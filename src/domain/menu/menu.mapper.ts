@@ -1,125 +1,157 @@
 // src/domain/menu/menu.mapper.ts
-// Maps backend DTOs to frontend domain types
-// Protects UI from backend changes
+// ============================================================================
+// MENU MAPPER — MenuItemDTO → MenuItem domain model
+// ============================================================================
+// The menu_items_full VIEW returns modifier_groups as a Json | null column.
+// Supabase client auto-parses Json columns, so it arrives as:
+//   - A JS array of ModifierGroupDTO objects (when item has modifier groups)
+//   - null (when item has no modifier groups)
+//   - Possibly a raw string in edge cases (defensive parse below)
+//
+// This mapper is the ONLY place that touches raw DTOs. Everything above
+// this layer works with fully-typed MenuItem domain objects.
+// ============================================================================
+import type { Database } from '@/lib/supabase/database.types'
+import type { MenuItem, ModifierGroup, Modifier } from '@/domain/menu/menu.types'
 
-import type {
-  MenuItemDTO,
-  ModifierGroupDTO,
-  ModifierDTO,
-} from '@/contracts/menu.contract';
+type MenuItemViewRow =
+  Database['public']['Views']['menu_items_full']['Row']
 
-import type {
-  MenuItem,
-  ModifierGroup,
-  Modifier,
-} from '@/types/menu';
+type ModifierRow = {
+  id: string
+  modifier_group_id: string
+  name: string
+  price_adjustment: number
+  available: boolean
+  sort_order: number
+}
 
+type ModifierGroupRow = {
+  id: string
+  name: string
+  description: string | null
+  type: string
+  required: boolean
+  min_selections: number | null
+  max_selections: number | null
+  active: boolean
+  sort_order: number
+  modifiers: ModifierRow[]
+}
 export class MenuMapper {
-  /**
-   * Transform backend modifier to domain model
-   */
-  static mapModifier(dto: ModifierDTO): Modifier {
+
+
+  
+  // ── Modifier ───────────────────────────────────────────────────────────────
+
+  static mapModifier(raw: ModifierRow): Modifier {
     return {
-      id: dto.id,
-      modifier_group_id: dto.modifier_group_id,
-      name: dto.name,
-      price_adjustment: Number(dto.price_adjustment),
-      available: dto.available,
-      sort_order: dto.sort_order,
-    };
+      id:                raw.id,
+      modifier_group_id: raw.modifier_group_id,
+      name:              raw.name,
+      price_adjustment:  Number(raw.price_adjustment ?? 0),
+      available:         raw.available ?? true,
+      sort_order:        raw.sort_order ?? 0,
+    }
   }
+
+  // ── Modifier group ─────────────────────────────────────────────────────────
+
+  static mapModifierGroup(raw: ModifierGroupRow): ModifierGroup {
+  return {
+    id:             raw.id,
+    name:           raw.name,
+    description:    raw.description ?? undefined,
+    type:           (raw.type as ModifierGroup['type']) ?? 'radio',
+    required:       raw.required ?? false,
+    min_selections: raw.min_selections ?? 0,
+    max_selections: raw.max_selections ?? null,
+    sort_order:     raw.sort_order ?? 0,
+    active:         raw.active ?? true,
+    modifiers: (raw.modifiers ?? [])
+      .filter((m) => m.available !== false)
+      .map((m) => this.mapModifier(m))
+      .sort((a: Modifier, b: Modifier) => a.sort_order - b.sort_order),
+  }
+}
+  // ── Parse modifier_groups Json from view ───────────────────────────────────
 
   /**
-   * Transform backend modifier group to domain model
+   * Safely parse the modifier_groups Json column.
+   *
+   * Supabase delivers this as an already-parsed JS array. However, we guard
+   * against: null, empty string, raw JSON string, and malformed objects.
+   *
+   * Rules:
+   *   - Filters groups where active === false
+   *   - Filters groups with no modifiers after availability filter
+   *   - Sorts by sort_order ascending
    */
-  static mapModifierGroup(dto: ModifierGroupDTO): ModifierGroup {
-    return {
-      id: dto.id,
-      name: dto.name,
-      description: dto.description || undefined,
-      type: dto.type,
-      min_selections: dto.min_selections,
-      max_selections: dto.max_selections,
-      required: dto.required,
-      sort_order: dto.sort_order,
-      modifiers: dto.modifiers.map((m) => this.mapModifier(m)),
-    };
-  }
+  private static parseModifierGroups(raw: unknown): ModifierGroup[] {
+    if (!raw) return []
 
-  /**
-   * Transform backend menu item to domain model
-   */
-  static mapMenuItem(dto: MenuItemDTO): MenuItem {
-    return {
-      id: dto.id,
-      name: dto.name,
-      description: dto.description || undefined,
-      price: Number(dto.price),
-      image_url: dto.image_url || undefined,
-      category: this.validateCategory(dto.category),
-      featured: dto.featured,
-      available: dto.available,
-      sort_order: dto.sort_order,
-
-      spicy_level: dto.spicy_level ?? undefined,
-
-      is_vegetarian: dto.is_vegetarian,
-      is_vegan: dto.is_vegan,
-      is_gluten_free: dto.is_gluten_free,
-
-      inventory_count: dto.inventory_count ?? undefined,
-
-      low_stock_threshold: dto.low_stock_threshold,
-
-      popularity_score: dto.popularity_score,
-      pairs_with: dto.pairs_with ?? undefined,
-
-      modifier_groups:
-        dto.modifier_groups?.map((g) =>
-          this.mapModifierGroup(g)
-        ) || [],
-
-      created_at: dto.created_at,
-      updated_at: dto.updated_at,
-    };
-  }
-
-  /**
-   * Batch transform menu items
-   */
-  static mapMenuItems(dtos: MenuItemDTO[]): MenuItem[] {
-    return dtos.map((dto) => this.mapMenuItem(dto));
-  }
-
-  /**
-   * Validate and cast category
-   */
-  private static isValidCategory(
-    value: string
-  ): value is MenuItem['category'] {
-    const validCategories = [
-      'appetizers',
-      'entrees',
-      'desserts',
-      'drinks',
-    ] as const;
-
-    return validCategories.includes(
-      value as (typeof validCategories)[number]
-    );
-  }
-
-  private static validateCategory(
-    category: string
-  ): MenuItem['category'] {
-    if (this.isValidCategory(category)) {
-      return category;
+    // Guard: occasionally arrives as JSON string in some Supabase versions
+    let parsed = raw
+    if (typeof raw === 'string') {
+      try { parsed = JSON.parse(raw) } catch { return [] }
     }
 
-    console.warn(
-      `Invalid category: ${category}, defaulting to 'entrees'`
-    );
+    if (!Array.isArray(parsed)) return []
 
-    return 'entrees';
+    const groups = parsed as ModifierGroupRow[];
+
+return groups
+  .filter((g) =>
+    g &&
+    typeof g === 'object' &&
+    typeof g.id === 'string' &&
+    typeof g.name === 'string' &&
+    g.active !== false
+  )
+  .map((g) => this.mapModifierGroup(g))
+  .sort((a, b) => a.sort_order - b.sort_order);
   }
+
+  // ── Menu item ──────────────────────────────────────────────────────────────
+
+static mapMenuItem(row: MenuItemViewRow): MenuItem {
+  return {
+    id: row.id ?? '',
+    name: row.name ?? '',
+    price: Number(row.price ?? 0),
+    category: row.category ?? 'entrees',
+    featured: row.featured ?? false,
+    available: row.available ?? true,
+    sort_order: row.sort_order ?? 0,
+
+    description: row.description ?? undefined,
+    image_url: row.image_url ?? undefined,
+    spicy_level: row.spicy_level ?? undefined,
+    is_vegetarian: row.is_vegetarian ?? false,
+    is_vegan: row.is_vegan ?? false,
+    is_gluten_free: row.is_gluten_free ?? false,
+    allergens: row.allergens ?? undefined,
+
+    inventory_count: row.inventory_count ?? undefined,
+    low_stock_threshold: row.low_stock_threshold ?? 0,
+    popularity_score: row.popularity_score ?? undefined,
+    pairs_with: row.pairs_with ?? undefined,
+
+    modifier_groups: MenuMapper.parseModifierGroups(row.modifier_groups),
+
+    created_at: row.created_at ?? new Date().toISOString(),
+    updated_at: row.updated_at ?? undefined,
+  }
+}
+
+  // ── Batch ──────────────────────────────────────────────────────────────────
+static mapMenuItems(rows: MenuItemViewRow[]): MenuItem[] {
+  return rows.map((row) => MenuMapper.mapMenuItem(row))
+}
+  // ── Category validation ────────────────────────────────────────────────────
+
+// ── Category validation ────────────────────────────────────────────────────
+private static validateCategory(raw: string): MenuItem['category'] {
+  return raw as MenuItem['category']
+}
 }

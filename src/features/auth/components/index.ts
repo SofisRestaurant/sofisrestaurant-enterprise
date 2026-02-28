@@ -11,7 +11,7 @@
 //   • LoginForm          — file does not exist
 //   • AuthModals as type — it is a value (React component), never a type
 //   • CartItem/CartStore  — belong in @/features/cart, not here
-//   • MenuItem           — belongs in @/types/menu, not here
+//   • MenuItem           — belongs in @/domain/menu/menu.types, not here
 // =============================================================================
 
 // Default exports (wrap in named re-export for consistent import style)

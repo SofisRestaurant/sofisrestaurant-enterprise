@@ -35,8 +35,6 @@ type PageState = 'loading' | 'found' | 'timeout' | 'error'
 type DbOrder   = Database['public']['Tables']['orders']['Row']
 
 // Sourced from loyalty_transactions table (which has all multiplier columns)
-type LoyaltyTxRow = Database['public']['Tables']['loyalty_transactions']['Row']
-
 interface LoyaltyResult {
   points_delta: number;
   points_balance: number;
@@ -129,20 +127,6 @@ function formatDate(iso: string): string {
   })
 }
 
-// Map loyalty_transactions row → LoyaltyResult display shape
-function mapTxToLoyalty(row: LoyaltyTxRow): LoyaltyResult {
-  return {
-    points_delta:     row.points_delta,
-    points_balance:   row.points_balance,
-    lifetime_balance: row.lifetime_balance,
-    tier_at_time:     row.tier_at_time,
-    streak_at_time:   row.streak_at_time,
-    tier_multiplier:  row.tier_multiplier,
-    streak_multiplier: row.streak_multiplier,
-    base_points:      row.base_points,
-    metadata:         row.metadata as Json | null,
-  }
-}
 
 // ============================================================================
 // DB → DOMAIN MAPPER
@@ -563,84 +547,94 @@ export default function OrderSuccess() {
     if (!sessionId) navigate('/', { replace: true })
   }, [sessionId, navigate])
 
-  useEffect(() => {
-    if (!sessionId) return;
-    const safeId = sessionId;
-    let cancelled = false;
-    let attempts = 0;
+useEffect(() => {
+  if (!sessionId) return;
 
-    async function tryFetch() {
+  const safeId = sessionId;
+  let cancelled = false;
+  let attempts = 0;
+
+  async function tryFetch() {
+    if (cancelled) return;
+
+    attempts++;
+    setAttempt(attempts);
+
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('stripe_session_id', safeId)
+        .maybeSingle();
+
       if (cancelled) return;
-      attempts++;
-      setAttempt(attempts);
 
-      try {
-        const { data, error } = await supabase
-          .from('orders')
-          .select('*')
-          .eq('stripe_session_id', safeId)
-          .maybeSingle();
-
-        if (cancelled) return;
-        if (error) {
-          setPageState('error');
-          return;
-        }
-
-        if (data && data.payment_status === PaymentStatus.PAID) {
-          const normalized = mapDbOrderToDomain(data as DbOrder);
-          setOrder(normalized);
-          setLiveStatus(normalized.status);
-          setPageState('found');
-
-          if (!cartFinalized.current) {
-            cartFinalized.current = true;
-            finalizeOrder();
-          }
-
-          // Fetch loyalty data from loyalty_transactions table
-          // (get_loyalty_for_order RPC does not exist in schema)
-          if (normalized.customer_uid) {
-            const [txRes, profileRes] = await Promise.all([
-              supabase
-                .from('loyalty_transactions')
-                .select('*')
-                .eq('user_id', normalized.customer_uid)
-                .eq('order_id', normalized.id)
-                .eq('transaction_type', 'earned')
-                .maybeSingle(),
-              supabase
-                .from('profiles')
-                .select('loyalty_streak')
-                .eq('id', normalized.customer_uid)
-                .single(),
-            ]);
-
-            if (!cancelled) {
-              if (txRes.data) setLoyalty(mapTxToLoyalty(txRes.data as LoyaltyTxRow));
-              if (profileRes.data) setLoyaltyStreak(profileRes.data.loyalty_streak ?? 0);
-            }
-          }
-
-          return;
-        }
-
-        if (attempts < POLL_MAX_ATTEMPTS) {
-          pollTimer.current = setTimeout(tryFetch, POLL_INTERVAL_MS);
-        } else {
-          setPageState('timeout');
-        }
-      } catch {
-        if (!cancelled) setPageState('error');
+      if (error) {
+        setPageState('error');
+        return;
       }
-    }
 
-    tryFetch();
-    return () => {
-      cancelled = true;
-      if (pollTimer.current) clearTimeout(pollTimer.current);
-    };
-  }, [sessionId, finalizeOrder]);
+      if (data && data.payment_status === PaymentStatus.PAID) {
+        const normalized = mapDbOrderToDomain(data as DbOrder);
+
+        setOrder(normalized);
+        setLiveStatus(normalized.status);
+        setPageState('found');
+
+        if (!cartFinalized.current) {
+          cartFinalized.current = true;
+          finalizeOrder();
+        }
+
+        // ✅ Ledger V2 loyalty fetch (RPC)
+        const { data: rpcData } = await supabase.rpc('get_loyalty_for_order', {
+          p_order_id: normalized.id,
+        });
+
+        const loyaltyData = rpcData as {
+          points_delta: number;
+          new_balance: number;
+          tier: string;
+          streak: number;
+          created_at: string;
+        } | null;
+
+        if (!cancelled && loyaltyData) {
+          setLoyalty({
+            points_delta: loyaltyData.points_delta,
+            points_balance: loyaltyData.new_balance,
+            lifetime_balance: loyaltyData.new_balance,
+            tier_at_time: loyaltyData.tier,
+            streak_at_time: loyaltyData.streak,
+            tier_multiplier: 1,
+            streak_multiplier: 1,
+            base_points: loyaltyData.points_delta,
+            metadata: null,
+          });
+
+          setLoyaltyStreak(loyaltyData.streak ?? 0);
+        }
+
+        return; // ← important: return inside PAID block
+      }
+
+      if (attempts < POLL_MAX_ATTEMPTS) {
+        pollTimer.current = setTimeout(tryFetch, POLL_INTERVAL_MS);
+      } else {
+        setPageState('timeout');
+      }
+    } catch {
+      if (!cancelled) setPageState('error');
+    }
+  }
+
+  tryFetch();
+
+  return () => {
+    cancelled = true;
+    if (pollTimer.current) clearTimeout(pollTimer.current);
+  };
+}, [sessionId, finalizeOrder]);
 
   // Real-time order status subscription
   useEffect(() => {

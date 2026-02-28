@@ -1,4 +1,4 @@
-import { MenuItem } from '@/types/menu';
+import { MenuItem } from '@/domain/menu/menu.types';
 import { MenuItemCard } from './MenuItemCard';
 
 interface MenuGridProps {

@@ -1,7 +1,8 @@
 // src/features/cart/cart.utils.ts
 import type { CartItem } from '@/features/cart/cart.types'
-import type { MenuItem } from '@/types/menu'
-
+import type { MenuItem } from '@/domain/menu/menu.types'
+import type { AddToCartPayload } from '@/features/cart/cart.types'
+import { PricingEngine } from '@/domain/pricing/pricing.engine'
 /**
  * Parameters for creating a cart item
  */
@@ -37,24 +38,12 @@ export function isValidQuantity(quantity: number): boolean {
   return Number.isFinite(quantity) && quantity > 0 && quantity <= 99
 }
 
-/**
- * Create a cart item from parameters
- */
-export function createCartItem(params: CreateCartItemParams): CartItem {
-  return {
-    id: generateCartItemId(),
-    menuItem: params.menuItem,
-    quantity: clampQuantity(params.quantity ?? 1),
-    customizations: params.customizations?.trim() || undefined,
-    specialInstructions: params.specialInstructions?.trim() || undefined,
-  }
-}
 
 /**
  * Calculate item total
  */
 export function calculateItemTotal(item: CartItem): number {
-  return item.menuItem.price * item.quantity
+  return item.base_price * item.quantity
 }
 
 /**
@@ -82,9 +71,31 @@ export function formatPrice(price: number): string {
  * Check if cart item matches menu item
  */
 export function cartItemMatchesMenuItem(cartItem: CartItem, menuItemId: string): boolean {
-  return cartItem.menuItem.id === menuItemId
+  return cartItem.item_id === menuItemId
 }
+export function createCartItem(payload: AddToCartPayload): CartItem {
+  const quantity = clampQuantity(payload.quantity)
 
+  const pricing = PricingEngine.calculate(
+    payload.item_id,
+    payload.base_price,
+    payload.modifiers,
+    quantity
+  )
+
+  return {
+    id: generateCartItemId(),
+    item_id: payload.item_id,
+    name: payload.name,
+    image_url: payload.image_url,
+    base_price: payload.base_price,
+    modifiers: payload.modifiers,
+    quantity,
+    subtotal: pricing.subtotal,
+    special_instructions: payload.special_instructions,
+    pricing_hash: pricing.pricing_hash,
+  }
+}
 /**
  * Find cart item by menu item ID
  */

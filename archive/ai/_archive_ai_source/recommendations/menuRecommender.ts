@@ -1,4 +1,4 @@
-import { MenuItem } from '@/types/menu'
+import { MenuItem } from '@/domain/menu/menu.types'
 
 export function getRecommendations(
   items: MenuItem[],

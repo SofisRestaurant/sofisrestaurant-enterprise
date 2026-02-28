@@ -5,7 +5,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { useCart } from './useCart'
-import type { CheckoutData } from '@/features/checkout/checkout.types'
+import type { CheckoutData } from '@/domain/checkout/checkout.types'
 import {
   createCheckoutSession,
   CheckoutValidationError,
@@ -144,25 +144,29 @@ export function useCheckout(): UseCheckoutReturn {
         // ==================================
         // BUILD PAYLOAD
         // ==================================
-        const payload: CheckoutData = {
-          items: items.map((item) => ({
-            id: item.id,
-            menuItemId: item.menuItem.id,
-            name: item.menuItem.name,
-            price: Math.round(item.menuItem.price * 100), // Convert to cents
-            quantity: Math.max(1, item.quantity),
-            customizations: item.customizations,
-            specialInstructions: item.specialInstructions,
-          })),
-          total: Math.round(total * 100), // Convert to cents
-          email: customer.email,
-          name: customer.name,
-          phone: customer.phone,
-          address: customer.address,
-          customer_uid: customer.customer_uid,
-          successUrl: `${window.location.origin}/order-success`,
-          cancelUrl: `${window.location.origin}/checkout`,
-        }
+       const payload: CheckoutData = {
+  items: items.map((item) => ({
+    item_id: item.item_id,
+    quantity: Math.max(1, item.quantity),
+    modifiers: item.modifiers.map((group) => ({
+      group_id: group.group_id,
+      selections: group.selections.map((sel) => sel.id),
+    })),
+    special_instructions: item.special_instructions,
+    pricing_hash: item.pricing_hash,
+  })),
+
+  customer: {
+    email: customer.email,
+    name: customer.name,
+    phone: customer.phone,
+    address: customer.address,
+    customer_uid: customer.customer_uid,
+  },
+
+  successUrl: `${window.location.origin}/order-success`,
+  cancelUrl: `${window.location.origin}/checkout`,
+}
 
         // ==================================
         // CREATE SESSION
