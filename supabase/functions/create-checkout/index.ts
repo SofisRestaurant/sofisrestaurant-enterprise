@@ -379,7 +379,10 @@ function enforceDiscountCeiling(
 
   // ── Rate limit ────────────────────────────────────────────────────────────
   const rate = await checkRateLimit(userId);
-  if (rate.blocked) return err("Too many attempts", cors, 429);
+if (rate.blocked) return err("Too many attempts", cors, 429);
+
+// Create once per request
+const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
   // ── Body ──────────────────────────────────────────────────────────────────
   let body: RawBody;
@@ -490,9 +493,44 @@ if (rawCreditId) {
     if (creditResult) await rollbackCredit(creditResult.credit_id!);
     return err("Order total must be greater than $0 after discounts", cors, 400);
   }
+  // ── Margin Protection Guard ─────────────────────────────
 
+const SAFE_MARGIN_PERCENT = 20;
+
+const { data: profitSnapshot, error: marginErr } = await svc
+  .from("admin_profit_snapshot")
+  .select("total_gross_profit_cents")
+  .single();
+
+if (marginErr || !profitSnapshot) {
+  // Fail safe: do NOT allow checkout if analytics broken
+  if (promoResult)  await rollbackPromo(promoResult.promo_id!);
+  if (creditResult) await rollbackCredit(creditResult.credit_id!);
+
+  return err("Margin snapshot unavailable", cors, 500);
+}
+
+// Avoid divide-by-zero
+const discountedTotal = Math.max(discountedSubtotal, 1);
+
+const projectedMargin =
+  ((profitSnapshot.total_gross_profit_cents - total_discount) /
+    discountedTotal) * 100;
+
+if (projectedMargin < SAFE_MARGIN_PERCENT) {
+
+  if (promoResult)  await rollbackPromo(promoResult.promo_id!);
+  if (creditResult) await rollbackCredit(creditResult.credit_id!);
+
+  log("warn", "margin_threshold_blocked", {
+    projectedMargin,
+    SAFE_MARGIN_PERCENT,
+    userId,
+  });
+
+  return err("Discount exceeds safe margin threshold", cors, 400);
+}
   // ── Store pending cart ────────────────────────────────────────────────────
-  const svc    = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
   const cartRef = crypto.randomUUID();
 
   const { error: cartErr } = await svc.from("pending_carts").insert({

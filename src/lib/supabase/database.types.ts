@@ -14,6 +14,36 @@ export type Database = {
   }
   public: {
     Tables: {
+      abandoned_cart_sessions: {
+        Row: {
+          cart_value_cents: number | null
+          created_at: string | null
+          email: string | null
+          id: string
+          last_activity: string | null
+          recovered: boolean | null
+          user_id: string | null
+        }
+        Insert: {
+          cart_value_cents?: number | null
+          created_at?: string | null
+          email?: string | null
+          id?: string
+          last_activity?: string | null
+          recovered?: boolean | null
+          user_id?: string | null
+        }
+        Update: {
+          cart_value_cents?: number | null
+          created_at?: string | null
+          email?: string | null
+          id?: string
+          last_activity?: string | null
+          recovered?: boolean | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       account_lockouts: {
         Row: {
           email: string
@@ -157,6 +187,39 @@ export type Database = {
         }
         Relationships: []
       }
+      cost_of_goods: {
+        Row: {
+          cost_cents: number
+          last_updated: string | null
+          menu_item_id: string
+        }
+        Insert: {
+          cost_cents: number
+          last_updated?: string | null
+          menu_item_id: string
+        }
+        Update: {
+          cost_cents?: number
+          last_updated?: string | null
+          menu_item_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cost_of_goods_menu_item_id_fkey"
+            columns: ["menu_item_id"]
+            isOneToOne: true
+            referencedRelation: "menu_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cost_of_goods_menu_item_id_fkey"
+            columns: ["menu_item_id"]
+            isOneToOne: true
+            referencedRelation: "menu_items_full"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       daily_order_counter: {
         Row: {
           day: string
@@ -169,6 +232,60 @@ export type Database = {
         Update: {
           day?: string
           last_number?: number
+        }
+        Relationships: []
+      }
+      discount_optimizer_rules: {
+        Row: {
+          active: boolean | null
+          id: string
+          min_conversion_rate: number | null
+          min_margin_percent: number | null
+          suggested_discount: number | null
+        }
+        Insert: {
+          active?: boolean | null
+          id?: string
+          min_conversion_rate?: number | null
+          min_margin_percent?: number | null
+          suggested_discount?: number | null
+        }
+        Update: {
+          active?: boolean | null
+          id?: string
+          min_conversion_rate?: number | null
+          min_margin_percent?: number | null
+          suggested_discount?: number | null
+        }
+        Relationships: []
+      }
+      discount_predictions: {
+        Row: {
+          avg_conversion: number | null
+          avg_margin: number | null
+          created_at: string | null
+          day_of_week: number | null
+          hour: number | null
+          id: string
+          recommended_discount: number | null
+        }
+        Insert: {
+          avg_conversion?: number | null
+          avg_margin?: number | null
+          created_at?: string | null
+          day_of_week?: number | null
+          hour?: number | null
+          id?: string
+          recommended_discount?: number | null
+        }
+        Update: {
+          avg_conversion?: number | null
+          avg_margin?: number | null
+          created_at?: string | null
+          day_of_week?: number | null
+          hour?: number | null
+          id?: string
+          recommended_discount?: number | null
         }
         Relationships: []
       }
@@ -267,6 +384,36 @@ export type Database = {
           server_total?: number | null
           stripe_total?: number
           user_id?: string | null
+        }
+        Relationships: []
+      }
+      growth_campaigns: {
+        Row: {
+          budget_cents: number | null
+          channel: string | null
+          created_at: string | null
+          id: string
+          name: string | null
+          revenue_cents: number | null
+          spent_cents: number | null
+        }
+        Insert: {
+          budget_cents?: number | null
+          channel?: string | null
+          created_at?: string | null
+          id?: string
+          name?: string | null
+          revenue_cents?: number | null
+          spent_cents?: number | null
+        }
+        Update: {
+          budget_cents?: number | null
+          channel?: string | null
+          created_at?: string | null
+          id?: string
+          name?: string | null
+          revenue_cents?: number | null
+          spent_cents?: number | null
         }
         Relationships: []
       }
@@ -665,6 +812,32 @@ export type Database = {
         }
         Relationships: []
       }
+      modifier_costs: {
+        Row: {
+          cost_cents: number
+          last_updated: string | null
+          modifier_id: string
+        }
+        Insert: {
+          cost_cents: number
+          last_updated?: string | null
+          modifier_id: string
+        }
+        Update: {
+          cost_cents?: number
+          last_updated?: string | null
+          modifier_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "modifier_costs_modifier_id_fkey"
+            columns: ["modifier_id"]
+            isOneToOne: true
+            referencedRelation: "modifiers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       modifier_groups: {
         Row: {
           active: boolean
@@ -1037,25 +1210,31 @@ export type Database = {
       }
       promo_redemptions: {
         Row: {
+          channel: string | null
           checkout_session_id: string | null
           discount_cents: number
           id: string
+          order_total_cents: number | null
           promotion_id: string
           used_at: string
           user_id: string
         }
         Insert: {
+          channel?: string | null
           checkout_session_id?: string | null
           discount_cents: number
           id?: string
+          order_total_cents?: number | null
           promotion_id: string
           used_at?: string
           user_id: string
         }
         Update: {
+          channel?: string | null
           checkout_session_id?: string | null
           discount_cents?: number
           id?: string
+          order_total_cents?: number | null
           promotion_id?: string
           used_at?: string
           user_id?: string
@@ -1084,50 +1263,102 @@ export type Database = {
           },
         ]
       }
+      promotion_expirations: {
+        Row: {
+          expired_at: string | null
+          id: string
+          promotion_id: string | null
+        }
+        Insert: {
+          expired_at?: string | null
+          id?: string
+          promotion_id?: string | null
+        }
+        Update: {
+          expired_at?: string | null
+          id?: string
+          promotion_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "promotion_expirations_promotion_id_fkey"
+            columns: ["promotion_id"]
+            isOneToOne: false
+            referencedRelation: "promotions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       promotions: {
         Row: {
           active: boolean
+          campaign_id: string | null
+          channel: string | null
           code: string
+          cost_center: string | null
           created_at: string
           current_uses: number
+          ends_at: string | null
           expires_at: string | null
+          geo_target: string | null
           id: string
           max_uses: number | null
           min_order_cents: number
           per_user_limit: number
+          starts_at: string | null
           type: string
           updated_at: string
           value: number
         }
         Insert: {
           active?: boolean
+          campaign_id?: string | null
+          channel?: string | null
           code: string
+          cost_center?: string | null
           created_at?: string
           current_uses?: number
+          ends_at?: string | null
           expires_at?: string | null
+          geo_target?: string | null
           id?: string
           max_uses?: number | null
           min_order_cents?: number
           per_user_limit?: number
+          starts_at?: string | null
           type: string
           updated_at?: string
           value: number
         }
         Update: {
           active?: boolean
+          campaign_id?: string | null
+          channel?: string | null
           code?: string
+          cost_center?: string | null
           created_at?: string
           current_uses?: number
+          ends_at?: string | null
           expires_at?: string | null
+          geo_target?: string | null
           id?: string
           max_uses?: number | null
           min_order_cents?: number
           per_user_limit?: number
+          starts_at?: string | null
           type?: string
           updated_at?: string
           value?: number
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "promotions_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "growth_campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       security_events: {
         Row: {
@@ -1147,6 +1378,36 @@ export type Database = {
           event_type?: string
           id?: string
           metadata?: Json | null
+        }
+        Relationships: []
+      }
+      smart_discounts: {
+        Row: {
+          active: boolean | null
+          day_of_week: number | null
+          end_hour: number | null
+          id: string
+          start_hour: number | null
+          type: string | null
+          value: number | null
+        }
+        Insert: {
+          active?: boolean | null
+          day_of_week?: number | null
+          end_hour?: number | null
+          id?: string
+          start_hour?: number | null
+          type?: string | null
+          value?: number | null
+        }
+        Update: {
+          active?: boolean | null
+          day_of_week?: number | null
+          end_hour?: number | null
+          id?: string
+          start_hour?: number | null
+          type?: string | null
+          value?: number | null
         }
         Relationships: []
       }
@@ -1286,6 +1547,111 @@ export type Database = {
       }
     }
     Views: {
+      admin_executive_snapshot: {
+        Row: {
+          avg_order_value_cents: number | null
+          fraud_events_7d: number | null
+          lifetime_revenue_cents: number | null
+          outstanding_loyalty_points: number | null
+          total_orders: number | null
+        }
+        Relationships: []
+      }
+      admin_hourly_heatmap: {
+        Row: {
+          hour_of_day: number | null
+          orders: number | null
+          revenue_cents: number | null
+        }
+        Relationships: []
+      }
+      admin_item_consumption: {
+        Row: {
+          item_name: string | null
+          revenue_impact_cents: number | null
+          total_quantity: number | null
+        }
+        Relationships: []
+      }
+      admin_item_hourly_velocity: {
+        Row: {
+          hour_of_day: number | null
+          item_name: string | null
+          quantity: number | null
+        }
+        Relationships: []
+      }
+      admin_loyalty_abuse: {
+        Row: {
+          account_id: string | null
+          adjustment_count: number | null
+          total_earned: number | null
+          total_redeemed: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "loyalty_ledger_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "loyalty_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_ledger_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v2_account_summary"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      admin_loyalty_liability: {
+        Row: {
+          total_points_outstanding: number | null
+        }
+        Relationships: []
+      }
+      admin_loyalty_summary: {
+        Row: {
+          total_issuances: number | null
+          total_issued: number | null
+          total_redeemed: number | null
+          total_redemptions: number | null
+        }
+        Relationships: []
+      }
+      admin_revenue_summary: {
+        Row: {
+          avg_order_value_cents: number | null
+          day: string | null
+          total_orders: number | null
+          total_revenue_cents: number | null
+        }
+        Relationships: []
+      }
+      admin_risk_snapshot: {
+        Row: {
+          cancelled_orders: number | null
+          disputes: number | null
+          failed_payments: number | null
+        }
+        Relationships: []
+      }
+      admin_top_items: {
+        Row: {
+          item_name: string | null
+          total_quantity: number | null
+        }
+        Relationships: []
+      }
+      admin_weekday_heatmap: {
+        Row: {
+          day_of_week: number | null
+          orders: number | null
+          revenue_cents: number | null
+        }
+        Relationships: []
+      }
       financial_revenue_view: {
         Row: {
           amount_total: number | null

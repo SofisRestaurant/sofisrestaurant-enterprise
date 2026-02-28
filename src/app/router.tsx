@@ -3,7 +3,10 @@ import { createBrowserRouter } from 'react-router-dom';
 import RootLayout from '@/app/RootLayout';
 import { AuthGuard, RoleGuard } from '@/components/auth/AuthGuard';
 import { Providers } from '@/app/Providers';
-
+import CampaignManager from '@/pages/Admin/Marketing/CampaignManager';
+import { PromoManager } from '@/pages/Admin/Marketing/PromoManager';
+import { AbandonedCartAnalytics } from '@/pages/Admin/Marketing/AbandonedCartAnalytics';
+import { AIOptimizerPanel } from '@/pages/Admin/Marketing/AIOptimizerPanel';
 
 export const router = createBrowserRouter([
   {
@@ -283,6 +286,35 @@ export const router = createBrowserRouter([
               const module = await import('@/pages/Admin/LoyaltyScan');
               return { Component: module.default };
             },
+          },
+
+          // ============================
+          // MARKETING (FIXED LOCATION)
+          // ============================
+          {
+            path: 'marketing',
+            children: [
+              {
+                index: true,
+                element: <CampaignManager />,
+              },
+              {
+                path: 'campaigns',
+                element: <CampaignManager />,
+              },
+              {
+                path: 'promos',
+                element: <PromoManager />,
+              },
+              {
+                path: 'abandoned',
+                element: <AbandonedCartAnalytics />,
+              },
+              {
+                path: 'optimizer',
+                element: <AIOptimizerPanel />,
+              },
+            ],
           },
         ],
       },

@@ -65,14 +65,35 @@ export default function AdminLayout() {
           <NavLink to="/admin" end className={({ isActive }) => navClass(isActive)}>
             Dashboard
           </NavLink>
+
           <NavLink to="/admin/orders" className={({ isActive }) => navClass(isActive)}>
             Orders
           </NavLink>
+
           <NavLink to="/admin/menu" className={({ isActive }) => navClass(isActive)}>
             Menu Editor
           </NavLink>
+
           <NavLink to="/admin/loyalty-scan" className={({ isActive }) => navClass(isActive)}>
             Loyalty Scanner
+          </NavLink>
+
+          {/* 🔥 NEW MARKETING LINKS */}
+
+          <NavLink to="/admin/marketing/campaigns" className={({ isActive }) => navClass(isActive)}>
+            Campaigns
+          </NavLink>
+
+          <NavLink to="/admin/marketing/promos" className={({ isActive }) => navClass(isActive)}>
+            Promo Codes
+          </NavLink>
+
+          <NavLink to="/admin/marketing/abandoned" className={({ isActive }) => navClass(isActive)}>
+            Abandoned Carts
+          </NavLink>
+
+          <NavLink to="/admin/marketing/optimizer" className={({ isActive }) => navClass(isActive)}>
+            AI Optimizer
           </NavLink>
         </div>
 

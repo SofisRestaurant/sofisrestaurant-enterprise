@@ -7,41 +7,39 @@ const supabase = createClient(
 
 Deno.serve(async () => {
 
-  const today = new Date()
-  today.setHours(0,0,0,0)
-
-  // Total revenue today
-  const { data: revenueRows } = await supabase
-    .from("orders")
-    .select("amount_total")
-    .gte("created_at", today.toISOString())
-    .eq("payment_status", "paid")
-
-  const revenue = revenueRows?.reduce(
-    (sum, o) => sum + o.amount_total,
-    0
-  ) ?? 0
-
-  // Disputes
-  const { count: disputes } = await supabase
-    .from("orders")
-    .select("*", { count: "exact", head: true })
-    .eq("payment_status", "disputed")
-
-  // Failed payments
-  const { count: failed } = await supabase
-    .from("orders")
-    .select("*", { count: "exact", head: true })
-    .eq("payment_status", "failed")
+  const [
+    revenueRes,
+    topItemsRes,
+    loyaltyRes,
+    liabilityRes,
+    riskRes,
+    fraudRes,
+    heatmapRes,
+    executiveRes
+  ] = await Promise.all([
+    supabase.from("admin_revenue_summary").select("*").limit(30),
+    supabase.from("admin_item_consumption").select("*").limit(10),
+    supabase.from("admin_loyalty_summary").select("*").single(),
+    supabase.from("admin_loyalty_liability").select("*").single(),
+    supabase.from("admin_risk_snapshot").select("*").single(),
+    supabase.from("admin_fraud_snapshot").select("*").single(),
+    supabase.from("admin_hourly_heatmap").select("*"),
+    supabase.from("admin_executive_snapshot").select("*").single()
+  ])
 
   return new Response(
     JSON.stringify({
-      revenue_today: revenue,
-      disputes,
-      failed,
+      revenue: revenueRes.data,
+      topItems: topItemsRes.data,
+      loyalty: loyaltyRes.data,
+      liability: liabilityRes.data,
+      risk: riskRes.data,
+      fraud: fraudRes.data,
+      heatmap: heatmapRes.data,
+      executive: executiveRes.data
     }),
     {
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" }
     }
   )
 })

@@ -11,13 +11,13 @@ import { useState, useEffect } from 'react'
 type BannerVariant = 'error' | 'warning' | 'success' | 'info'
 
 interface ErrorBannerProps {
-  message:    string | null | undefined
-  variant?:   BannerVariant
+  message: string | null | undefined;
+  variant?: BannerVariant;
   /** Auto-dismiss after N ms. 0 = never */
-  autoDismissMs?: number
-  onDismiss?: () => void
+  autoDismissMs?: number;
+  onDismiss?: () => void;
   /** Compact single-line style */
-  compact?:   boolean
+  compact?: boolean;
 }
 
 const VARIANT_STYLES: Record<BannerVariant, {
@@ -54,30 +54,35 @@ const VARIANT_STYLES: Record<BannerVariant, {
 
 export function ErrorBanner({
   message,
-  variant        = 'error',
-  autoDismissMs  = 0,
+  variant = 'error',
+  autoDismissMs = 0,
   onDismiss,
-  compact        = false,
+  compact = false,
 }: ErrorBannerProps) {
-  const [dismissed, setDismissed] = useState(false)
-
-  // Reset dismissed when message changes
-  useEffect(() => { setDismissed(false) }, [message])
+  // Track the message that was last dismissed so we can show a new one
+  // without calling setState inside an effect body.
+  const [dismissedMessage, setDismissedMessage] = useState<string | null | undefined>(null);
 
   // Auto-dismiss
   useEffect(() => {
-    if (!message || !autoDismissMs) return
-    const t = setTimeout(() => { setDismissed(true); onDismiss?.() }, autoDismissMs)
-    return () => clearTimeout(t)
-  }, [message, autoDismissMs, onDismiss])
+    if (!message || !autoDismissMs) return;
+    const t = setTimeout(() => {
+      setDismissedMessage(message);
+      onDismiss?.();
+    }, autoDismissMs);
+    return () => clearTimeout(t);
+  }, [message, autoDismissMs, onDismiss]);
 
-  if (!message || dismissed) return null
+  // Treat banner as visible when message exists and hasn't been dismissed
+  const visible = !!message && message !== dismissedMessage;
 
-  const s = VARIANT_STYLES[variant]
+  if (!visible) return null;
+
+  const s = VARIANT_STYLES[variant];
 
   function handleDismiss() {
-    setDismissed(true)
-    onDismiss?.()
+    setDismissedMessage(message);
+    onDismiss?.();
   }
 
   return (
@@ -89,9 +94,7 @@ export function ErrorBanner({
         s.wrapper,
       ].join(' ')}
     >
-      <span className={`shrink-0 font-bold text-base leading-none mt-0.5 ${s.text}`}>
-        {s.icon}
-      </span>
+      <span className={`shrink-0 font-bold text-base leading-none mt-0.5 ${s.text}`}>{s.icon}</span>
       <p className={`flex-1 text-sm leading-relaxed ${s.text}`}>{message}</p>
       <button
         type="button"
@@ -102,5 +105,5 @@ export function ErrorBanner({
         ×
       </button>
     </div>
-  )
+  );
 }
