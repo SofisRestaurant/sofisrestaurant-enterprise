@@ -377,9 +377,11 @@ export default function AdminMenuEditor() {
                                 <span
                                   className={[
                                     'inline-flex items-center px-2 py-0.5 rounded-full font-medium',
-                                    stockStatus === 'out'
+                                    stockStatus === 'out_of_stock'
                                       ? 'bg-red-50 text-red-600'
-                                      : 'bg-amber-50 text-amber-700',
+                                      : stockStatus === 'low_stock'
+                                        ? 'bg-amber-50 text-amber-700'
+                                        : 'bg-gray-50 text-gray-600',
                                   ].join(' ')}
                                 >
                                   {stockMsg}
