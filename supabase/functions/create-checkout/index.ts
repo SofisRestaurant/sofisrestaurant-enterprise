@@ -1,42 +1,62 @@
+// supabase/functions/create-checkout/index.ts
 // =============================================================================
-// CREATE CHECKOUT — HARDENED v2
+// CREATE CHECKOUT — HARDENED v2 (clean + type-safe + consistent helpers)
 // =============================================================================
-import Stripe from "stripe";
-import {
-  createServiceClient,
-  createAnonClient,
-  type SvcClient,
-} from "../_shared/supabase.ts";
-import type { Json } from "../_shared/database.types.ts";
+// Notes:
+// - Auth required (Bearer access token). Uses shared authenticate().
+// - CORS strict allow-list.
+// - Idempotency required via x-idempotency-key.
+// - Server-authoritative pricing from DB (+ modifier validation).
+// - Persists validated cart to pending_carts, then creates Stripe Checkout Session.
+// - Optional promo + credit with rollback on failure.
+// - Rate-limit uses checkout_rate_limits (latest row wins).
+// =============================================================================
 
-// ── Env ───────────────────────────────────────────────────────────────────────
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
-const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY")!;
-const HASH_VERSION = "v1"; // bump when pricing schema changes to invalidate old hashes
+import Stripe from "stripe";
+import { createServiceClient, type SvcClient } from "../_shared/supabase.ts";
+import type { Json } from "../_shared/database.types.ts";
+import { authenticate } from "../_shared/auth.ts";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Env
+// ─────────────────────────────────────────────────────────────────────────────
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
+
+const HASH_VERSION = "v1"; // bump to invalidate old hashes
 
 if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY || !STRIPE_SECRET_KEY) {
   throw new Error("Missing required environment variables");
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Stripe
+// ─────────────────────────────────────────────────────────────────────────────
 const stripe = new Stripe(STRIPE_SECRET_KEY, {
-  // NOTE: This will typecheck once your Stripe SDK is upgraded to a version
-  // whose typings include this Clover API version.
   apiVersion: "2026-02-25.clover",
   httpClient: Stripe.createFetchHttpClient(),
 });
 
-// ── Config ────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Config
+// ─────────────────────────────────────────────────────────────────────────────
 const CONFIG = {
   MAX_ITEMS: 100,
   MIN_AMOUNT_CENTS: 500,
   MAX_AMOUNT_CENTS: 100_000_000,
   SESSION_EXPIRES_MINUTES: 30,
+
+  // rate limiting
   MAX_ATTEMPTS_PER_WINDOW: 10,
   WINDOW_MINUTES: 5,
   BLOCK_MINUTES: 15,
+
+  // pricing
   TAX_RATE: 0.08,
+
+  // discounts
   MAX_DISCOUNT_FRACTION: 0.5,
   SAFE_MARGIN_PERCENT: 20,
 } as const;
@@ -47,11 +67,12 @@ const ALLOWED_ORIGINS = [
   "https://sofisrestaurant.netlify.app",
   "http://localhost:3000",
   "http://localhost:3001",
-];
+] as const;
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
 
-/** A single validated modifier selection stored for audit/replay */
 interface ValidatedModifier {
   modifier_id: string;
   modifier_group_id: string;
@@ -59,19 +80,15 @@ interface ValidatedModifier {
   price_adjustment_cents: number;
 }
 
-/**
- * v2 ValidatedItem — now includes full modifier audit trail + notes + pricing_hash.
- * This is what gets persisted in pending_carts.items[].
- */
 interface ValidatedItem {
   id: string;
   name: string;
-  base_cents: number; // base price before modifiers
-  price_cents: number; // base + modifiers per unit
+  base_cents: number;
+  price_cents: number;
   quantity: number;
   modifiers: ValidatedModifier[];
   notes: string | null;
-  pricing_hash: string; // deterministic per-line integrity hash
+  pricing_hash: string;
 }
 
 interface DiscountResult {
@@ -99,7 +116,7 @@ interface ModifierGroupRow {
   id: string;
   required: boolean;
   min_selections: number | null;
-  max_selections: number | null; // null = no max
+  max_selections: number | null;
   active: boolean;
 }
 
@@ -107,7 +124,6 @@ interface RawBody {
   items: RawItem[];
   email: unknown;
 
-  // ✅ accept BOTH styles
   successUrl?: unknown;
   cancelUrl?: unknown;
   success_url?: unknown;
@@ -134,19 +150,26 @@ type MenuProductRow = {
   available: boolean;
 };
 
-// ── CORS ──────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// CORS
+// ─────────────────────────────────────────────────────────────────────────────
 function getCorsHeaders(req: Request): Record<string, string> | null {
   const origin = req.headers.get("origin") ?? "";
-  if (!ALLOWED_ORIGINS.includes(origin)) return null;
+  if (!ALLOWED_ORIGINS.includes(origin as (typeof ALLOWED_ORIGINS)[number])) return null;
+
   return {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Headers":
       "authorization, x-client-info, apikey, content-type, x-idempotency-key, x-application-name",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Credentials": "true",
+    Vary: "Origin",
   };
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
 function log(level: "info" | "warn" | "error", msg: string, data?: unknown) {
   console.log(JSON.stringify({ level, msg, data, time: new Date().toISOString() }));
 }
@@ -158,22 +181,24 @@ function json(data: unknown, cors: Record<string, string>, status = 200) {
   });
 }
 
-function err(message: string, cors: Record<string, string>, status = 400) {
-  log("error", message);
+function err(cors: Record<string, string>, message: string, status = 400, extra?: unknown) {
+  log(status >= 500 ? "error" : "warn", message, extra);
   return json({ error: message }, cors, status);
 }
 
-function s(v: unknown, max: number): string {
+function s(v: unknown, max = 320): string {
   return String(v ?? "").slice(0, max).trim();
 }
 
 function n(v: unknown, min: number, max: number): number {
   const x = Number(v);
-  if (Number.isNaN(x)) return min;
+  if (!Number.isFinite(x)) return min;
   return Math.max(min, Math.min(max, Math.round(x)));
 }
 
-// ── Pricing hash ──────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Pricing hash
+// ─────────────────────────────────────────────────────────────────────────────
 async function computePricingHash(
   itemId: string,
   baseCents: number,
@@ -192,43 +217,27 @@ async function computePricingHash(
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
-async function authenticate(
-  req: Request,
-): Promise<{ ok: false } | { ok: true; userId: string }> {
-  const authHeader = req.headers.get("authorization");
-  if (!authHeader?.startsWith("Bearer ")) return { ok: false };
-
-  const token = authHeader.slice("Bearer ".length).trim();
-  if (!token) return { ok: false };
-
-  const anonClient = createAnonClient(token);
-  const { data, error } = await anonClient.auth.getUser();
-
-  if (error || !data?.user) return { ok: false };
-  return { ok: true, userId: data.user.id };
-}
-
-// ── Rate limiting ─────────────────────────────────────────────────────────────
-// IMPORTANT: this code expects checkout_rate_limits has columns:
-// user_id, attempts, last_attempt_at, blocked_until
+// ─────────────────────────────────────────────────────────────────────────────
+// Rate limiting (checkout_rate_limits)
+// Columns: user_id, attempts, last_attempt_at, blocked_until
+// Reads latest row safely (handles legacy duplicates).
+// ─────────────────────────────────────────────────────────────────────────────
 async function checkRateLimit(userId: string): Promise<{ blocked: boolean }> {
   const svc = createServiceClient();
   const now = new Date();
   const windowStart = new Date(now.getTime() - CONFIG.WINDOW_MINUTES * 60_000);
 
- const { data, error } = await svc
-  .from("checkout_rate_limits")
-  .select("user_id,attempts,last_attempt_at,blocked_until")
-  .eq("user_id", userId)
-  .order("last_attempt_at", { ascending: false })
-  .limit(1)
-  .maybeSingle();
+  const { data, error } = await svc
+    .from("checkout_rate_limits")
+    .select("user_id,attempts,last_attempt_at,blocked_until")
+    .eq("user_id", userId)
+    .order("last_attempt_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
   if (error) {
-    log("warn", "rate_limit_read_failed", { userId, error });
-    // fail-open to avoid blocking purchases due to telemetry table issues
-    return { blocked: false };
+    log("warn", "rate_limit_read_failed", { userId, error: error.message });
+    return { blocked: false }; // fail-open
   }
 
   const blockedUntil = data?.blocked_until ? new Date(data.blocked_until) : null;
@@ -236,13 +245,11 @@ async function checkRateLimit(userId: string): Promise<{ blocked: boolean }> {
 
   const lastAttemptAt = data?.last_attempt_at ? new Date(data.last_attempt_at) : null;
   const attempts =
-    !data || !lastAttemptAt || lastAttemptAt < windowStart
-      ? 1
-      : (data.attempts ?? 0) + 1;
+    !data || !lastAttemptAt || lastAttemptAt < windowStart ? 1 : (data.attempts ?? 0) + 1;
 
   const blocked = attempts > CONFIG.MAX_ATTEMPTS_PER_WINDOW;
 
-  await svc.from("checkout_rate_limits").upsert({
+  const { error: upErr } = await svc.from("checkout_rate_limits").upsert({
     user_id: userId,
     attempts,
     last_attempt_at: now.toISOString(),
@@ -251,10 +258,14 @@ async function checkRateLimit(userId: string): Promise<{ blocked: boolean }> {
       : null,
   });
 
+  if (upErr) log("warn", "rate_limit_upsert_failed", { userId, error: upErr.message });
+
   return { blocked };
 }
 
-// ── Modifier groups fetch (stable, avoids nested typing pitfalls) ─────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Modifier groups fetch
+// ─────────────────────────────────────────────────────────────────────────────
 async function fetchModifierGroupsForItem(
   svc: SvcClient,
   menuItemId: string,
@@ -267,7 +278,7 @@ async function fetchModifierGroupsForItem(
     .eq("menu_item_id", menuItemId);
 
   if (linkErr) {
-    log("warn", "modifier_group_links_failed", { menuItemId, linkErr });
+    log("warn", "modifier_group_links_failed", { menuItemId, error: linkErr.message });
     return groupMap;
   }
 
@@ -283,7 +294,7 @@ async function fetchModifierGroupsForItem(
     .in("id", groupIds);
 
   if (groupsErr) {
-    log("warn", "modifier_groups_fetch_failed", { menuItemId, groupsErr });
+    log("warn", "modifier_groups_fetch_failed", { menuItemId, error: groupsErr.message });
     return groupMap;
   }
 
@@ -291,13 +302,12 @@ async function fetchModifierGroupsForItem(
   return groupMap;
 }
 
-// ── Item validation ───────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Item validation (server-authoritative)
+// ─────────────────────────────────────────────────────────────────────────────
 async function validateItems(
   rawItems: RawItem[],
-): Promise<
-  | { ok: false; reason: string }
-  | { ok: true; items: ValidatedItem[]; subtotalCents: number }
-> {
+): Promise<{ ok: false; reason: string } | { ok: true; items: ValidatedItem[]; subtotalCents: number }> {
   const svc = createServiceClient();
 
   if (!rawItems.length || rawItems.length > CONFIG.MAX_ITEMS) {
@@ -312,7 +322,7 @@ async function validateItems(
     .select("id,name,price,available")
     .in("id", itemIds);
 
-  if (prodErr) return { ok: false, reason: "Failed to load products" };
+  if (prodErr) return { ok: false, reason: `Failed to load products: ${prodErr.message}` };
 
   const typedProducts = (products ?? []) as MenuProductRow[];
   if (typedProducts.length !== itemIds.length) {
@@ -348,9 +358,9 @@ async function validateItems(
           .from("modifiers")
           .select("id,modifier_group_id,name,price_adjustment,available")
           .in("id", modifierIds)
-      : { data: [] as ModifierRow[], error: null };
+      : { data: [] as unknown[], error: null };
 
-    if (modErr) return { ok: false, reason: "Failed to load modifiers" };
+    if (modErr) return { ok: false, reason: `Failed to load modifiers: ${modErr.message}` };
 
     const modifiersList: ModifierRow[] = Array.isArray(modifierData) ? (modifierData as ModifierRow[]) : [];
     const modifierDbMap = new Map<string, ModifierRow>(modifiersList.map((m) => [m.id, m]));
@@ -361,58 +371,61 @@ async function validateItems(
     const baseCents = Math.round(Number(product.price) * 100);
     let modifierSumCents = 0;
 
-for (const rawMod of selectedRaw) {
-  const modId = s(rawMod.id, 100)
+    for (const rawMod of selectedRaw) {
+      const modId = s(rawMod.id, 100);
 
-  // ✅ NEW: explicit guard for empty id (this is your current 422 cause)
-  if (!modId) {
-    return { ok: false, reason: `Modifier id missing (item ${itemId})` }
-  }
+      if (!modId) return { ok: false, reason: `Modifier id missing (item ${itemId})` };
 
-  const mod = modifierDbMap.get(modId)
+      const mod = modifierDbMap.get(modId);
+      if (!mod) return { ok: false, reason: `Modifier not found: "${modId}" (item ${itemId})` };
+      if (!mod.available) return { ok: false, reason: `Modifier unavailable: ${mod.name}` };
 
-  // ✅ UPDATED message (safe: itemId is in-scope)
-  if (!mod) {
-    return { ok: false, reason: `Modifier not found: "${modId}" (item ${itemId})` }
-  }
+      const group = groupMap.get(mod.modifier_group_id);
+      if (!group) return { ok: false, reason: `Modifier "${mod.name}" does not belong to this item` };
+      if (!group.active) return { ok: false, reason: `Modifier group is inactive for "${mod.name}"` };
 
-  // Everything below is now safe because mod is guaranteed defined
-  if (!mod.available) return { ok: false, reason: `Modifier unavailable: ${mod.name}` }
+      const currentCount = groupSelectionCount.get(mod.modifier_group_id) ?? 0;
+      const maxSelections = group.max_selections ?? Infinity;
+      if (currentCount + 1 > maxSelections) {
+        return { ok: false, reason: "Too many selections for modifier group" };
+      }
 
-  const group = groupMap.get(mod.modifier_group_id)
-  if (!group) return { ok: false, reason: `Modifier "${mod.name}" does not belong to this item` }
-  if (!group.active) return { ok: false, reason: `Modifier group is inactive for "${mod.name}"` }
+      groupSelectionCount.set(mod.modifier_group_id, currentCount + 1);
 
-  const currentCount = groupSelectionCount.get(mod.modifier_group_id) ?? 0
-  const maxSelections = group.max_selections ?? Infinity
-  if (currentCount + 1 > maxSelections) return { ok: false, reason: 'Too many selections for modifier group' }
+      const adjCents = Math.round(Number(mod.price_adjustment) * 100);
+      modifierSumCents += adjCents;
 
-  groupSelectionCount.set(mod.modifier_group_id, currentCount + 1)
-
-  const adjCents = Math.round(Number(mod.price_adjustment) * 100)
-  modifierSumCents += adjCents
-
-  validatedModifiers.push({
-    modifier_id: mod.id,
-    modifier_group_id: mod.modifier_group_id,
-    name: mod.name,
-    price_adjustment_cents: adjCents,
+      validatedModifiers.push({
+        modifier_id: mod.id,
+        modifier_group_id: mod.modifier_group_id,
+        name: mod.name,
+        price_adjustment_cents: adjCents,
       });
     }
 
+    // enforce group requirements
     for (const [groupId, group] of groupMap.entries()) {
       const selectedCount = groupSelectionCount.get(groupId) ?? 0;
       const minSelections = group.min_selections ?? 0;
 
-      if (group.required && selectedCount === 0) return { ok: false, reason: "Required modifier group has no selection" };
-      if (selectedCount < minSelections) return { ok: false, reason: "Minimum selections not met for a modifier group" };
+      if (group.required && selectedCount === 0) {
+        return { ok: false, reason: "Required modifier group has no selection" };
+      }
+      if (selectedCount < minSelections) {
+        return { ok: false, reason: "Minimum selections not met for a modifier group" };
+      }
     }
 
     const unitPriceCents = baseCents + modifierSumCents;
     const lineTotalCents = unitPriceCents * qty;
     subtotalCents += lineTotalCents;
 
-    const pricingHash = await computePricingHash(itemId, baseCents, validatedModifiers, qty);
+    const pricingHash = await computePricingHash(
+      itemId,
+      baseCents,
+      validatedModifiers.map((m) => ({ modifier_id: m.modifier_id, price_adjustment_cents: m.price_adjustment_cents })),
+      qty,
+    );
 
     items.push({
       id: itemId,
@@ -433,9 +446,9 @@ for (const rawMod of selectedRaw) {
   return { ok: true, items, subtotalCents };
 }
 
-// =============================================================================
-// DISCOUNT MODULE A: applyPromoCode
-// =============================================================================
+// ─────────────────────────────────────────────────────────────────────────────
+// Discount module A: Promo codes
+// ─────────────────────────────────────────────────────────────────────────────
 async function applyPromoCode(code: string, userId: string, subtotalCents: number): Promise<DiscountResult> {
   const svc = createServiceClient();
   const now = new Date();
@@ -493,9 +506,9 @@ async function rollbackPromo(promoId: string) {
   await svc.rpc("promotions_decrement_uses", { p_promo_id: promoId });
 }
 
-// =============================================================================
-// DISCOUNT MODULE B: applyUserCredit
-// =============================================================================
+// ─────────────────────────────────────────────────────────────────────────────
+// Discount module B: Credits
+// ─────────────────────────────────────────────────────────────────────────────
 async function applyUserCredit(creditId: string, userId: string, remainingTotal: number): Promise<DiscountResult> {
   const svc = createServiceClient();
   const now = new Date();
@@ -541,9 +554,9 @@ async function rollbackCredit(creditId: string) {
     .eq("id", creditId);
 }
 
-// =============================================================================
-// DISCOUNT MODULE C: Anti-stack ceiling
-// =============================================================================
+// ─────────────────────────────────────────────────────────────────────────────
+// Discount module C: anti-stack ceiling
+// ─────────────────────────────────────────────────────────────────────────────
 function enforceDiscountCeiling(
   subtotalCents: number,
   promoCents: number,
@@ -561,9 +574,9 @@ function enforceDiscountCeiling(
   };
 }
 
-// =============================================================================
-// Stripe Coupon helper
-// =============================================================================
+// ─────────────────────────────────────────────────────────────────────────────
+// Stripe coupon helper
+// ─────────────────────────────────────────────────────────────────────────────
 async function createStripeCoupon(discountCents: number, label: string): Promise<string> {
   const coupon = await stripe.coupons.create({
     name: label.slice(0, 40),
@@ -576,9 +589,9 @@ async function createStripeCoupon(discountCents: number, label: string): Promise
   return coupon.id;
 }
 
-// =============================================================================
+// ─────────────────────────────────────────────────────────────────────────────
 // DB idempotency helpers
-// =============================================================================
+// ─────────────────────────────────────────────────────────────────────────────
 async function findExistingCart(
   svc: SvcClient,
   userId: string,
@@ -592,43 +605,43 @@ async function findExistingCart(
     .maybeSingle();
 
   if (error) {
-    log("warn", "findExistingCart_error", { userId, idempotencyKey, error });
+    log("warn", "findExistingCart_error", { userId, idempotencyKey, error: error.message });
     return null;
   }
-  if (!data) return null;
 
+  if (!data) return null;
   return { stripe_session_id: data.stripe_session_id ?? null };
 }
 
-// =============================================================================
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN
-// =============================================================================
+// ─────────────────────────────────────────────────────────────────────────────
 Deno.serve(async (req): Promise<Response> => {
   const cors = getCorsHeaders(req);
   if (!cors) return new Response("Origin not allowed", { status: 403 });
+
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
-  if (req.method !== "POST") return err("Method not allowed", cors, 405);
+  if (req.method !== "POST") return err(cors, "Method not allowed", 405);
 
-  // ── Auth ──────────────────────────────────────────────────────────────────
-  const authResult = await authenticate(req);
-  if (!authResult.ok) return err("Unauthorized", cors, 401);
-  const userId = authResult.userId;
+  // Auth (shared)
+  const auth = await authenticate(req);
+  if (!auth.ok) return err(cors, "Unauthorized", 401);
+  const userId = auth.userId;
 
-  // ── Require idempotency key ──────────────────────────────────────────────
-  const idempotencyKey = req.headers.get("x-idempotency-key")?.trim();
-  if (!idempotencyKey) return err("x-idempotency-key header is required", cors, 400);
+  // Idempotency required
+  const idempotencyKey = (req.headers.get("x-idempotency-key") ?? "").trim();
+  if (!idempotencyKey) return err(cors, "x-idempotency-key header is required", 400);
 
-  // ── Rate limit ────────────────────────────────────────────────────────────
+  // Rate limit
   const rate = await checkRateLimit(userId);
-  if (rate.blocked) return err("Too many attempts. Please wait.", cors, 429);
+  if (rate.blocked) return err(cors, "Too many attempts. Please wait.", 429);
 
   const svc = createServiceClient();
 
-  // ── DB idempotency check — return existing if same key ────────────────────
+  // If same key already created a session, return it if still open
   const existing = await findExistingCart(svc, userId, idempotencyKey);
   if (existing?.stripe_session_id) {
     log("info", "idempotent_replay", { userId, idempotencyKey });
-
     try {
       const session = await stripe.checkout.sessions.retrieve(existing.stripe_session_id);
       if (session.url && session.status === "open") {
@@ -639,28 +652,47 @@ Deno.serve(async (req): Promise<Response> => {
     }
   }
 
-  // ── Body ──────────────────────────────────────────────────────────────────
+  // Body
   let body: RawBody;
   try {
     body = await req.json();
   } catch {
-    return err("Invalid JSON", cors);
+    return err(cors, "Invalid JSON", 400);
   }
-  if (!body?.items?.length) return err("Cart is empty", cors);
-// ── Redirect URL compatibility (camelCase + snake_case) ─────────────────────
-const success_url = body.success_url ?? body.successUrl;
-const cancel_url  = body.cancel_url  ?? body.cancelUrl;
 
-if (!success_url || !cancel_url) {
-  return err("Missing success/cancel URL", cors, 400);
-}
-  // ── Validate items ────────────────────────────────────────────────────────
+  if (!body?.items?.length) return err(cors, "Cart is empty", 400);
+
+  // Redirect URL compatibility
+  const success_url = body.success_url ?? body.successUrl;
+  const cancel_url = body.cancel_url ?? body.cancelUrl;
+
+  if (!success_url || !cancel_url) return err(cors, "Missing success/cancel URL", 400);
+
+  // Validate items (server authority)
   const validation = await validateItems(body.items);
-  if (!validation.ok) return err(validation.reason, cors, 422);
+  if (!validation.ok) return err(cors, validation.reason, 422);
 
   const { items, subtotalCents } = validation;
 
-  // ── Frontend fraud signal ─────────────────────────────────────────────────
+  // Origin validation (derived from success_url)
+  let requestedOrigin: string;
+  try {
+    requestedOrigin = new URL(s(success_url, 500)).origin;
+  } catch {
+    return err(cors, "Invalid redirect URL", 400);
+  }
+
+  if (!ALLOWED_ORIGINS.includes(requestedOrigin as (typeof ALLOWED_ORIGINS)[number])) {
+    return err(cors, "Invalid redirect origin", 400);
+  }
+
+  // Email
+  const customerEmail = s(body.email, 320).toLowerCase();
+  if (!customerEmail.includes("@") || customerEmail.length < 5) {
+    return err(cors, "Invalid email address", 400);
+  }
+
+  // Frontend fraud signal (optional)
   if (typeof body.frontend_total === "number") {
     const frontendCents = Math.round(body.frontend_total * 100);
     const serverEstimate = subtotalCents + Math.round(subtotalCents * CONFIG.TAX_RATE);
@@ -669,26 +701,7 @@ if (!success_url || !cancel_url) {
     }
   }
 
-// ── Origin validation ─────────────────────────────────────────────────────
-let requestedOrigin: string;
-try {
-  requestedOrigin = new URL(s(success_url, 500)).origin;
-} catch {
-  return err("Invalid redirect URL", cors, 400);
-}
-
-if (!ALLOWED_ORIGINS.includes(requestedOrigin)) {
-  return err("Invalid redirect origin", cors, 400);
-}
-  // ── Email ─────────────────────────────────────────────────────────────────
-  const customerEmail = s(body.email, 320).toLowerCase();
-  if (!customerEmail.includes("@") || customerEmail.length < 5) {
-    return err("Invalid email address", cors, 400);
-  }
-
-  // =========================================================================
-  // DISCOUNT PIPELINE
-  // =========================================================================
+  // Discounts
   let promoResult: DiscountResult | null = null;
   let creditResult: DiscountResult | null = null;
   let promoDiscountCents = 0;
@@ -700,7 +713,7 @@ if (!ALLOWED_ORIGINS.includes(requestedOrigin)) {
       promoResult = await applyPromoCode(rawPromoCode, userId, subtotalCents);
       promoDiscountCents = promoResult.discount_cents;
     } catch (e) {
-      return err(e instanceof Error ? e.message : "Promo code invalid", cors, 422);
+      return err(cors, e instanceof Error ? e.message : "Promo code invalid", 422);
     }
   }
 
@@ -712,7 +725,7 @@ if (!ALLOWED_ORIGINS.includes(requestedOrigin)) {
       creditDiscountCents = creditResult.discount_cents;
     } catch (e) {
       if (promoResult?.promo_id) await rollbackPromo(promoResult.promo_id);
-      return err(e instanceof Error ? e.message : "Credit invalid", cors, 422);
+      return err(cors, e instanceof Error ? e.message : "Credit invalid", 422);
     }
   }
 
@@ -732,48 +745,38 @@ if (!ALLOWED_ORIGINS.includes(requestedOrigin)) {
   if (grandTotalCents <= 0) {
     if (promoResult?.promo_id) await rollbackPromo(promoResult.promo_id);
     if (creditResult?.credit_id) await rollbackCredit(creditResult.credit_id);
-    return err("Order total must be greater than $0 after discounts", cors, 400);
-  }
-log("info", "margin_inputs", {
-  subtotalCents,
-  total_discount,
-  discountedSubtotal,
-  promoDiscountCents,
-  creditDiscountCents,
-  final_promo,
-  final_credit,
-});
-// ── Margin protection (only when discounts are applied) ─────────────────────
-if (total_discount > 0) {
-  const { data: profitSnapshot, error: marginErr } = await svc
-    .from("admin_profit_snapshot")
-    .select("total_gross_profit_cents")
-    .single();
-
-  if (marginErr || !profitSnapshot) {
-    if (promoResult?.promo_id) await rollbackPromo(promoResult.promo_id);
-    if (creditResult?.credit_id) await rollbackCredit(creditResult.credit_id);
-    return err("Margin snapshot unavailable", cors, 500);
+    return err(cors, "Order total must be greater than $0 after discounts", 400);
   }
 
-  const gross = Number(profitSnapshot.total_gross_profit_cents ?? 0);
+  // Margin protection only when discounts applied
+  if (total_discount > 0) {
+    const { data: profitSnapshot, error: marginErr } = await svc
+      .from("admin_profit_snapshot")
+      .select("total_gross_profit_cents")
+      .single();
 
-  // If snapshot is missing/invalid, fail-open (don’t block checkout)
-  if (!Number.isFinite(gross) || gross <= 0) {
-    log("warn", "margin_snapshot_invalid_failopen", { gross, userId });
-  } else {
-    const projectedMargin =
-      ((gross - total_discount) / Math.max(discountedSubtotal, 1)) * 100;
-
-    if (projectedMargin < CONFIG.SAFE_MARGIN_PERCENT) {
+    if (marginErr || !profitSnapshot) {
       if (promoResult?.promo_id) await rollbackPromo(promoResult.promo_id);
       if (creditResult?.credit_id) await rollbackCredit(creditResult.credit_id);
-      log("warn", "margin_threshold_blocked", { projectedMargin, userId });
-      return err("Discount exceeds safe margin threshold", cors, 400);
+      return err(cors, "Margin snapshot unavailable", 500);
+    }
+
+    const gross = Number(profitSnapshot.total_gross_profit_cents ?? 0);
+
+    if (!Number.isFinite(gross) || gross <= 0) {
+      log("warn", "margin_snapshot_invalid_failopen", { gross, userId });
+    } else {
+      const projectedMargin = ((gross - total_discount) / Math.max(discountedSubtotal, 1)) * 100;
+      if (projectedMargin < CONFIG.SAFE_MARGIN_PERCENT) {
+        if (promoResult?.promo_id) await rollbackPromo(promoResult.promo_id);
+        if (creditResult?.credit_id) await rollbackCredit(creditResult.credit_id);
+        log("warn", "margin_threshold_blocked", { projectedMargin, userId });
+        return err(cors, "Discount exceeds safe margin threshold", 400);
+      }
     }
   }
-}
-  // ── Store pending cart with idempotency_key ────────────────────────────────
+
+  // Persist pending cart
   const cartRef = crypto.randomUUID();
   const cartPricingHash = items.map((i) => i.pricing_hash).join("|");
   const itemsJson: Json = items as unknown as Json;
@@ -795,13 +798,11 @@ if (total_discount > 0) {
   if (cartErr) {
     if (promoResult?.promo_id) await rollbackPromo(promoResult.promo_id);
     if (creditResult?.credit_id) await rollbackCredit(creditResult.credit_id);
-    log("error", "pending_cart_insert_failed", cartErr);
-    return err("Failed to create pending cart", cors, 500);
+    log("error", "pending_cart_insert_failed", { message: cartErr.message });
+    return err(cors, "Failed to create pending cart", 500);
   }
 
-  // =========================================================================
-  // STRIPE SESSION
-  // =========================================================================
+  // Create Stripe Session
   try {
     const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
       ...items.map((i) => ({
@@ -833,7 +834,7 @@ if (total_discount > 0) {
       mode: "payment",
       line_items: lineItems,
       success_url: `${requestedOrigin}/order-success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${requestedOrigin}/checkout`,
+      cancel_url: String(cancel_url),
       customer_email: customerEmail,
       expires_at: Math.floor(Date.now() / 1000) + CONFIG.SESSION_EXPIRES_MINUTES * 60,
       metadata: {
@@ -863,7 +864,6 @@ if (total_discount > 0) {
 
     await svc.from("pending_carts").update({ stripe_session_id: session.id }).eq("id", cartRef);
 
-    // Promo redemption now correctly records checkout_session_id AFTER session exists
     if (promoResult?.promo_id) {
       await svc.from("promo_redemptions").insert({
         promotion_id: promoResult.promo_id,
@@ -891,7 +891,7 @@ if (total_discount > 0) {
 
     await svc.from("pending_carts").delete().eq("id", cartRef);
 
-    log("error", "stripe_error", e);
-    return err("Payment service unavailable. Please try again.", cors, 500);
+    log("error", "stripe_error", { message: e instanceof Error ? e.message : String(e) });
+    return err(cors, "Payment service unavailable. Please try again.", 500);
   }
 });

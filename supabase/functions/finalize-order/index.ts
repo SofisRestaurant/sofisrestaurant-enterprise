@@ -1,10 +1,10 @@
 // supabase/functions/finalize-order/index.ts
 // =============================================================================
-// FINALIZE ORDER — Production Hardened (2026)
+// FINALIZE ORDER — Production Hardened (2026) (fixed + consistent)
 // =============================================================================
 // Purpose:
 // - Called from /order-success to ensure an order exists even if webhook is delayed.
-// - Auth required (Bearer access token).
+// - Auth required (Bearer access token) via shared authenticate().
 // - Ownership enforced via Stripe session metadata.customer_uid.
 // - Idempotent: safe to call repeatedly; returns existing order when present.
 // - Uses pending_carts (created by create-checkout) to build authoritative order payload.
@@ -13,13 +13,13 @@
 //   customer_uid, cart_ref
 //
 // Tables expected:
-//   pending_carts: { id (uuid), user_id, items (json), subtotal_cents, tax_cents, total_cents, discount_cents, stripe_session_id }
-//   orders: must include stripe_session_id unique (recommended)
-//
+//   pending_carts: { id, user_id, items, subtotal_cents, discount_cents, tax_cents, total_cents, stripe_session_id? }
+//   orders: must include UNIQUE(stripe_session_id) recommended
 // =============================================================================
 
 import Stripe from "stripe";
-import { createAnonClient, createServiceClient } from "../_shared/supabase.ts";
+import { createServiceClient } from "../_shared/supabase.ts";
+import { authenticate } from "../_shared/auth.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
@@ -34,7 +34,6 @@ const CONFIG = {
   RATE_LIMIT_BLOCK_MINUTES: 10,
 } as const;
 
-// Stripe checkout session ids look like: cs_test_... or cs_live_...
 const SESSION_REGEX = /^cs_(test|live)_[a-zA-Z0-9]+$/;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -43,7 +42,6 @@ const SESSION_REGEX = /^cs_(test|live)_[a-zA-Z0-9]+$/;
 const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
 if (!STRIPE_SECRET_KEY) throw new Error("Missing STRIPE_SECRET_KEY");
 
-// Stripe client
 const stripe = new Stripe(STRIPE_SECRET_KEY, {
   apiVersion: "2026-02-25.clover",
   httpClient: Stripe.createFetchHttpClient(),
@@ -55,17 +53,17 @@ const svc = createServiceClient();
 // ─────────────────────────────────────────────────────────────────────────────
 // CORS
 // ─────────────────────────────────────────────────────────────────────────────
-const ALLOWED_ORIGINS = [
+const ALLOWED_ORIGINS = new Set([
   "https://sofislegacy.com",
   "https://www.sofislegacy.com",
   "https://sofisrestaurant.netlify.app",
   "http://localhost:3000",
   "http://localhost:3001",
-];
+]);
 
 function getCorsHeaders(req: Request): Record<string, string> | null {
   const origin = req.headers.get("origin") ?? "";
-  if (!ALLOWED_ORIGINS.includes(origin)) return null;
+  if (!ALLOWED_ORIGINS.has(origin)) return null;
 
   return {
     "Access-Control-Allow-Origin": origin,
@@ -73,7 +71,7 @@ function getCorsHeaders(req: Request): Record<string, string> | null {
     "Access-Control-Allow-Headers":
       "authorization, apikey, x-client-info, content-type, x-idempotency-key, x-application-name",
     "Access-Control-Allow-Credentials": "true",
-    "Vary": "Origin",
+    Vary: "Origin",
   };
 }
 
@@ -92,7 +90,7 @@ function json(cors: Record<string, string>, data: unknown, status = 200) {
 }
 
 function err(cors: Record<string, string>, message: string, status = 400, extra?: unknown) {
-  log("error", message, extra);
+  log(status >= 500 ? "error" : "warn", message, extra);
   return json(cors, { error: message }, status);
 }
 
@@ -105,10 +103,9 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Rate limit (reuse checkout_rate_limits)
+// Rate limit (checkout_rate_limits)
 // Columns: user_id, attempts, last_attempt_at, blocked_until
-// NOTE: If your table has UNIQUE(user_id), this will always be 1 row.
-// If duplicates exist from older migrations, we read the latest row safely.
+// NOTE: If duplicates exist, we read the latest row safely.
 // ─────────────────────────────────────────────────────────────────────────────
 async function checkRateLimit(userId: string): Promise<{ blocked: boolean }> {
   const now = new Date();
@@ -124,60 +121,31 @@ async function checkRateLimit(userId: string): Promise<{ blocked: boolean }> {
 
   if (error) {
     log("warn", "rate_limit_read_failed", { userId, error: error.message });
-    // fail-open for finalize (don’t brick success page)
+    // fail-open for finalize (don't brick success page)
     return { blocked: false };
   }
 
-  if (data?.blocked_until && new Date(data.blocked_until) > now) {
-    return { blocked: true };
-  }
+  const blockedUntil = data?.blocked_until ? new Date(data.blocked_until) : null;
+  if (blockedUntil && blockedUntil > now) return { blocked: true };
 
   const lastAttemptAt = data?.last_attempt_at ? new Date(data.last_attempt_at) : null;
   const attempts =
-    !data || !lastAttemptAt || lastAttemptAt < windowStart
-      ? 1
-      : (data.attempts ?? 0) + 1;
+    !data || !lastAttemptAt || lastAttemptAt < windowStart ? 1 : (data.attempts ?? 0) + 1;
 
   const blocked = attempts > CONFIG.RATE_LIMIT_MAX;
 
-  const blockedUntil = blocked
-    ? new Date(now.getTime() + CONFIG.RATE_LIMIT_BLOCK_MINUTES * 60_000).toISOString()
-    : null;
-
-  // upsert into UNIQUE(user_id) row
   const { error: upErr } = await svc.from("checkout_rate_limits").upsert({
     user_id: userId,
     attempts,
     last_attempt_at: now.toISOString(),
-    blocked_until: blockedUntil,
+    blocked_until: blocked
+      ? new Date(now.getTime() + CONFIG.RATE_LIMIT_BLOCK_MINUTES * 60_000).toISOString()
+      : null,
   });
 
-  if (upErr) {
-    log("warn", "rate_limit_upsert_failed", { userId, error: upErr.message });
-    // still fail-open
-    return { blocked: false };
-  }
+  if (upErr) log("warn", "rate_limit_upsert_failed", { userId, error: upErr.message });
 
   return { blocked };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Auth (Bearer access token)
-// ─────────────────────────────────────────────────────────────────────────────
-async function authenticate(req: Request): Promise<
-  { ok: false; reason: string } | { ok: true; userId: string }
-> {
-  const authHeader = req.headers.get("authorization") ?? "";
-  if (!authHeader.startsWith("Bearer ")) return { ok: false, reason: "missing_bearer" };
-
-  const token = authHeader.slice("Bearer ".length).trim();
-  if (!token) return { ok: false, reason: "empty_token" };
-
-  const anon = createAnonClient(token);
-  const { data, error } = await anon.auth.getUser();
-
-  if (error || !data?.user?.id) return { ok: false, reason: "invalid_token" };
-  return { ok: true, userId: data.user.id };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -187,7 +155,7 @@ Deno.serve(async (req) => {
   const cors = getCorsHeaders(req);
   if (!cors) return new Response("Origin not allowed", { status: 403 });
 
-  // Preflight must always succeed.
+  // Preflight must always succeed
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
   if (req.method !== "POST") return err(cors, "Method not allowed", 405);
 
@@ -197,8 +165,9 @@ Deno.serve(async (req) => {
     return err(cors, "Payload too large", 413);
   }
 
-  // Auth
   const idem = (req.headers.get("x-idempotency-key") ?? "").trim();
+
+  // Auth (shared)
   const auth = await authenticate(req);
   if (!auth.ok) {
     log("warn", "finalize_unauthorized", { reason: auth.reason, hasIdem: !!idem });
@@ -206,7 +175,7 @@ Deno.serve(async (req) => {
   }
   const userId = auth.userId;
 
-  // Rate limit
+  // Rate limit (light)
   const rate = await checkRateLimit(userId);
   if (rate.blocked) return err(cors, "Too many attempts. Please wait.", 429);
 
@@ -218,10 +187,9 @@ Deno.serve(async (req) => {
     return err(cors, "Invalid JSON", 400);
   }
 
-  const sessionIdRaw =
-    isRecord(body) ? (body["session_id"] ?? body["sessionId"] ?? null) : null;
-
+  const sessionIdRaw = isRecord(body) ? (body["session_id"] ?? body["sessionId"] ?? null) : null;
   const sessionId = s(sessionIdRaw, CONFIG.MAX_SESSION_ID_LEN);
+
   if (!sessionId || !SESSION_REGEX.test(sessionId)) {
     return err(cors, "Missing or invalid session_id", 400, { sessionId });
   }
@@ -230,7 +198,7 @@ Deno.serve(async (req) => {
   {
     const { data: existing, error } = await svc
       .from("orders")
-      .select("id, stripe_session_id, payment_status, status")
+      .select("id,stripe_session_id,payment_status,status")
       .eq("stripe_session_id", sessionId)
       .maybeSingle();
 
@@ -254,8 +222,10 @@ Deno.serve(async (req) => {
       expand: ["payment_intent", "customer"],
     });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    log("error", "stripe_retrieve_failed", { sessionId, msg });
+    log("error", "stripe_retrieve_failed", {
+      sessionId,
+      msg: e instanceof Error ? e.message : String(e),
+    });
     return err(cors, "Unable to verify payment session", 502);
   }
 
@@ -266,7 +236,7 @@ Deno.serve(async (req) => {
     return err(cors, "Unauthorized", 401);
   }
 
-  // Payment check (support both fields)
+  // Paid check
   const paid = session.payment_status === "paid" || session.status === "complete";
   if (!paid) {
     return json(cors, {
@@ -279,7 +249,7 @@ Deno.serve(async (req) => {
     });
   }
 
-  // 3) Load pending cart (authoritative)
+  // 3) Load pending cart (authoritative payload)
   const cartRef = session.metadata?.cart_ref ?? "";
   if (!cartRef) {
     log("error", "missing_cart_ref_metadata", { sessionId });
@@ -289,7 +259,7 @@ Deno.serve(async (req) => {
   const { data: cart, error: cartErr } = await svc
     .from("pending_carts")
     .select(
-      "id, user_id, items, subtotal_cents, discount_cents, tax_cents, total_cents, promo_id, credit_id, stripe_session_id",
+      "id,user_id,items,subtotal_cents,discount_cents,tax_cents,total_cents,promo_id,credit_id,stripe_session_id",
     )
     .eq("id", cartRef)
     .maybeSingle();
@@ -304,13 +274,18 @@ Deno.serve(async (req) => {
     return err(cors, "Unauthorized", 401);
   }
 
-  // Link pending cart to stripe session if missing
+  // Link pending cart to stripe session if missing (best-effort)
   if (!cart.stripe_session_id) {
-    await svc.from("pending_carts").update({ stripe_session_id: sessionId }).eq("id", cartRef);
+    const { error: linkErr } = await svc
+      .from("pending_carts")
+      .update({ stripe_session_id: sessionId })
+      .eq("id", cartRef);
+    if (linkErr) log("warn", "pending_cart_link_failed", { cartRef, sessionId, error: linkErr.message });
   }
 
-  // 4) Insert order (idempotent on stripe_session_id)
-  // IMPORTANT: ensure orders.stripe_session_id has UNIQUE constraint in DB.
+  // 4) Insert order (idempotent via UNIQUE(stripe_session_id))
+  // IMPORTANT: match these enum strings to your DB exactly.
+  // If your DB expects lowercase enums, change to "paid"/"confirmed".
   const orderInsert = {
     stripe_session_id: sessionId,
     stripe_payment_intent_id:
@@ -329,10 +304,8 @@ Deno.serve(async (req) => {
     amount_total: cart.total_cents ?? 0,
 
     currency: (session.currency ?? "usd").toLowerCase(),
-
-    // Use lowercase unless your DB enums are uppercase.
-    payment_status: "paid",
-    status: "confirmed",
+    payment_status: "PAID",
+    status: "CONFIRMED",
 
     cart_items: cart.items,
     metadata: {
@@ -343,40 +316,42 @@ Deno.serve(async (req) => {
     notes: null,
   };
 
-  // Insert then fallback to fetch
-  let orderId: string | null = null;
-
   const { data: inserted, error: insErr } = await svc
     .from("orders")
     .insert(orderInsert)
     .select("id")
     .maybeSingle();
 
-  if (insErr) {
-    const { data: existing, error: fetchErr } = await svc
-      .from("orders")
-      .select("id")
-      .eq("stripe_session_id", sessionId)
-      .maybeSingle();
+  if (!insErr && inserted?.id) {
+    return json(cors, {
+      ok: true,
+      order_id: inserted.id,
+      already_finalized: false,
+      payment_status: session.payment_status ?? null,
+      status: session.status ?? null,
+    });
+  }
 
-    if (fetchErr || !existing?.id) {
-      log("error", "order_insert_failed", {
-        sessionId,
-        insErr: insErr.message,
-        fetchErr: fetchErr?.message,
-      });
-      return err(cors, "Failed to create order", 500);
-    }
+  // If insert failed (often due to conflict), fetch existing
+  const { data: existing, error: fetchErr } = await svc
+    .from("orders")
+    .select("id")
+    .eq("stripe_session_id", sessionId)
+    .maybeSingle();
 
-    orderId = existing.id;
-  } else {
-    orderId = inserted?.id ?? null;
+  if (fetchErr || !existing?.id) {
+    log("error", "order_insert_failed", {
+      sessionId,
+      insErr: insErr?.message,
+      fetchErr: fetchErr?.message,
+    });
+    return err(cors, "Failed to create order", 500);
   }
 
   return json(cors, {
     ok: true,
-    order_id: orderId,
-    already_finalized: false,
+    order_id: existing.id,
+    already_finalized: true,
     payment_status: session.payment_status ?? null,
     status: session.status ?? null,
   });

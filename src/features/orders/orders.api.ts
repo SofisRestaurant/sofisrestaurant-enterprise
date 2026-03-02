@@ -206,14 +206,15 @@ export async function fetchOrdersByCustomer(
   const to = from + safePageSize - 1
 
   // 🔒 RLS policy should also filter by auth.uid(); this is an extra safe filter
-  const { data, count, error } = await supabase
-    .from('orders')
-    .select('*', { count: 'exact' })
-    .eq('customer_uid', currentUserId)
-    .order('created_at', { ascending: false })
-    .range(from, to)
+ const { data, count, error } = await supabase
+  .from('orders')
+  .select('*', { count: 'exact' })
+  .eq('customer_uid', currentUserId)
+  .order('created_at', { ascending: false })
+  .range(from, to)
 
-  if (error) throw error
+console.log('[orders] uid=', currentUserId, 'count=', count, 'error=', error)
+if (error) throw error
 
   return {
     rows: (data ?? []).map((row) => mapOrderRowToDomain(row as OrderRow)),

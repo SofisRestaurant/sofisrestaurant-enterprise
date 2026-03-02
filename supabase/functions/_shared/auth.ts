@@ -1,88 +1,93 @@
 // supabase/functions/_shared/auth.ts
 // =============================================================================
-// Shared JWT extraction + validation for all auth edge functions.
-// Import as: import { extractUser, requireAuth } from '../_shared/auth.ts'
+// Shared Auth — Production Hardened (2026)
+// - Extracts Bearer token safely
+// - Validates JWT via Supabase Auth (anon client)
+// - Provides admin gate using service role client
+// - Normalizes failure reasons for logs / responses
 // =============================================================================
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createAnonClient, createServiceClient } from './supabase.ts'
 
-export interface AuthUser {
-  id:    string;
-  email: string | undefined;
-  role:  string;
+export type AuthFailReason =
+  | 'missing_bearer'
+  | 'empty_token'
+  | 'invalid_token'
+  | 'auth_error'
+
+export type AuthResult =
+  | { ok: true; userId: string; token: string }
+  | { ok: false; reason: AuthFailReason; message: string }
+
+export type AdminAuthFailReason = AuthFailReason | 'not_admin' | 'admin_check_failed'
+
+export type AdminAuthResult =
+  | { ok: true; userId: string; token: string }
+  | { ok: false; reason: AdminAuthFailReason; message: string }
+
+function readAuthHeader(req: Request): string {
+  // Headers are case-insensitive; some runtimes normalize to lowercase only.
+  return req.headers.get('authorization') ?? req.headers.get('Authorization') ?? ''
 }
-export async function requireAdmin(req: Request): Promise<AuthUser> {
-  const user = await requireAuth(req)
 
-  const svc = serviceClient()
+export function getBearerToken(req: Request): string | null {
+  const raw = readAuthHeader(req)
+  if (!raw) return null
 
-  const { data: profile, error } = await svc
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .single()
+  const prefix = 'Bearer '
+  if (!raw.startsWith(prefix)) return null
 
-  if (error || !profile || profile.role !== 'admin') {
-    throw new AuthError('FORBIDDEN', 'Admin privileges required', 403)
+  const token = raw.slice(prefix.length).trim()
+  return token.length ? token : null
+}
+
+export async function authenticate(req: Request): Promise<AuthResult> {
+  const raw = readAuthHeader(req)
+  if (!raw) {
+    return { ok: false, reason: 'missing_bearer', message: 'Missing Authorization header' }
   }
 
-  return user
-}
-/**
- * Extract and validate the Bearer token from the Authorization header.
- * Returns the Supabase user if valid, throws a typed error if not.
- */
-export async function requireAuth(req: Request): Promise<AuthUser> {
-  const authHeader = req.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    throw new AuthError('MISSING_TOKEN', 'Authorization header required', 401);
-  }
-
-  const token = authHeader.replace('Bearer ', '').trim();
+  const token = getBearerToken(req)
   if (!token) {
-    throw new AuthError('MISSING_TOKEN', 'Bearer token is empty', 401);
+    // header exists, but not a valid Bearer token format
+    return { ok: false, reason: 'missing_bearer', message: 'Missing Authorization Bearer token' }
   }
 
-  // Validate token against Supabase auth (user client — uses the caller's JWT)
-  const userClient = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_ANON_KEY')!,
-    { global: { headers: { Authorization: `Bearer ${token}` } } },
-  );
-
-  const { data: { user }, error } = await userClient.auth.getUser();
-
-  if (error || !user) {
-    throw new AuthError('INVALID_TOKEN', 'Token is invalid or expired', 401);
+  if (!token.trim()) {
+    return { ok: false, reason: 'empty_token', message: 'Empty Bearer token' }
   }
 
-  return {
-    id:    user.id,
-    email: user.email,
-    role:  (user.app_metadata?.role as string) ?? 'user',
-  };
+  try {
+    const anon = createAnonClient(token)
+    const { data, error } = await anon.auth.getUser()
+
+    if (error || !data?.user?.id) {
+      return { ok: false, reason: 'invalid_token', message: 'Invalid or expired token' }
+    }
+
+    return { ok: true, userId: data.user.id, token }
+  } catch {
+    return { ok: false, reason: 'auth_error', message: 'Authentication failed' }
+  }
 }
 
-/**
- * Create a service-role Supabase client for privileged DB operations.
- * Never expose the service role key to the client.
- */
-export function serviceClient() {
-  return createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-    { auth: { persistSession: false } },
-  );
-}
+export async function authenticateAdmin(req: Request): Promise<AdminAuthResult> {
+  const base = await authenticate(req)
+  if (!base.ok) return base
 
-/** Typed auth error — maps to HTTP status codes */
-export class AuthError extends Error {
-  constructor(
-    public readonly code: string,
-    message: string,
-    public readonly status: number = 400,
-  ) {
-    super(message);
-    this.name = 'AuthError';
+  try {
+    const svc = createServiceClient()
+    const { data: isAdmin, error } = await svc.rpc('is_admin', { uid: base.userId })
+
+    if (error) {
+      return { ok: false, reason: 'admin_check_failed', message: 'Admin check failed' }
+    }
+    if (isAdmin !== true) {
+      return { ok: false, reason: 'not_admin', message: 'Insufficient permissions' }
+    }
+
+    return { ok: true, userId: base.userId, token: base.token }
+  } catch {
+    return { ok: false, reason: 'admin_check_failed', message: 'Admin check failed' }
   }
 }

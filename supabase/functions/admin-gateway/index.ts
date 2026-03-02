@@ -1,17 +1,10 @@
 // supabase/functions/admin-gateway/index.ts
 // =============================================================================
 // ADMIN GATEWAY ROUTER — ENTERPRISE MODE (PRODUCTION GRADE, 2026)
-// Stack: Supabase Edge (Deno) + Postgres (service role client)
-// Goals:
-// - Server-authoritative admin data access (no direct PostgREST from browser)
-// - Strong request validation + consistent envelopes
-// - Strict auth (JWT) + admin enforcement
-// - CORS done right (2xx preflight, vary origin)
-// - Safe paging + sane defaults
-// - Structured errors + requestId correlation
 // =============================================================================
 
 import { service } from "./lib/service.ts";
+import { authenticateAdmin } from "../_shared/auth.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CORS
@@ -89,8 +82,8 @@ function assertNever(x: never): never {
 type AdminAction = "metrics" | "layout" | "orders:list" | "menu:full";
 
 type MenuFullPayload = {
-  page?: number;      // default 0
-  pageSize?: number;  // default 200, max 500
+  page?: number;
+  pageSize?: number;
 };
 
 type OrdersListPayload = { page?: number };
@@ -115,54 +108,32 @@ type RequestContext = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AUTH
+// AUTH (shared) — single source of truth
 // ─────────────────────────────────────────────────────────────────────────────
 
-function getBearerToken(req: Request): string | null {
-  const h = req.headers.get("authorization") || req.headers.get("Authorization");
-  if (!h) return null;
-  const prefix = "Bearer ";
-  if (!h.startsWith(prefix)) return null;
-  const token = h.slice(prefix.length).trim();
-  return token.length ? token : null;
-}
+type AuthCode = "AUTH_MISSING" | "AUTH_INVALID" | "AUTH_FORBIDDEN";
 
 async function requireAdmin(req: Request, ctx: RequestContext): Promise<void> {
-  const token = getBearerToken(req);
-  if (!token) throw Object.assign(new Error("Missing authorization header"), { code: "AUTH_MISSING" });
+  const auth = await authenticateAdmin(req);
 
-  // Validate token (signature/expiry) + fetch user
-  const { data, error } = await service.auth.getUser(token);
-  if (error || !data?.user) {
-    throw Object.assign(new Error("Invalid or expired session"), { code: "AUTH_INVALID" });
+  if (!auth.ok) {
+    const code: AuthCode =
+      auth.reason === "missing_bearer" || auth.reason === "empty_token"
+        ? "AUTH_MISSING"
+        : auth.reason === "not_admin"
+          ? "AUTH_FORBIDDEN"
+          : "AUTH_INVALID";
+
+    throw Object.assign(new Error(auth.message), { code });
   }
 
-  const u = data.user;
-  const meta = (u.app_metadata ?? {}) as Record<string, unknown>;
-  const role = typeof meta.role === "string" ? meta.role : null;
-
-  ctx.user.id = u.id;
-  ctx.user.email = u.email ?? null;
-  ctx.user.role = role;
-
-  // Primary: app_metadata.role === "admin"
-  if (role === "admin") return;
-
-  // Secondary: DB-authoritative check (optional, but recommended)
-  // If you don't have is_admin(uid uuid) RPC, remove this block.
-  try {
-    const { data: isAdmin, error: rpcErr } = await service.rpc("is_admin", { uid: u.id });
-    if (!rpcErr && isAdmin === true) return;
-  } catch {
-    // ignore
-  }
-
-  throw Object.assign(new Error("Forbidden: admin access required"), { code: "AUTH_FORBIDDEN" });
+  ctx.user.id = auth.userId;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REQUEST VALIDATION
 // ─────────────────────────────────────────────────────────────────────────────
+
 function parseGatewayRequest(v: unknown): GatewayRequest | null {
   if (!isRecord(v)) return null;
 
@@ -193,7 +164,10 @@ function parseGatewayRequest(v: unknown): GatewayRequest | null {
     if (page !== undefined && (typeof page !== "number" || !Number.isFinite(page))) return null;
     if (pageSize !== undefined && (typeof pageSize !== "number" || !Number.isFinite(pageSize))) return null;
 
-    return { action: "menu:full", payload: { page: page as number | undefined, pageSize: pageSize as number | undefined } };
+    return {
+      action: "menu:full",
+      payload: { page: page as number | undefined, pageSize: pageSize as number | undefined },
+    };
   }
 
   return null;
@@ -225,9 +199,6 @@ type RiskSnapshot = {
   abandoned_value_cents_24h: number;
 };
 
-// IMPORTANT: "layout" is meant to power AdminLayout top cards and global badges.
-// We intentionally make it resilient: it returns partials + zeros if a view is missing,
-// instead of hard failing the entire admin UI.
 type AdminLayoutSnapshot = {
   today_revenue_cents: number;
   today_orders: number;
@@ -238,7 +209,6 @@ type AdminLayoutSnapshot = {
   pending_carts: number;
   generated_at: string;
 
-  // Optional extra signals (nice to have for UI)
   net_revenue_30d_cents?: number;
   total_gross_profit_cents?: number;
   mismatch_events_7d?: number;
@@ -252,11 +222,7 @@ type AdminLayoutSnapshot = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function getExecutiveSnapshot(): Promise<ExecutiveSnapshot | null> {
-  const { data, error } = await service
-    .from("admin_executive_snapshot")
-    .select("*")
-    .maybeSingle();
-
+  const { data, error } = await service.from("admin_executive_snapshot").select("*").maybeSingle();
   if (error) throw Object.assign(new Error(`Failed to load metrics: ${error.message}`), { code: "DB_METRICS" });
   return (data ?? null) as ExecutiveSnapshot | null;
 }
@@ -277,15 +243,14 @@ async function listOrders(payload: OrdersListPayload): Promise<unknown[]> {
 }
 
 function startOfLocalDayISO(tzOffsetMinutes: number): string {
-  // tzOffsetMinutes: e.g. -420 for MST/Phoenix (no DST)
   const now = new Date();
   const utc = now.getTime() + now.getTimezoneOffset() * 60_000;
   const local = new Date(utc + tzOffsetMinutes * 60_000);
   local.setHours(0, 0, 0, 0);
-  // convert "local midnight" back to UTC ISO for storage comparisons in Postgres
   const backToUtc = new Date(local.getTime() - tzOffsetMinutes * 60_000);
   return backToUtc.toISOString();
 }
+
 async function getMenuAdminFull(payload: MenuFullPayload = {}): Promise<unknown[]> {
   const page = n(payload.page ?? 0, 0, 100_000);
   const pageSize = n(payload.pageSize ?? 200, 1, 500);
@@ -299,33 +264,26 @@ async function getMenuAdminFull(payload: MenuFullPayload = {}): Promise<unknown[
     .order("sort_order", { ascending: true })
     .range(from, to);
 
-  if (error) {
-    throw Object.assign(
-      new Error(`Failed to load menu admin view: ${error.message}`),
-      { code: "DB_MENU_FULL" },
-    );
-  }
-
+  if (error) throw Object.assign(new Error(`Failed to load menu admin view: ${error.message}`), { code: "DB_MENU_FULL" });
   return (data ?? []) as unknown[];
 }
-async function getLayoutSnapshot(): Promise<AdminLayoutSnapshot> {
-  // Phoenix is typically UTC-7 year-round.
-  // If you prefer UTC day buckets, set tzOffsetMinutes = 0.
-  const tzOffsetMinutes = -420;
 
+async function getLayoutSnapshot(): Promise<AdminLayoutSnapshot> {
+  const tzOffsetMinutes = -420; // Phoenix (UTC-7)
   const sinceISO = startOfLocalDayISO(tzOffsetMinutes);
 
-  // These are resilient: any query can fail without killing layout entirely.
   const safe = async <T>(name: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
     try {
       return await fn();
     } catch (e) {
-      console.warn(JSON.stringify({
-        level: "warn",
-        event: "layout_partial_failure",
-        name,
-        message: e instanceof Error ? e.message : String(e),
-      }));
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          event: "layout_partial_failure",
+          name,
+          message: e instanceof Error ? e.message : String(e),
+        }),
+      );
       return fallback;
     }
   };
@@ -363,18 +321,13 @@ async function getLayoutSnapshot(): Promise<AdminLayoutSnapshot> {
   const today = await safe<{ today_orders: number; today_revenue_cents: number }>(
     "today_orders",
     async () => {
-      // NOTE: adjust these column names if your orders table differs.
-      // amount_total is integer cents in your schema listing.
-      const { data, error } = await service
-        .from("orders")
-        .select("amount_total,created_at")
-        .gte("created_at", sinceISO);
-
+      const { data, error } = await service.from("orders").select("amount_total,created_at").gte("created_at", sinceISO);
       if (error) throw error;
       const rows = (data ?? []) as Array<{ amount_total: number | null }>;
-      const today_orders = rows.length;
-      const today_revenue_cents = rows.reduce((acc, r) => acc + (Number(r.amount_total) || 0), 0);
-      return { today_orders, today_revenue_cents };
+      return {
+        today_orders: rows.length,
+        today_revenue_cents: rows.reduce((acc, r) => acc + (Number(r.amount_total) || 0), 0),
+      };
     },
     { today_orders: 0, today_revenue_cents: 0 },
   );
@@ -382,7 +335,6 @@ async function getLayoutSnapshot(): Promise<AdminLayoutSnapshot> {
   const pending_orders = await safe<number>(
     "pending_orders",
     async () => {
-      // If you have a canonical pending set, update this filter.
       const { count, error } = await service
         .from("orders")
         .select("id", { count: "exact", head: true })
@@ -393,16 +345,9 @@ async function getLayoutSnapshot(): Promise<AdminLayoutSnapshot> {
     0,
   );
 
-  // If you later add admin_notifications view/table, plug it here.
   const unread_notifications = 0;
-
-  // Pending carts: if you have a table/view, wire it here; otherwise 0.
   const pending_carts = 0;
-
-  // Abandoned carts: use risk snapshot (sessions) as a proxy for now.
   const abandoned_carts = Number(risk?.abandoned_sessions_24h ?? 0);
-
-  const generated_at = new Date().toISOString();
 
   return {
     today_revenue_cents: today.today_revenue_cents,
@@ -412,7 +357,7 @@ async function getLayoutSnapshot(): Promise<AdminLayoutSnapshot> {
     fraud_events_7d: Number(fraud?.fraud_events_7d ?? 0),
     abandoned_carts,
     pending_carts,
-    generated_at,
+    generated_at: new Date().toISOString(),
 
     net_revenue_30d_cents: executive?.net_revenue_30d_cents,
     total_gross_profit_cents: executive?.total_gross_profit_cents,
@@ -431,19 +376,14 @@ async function dispatch(req: GatewayRequest): Promise<{ action: AdminAction; res
   switch (req.action) {
     case "metrics":
       return { action: "metrics", result: await getExecutiveSnapshot() };
-
     case "layout":
       return { action: "layout", result: await getLayoutSnapshot() };
-
     case "orders:list":
       return { action: "orders:list", result: await listOrders(req.payload ?? {}) };
-
     case "menu:full":
       return { action: "menu:full", result: await getMenuAdminFull(req.payload ?? {}) };
   }
-
-  const _exhaustive: never = req;
-  return assertNever(_exhaustive);
+  return assertNever(req);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -456,10 +396,7 @@ async function handleRequest(req: Request): Promise<Response> {
   const origin = req.headers.get("origin");
   const cors = corsHeaders(origin);
 
-  // ✅ Preflight must be 2xx
-  if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: cors });
-  }
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
 
   const ctx: RequestContext = {
     requestId: crypto.randomUUID(),
@@ -470,62 +407,50 @@ async function handleRequest(req: Request): Promise<Response> {
     user: { id: "unknown" },
   };
 
-  // Strict: only POST
-  if (req.method !== "POST") {
-    const meta: Meta = { requestedBy: ctx.user.id, requestId: ctx.requestId, ts: ctx.timestamp };
-    return fail("METHOD_NOT_ALLOWED", "Method not allowed", meta, cors, 405);
-  }
+  const meta: Meta = { requestedBy: ctx.user.id, requestId: ctx.requestId, ts: ctx.timestamp };
 
-  // Parse JSON
+  if (req.method !== "POST") return fail("METHOD_NOT_ALLOWED", "Method not allowed", meta, cors, 405);
+
   let bodyUnknown: unknown;
   try {
     bodyUnknown = await req.json();
   } catch {
-    const meta: Meta = { requestedBy: ctx.user.id, requestId: ctx.requestId, ts: ctx.timestamp };
     return fail("BAD_JSON", "Invalid JSON", meta, cors, 400);
   }
 
-  // Validate request shape
   const parsed = parseGatewayRequest(bodyUnknown);
   if (!parsed) {
-  const meta: Meta = { requestedBy: ctx.user.id, requestId: ctx.requestId, ts: ctx.timestamp };
-  return fail(
-    "BAD_REQUEST",
-    "Invalid request shape",
-    meta,
-    cors,
-    400,
-    {
-      expected: ["metrics", "layout", "orders:list", "menu:full"],
-      example: { action: "menu:full", payload: { page: 0, pageSize: 50 } },
-    },
-  );
-}
+    return fail(
+      "BAD_REQUEST",
+      "Invalid request shape",
+      meta,
+      cors,
+      400,
+      { expected: ["metrics", "layout", "orders:list", "menu:full"] },
+    );
+  }
 
   // Auth + admin gate
   try {
     await requireAdmin(req, ctx);
   } catch (e) {
-    const code = isRecord(e) && typeof e.code === "string" ? e.code : "AUTH_ERROR";
+    const code = isRecord(e) && typeof e.code === "string" ? e.code : "AUTH_INVALID";
     const msg = e instanceof Error ? e.message : "Authentication error";
-    const meta: Meta = { requestedBy: ctx.user.id, requestId: ctx.requestId, ts: ctx.timestamp };
+    const meta2: Meta = { requestedBy: ctx.user.id, requestId: ctx.requestId, ts: ctx.timestamp };
 
     const status =
-      code === "AUTH_MISSING" ? 401
-      : code === "AUTH_INVALID" ? 401
-      : code === "AUTH_FORBIDDEN" ? 403
-      : 401;
+      code === "AUTH_MISSING" ? 401 :
+      code === "AUTH_FORBIDDEN" ? 403 :
+      401;
 
-    return fail(code, msg, meta, cors, status);
+    return fail(code, msg, meta2, cors, status);
   }
 
-  const meta: Meta = { requestedBy: ctx.user.id, requestId: ctx.requestId, ts: ctx.timestamp };
+  const metaAuthed: Meta = { requestedBy: ctx.user.id, requestId: ctx.requestId, ts: ctx.timestamp };
 
-  // Dispatch + respond
   try {
     const { action, result } = await dispatch(parsed);
 
-    // structured log (safe)
     console.info(JSON.stringify({
       level: "info",
       event: "request_ok",
@@ -534,7 +459,7 @@ async function handleRequest(req: Request): Promise<Response> {
       userId: ctx.user.id,
     }));
 
-    return ok(result, meta, cors, 200);
+    return ok(result, metaAuthed, cors, 200);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";
     const code = isRecord(e) && typeof e.code === "string" ? e.code : "INTERNAL";
@@ -548,6 +473,6 @@ async function handleRequest(req: Request): Promise<Response> {
       userId: ctx.user.id,
     }));
 
-    return fail(code, msg, meta, cors, 500);
+    return fail(code, msg, metaAuthed, cors, 500);
   }
 }

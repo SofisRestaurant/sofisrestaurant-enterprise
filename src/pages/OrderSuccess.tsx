@@ -572,10 +572,12 @@ useEffect(() => {
       if (!finalizeAttempted && attempts >= 2) {
         finalizeAttempted = true;
 
-        const fnData = await invokeFn<{ order_id?: string }>(
+        const fnData = await invokeFn(
           'finalize-order',
           { session_id: safeSessionId },
-          { headers: { 'x-idempotency-key': crypto.randomUUID() } },
+          {
+            headers: { 'x-idempotency-key': crypto.randomUUID() },
+          },
         );
 
         if (!cancelled && fnData && typeof (fnData as any).order_id === 'string') {

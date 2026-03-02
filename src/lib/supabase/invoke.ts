@@ -1,11 +1,10 @@
 // src/lib/supabase/invoke.ts
 // =============================================================================
-// Edge Function invoke helper (hard-auth, production)
-// - Always sends apikey + Bearer access_token
-// - Supports custom headers (e.g., x-idempotency-key)
-// - Uses AbortController timeout by default (can override/disable)
-// - Throws with parsed error + requestId for debugging
-// - Never logs secrets (no token/apikey in logs)
+// Edge Function invoke helper (production hardened)
+// - Always sends apikey + Bearer access token
+// - Refreshes token if near expiry
+// - Retries once automatically on 401 (stale/invalid JWT race)
+// - Throws typed error with requestId + status + code
 // =============================================================================
 
 import { supabase } from '@/lib/supabase/supabaseClient'
@@ -16,33 +15,37 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string
 export type InvokeOptions = {
   signal?: AbortSignal
   headers?: Record<string, string>
-  /**
-   * Default timeout for the request. Set to 0/undefined to disable.
-   * (If you pass your own signal, this still works by chaining signals.)
-   */
-  timeoutMs?: number
 }
 
-function invariantEnv(): void {
+export class InvokeFnError extends Error {
+  readonly fnName: string
+  readonly status: number
+  readonly code: string
+  readonly requestId: string
+  readonly bodyPreview: string
+
+  constructor(args: {
+    fnName: string
+    status: number
+    code: string
+    message: string
+    requestId: string
+    bodyPreview: string
+  }) {
+    super(args.message)
+    this.name = 'InvokeFnError'
+    this.fnName = args.fnName
+    this.status = args.status
+    this.code = args.code
+    this.requestId = args.requestId
+    this.bodyPreview = args.bodyPreview
+  }
+}
+
+function requireEnv() {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
     throw new Error('[invokeFn] Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY')
   }
-}
-
-async function getAccessToken(): Promise<string> {
-  const { data, error } = await supabase.auth.getSession()
-  if (error) throw new Error(`[invokeFn] getSession failed: ${error.message}`)
-
-  let token = data.session?.access_token ?? null
-
-  if (!token) {
-    const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession()
-    if (refreshErr) throw new Error(`[invokeFn] refreshSession failed: ${refreshErr.message}`)
-    token = refreshed.session?.access_token ?? null
-  }
-
-  if (!token) throw new Error('[invokeFn] No access token (user not authenticated)')
-  return token
 }
 
 function getRequestId(res: Response): string {
@@ -68,112 +71,111 @@ async function readBodySafe(res: Response): Promise<{ json: any | null; text: st
   }
 }
 
-function mergeSignals(primary?: AbortSignal, secondary?: AbortSignal): AbortSignal | undefined {
-  if (!primary) return secondary
-  if (!secondary) return primary
+function secondsUntilExpiry(jwt?: string | null): number | null {
+  if (!jwt) return null
+  const parts = jwt.split('.')
+  if (parts.length !== 3) return null
 
-  const controller = new AbortController()
-
-  const onAbort = () => {
-    if (!controller.signal.aborted) controller.abort()
+  try {
+    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')))
+    const exp = typeof payload?.exp === 'number' ? payload.exp : null
+    if (!exp) return null
+    return exp - Math.floor(Date.now() / 1000)
+  } catch {
+    return null
   }
-
-  if (primary.aborted || secondary.aborted) {
-    controller.abort()
-    return controller.signal
-  }
-
-  primary.addEventListener('abort', onAbort, { once: true })
-  secondary.addEventListener('abort', onAbort, { once: true })
-
-  return controller.signal
 }
 
-function makeTimeoutSignal(timeoutMs?: number): AbortSignal | undefined {
-  if (!timeoutMs || timeoutMs <= 0) return undefined
-  const controller = new AbortController()
-  const id = window.setTimeout(() => controller.abort(), timeoutMs)
-  controller.signal.addEventListener(
-    'abort',
-    () => {
-      window.clearTimeout(id)
-    },
-    { once: true },
-  )
-  return controller.signal
+async function getValidAccessToken(): Promise<string> {
+  const { data, error } = await supabase.auth.getSession()
+  if (error) throw new Error(`[invokeFn] getSession failed: ${error.message}`)
+
+  let token = data.session?.access_token ?? null
+  if (!token) throw new Error('[invokeFn] No access token (user not authenticated)')
+
+  // If token expires soon, refresh proactively
+  const ttl = secondsUntilExpiry(token)
+  if (ttl !== null && ttl < 60) {
+    const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession()
+    if (refreshErr) throw new Error(`[invokeFn] refreshSession failed: ${refreshErr.message}`)
+    token = refreshed.session?.access_token ?? null
+    if (!token) throw new Error('[invokeFn] No access token after refresh')
+  }
+
+  return token
 }
 
-/**
- * invokeFn
- * - body is JSON-encoded
- * - attaches auth headers
- * - throws on non-2xx with best-effort error parsing
- */
-export async function invokeFn<T>(
+async function doFetch<T>(
   fnName: string,
-  body: Record<string, unknown> | null = null,
-  opts: InvokeOptions = {},
+  body: Record<string, unknown> | null,
+  token: string,
+  opts: InvokeOptions,
 ): Promise<T> {
-  invariantEnv()
-
-  const token = await getAccessToken()
   const url = `${SUPABASE_URL}/functions/v1/${fnName}`
-
-  // Default timeout (override per call)
-  const timeoutSignal = makeTimeoutSignal(opts.timeoutMs ?? 30_000)
-  const signal = mergeSignals(opts.signal, timeoutSignal)
 
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
+      authorization: `Bearer ${token}`, // use lowercase to avoid edge/runtime header quirks
+      'content-type': 'application/json',
+      accept: 'application/json',
       'x-application-name': 'sofis-restaurant-v2',
       ...(opts.headers ?? {}),
     },
     body: JSON.stringify(body ?? {}),
-    signal,
+    signal: opts.signal,
   })
 
   if (!res.ok) {
     const requestId = getRequestId(res)
     const { json, text } = await readBodySafe(res)
 
-    // Your edge functions often return: { error: "..." } (string)
-    // Or: { error: { code, message } }
     const code =
-      json?.error?.code ??
       json?.code ??
-      (typeof json?.error === 'string' ? `HTTP_${res.status}` : undefined) ??
+      json?.error?.code ??
       `HTTP_${res.status}`
 
     const msg =
-      json?.error?.message ??
       json?.message ??
-      (typeof json?.error === 'string' ? json.error : undefined) ??
+      json?.error?.message ??
+      (typeof json?.error === 'string' ? json.error : null) ??
       (text?.trim() ? text.trim() : res.statusText)
 
-    // Safe debug (no secrets)
-    console.error(`[invokeFn] ${fnName} failed`, {
+    throw new InvokeFnError({
+      fnName,
       status: res.status,
-      code,
-      msg,
+      code: String(code),
+      message: `[invokeFn] ${fnName} failed (${res.status}) ${String(code)}: ${msg}${requestId ? ` (req ${requestId})` : ''}`,
       requestId,
-      bodyPreview: text?.slice(0, 2000),
+      bodyPreview: (text ?? '').slice(0, 2000),
     })
-
-    throw new Error(
-      `[invokeFn] ${fnName} failed (${res.status}) ${code}: ${msg}${requestId ? ` (req ${requestId})` : ''}`,
-    )
-  }
-
-  // Some functions might return empty body; handle safely
-  const ct = res.headers.get('content-type') ?? ''
-  if (!ct.includes('application/json')) {
-    const text = await res.text()
-    throw new Error(`[invokeFn] ${fnName} returned non-JSON: ${text.slice(0, 200)}`)
   }
 
   return (await res.json()) as T
+}
+
+export async function invokeFn<T>(
+  fnName: string,
+  body: Record<string, unknown> | null,
+  opts: InvokeOptions = {},
+): Promise<T> {
+  requireEnv()
+
+  // 1) get token (refresh if needed)
+  let token = await getValidAccessToken()
+
+  try {
+    return await doFetch<T>(fnName, body, token, opts)
+  } catch (e) {
+    // 2) if we got a 401, refresh once and retry (handles stale JWT race)
+    if (e instanceof InvokeFnError && e.status === 401) {
+      const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession()
+      if (!refreshErr && refreshed.session?.access_token) {
+        token = refreshed.session.access_token
+        return await doFetch<T>(fnName, body, token, opts)
+      }
+    }
+    throw e
+  }
 }
