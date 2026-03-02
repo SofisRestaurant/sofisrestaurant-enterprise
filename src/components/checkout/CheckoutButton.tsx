@@ -6,6 +6,7 @@
 // - Strict, typed props + resilient runtime guards
 // - Uses useCheckout() as the single source of truth for state + effects
 // - Safe auth gating (no checkout attempt without authenticated user)
+// - Stripe env gating (never hard-crash app if key missing)
 // - Idempotent UX (prevents double submit / rapid clicks / stale retries)
 // - Clean error routing:
 //    • promo-specific errors forwarded to parent via onPromoError
@@ -18,6 +19,7 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, CreditCard, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
 
+import { env } from '@/lib/config/env';
 import { useCheckout } from '@/hooks/useCheckout'
 import { useUserContext } from '@/contexts/useUserContext';
 
@@ -30,6 +32,7 @@ type CheckoutButtonProps = {
   creditId?: string;
   onPromoError?: (msg: string) => void;
   className?: string;
+  disabled?: boolean;
 };
 
 type CountdownState = {
@@ -56,7 +59,6 @@ function normalizeCreditId(id?: string): string | undefined {
 }
 
 function isPromoRelatedMessage(msg: string): boolean {
-  // Keep it conservative—only route obvious promo failures to promo UI.
   return /(promo|coupon|code|discount)/i.test(msg);
 }
 
@@ -69,24 +71,26 @@ function safeSecondsLeft(untilMs: number): number {
 // Component
 // ============================================================================
 
-function CheckoutButton({ promoCode, creditId, onPromoError, className }: CheckoutButtonProps) {
+function CheckoutButton({
+  promoCode,
+  creditId,
+  onPromoError,
+  className,
+  disabled: disabledProp = false,
+}: CheckoutButtonProps) {
   const { user, loading: authLoading, isAuthenticated } = useUserContext();
 
-  const {
-    checkout,
-    isLoading,
-    error,
-    errorCode,
-    canRetry,
-    retryAfter, // ms
-    reset,
-    canCheckout,
-  } = useCheckout();
+  const { checkout, isLoading, error, errorCode, canRetry, retryAfter, reset, canCheckout } =
+    useCheckout();
+
+  // --------------------------------------------------------------------------
+  // Stripe config gate (prevents app crash + prevents checkout attempts)
+  // --------------------------------------------------------------------------
+  const stripeEnabled = Boolean(env?.stripe?.enabled);
 
   // --------------------------------------------------------------------------
   // Refs: mount safety, click-deduping, and timers
   // --------------------------------------------------------------------------
-
   const mountedRef = useRef(true);
   const inflightRef = useRef(false);
   const retryTimerRef = useRef<number | null>(null);
@@ -105,7 +109,6 @@ function CheckoutButton({ promoCode, creditId, onPromoError, className }: Checko
   // --------------------------------------------------------------------------
   // Normalize inputs (stable)
   // --------------------------------------------------------------------------
-
   const normalizedPromo = useMemo(() => normalizePromo(promoCode), [promoCode]);
   const normalizedCreditId = useMemo(() => normalizeCreditId(creditId), [creditId]);
 
@@ -117,7 +120,6 @@ function CheckoutButton({ promoCode, creditId, onPromoError, className }: Checko
   // --------------------------------------------------------------------------
   // Retry countdown (rate-limit UX)
   // --------------------------------------------------------------------------
-
   useEffect(() => {
     if (retryTimerRef.current) {
       window.clearInterval(retryTimerRef.current);
@@ -138,7 +140,6 @@ function CheckoutButton({ promoCode, creditId, onPromoError, className }: Checko
 
       if (secondsLeft <= 0) {
         setCountdown(null);
-        // Cooldown ended; allow another attempt.
         reset();
         if (retryTimerRef.current) window.clearInterval(retryTimerRef.current);
         retryTimerRef.current = null;
@@ -148,9 +149,7 @@ function CheckoutButton({ promoCode, creditId, onPromoError, className }: Checko
       setCountdown({ secondsLeft, untilMs });
     };
 
-    // Prime immediately so UI updates without delay.
     tick();
-
     retryTimerRef.current = window.setInterval(tick, 250);
 
     return () => {
@@ -162,13 +161,14 @@ function CheckoutButton({ promoCode, creditId, onPromoError, className }: Checko
   // --------------------------------------------------------------------------
   // Derived UI state
   // --------------------------------------------------------------------------
-
   const isAuthed = Boolean(isAuthenticated && user?.id);
   const cooldownSeconds = countdown?.secondsLeft ?? 0;
   const disabledBecauseCooldown = cooldownSeconds > 0;
 
   const disabled =
+    disabledProp ||
     authLoading ||
+    !stripeEnabled ||
     !isAuthed ||
     !canCheckout ||
     isLoading ||
@@ -176,19 +176,25 @@ function CheckoutButton({ promoCode, creditId, onPromoError, className }: Checko
     inflightRef.current;
 
   const buttonLabel = useMemo(() => {
+    if (!stripeEnabled) return 'Checkout unavailable';
     if (authLoading) return 'Loading…';
     if (!isAuthed) return 'Log in to pay';
     if (isLoading) return 'Creating secure checkout…';
     if (disabledBecauseCooldown) return `Retry in ${cooldownSeconds}s`;
     return 'Proceed to Payment';
-  }, [authLoading, isAuthed, isLoading, disabledBecauseCooldown, cooldownSeconds]);
+  }, [stripeEnabled, authLoading, isAuthed, isLoading, disabledBecauseCooldown, cooldownSeconds]);
 
   // --------------------------------------------------------------------------
   // Actions
   // --------------------------------------------------------------------------
-
   const handleCheckout = useCallback(async () => {
     if (disabled) return;
+
+    // Stripe must be configured (never throw here—show UI error)
+    if (!stripeEnabled) {
+      onPromoError?.('Checkout is temporarily unavailable. Please try again later.');
+      return;
+    }
 
     if (!isAuthed || !user) {
       window.alert('Please log in to continue');
@@ -202,17 +208,28 @@ function CheckoutButton({ promoCode, creditId, onPromoError, className }: Checko
         customer_uid: user.id,
         email: user.email,
         name: user.name ?? undefined,
-        phone: (user as any)?.phone ?? undefined,
+        phone: (user as unknown as { phone?: string | null })?.phone ?? undefined,
         promo_code: normalizedPromo,
         credit_id: normalizedCreditId,
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Checkout failed';
       if (onPromoError && isPromoRelatedMessage(msg)) onPromoError(msg);
+      // all other errors are handled by the hook's `error` state
     } finally {
       inflightRef.current = false;
     }
-  }, [disabled, isAuthed, user, checkout, normalizedPromo, normalizedCreditId, onPromoError]);
+  }, [
+    disabled,
+    stripeEnabled,
+    isAuthed,
+    user,
+    checkout,
+    normalizedPromo,
+    normalizedCreditId,
+    onPromoError,
+  ]);
+
   const handleRetry = useCallback(() => {
     if (disabledBecauseCooldown) return;
     reset();
@@ -239,6 +256,41 @@ function CheckoutButton({ promoCode, creditId, onPromoError, className }: Checko
           <span className="text-base font-semibold">Loading…</span>
         </div>
       </button>
+    );
+  }
+
+  // ========================================================================
+  // Render: Stripe missing (friendly, non-crashing)
+  // ========================================================================
+
+  if (!stripeEnabled) {
+    return (
+      <div className={cx('space-y-3', className)} aria-live="polite">
+        <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-amber-900">Checkout is not configured.</p>
+            <p className="mt-1 text-xs text-amber-800">
+              Missing <span className="font-mono">VITE_STRIPE_PUBLIC_KEY</span>. Add it in Netlify
+              env vars and redeploy.
+            </p>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          disabled
+          className={cx(
+            'w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm font-semibold text-zinc-900',
+            'opacity-50 cursor-not-allowed',
+          )}
+        >
+          <span className="flex items-center justify-center gap-2">
+            <ShieldCheck className="h-4 w-4" />
+            Checkout unavailable
+          </span>
+        </button>
+      </div>
     );
   }
 

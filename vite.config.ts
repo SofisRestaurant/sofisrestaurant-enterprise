@@ -1,3 +1,4 @@
+// vite.config.ts
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
@@ -7,27 +8,22 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
-
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, './src'),
+        '@': path.resolve(__dirname, 'src'),
       },
     },
-
     server: {
       port: 3000,
       open: true,
     },
-
     esbuild: {
       drop: isProduction ? ['console', 'debugger'] : [],
     },
-
     build: {
       outDir: 'dist',
       sourcemap: false,
       chunkSizeWarningLimit: 900,
-
       rollupOptions: {
         output: {
           manualChunks: {

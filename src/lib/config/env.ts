@@ -1,10 +1,9 @@
+// src/lib/config/env.ts
 export type AppMode = 'development' | 'production' | 'test'
 
 type EnvKey = keyof ImportMetaEnv
 
 function readEnv(key: EnvKey): unknown {
-  // typed-eslint sometimes treats indexed access as unsafe.
-  // Narrow from unknown -> string explicitly.
   return (import.meta.env as unknown as Record<string, unknown>)[key as string]
 }
 
@@ -26,13 +25,17 @@ function mode(): AppMode {
   return m === 'production' || m === 'test' ? m : 'development'
 }
 
+const stripePublicKey = getOptionalString('VITE_STRIPE_PUBLIC_KEY')
+
 export const env = {
   supabase: {
     url: mustGetString('VITE_SUPABASE_URL'),
     anonKey: mustGetString('VITE_SUPABASE_ANON_KEY'),
   },
   stripe: {
-    publicKey: mustGetString('VITE_STRIPE_PUBLIC_KEY'),
+    // ✅ Don’t crash app: allow site to load even if Stripe isn't configured
+    enabled: Boolean(stripePublicKey),
+    publicKey: stripePublicKey ?? '',
   },
   api: {
     baseUrl: getOptionalString('VITE_API_BASE_URL') ?? '',
