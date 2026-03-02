@@ -1,254 +1,303 @@
+// =============================================================================
 // src/domain/pricing/pricing.engine.ts
-// ============================================================================
-// PRICING ENGINE — Deterministic, auditable, pure functional
-// ============================================================================
-// All calculations are pure: same inputs → same outputs, always.
-// pricing_hash enables server-side tamper detection at checkout.
+// =============================================================================
+// PricingEngine — Cents-first, production-grade pricing utilities.
 //
-// Hash: djb2 (sync, no async overhead). Suitable for cart integrity checks.
-// For cryptographic storage use computePricingHashAsync (SHA-256).
-// ============================================================================
+// Key principles:
+// - All internal math is integer cents.
+// - No floating point is used for totals.
+// - `formatPrice()` is cents-based (for backward compatibility in UI).
+// - `normalizeMoney()` supports future merch needs (explicit dollars vs cents).
+// - `pricing_hash` is a *client-side integrity tag* (NOT security). Server must
+//   validate prices against DB regardless.
+//
+// Public API (kept stable):
+// - PricingEngine.formatPrice(cents) => "$x.xx"  ✅ cents-based
+// - PricingEngine.calculate(itemId, unitPriceCents, compatModifiers, qty)
+// - PricingEngine.buildCartModifiers(item, selectedByGroup)
+//
+// =============================================================================
 
-import type {
-  MenuItem,
-  ModifierGroup,
-  SelectedModifier,
-  CartItemModifier,
-  PricingBreakdown,
-  ConfigurationValidation,
-  ModifierValidationResult,
-} from '@/domain/menu/menu.types'
+export type MoneyUnit = 'cents' | 'dollars';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────────────────────────────────────
+export type CartItemModifierCompat = {
+  id: string;
+  groupId: string;
+  name: string;
+  /** integer cents; may be negative */
+  priceAdjustmentCents: number;
+};
 
-const TAX_RATE = 0.0875 // 8.75% — update per jurisdiction
+export type SelectedModLike = {
+  id: string;
+  name: string;
+  // your domain uses price_adjustment; some drift uses priceAdjustment
+  price_adjustment?: number;
+  priceAdjustment?: number;
+};
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Rounding — integer cents arithmetic to avoid float drift
-// ─────────────────────────────────────────────────────────────────────────────
+export type SelectedByGroup = Record<string, SelectedModLike[]>;
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
+// Minimal “menu item” shape we need for modifier extraction.
+// We intentionally accept camelCase and snake_case drift.
+type ModifierLike = {
+  id: string;
+  name: string;
+  price_adjustment?: number | null;
+  priceAdjustment?: number | null;
+};
+
+type ModifierGroupLike = {
+  id: string;
+  name: string;
+  modifiers?: ModifierLike[] | null;
+};
+
+type MenuItemLike = {
+  id: string;
+  modifier_groups?: ModifierGroupLike[] | null;
+  modifierGroups?: ModifierGroupLike[] | null;
+};
+
+// -----------------------------------------------------------------------------
+// Guards / helpers (no unsafe member access)
+// -----------------------------------------------------------------------------
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Hash
-// ─────────────────────────────────────────────────────────────────────────────
+function asString(v: unknown, fallback = ''): string {
+  return typeof v === 'string' ? v : fallback;
+}
 
-function djb2(input: string): string {
-  let h = 5381
+function asNumber(v: unknown, fallback: number): number {
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function clampInt(n: number, min: number, max: number): number {
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, Math.trunc(n)));
+}
+
+/**
+ * IMPORTANT:
+ * - Treat anything that is not a finite number as 0 (or fallback).
+ * - Always return integer cents.
+ */
+function toCentsInt(n: number, fallback = 0): number {
+  if (!Number.isFinite(n)) return fallback;
+  return Math.trunc(Math.round(n));
+}
+
+/**
+ * Detect “dollars-like” floats vs integer cents.
+ * Examples:
+ * - 3.99 -> dollars-like
+ * - 399  -> cents-like
+ *
+ * This is a heuristic. For merch later, prefer normalizeMoney(value, 'dollars'|'cents')
+ * instead of relying on guessing.
+ */
+function guessMoneyUnit(value: number): MoneyUnit {
+  // If it has decimals, it’s almost certainly dollars.
+  if (Math.abs(value % 1) > 0) return 'dollars';
+
+  // If it’s small like 2, 3, 13, also likely dollars (but could be cents).
+  // We only guess dollars for small integers to catch cases like `price: 3`.
+  // If you ever have $0.03 items, use explicit units.
+  if (Math.abs(value) > 0 && Math.abs(value) < 50) return 'dollars';
+
+  // Otherwise assume cents.
+  return 'cents';
+}
+
+/**
+ * Normalize money input to integer cents.
+ * - If you pass unit explicitly, it will be respected.
+ * - If unit omitted, we guess (safe for your current menu case).
+ */
+export function normalizeMoney(value: unknown, unit?: MoneyUnit): number {
+  const raw = asNumber(value, 0);
+  const u = unit ?? guessMoneyUnit(raw);
+
+  if (u === 'dollars') {
+    // dollars -> cents (integer)
+    return toCentsInt(raw * 100, 0);
+  }
+  // cents already
+  return toCentsInt(raw, 0);
+}
+
+/**
+ * Stable, deterministic, fast hash for client integrity tags.
+ * NOT cryptographic security. Server must validate.
+ */
+function fnv1a32(input: string): string {
+  let hash = 0x811c9dc5;
   for (let i = 0; i < input.length; i++) {
-    h = ((h << 5) + h) ^ input.charCodeAt(i)
-    h = h >>> 0
+    hash ^= input.charCodeAt(i);
+    hash = (hash * 0x01000193) >>> 0;
   }
-  return h.toString(16).padStart(8, '0')
+  // base36 short tag
+  return hash.toString(36);
 }
 
-function canonicalInput(
-  itemId:    string,
-  basePrice: number,
-  modifiers: CartItemModifier[],
-  quantity:  number,
-): string {
-  // Sort groups + selections for determinism regardless of selection order
-  const mods = [...modifiers]
-    .sort((a, b) => a.group_id.localeCompare(b.group_id))
-    .map((m) => ({
-      g: m.group_id,
-      s: [...m.selections]
-        .sort((a, b) => a.id.localeCompare(b.id))
-        .map((sel) => `${sel.id}:${sel.price_adjustment}`),
-    }))
-  return JSON.stringify({ itemId, basePrice, mods, quantity })
+function canonicalizeModifiers(mods: CartItemModifierCompat[]): string {
+  // Stable ordering
+  const sorted = [...mods].sort((a, b) => {
+    if (a.groupId !== b.groupId) return a.groupId.localeCompare(b.groupId);
+    if (a.id !== b.id) return a.id.localeCompare(b.id);
+    return a.priceAdjustmentCents - b.priceAdjustmentCents;
+  });
+
+  return sorted
+    .map((m) => `${m.groupId}:${m.id}:${m.priceAdjustmentCents}`)
+    .join('|');
 }
 
-export function computePricingHashSync(
-  itemId:    string,
-  basePrice: number,
-  modifiers: CartItemModifier[],
-  quantity:  number,
-): string {
-  return djb2(canonicalInput(itemId, basePrice, modifiers, quantity))
-}
-
-/** Async SHA-256 version for server-side or audit logging */
-export async function computePricingHashAsync(
-  itemId:    string,
-  basePrice: number,
-  modifiers: CartItemModifier[],
-  quantity:  number,
-): Promise<string> {
-  const input = canonicalInput(itemId, basePrice, modifiers, quantity)
-  if (typeof crypto !== 'undefined' && crypto.subtle) {
-    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input))
-    return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('')
-  }
-  return djb2(input)
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Engine
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// PricingEngine
+// -----------------------------------------------------------------------------
 
 export class PricingEngine {
-
-  // ── Core calculation ───────────────────────────────────────────────────────
-
-  static calculate(
-    itemId:    string,
-    basePrice: number,
-    modifiers: CartItemModifier[],
-    quantity:  number,
-  ): PricingBreakdown {
-    const qty = Math.max(1, Math.floor(quantity))
-
-    const modifierTotal = round2(
-      modifiers.reduce(
-        (sum, mod) => sum + mod.selections.reduce((s, sel) => s + (sel.price_adjustment ?? 0), 0),
-        0,
-      ),
-    )
-
-    const unitPrice = round2(basePrice + modifierTotal)
-    const subtotal  = round2(unitPrice * qty)
-    const tax       = round2(subtotal * TAX_RATE)
-    const total     = round2(subtotal + tax)
-
-    return {
-      base_price:      round2(basePrice),
-      modifier_total:  modifierTotal,
-      unit_price:      unitPrice,
-      quantity:        qty,
-      subtotal,
-      tax,
-      total,
-      pricing_hash:    computePricingHashSync(itemId, basePrice, modifiers, qty),
-    }
+  /**
+   * ✅ BACKWARD-COMPAT:
+   * In your UI, you currently call PricingEngine.formatPrice(unitPriceCents).
+   * This implementation expects cents and returns a USD string.
+   */
+  static formatPrice(cents: number): string {
+    const c = clampInt(toCentsInt(cents, 0), -50_000_000, 50_000_000);
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(c / 100);
   }
 
-  // ── Cart-level totals ──────────────────────────────────────────────────────
-
-  static cartTotals(subtotals: number[]): { subtotal: number; tax: number; total: number } {
-    const subtotal = round2(subtotals.reduce((s, n) => s + n, 0))
-    const tax      = round2(subtotal * TAX_RATE)
-    return { subtotal, tax, total: round2(subtotal + tax) }
+  /** For merch or any future “explicit dollars” UI usage */
+  static formatDollars(dollars: number): string {
+    return PricingEngine.formatPrice(normalizeMoney(dollars, 'dollars'));
   }
 
-  // ── Modifier builders ──────────────────────────────────────────────────────
+  /** Explicit cents formatting (just alias; clearer intent in new code) */
+  static formatCents(cents: number): string {
+    return PricingEngine.formatPrice(cents);
+  }
 
   /**
-   * Convert the raw selection map (group_id → SelectedModifier[]) into
-   * CartItemModifier[] for storing in the cart.
-   * Only includes groups with at least one selection.
+   * Build compat modifiers array from:
+   * - MenuItem (with modifier groups)
+   * - SelectedByGroup (groupId -> SelectedModLike[])
+   *
+   * This is used ONLY for display math + pricing_hash input.
+   * Server must re-price from DB.
    */
-  static buildCartModifiers(
-    item:              MenuItem,
-    selectedModifiers: Record<string, SelectedModifier[]>,
-  ): CartItemModifier[] {
-    return (item.modifier_groups ?? [])
-      .map((group) => ({
-        group_id:   group.id,
-        group_name: group.name,
-        selections: selectedModifiers[group.id] ?? [],
-      }))
-      .filter((m) => m.selections.length > 0)
-  }
+  static buildCartModifiers(item: unknown, selected: unknown): CartItemModifierCompat[] {
+    const out: CartItemModifierCompat[] = [];
 
-  // ── Validation ─────────────────────────────────────────────────────────────
+    if (!isRecord(selected)) return out;
 
-  static validateGroup(
-    group:      ModifierGroup,
-    selections: SelectedModifier[],
-  ): ModifierValidationResult {
-    if (group.required && selections.length === 0) {
-      return { valid: false, error: 'This selection is required', code: 'REQUIRED_MISSING' }
-    }
-    if (!selections.length) return { valid: true }
+    // Extract group list from item (snake/camel drift)
+    const it = item as MenuItemLike;
+    const groups = (it.modifier_groups ?? it.modifierGroups ?? []) ?? [];
 
-    if (group.min_selections && selections.length < group.min_selections) {
-      return {
-        valid: false,
-        error: `Please select at least ${group.min_selections} option${group.min_selections > 1 ? 's' : ''}`,
-        code: 'MIN_NOT_MET',
+    // Build a quick lookup for known modifiers -> canonical adjustment
+    const lookup = new Map<string, { name: string; groupId: string; adjCents: number }>();
+
+    for (const g of groups) {
+      if (!g || typeof g.id !== 'string') continue;
+      const mods = (g.modifiers ?? []) ?? [];
+      for (const m of mods) {
+        if (!m || typeof m.id !== 'string') continue;
+        const adj =
+          typeof m.price_adjustment === 'number'
+            ? m.price_adjustment
+            : typeof m.priceAdjustment === 'number'
+              ? m.priceAdjustment
+              : 0;
+
+        lookup.set(`${g.id}:${m.id}`, {
+          name: typeof m.name === 'string' ? m.name : '',
+          groupId: g.id,
+          adjCents: normalizeMoney(adj, guessMoneyUnit(adj)), // handles accidental dollars
+        });
       }
     }
-    if (group.max_selections && selections.length > group.max_selections) {
-      return {
-        valid: false,
-        error: `Maximum ${group.max_selections} selection${group.max_selections > 1 ? 's' : ''} allowed`,
-        code: 'MAX_EXCEEDED',
+
+    // Walk selected groups
+    for (const [groupId, arr] of Object.entries(selected as SelectedByGroup)) {
+      if (!Array.isArray(arr)) continue;
+
+      for (const raw of arr) {
+        const id = asString(raw?.id).trim();
+        const name = asString(raw?.name).trim();
+        if (!groupId || !id) continue;
+
+        // Prefer canonical lookup adjustment when available (safer)
+        const hit = lookup.get(`${groupId}:${id}`);
+
+        const adjRaw =
+          typeof raw?.price_adjustment === 'number'
+            ? raw.price_adjustment
+            : typeof raw?.priceAdjustment === 'number'
+              ? raw.priceAdjustment
+              : 0;
+
+        const priceAdjustmentCents = hit
+          ? clampInt(hit.adjCents, -50_000_000, 50_000_000)
+          : clampInt(normalizeMoney(adjRaw, guessMoneyUnit(adjRaw)), -50_000_000, 50_000_000);
+
+        out.push({
+          id,
+          groupId,
+          name: hit?.name?.trim() || name || id,
+          priceAdjustmentCents,
+        });
       }
     }
-    return { valid: true }
+
+    return out;
   }
 
-  static validateConfiguration(
-    item:              MenuItem,
-    selectedModifiers: Record<string, SelectedModifier[]>,
-  ): ConfigurationValidation {
-    const errors: Record<string, string> = {}
+  /**
+   * Core pricing math (CLIENT DISPLAY ONLY)
+   * - itemId: string identifier
+   * - basePriceCents: integer cents (use normalizeMoney before calling if needed)
+   * - modifiers: CartItemModifierCompat[] (priceAdjustmentCents included)
+   * - quantity: integer
+   *
+   * Returns:
+   * - subtotal: integer cents
+   * - pricing_hash: deterministic integrity tag
+   */
+  static calculate(
+    itemId: string,
+    basePriceCents: number,
+    modifiers: CartItemModifierCompat[],
+    quantity: number,
+  ): { subtotal: number; pricing_hash: string } {
+    const id = asString(itemId).trim();
+    const qty = clampInt(toCentsInt(quantity, 1), 1, 99);
 
-    for (const group of (item.modifier_groups ?? [])) {
-      const result = PricingEngine.validateGroup(group, selectedModifiers[group.id] ?? [])
-      if (!result.valid && result.error) errors[group.id] = result.error
-    }
+    // Base must be cents. Clamp to protect UI.
+    const base = clampInt(toCentsInt(basePriceCents, 0), 0, 50_000_000);
 
-    return { valid: Object.keys(errors).length === 0, errors }
-  }
+    const modSum = clampInt(
+      modifiers.reduce((sum, m) => sum + clampInt(toCentsInt(m.priceAdjustmentCents, 0), -50_000_000, 50_000_000), 0),
+      -50_000_000,
+      50_000_000,
+    );
 
-  // ── Inventory helpers ──────────────────────────────────────────────────────
+    const unit = clampInt(base + modSum, 0, 50_000_000);
+    const subtotal = clampInt(unit * qty, 0, 2_000_000_000); // $20,000,000 cap for sanity
 
-  static isLowStock(item: MenuItem): boolean {
-    return (
-      typeof item.inventory_count === 'number' &&
-      item.inventory_count > 0 &&
-      item.inventory_count <= item.low_stock_threshold
-    )
-  }
+    // pricing_hash (client integrity tag)
+    const payload = `${id}|${base}|${qty}|${canonicalizeModifiers(modifiers)}`;
+    const pricing_hash = fnv1a32(payload);
 
-  static isOutOfStock(item: MenuItem): boolean {
-    return typeof item.inventory_count === 'number' && item.inventory_count === 0
-  }
-
-  static getStockStatus(item: MenuItem): 'available' | 'low' | 'out' {
-    if (PricingEngine.isOutOfStock(item)) return 'out'
-    if (PricingEngine.isLowStock(item))   return 'low'
-    return 'available'
-  }
-
-  static getStockMessage(item: MenuItem): string | null {
-    if (typeof item.inventory_count !== 'number') return null
-    if (item.inventory_count === 0) return 'Out of Stock'
-    if (item.inventory_count === 1) return 'Only 1 left!'
-    if (PricingEngine.isLowStock(item)) return `Only ${item.inventory_count} left!`
-    return null
-  }
-
-  // ── Display helpers ────────────────────────────────────────────────────────
-
-  static formatPrice(amount: number): string {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency', currency: 'USD',
-      minimumFractionDigits: 2, maximumFractionDigits: 2,
-    }).format(amount)
-  }
-
-  static getModifierBreakdown(modifiers: CartItemModifier[]): string {
-    return modifiers
-      .filter((m) => m.selections.length > 0)
-      .map((m) => {
-        const sels = m.selections
-          .map((s) => `${s.name}${s.price_adjustment > 0 ? ` (+${PricingEngine.formatPrice(s.price_adjustment)})` : ''}`)
-          .join(', ')
-        return `${m.group_name}: ${sels}`
-      })
-      .join(' • ')
-  }
-
-  static getModifierSummary(modifiers: CartItemModifier[]): string {
-    const n = modifiers.reduce((sum, m) => sum + m.selections.length, 0)
-    return n ? `${n} customization${n !== 1 ? 's' : ''}` : 'No customizations'
+    return { subtotal, pricing_hash };
   }
 }

@@ -1,7 +1,8 @@
 // ============================================================================
 // ORDER DOMAIN MODEL — SINGLE SOURCE OF TRUTH (PRODUCTION 2026)
 // ============================================================================
-import type { Database } from '@/lib/supabase/database.types'
+import type { Database } from '@/types/supabase'
+
 type Json =
   Database['public']['Tables']['orders']['Row']['metadata']
 /**

@@ -19,8 +19,8 @@ truncate table public.profiles cascade;
 
 insert into public.menu_items (name, description, price, category)
 values
-('Carne Asada Taco', 'Fresh grilled steak with onions & cilantro', 2.99, 'tacos'),
-('Al Pastor Taco', 'Marinated pork with pineapple', 2.79, 'tacos'),
+('Carne Asada Taco', 'Fresh grilled steak with onions & cilantro', 2.99, 'lunch'),
+('Al Pastor Taco', 'Marinated pork with pineapple', 2.79, 'lunch'),
 ('Huevos Rancheros', 'Eggs with ranchera sauce & beans', 12.99, 'breakfast'),
 ('Breakfast Burrito', 'Eggs, potato & cheese', 10.49, 'breakfast'),
 ('Horchata', 'Sweet rice drink', 3.49, 'drinks'),

@@ -3,7 +3,8 @@
 // ORDER MAPPER — DATABASE ROW TO DOMAIN ENTITY (FINAL PRODUCTION)
 // ============================================================================
 
-import type { Database } from '@/lib/supabase/database.types'
+import type { Database } from '@/types/supabase'
+
 import {
   OrderType,
   isOrderType,

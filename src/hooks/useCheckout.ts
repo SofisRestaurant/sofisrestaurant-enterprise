@@ -3,7 +3,7 @@
 // USE CHECKOUT HOOK — PRODUCTION GRADE 2026
 // ============================================================================
 
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useCart } from './useCart'
 import type { CheckoutData } from '@/domain/checkout/checkout.types'
 import {
@@ -12,6 +12,8 @@ import {
   CheckoutNetworkError,
   CheckoutRateLimitError,
 } from '@/features/checkout/checkout.api'
+import type { CartItem, CartModifier } from '@/features/cart/cart.types'
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -56,17 +58,57 @@ const INITIAL_STATE: CheckoutState = {
 }
 
 // ============================================================================
+// Helpers (pure)
+// ============================================================================
+
+type CheckoutModifierGroup = {
+  group_id: string
+  selections: string[]
+}
+
+function groupModifiersForCheckout(mods: CartModifier[]): CheckoutModifierGroup[] {
+  const map = new Map<string, string[]>()
+
+  for (const m of mods) {
+    if (!m?.groupId || !m?.id) continue
+    const list = map.get(m.groupId) ?? []
+    list.push(m.id)
+    map.set(m.groupId, list)
+  }
+
+  return Array.from(map.entries()).map(([group_id, selections]) => ({
+    group_id,
+    selections,
+  }))
+}
+
+function buildCheckoutItems(items: CartItem[]): CheckoutData['items'] {
+  return items.map((item) => ({
+    item_id: item.menuItemId,
+    quantity: Math.max(1, Math.round(item.quantity)),
+    modifiers: groupModifiersForCheckout(item.modifiers),
+    special_instructions: item.notes ?? undefined,
+    pricing_hash: item.pricingHash,
+  }))
+}
+
+// ============================================================================
 // HOOK
 // ============================================================================
 
 export function useCheckout(): UseCheckoutReturn {
-  const { items, total } = useCart()
+  const { items } = useCart()
+
+  // Always compute derived totals once (no redeclare in callback)
+  const total = useMemo(() => {
+    return items.reduce((sum, i) => sum + (i.lineTotalCents ?? 0), 0)
+  }, [items])
 
   const [state, setState] = useState<CheckoutState>(INITIAL_STATE)
 
   // Prevent double-clicks and race conditions
   const lockRef = useRef(false)
-  
+
   // Track if component is mounted (prevent state updates after unmount)
   const mountedRef = useRef(true)
 
@@ -81,7 +123,6 @@ export function useCheckout(): UseCheckoutReturn {
   // RESET STATE
   // ======================================================
   const reset = useCallback(() => {
-    
     setState(INITIAL_STATE)
     lockRef.current = false
   }, [])
@@ -112,15 +153,12 @@ export function useCheckout(): UseCheckoutReturn {
         if (!customer.customer_uid) {
           throw new CheckoutValidationError(
             'User identity missing. Please log in again.',
-            'customer_uid'
+            'customer_uid',
           )
         }
 
         if (!customer.email?.includes('@')) {
-          throw new CheckoutValidationError(
-            'Valid email is required',
-            'email'
-          )
+          throw new CheckoutValidationError('Valid email is required', 'email')
         }
 
         // ==================================
@@ -142,62 +180,60 @@ export function useCheckout(): UseCheckoutReturn {
         console.log('👤 Customer:', customer.email)
 
         // ==================================
-        // BUILD PAYLOAD
+        // BUILD PAYLOAD (FIXED)
+        // - Do NOT call useCart() again
+        // - Do NOT reference "checkout.email" (that's the function)
+        // - Use the "customer" param
         // ==================================
-       const payload: CheckoutData = {
-  items: items.map((item) => ({
-    item_id: item.item_id,
-    quantity: Math.max(1, item.quantity),
-    modifiers: item.modifiers.map((group) => ({
-      group_id: group.group_id,
-      selections: group.selections.map((sel) => sel.id),
-    })),
-    special_instructions: item.special_instructions,
-    pricing_hash: item.pricing_hash,
-  })),
 
-  customer: {
-    email: customer.email,
-    name: customer.name,
-    phone: customer.phone,
-    address: customer.address,
-    customer_uid: customer.customer_uid,
-  },
+        const email = customer.email
+        const name = customer.name || undefined
+        const phone = customer.phone || undefined
 
-  successUrl: `${window.location.origin}/order-success`,
-  cancelUrl: `${window.location.origin}/checkout`,
-}
+        const successUrl = `${window.location.origin}/order-success`
+        const cancelUrl = `${window.location.origin}/checkout`
+
+        const payload: CheckoutData = {
+          items: buildCheckoutItems(items),
+          customer: {
+            email,
+            name,
+            phone,
+            // address is optional; include only if your CheckoutData supports it
+            ...(customer.address ? { address: customer.address } : {}),
+            // if your API expects uid here, include only if it exists in CheckoutData.customer
+            ...(customer.customer_uid ? { customer_uid: customer.customer_uid } : {}),
+          } as CheckoutData['customer'],
+          successUrl,
+          cancelUrl,
+          // If your CheckoutData supports these fields, keep them.
+          ...(customer.promo_code ? { promo_code: customer.promo_code } : {}),
+          ...(customer.credit_id ? { credit_id: customer.credit_id } : {}),
+          // Optional fraud signal (if supported by your API contract)
+          frontend_total: total / 100,
+        } as CheckoutData
 
         // ==================================
         // CREATE SESSION
         // ==================================
-           console.log('🔄 Creating checkout session...')
-const session = await createCheckoutSession(payload)
+        console.log('🔄 Creating checkout session...')
+        const session = await createCheckoutSession(payload)
 
-if (!session?.url) {
-  throw new Error('Invalid checkout session response')
-}
+        if (!session?.url) {
+          throw new Error('Invalid checkout session response')
+        }
 
-console.log('✅ Session created:', session.id)
-console.groupEnd()
+        console.log('✅ Session created:', session.id)
+        console.groupEnd()
 
-// Redirect OUTSIDE React lifecycle
-setTimeout(() => {
-  console.log('🔀 Redirecting to Stripe...')
-  window.location.assign(session.url)
-}, 0)
+        // Redirect OUTSIDE React lifecycle
+        setTimeout(() => {
+          console.log('🔀 Redirecting to Stripe...')
+          window.location.assign(session.url)
+        }, 0)
 
-// stop further execution
-return
-
-        // ==================================
-        // REDIRECT
-        // ==================================
-       
-
-        // Note: Code below won't execute due to redirect,
-        // but keeping for completeness
-
+        // stop further execution
+        return
       } catch (err: unknown) {
         console.error('🔥 Checkout error:', err)
         console.groupEnd()
@@ -252,7 +288,7 @@ return
         }
       }
     },
-    [items, total]
+    [items, total],
   )
 
   // ======================================================

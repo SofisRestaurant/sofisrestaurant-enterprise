@@ -1,137 +1,171 @@
 // supabase/functions/promo-validate/index.ts
+// =============================================================================
+// PROMO VALIDATE — PRODUCTION (RLS-SAFE AUTH + SERVICE READS)
+// =============================================================================
+// - Auth required (JWT)
+// - Uses anon client for caller identity (RLS enforced)
+// - Uses service client for promo/smart_discount reads (validation is server-only)
+// =============================================================================
 
-import { createClient } from "@supabase/supabase-js";
+import { createAnonClient, createServiceClient } from "../_shared/supabase.ts";
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+type RawBody = {
+  code?: unknown;
+  cartTotalCents?: unknown;
+};
 
-Deno.serve(async (req) => {
+function asString(v: unknown, max = 64): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  if (!s) return null;
+  return s.slice(0, max);
+}
+
+function asInt(v: unknown, fallback = 0): number {
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.floor(n));
+}
+
+function json(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export default Deno.serve(async (req) => {
   try {
+    if (req.method === "OPTIONS") return new Response(null, { status: 204 });
+    if (req.method !== "POST") return json({ valid: false, reason: "Method not allowed" }, 405);
+
     // ------------------------------------------------------------------
-    // 1️⃣ Auth Required
+    // 1) AUTH REQUIRED (JWT)
     // ------------------------------------------------------------------
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response("Unauthorized", { status: 401 });
+    const authHeader =
+      req.headers.get("authorization") ?? req.headers.get("Authorization") ?? "";
+
+    if (!authHeader.startsWith("Bearer ")) {
+      return json({ valid: false, reason: "Unauthorized" }, 401);
     }
 
-    const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-      global: { headers: { Authorization: authHeader } },
-    });
+    const jwt = authHeader.slice("Bearer ".length).trim();
+    if (!jwt) return json({ valid: false, reason: "Unauthorized" }, 401);
 
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
+    const anon = createAnonClient(jwt);
+    const { data: authData, error: authErr } = await anon.auth.getUser();
 
-    if (authError || !user) {
-      return new Response("Unauthorized", { status: 401 });
+    if (authErr || !authData?.user) {
+      return json({ valid: false, reason: "Unauthorized" }, 401);
     }
 
-    const userId = user.id;
+    const userId = authData.user.id;
 
     // ------------------------------------------------------------------
-    // 2️⃣ Parse Input
+    // 2) PARSE INPUT
     // ------------------------------------------------------------------
-    const body = await req.json();
-    const code: string | undefined = body?.code;
-    const cartTotalCents: number = body?.cartTotalCents ?? 0;
-
-    if (!code) {
-      return Response.json(
-        { valid: false, reason: "Code required" },
-        { status: 400 }
-      );
+    let body: RawBody;
+    try {
+      body = (await req.json()) as RawBody;
+    } catch {
+      return json({ valid: false, reason: "Invalid JSON" }, 400);
     }
 
-    const normalizedCode = code.trim().toUpperCase();
+    const codeRaw = asString(body.code, 50);
+    const cartTotalCents = asInt(body.cartTotalCents, 0);
+
+    if (!codeRaw) {
+      return json({ valid: false, reason: "Code required" }, 400);
+    }
+
+    const normalizedCode = codeRaw.toUpperCase();
 
     // ------------------------------------------------------------------
-    // 3️⃣ Load Promotion
+    // 3) LOAD PROMO (SERVICE READ)
     // ------------------------------------------------------------------
-    const { data: promo, error: promoError } = await supabase
+    const svc = createServiceClient();
+
+    const { data: promo, error: promoError } = await svc
       .from("promotions")
-      .select("*")
+      .select(
+        "id,type,value,active,starts_at,ends_at,expires_at,max_uses,per_user_limit,min_order_cents",
+      )
       .eq("code", normalizedCode)
       .eq("active", true)
-      .single();
+      .maybeSingle();
 
     if (promoError || !promo) {
-      return Response.json({ valid: false, reason: "Invalid code" });
+      return json({ valid: false, reason: "Invalid code" }, 200);
     }
 
     const now = new Date();
 
     // ------------------------------------------------------------------
-    // 4️⃣ Date Validation
+    // 4) DATE VALIDATION
     // ------------------------------------------------------------------
     if (promo.starts_at && new Date(promo.starts_at) > now) {
-      return Response.json({ valid: false, reason: "Not active yet" });
+      return json({ valid: false, reason: "Not active yet" }, 200);
     }
 
-    if (promo.ends_at && new Date(promo.ends_at) < now) {
-      return Response.json({ valid: false, reason: "Expired" });
+    const expiry = promo.expires_at ?? promo.ends_at ?? null;
+    if (expiry && new Date(expiry) < now) {
+      return json({ valid: false, reason: "Expired" }, 200);
     }
 
     // ------------------------------------------------------------------
-    // 5️⃣ Global Usage Check
+    // 5) GLOBAL USAGE CHECK (count redemptions)
     // ------------------------------------------------------------------
-    const { count: totalUsesRaw } = await supabase
+    const { count: totalUsesRaw, error: totalUsesErr } = await svc
       .from("promo_redemptions")
-      .select("*", { count: "exact", head: true })
+      .select("id", { count: "exact", head: true })
       .eq("promotion_id", promo.id);
+
+    if (totalUsesErr) {
+      return json({ valid: false, reason: "Unable to validate usage" }, 500);
+    }
 
     const totalUses = totalUsesRaw ?? 0;
 
-    if (promo.max_uses && totalUses >= promo.max_uses) {
-      return Response.json({
-        valid: false,
-        reason: "Usage limit reached",
-      });
+    if (promo.max_uses != null && totalUses >= promo.max_uses) {
+      return json({ valid: false, reason: "Usage limit reached" }, 200);
     }
 
     // ------------------------------------------------------------------
-    // 6️⃣ Per User Limit
+    // 6) PER-USER LIMIT CHECK
     // ------------------------------------------------------------------
-    if (promo.per_user_limit) {
-      const { count: userUsesRaw } = await supabase
+    if (promo.per_user_limit != null && promo.per_user_limit > 0) {
+      const { count: userUsesRaw, error: userUsesErr } = await svc
         .from("promo_redemptions")
-        .select("*", { count: "exact", head: true })
+        .select("id", { count: "exact", head: true })
         .eq("promotion_id", promo.id)
         .eq("user_id", userId);
 
-      const userUses = userUsesRaw ?? 0;
+      if (userUsesErr) {
+        return json({ valid: false, reason: "Unable to validate user usage" }, 500);
+      }
 
+      const userUses = userUsesRaw ?? 0;
       if (userUses >= promo.per_user_limit) {
-        return Response.json({
-          valid: false,
-          reason: "User limit reached",
-        });
+        return json({ valid: false, reason: "User limit reached" }, 200);
       }
     }
 
     // ------------------------------------------------------------------
-    // 7️⃣ Minimum Order Check
+    // 7) MINIMUM ORDER CHECK
     // ------------------------------------------------------------------
-    if (
-      promo.min_order_cents &&
-      cartTotalCents < promo.min_order_cents
-    ) {
-      return Response.json({
-        valid: false,
-        reason: "Minimum order not met",
-      });
+    if (promo.min_order_cents != null && cartTotalCents < promo.min_order_cents) {
+      return json({ valid: false, reason: "Minimum order not met" }, 200);
     }
 
     // ------------------------------------------------------------------
-    // 8️⃣ Smart Dynamic Discounts
+    // 8) SMART DISCOUNTS (OPTIONAL OVERRIDE)
     // ------------------------------------------------------------------
     const currentHour = now.getHours();
     const currentDay = now.getDay();
 
-    const { data: smart } = await supabase
+    const { data: smart } = await svc
       .from("smart_discounts")
-      .select("*")
+      .select("type,value")
       .eq("active", true)
       .eq("day_of_week", currentDay)
       .lte("start_hour", currentHour)
@@ -147,42 +181,35 @@ Deno.serve(async (req) => {
     }
 
     // ------------------------------------------------------------------
-    // 9️⃣ Margin Protection Guard (CRITICAL)
+    // 9) BASIC MARGIN SAFETY (LIGHTWEIGHT)
+    // (Your real margin gate is in create-checkout; keep this as UI precheck.)
     // ------------------------------------------------------------------
     if (discountType === "percent") {
-      const maxSafePercent = 70; // hard safety cap
+      const maxSafePercent = 70;
       if (discountValue > maxSafePercent) {
-        return Response.json({
-          valid: false,
-          reason: "Discount exceeds margin protection",
-        });
+        return json({ valid: false, reason: "Discount exceeds safety cap" }, 200);
       }
-    }
-
-    if (discountType === "fixed") {
-      if (discountValue > cartTotalCents) {
-        return Response.json({
-          valid: false,
-          reason: "Invalid discount amount",
-        });
+    } else if (discountType === "fixed") {
+      const fixedCents = Math.round(discountValue * 100); // if your DB stores dollars
+      if (fixedCents > cartTotalCents) {
+        return json({ valid: false, reason: "Invalid discount amount" }, 200);
       }
     }
 
     // ------------------------------------------------------------------
-    // ✅ VALID PROMO
+    // ✅ VALID
     // ------------------------------------------------------------------
-    return Response.json({
-      valid: true,
-      promotionId: promo.id,
-      type: discountType,
-      value: discountValue,
-    });
-
-  } catch (err) {
-    console.error("Promo validation error:", err);
-    return Response.json(
-      { valid: false, reason: "Internal error" },
-      { status: 500 }
+    return json(
+      {
+        valid: true,
+        promotionId: promo.id,
+        type: discountType,
+        value: discountValue,
+      },
+      200,
     );
+  } catch (e) {
+    console.error("Promo validation error:", e);
+    return json({ valid: false, reason: "Internal error" }, 500);
   }
 });

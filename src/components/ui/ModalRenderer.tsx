@@ -5,31 +5,45 @@
 // Single mount point for all modals. Reads from modal context and renders
 // the correct modal component.
 //
-// addItem expects AddToCartPayload — MenuItemModal already builds this payload
-// and passes it through onAddToCart. ModalRenderer just forwards it.
+// This repo’s cart layer expects: addItem(Omit<CartItem,'lineTotalCents'>)
+// so MenuItemModal adds to cart internally via useCart().
+// ModalRenderer only controls open/close + shell rendering.
 // ============================================================================
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useModal } from './useModal';
-import { useCart } from '@/hooks/useCart';
 import { useScrollLock } from './hooks/useScrollLock';
 import { useModalEscape } from './hooks/useModalEscape';
 import { ModalShell } from './ModalShell';
 import MenuItemModal from '@/components/menu/MenuItemModal';
-import type { MenuItem } from '@/domain/menu/menu.types';
-import type { AddToCartPayload } from '@/features/cart/cart.types';
+import type { MenuItemPublic } from '@/domain/menu/menu.types';
 
 const MODAL_WIDTH: Partial<Record<string, string>> = {
   'menu-item': 'max-w-2xl',
 }
 
+type MenuItemModalData = { item: MenuItemPublic };
+
+function isMenuItemModalData(v: unknown): v is MenuItemModalData {
+  if (!v || typeof v !== 'object') return false;
+  const r = v as Record<string, unknown>;
+  const item = r['item'];
+  if (!item || typeof item !== 'object') return false;
+  const ir = item as Record<string, unknown>;
+  return typeof ir['id'] === 'string' && typeof ir['name'] === 'string';
+}
+
 export function ModalRenderer() {
-  const { activeModal, modalConfig, closeModal } = useModal()
-  const { addItem } = useCart()
+  const { activeModal, modalConfig, closeModal } = useModal();
 
   const isOpen = activeModal !== null;
   useScrollLock(isOpen)
   useModalEscape(closeModal, isOpen)
+
+  const maxWidth = useMemo(
+    () => (activeModal ? (MODAL_WIDTH[activeModal] ?? 'max-w-2xl') : 'max-w-2xl'),
+    [activeModal],
+  );
 
   if (!isOpen) return null
 
@@ -37,37 +51,30 @@ export function ModalRenderer() {
 
   switch (activeModal) {
     case 'menu-item': {
-      const data = modalConfig?.data as { item: MenuItem } | undefined;
-      if (!data?.item) {
-        console.warn('MenuItem modal opened without item data');
-        return null;
+      const data = modalConfig?.data;
+
+      if (!isMenuItemModalData(data)) {
+        console.warn('[ModalRenderer] menu-item opened without valid item data', { data });
+        content = null;
+        break;
       }
-      const item = data.item;
-      content = (
-        <MenuItemModal
-          item={item}
-          onClose={closeModal}
-          onAddToCart={(payload: AddToCartPayload) => {
-            // payload is already a fully-built AddToCartPayload from MenuItemModal
-            addItem(payload);
-            closeModal();
-          }}
-        />
-      );
+
+      content = <MenuItemModal isOpen item={data.item} onClose={closeModal} />;
       break;
     }
+
     default:
-      return null
+      content = null
+      break
   }
 
+  if (!content) return null;
+
   return (
-    <ModalShell
-      isOpen
-      onClose={closeModal}
-      maxWidth={MODAL_WIDTH[activeModal] ?? 'max-w-2xl'}
-      label={activeModal}
-    >
+    <ModalShell isOpen onClose={closeModal} maxWidth={maxWidth} label={activeModal ?? 'modal'}>
       {content}
     </ModalShell>
-  )
+  );
 }
+
+export default ModalRenderer;

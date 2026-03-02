@@ -1,67 +1,104 @@
 // =============================================================================
 // src/domain/loyalty/loyalty.service.ts
 // =============================================================================
-import { supabase } from '@/lib/supabase/supabaseClient';
-import type { CustomerProfile, AwardResult, RedeemResult } from './loyalty.types';
 
-async function getToken(): Promise<string> {
-  const { data: { session }, error } = await supabase.auth.getSession();
-  if (error || !session?.access_token) {
-    throw new Error('Authentication expired. Please log in again.');
-  }
-  return session.access_token;
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { invokeFn } from '@/lib/supabase/invoke'
+import type { CustomerProfile, AwardResult, RedeemResult } from './loyalty.types'
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+type UnknownRecord = Record<string, unknown>
+
+function isRecord(v: unknown): v is UnknownRecord {
+  return typeof v === 'object' && v !== null
 }
 
-export async function verifyLoyaltyQR(loyaltyPublicId: string): Promise<CustomerProfile> {
-  const token = await getToken();
-  const { data, error } = await supabase.functions.invoke('verify-loyalty-qr', {
-    body: { loyalty_public_id: loyaltyPublicId },
-    headers: { Authorization: `Bearer ${token}` },
-  });
+function asString(v: unknown, fallback = ''): string {
+  return typeof v === 'string' ? v : fallback
+}
 
-  if (error) throw new Error(error.message);
-  if (!data || typeof data !== 'object') throw new Error('Invalid response from server.');
+function asNullableString(v: unknown): string | null {
+  return typeof v === 'string' ? v : null
+}
 
+function asNumber(v: unknown, fallback = 0): number {
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN
+  return Number.isFinite(n) ? n : fallback
+}
+
+// ─── Response parsers ─────────────────────────────────────────────────────────
+
+function parseCustomerProfile(payload: unknown): CustomerProfile {
+  if (!isRecord(payload)) throw new Error('Invalid response from server.')
+  const accountId = asString(payload.account_id).trim()
+  if (!accountId) throw new Error('Invalid response from server: missing account_id')
   return {
-    account_id:      String(data.account_id),
-    full_name:       data.full_name ?? null,
-    tier:            data.tier ?? 'bronze',
-    balance:         Number(data.balance ?? 0),
-    lifetime_earned: Number(data.lifetime_earned ?? 0),
-    streak:          Number(data.streak ?? 0),
-    last_activity:   data.last_activity ?? null,
-  };
+    account_id: accountId,
+    full_name: asNullableString(payload.full_name),
+    tier: asString(payload.tier, 'bronze'),
+    balance: asNumber(payload.balance, 0),
+    lifetime_earned: asNumber(payload.lifetime_earned, 0),
+    streak: asNumber(payload.streak, 0),
+    last_activity: asNullableString(payload.last_activity),
+  }
+}
+
+function parseAwardResult(payload: unknown): AwardResult {
+  if (!isRecord(payload)) throw new Error('Invalid response from server.')
+  return payload as unknown as AwardResult
+}
+
+function parseRedeemResult(payload: unknown): RedeemResult {
+  if (!isRecord(payload)) throw new Error('Invalid response from server.')
+  if (payload.was_duplicate === true) throw new Error('DUPLICATE')
+  if (!('new_balance' in payload)) throw new Error('Invalid redeem response: missing new_balance')
+  return payload as unknown as RedeemResult
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
+/** Optional `sb` override lets callers inject a test client. */
+export async function verifyLoyaltyQR(
+  loyaltyPublicId: string,
+  sb?: SupabaseClient,
+): Promise<CustomerProfile> {
+  const id = loyaltyPublicId.trim()
+  if (!id) throw new Error('Missing loyalty QR code.')
+  const raw = await invokeFn<unknown>('verify-loyalty-qr', { loyalty_public_id: id }, sb as never)
+  return parseCustomerProfile(raw)
 }
 
 export async function awardLoyaltyPoints(
   accountId: string,
   amountCents: number,
+  sb?: SupabaseClient,
 ): Promise<AwardResult> {
-  const token = await getToken();
-  const { data, error } = await supabase.functions.invoke('award-loyalty-qr', {
-    body: { account_id: accountId, amount_cents: amountCents },
-    headers: { Authorization: `Bearer ${token}` },
-  });
-
-  if (error || !data) throw new Error(error?.message ?? 'Award failed');
-  return Array.isArray(data) ? data[0] : data;
+  const id = accountId.trim()
+  if (!id) throw new Error('Missing account id.')
+  if (!Number.isFinite(amountCents) || amountCents <= 0)
+    throw new Error('Amount must be a positive number of cents.')
+  const raw = await invokeFn<unknown>(
+    'award-loyalty-qr',
+    { account_id: id, amount_cents: Math.floor(amountCents) },
+    sb as never,
+  )
+  return parseAwardResult(raw)
 }
 
 export async function redeemLoyaltyPoints(
   accountId: string,
   pointsToRedeem: number,
+  sb?: SupabaseClient,
 ): Promise<RedeemResult> {
-  const token = await getToken();
-  const { data, error } = await supabase.functions.invoke('redeem-loyalty', {
-    body: { account_id: accountId, points_to_redeem: pointsToRedeem, mode: 'dine_in' },
-    headers: { Authorization: `Bearer ${token}` },
-  });
-
-  if (error) throw new Error(error.message);
-  if (!data)  throw new Error('No response from server');
-
-  const result = Array.isArray(data) ? data[0] : data;
-  if (result.was_duplicate) throw new Error('DUPLICATE');
-
-  return result;
+  const id = accountId.trim()
+  if (!id) throw new Error('Missing account id.')
+  if (!Number.isFinite(pointsToRedeem) || pointsToRedeem <= 0)
+    throw new Error('Points to redeem must be a positive number.')
+  const raw = await invokeFn<unknown>(
+    'redeem-loyalty',
+    { account_id: id, points_to_redeem: Math.floor(pointsToRedeem), mode: 'dine_in' },
+    sb as never,
+  )
+  return parseRedeemResult(raw)
 }

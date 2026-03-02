@@ -8,7 +8,7 @@
 //   • loyalty_ledger    → direct select replaces get_loyalty_ledger_secure RPC
 //   • profiles          → loyalty_public_id
 // ============================================================================
-import type { Database } from '@/lib/supabase/database.types';
+import type { Database } from '@/types/supabase';
 import { useEffect, useRef, useState } from 'react'
 import { QRCodeSVG, QRCodeCanvas } from 'qrcode.react';
 import { useUserContext } from '@/contexts/useUserContext';

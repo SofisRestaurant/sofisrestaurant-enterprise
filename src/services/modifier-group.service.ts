@@ -11,7 +11,7 @@
 // ============================================================================
 
 import { supabase }                     from '@/lib/supabase/supabaseClient'
-import type { Database }                from '@/lib/supabase/database.types'
+import type { Database } from '@/types/supabase'
 import type { ModifierGroup }           from '@/domain/menu/menu.types'
 import type {
   AdminModifierGroup,
@@ -48,7 +48,7 @@ function rowToModifierGroup(row: GroupRow, itemCount = 0): AdminModifierGroup {
   return {
     id:             row.id,
     name:           row.name,
-    description:    row.description ?? undefined,
+    description: row.description ?? null,
     type:           (row.type as ModifierGroup['type']) ?? 'radio',
     required:       row.required,
     min_selections: row.min_selections ?? 0,

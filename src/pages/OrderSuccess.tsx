@@ -18,13 +18,10 @@ import {
   PaymentStatus,
   OrderType,
 } from '@/domain/orders/order.types'
-import type {
-  Order,
-  OrderCartItem,
-  ShippingAddress,
-} from '@/domain/orders/order.types'
-import type { Database } from '@/lib/supabase/database.types'
+import type { Order, OrderCartItem, ShippingAddress } from '@/domain/orders/order.types';
 import { LOYALTY_TIERS, asTier } from '@/domain/loyalty/tiers'
+import type { Database } from '@/types/supabase';
+import { invokeFn } from '@/lib/supabase/invoke';
 
 // ============================================================================
 // TYPES
@@ -530,7 +527,7 @@ function ErrorState() {
 export default function OrderSuccess() {
   const [searchParams] = useSearchParams()
   const navigate       = useNavigate()
-  const finalizeOrder  = useCartStore((s) => s.finalizeOrder)
+  const finalizeOrder = useCartStore((s) => s.clearCart);
   const sessionId      = searchParams.get('session_id')
 
   const [pageState,     setPageState]     = useState<PageState>('loading')
@@ -543,96 +540,124 @@ export default function OrderSuccess() {
   const cartFinalized = useRef(false)
   const pollTimer     = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  useEffect(() => {
-    if (!sessionId) navigate('/', { replace: true })
-  }, [sessionId, navigate])
-
 useEffect(() => {
   if (!sessionId) return;
 
-  const safeId = sessionId;
   let cancelled = false;
   let attempts = 0;
 
-  async function tryFetch() {
+  let finalizeAttempted = false;
+  let finalizedOrderId: string | null = null;
+
+  const stop = () => {
+    if (pollTimer.current) clearTimeout(pollTimer.current);
+    pollTimer.current = null;
+  };
+
+  const schedule = () => {
+    stop();
+    pollTimer.current = setTimeout(run, POLL_INTERVAL_MS);
+  };
+
+  const safeSessionId = sessionId.trim();
+
+  async function run() {
     if (cancelled) return;
 
-    attempts++;
+    attempts += 1;
     setAttempt(attempts);
 
     try {
-      const { data, error } = await supabase
-        .from('orders')
-        .select('*')
-        .eq('stripe_session_id', safeId)
-        .maybeSingle();
+      // A) Ask server to finalize (only once, starting attempt #2)
+      if (!finalizeAttempted && attempts >= 2) {
+        finalizeAttempted = true;
+
+        const fnData = await invokeFn<{ order_id?: string }>(
+          'finalize-order',
+          { session_id: safeSessionId },
+          { headers: { 'x-idempotency-key': crypto.randomUUID() } },
+        );
+
+        if (!cancelled && fnData && typeof (fnData as any).order_id === 'string') {
+          finalizedOrderId = (fnData as any).order_id;
+        }
+      }
+
+      // B) Poll orders (prefer order id)
+      const q = supabase.from('orders').select('*');
+
+      const { data, error } = finalizedOrderId
+        ? await q.eq('id', finalizedOrderId).maybeSingle()
+        : await q.eq('stripe_session_id', safeSessionId).maybeSingle();
 
       if (cancelled) return;
 
       if (error) {
-        setPageState('error');
+        if (attempts >= POLL_MAX_ATTEMPTS) {
+          setPageState('error');
+          stop();
+        } else {
+          schedule();
+        }
         return;
       }
 
-      if (data && data.payment_status === PaymentStatus.PAID) {
-        const normalized = mapDbOrderToDomain(data as DbOrder);
-
-        setOrder(normalized);
-        setLiveStatus(normalized.status);
-        setPageState('found');
-
-        if (!cartFinalized.current) {
-          cartFinalized.current = true;
-          finalizeOrder();
+      if (!data) {
+        if (attempts >= POLL_MAX_ATTEMPTS) {
+          setPageState('timeout');
+          stop();
+        } else {
+          schedule();
         }
-
-        // ✅ Ledger V2 loyalty fetch (RPC)
-        const { data: rpcData } = await supabase.rpc('get_loyalty_for_order', {
-          p_order_id: normalized.id,
-        });
-
-        const loyaltyData = rpcData as {
-          points_delta: number;
-          new_balance: number;
-          tier: string;
-          streak: number;
-          created_at: string;
-        } | null;
-
-        if (!cancelled && loyaltyData) {
-          setLoyalty({
-            points_delta: loyaltyData.points_delta,
-            points_balance: loyaltyData.new_balance,
-            lifetime_balance: loyaltyData.new_balance,
-            tier_at_time: loyaltyData.tier,
-            streak_at_time: loyaltyData.streak,
-            tier_multiplier: 1,
-            streak_multiplier: 1,
-            base_points: loyaltyData.points_delta,
-            metadata: null,
-          });
-
-          setLoyaltyStreak(loyaltyData.streak ?? 0);
-        }
-
-        return; // ← important: return inside PAID block
+        return;
       }
 
-      if (attempts < POLL_MAX_ATTEMPTS) {
-        pollTimer.current = setTimeout(tryFetch, POLL_INTERVAL_MS);
-      } else {
-        setPageState('timeout');
+      // Found
+      const normalized = mapDbOrderToDomain(data as DbOrder);
+
+      setOrder(normalized);
+      setLiveStatus(normalized.status);
+      setPageState('found');
+
+      if (!cartFinalized.current) {
+        cartFinalized.current = true;
+        finalizeOrder();
       }
+
+      // C) Loyalty (non-blocking)
+      const { data: tx } = await supabase
+        .from('loyalty_transactions')
+        .select(
+          'points_delta, points_balance, lifetime_balance, tier_at_time, streak_at_time, tier_multiplier, streak_multiplier, base_points, metadata',
+        )
+        .eq('order_id', normalized.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!cancelled && tx) {
+        setLoyalty(tx as unknown as LoyaltyResult);
+        setLoyaltyStreak((tx as any)?.streak_at_time ?? 0);
+      }
+
+      stop();
     } catch {
-      if (!cancelled) setPageState('error');
+      if (cancelled) return;
+
+      if (attempts >= POLL_MAX_ATTEMPTS) {
+        setPageState('error');
+        stop();
+      } else {
+        schedule();
+      }
     }
   }
 
-  tryFetch();
+  run();
 
   return () => {
     cancelled = true;
-    if (pollTimer.current) clearTimeout(pollTimer.current);
+    stop();
   };
 }, [sessionId, finalizeOrder]);
 

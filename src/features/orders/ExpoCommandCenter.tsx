@@ -9,11 +9,10 @@
 // ✅ Auto-refresh failsafe
 // ✅ Event system integration
 // ============================================================================
-
+import type { Database } from '@/types/supabase';
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { supabase } from '@/lib/supabase/supabaseClient'
-import { mapOrderRowToDomain } from '@/domain/orders/order.mapper'
-import type { Database } from '@/lib/supabase/database.types'
+import { mapOrderRowToDomain } from '@/domain/orders/order.mapper';
 import {
   Order,
   OrderStatus,

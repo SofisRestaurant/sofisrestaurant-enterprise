@@ -1,11 +1,11 @@
-import { MenuItem } from '@/domain/menu/menu.types';
+import type { MenuItemPublic } from '@/domain/menu/menu.types';
 import { useAuth } from '@/features/auth/useAuth';
 import { useModal } from '@/components/ui/useModal';
 import { formatCurrency } from '@/utils/currency';
 import { Button } from '@/components/ui/Button';
 
 interface MenuItemCardProps {
-  item: MenuItem;
+  item: MenuItemPublic;
 }
 
 export function MenuItemCard({ item }: MenuItemCardProps) {

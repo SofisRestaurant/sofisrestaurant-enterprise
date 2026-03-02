@@ -62,7 +62,7 @@ export function ConfirmDialog({
       {/* Backdrop */}
       <div
         aria-hidden="true"
-        className="fixed inset-0 z-[9999] bg-black/50 backdrop-blur-sm"
+        className="fixed inset-0 z-9999 bg-black/50 backdrop-blur-sm"
         onClick={onCancel}
       />
       {/* Dialog */}
@@ -71,18 +71,23 @@ export function ConfirmDialog({
         aria-modal="true"
         aria-labelledby="confirm-title"
         aria-describedby="confirm-message"
-        className="fixed inset-0 z-[10000] flex items-center justify-center px-4"
+        className="fixed inset-0 z-10000 flex items-center justify-center px-4"
       >
         <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 animate-[modalCardIn_0.22s_ease_both]">
           {/* Icon */}
-          <div className={`mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full ${style.bg} ring-8 ${style.ring} text-2xl`}>
+          <div
+            className={`mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full ${style.bg} ring-8 ${style.ring} text-2xl`}
+          >
             {style.icon}
           </div>
 
           <h2 id="confirm-title" className="text-center text-lg font-bold text-gray-900 mb-2">
             {title}
           </h2>
-          <p id="confirm-message" className="text-center text-sm text-gray-500 mb-6 leading-relaxed">
+          <p
+            id="confirm-message"
+            className="text-center text-sm text-gray-500 mb-6 leading-relaxed"
+          >
             {message}
           </p>
 
@@ -107,5 +112,5 @@ export function ConfirmDialog({
         </div>
       </div>
     </>
-  )
+  );
 }

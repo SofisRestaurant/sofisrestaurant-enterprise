@@ -21,18 +21,20 @@ export function DragHandle({ className = '', onMouseDown }: DragHandleProps) {
       onMouseDown={onMouseDown}
       className={[
         'cursor-grab active:cursor-grabbing',
-        'flex flex-col items-center justify-center gap-[3px]',
+        'flex flex-col items-center justify-center gap-3px',
         'px-1 py-2 rounded hover:bg-gray-100 transition text-gray-300 hover:text-gray-500',
         className,
-      ].filter(Boolean).join(' ')}
+      ]
+        .filter(Boolean)
+        .join(' ')}
     >
       {/* Two columns of three dots = ⠿ pattern */}
       {[0, 1, 2].map((row) => (
-        <div key={row} className="flex gap-[3px]">
-          <span className="h-[3px] w-[3px] rounded-full bg-current" />
-          <span className="h-[3px] w-[3px] rounded-full bg-current" />
+        <div key={row} className="flex gap-3px">
+          <span className="h-3px w-[px rounded-full bg-current" />
+          <span className="h-3px w-3px rounded-full bg-current" />
         </div>
       ))}
     </div>
-  )
+  );
 }

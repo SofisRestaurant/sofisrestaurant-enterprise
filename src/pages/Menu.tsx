@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { MenuGrid } from '@/components/menu/MenuGrid'
 import { CategoryTabs } from '@/components/menu/CategoryTabs'
-import { MenuService } from '@/services/menu.service';
-import type { MenuItem, MenuCategory } from '@/domain/menu/menu.types'
+import { MenuPublicService } from '@/domain/menu/menu.service.public';
+import type { MenuItemPublic, MenuCategory } from '@/domain/menu/menu.types';
 import { Spinner } from '@/components/ui/Spinner'
 
 /* ======================================================
@@ -10,7 +10,7 @@ import { Spinner } from '@/components/ui/Spinner'
 ====================================================== */
 
 export default function Menu() {
-  const [items, setItems] = useState<MenuItem[]>([])
+  const [items, setItems] = useState<MenuItemPublic[]>([]);
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -19,24 +19,28 @@ export default function Menu() {
 
   /* ================= LOAD MENU ================= */
 
-const loadMenu = useCallback(async () => {
-  try {
-    setError(null);
-    setLoading(true);
+  const loadMenu = useCallback(async () => {
+    try {
+      setError(null);
+      setLoading(true);
 
-    const data = await MenuService.getMenuItems();
-    setItems(Array.isArray(data) ? data : []);
-  } catch (e) {
-    console.error('Menu load failed', e);
-    setError('We couldn’t load the menu right now.');
-  } finally {
-    setLoading(false);
-  }
-}, []);
+      const data = await MenuPublicService.getMenuItems();
 
-useEffect(() => {
-  loadMenu();
-}, [loadMenu]);
+      // Defensive safety — guarantees array shape
+      setItems(Array.isArray(data) ? data : []);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        console.error('Menu load failed:', err.message);
+      }
+      setError('We couldn’t load the menu right now.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMenu();
+  }, [loadMenu]);
 
   /* ================= SAFE CATEGORY EXTRACTION ================= */
 

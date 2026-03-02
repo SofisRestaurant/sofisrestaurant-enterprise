@@ -2,10 +2,9 @@
 // ============================================================================
 // ORDERS API — SECURE WITH RLS ENFORCEMENT
 // ============================================================================
-
+import type { Database } from '@/types/supabase'
 import { supabase } from '@/lib/supabase/supabaseClient'
 import { mapOrderRowToDomain } from '@/domain/orders/order.mapper'
-import type { Database } from '@/lib/supabase/database.types'
 import { OrderStatus, type Order } from '@/domain/orders/order.types'
 
 type OrderRow = Database['public']['Tables']['orders']['Row']

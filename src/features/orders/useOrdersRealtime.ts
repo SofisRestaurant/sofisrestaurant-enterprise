@@ -4,8 +4,8 @@
 
 import { useEffect, useRef } from 'react'
 import { supabase } from '@/lib/supabase/supabaseClient'
-import type { Database } from '@/lib/supabase/database.types'
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js'
+import type { Database } from '@/types/supabase'
 
 type OrderRow = Database['public']['Tables']['orders']['Row']
 

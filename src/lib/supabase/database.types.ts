@@ -121,6 +121,24 @@ export type Database = {
           },
         ]
       }
+      admin_profit_snapshot: {
+        Row: {
+          singleton_id: boolean
+          total_gross_profit_cents: number
+          updated_at: string
+        }
+        Insert: {
+          singleton_id?: boolean
+          total_gross_profit_cents?: number
+          updated_at?: string
+        }
+        Update: {
+          singleton_id?: boolean
+          total_gross_profit_cents?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
       admins: {
         Row: {
           created_at: string | null
@@ -136,9 +154,43 @@ export type Database = {
         }
         Relationships: []
       }
+      ai_insights: {
+        Row: {
+          applied: boolean | null
+          body: string
+          category: string
+          confidence: number | null
+          created_at: string | null
+          id: string
+          impact_pct: number | null
+          title: string
+        }
+        Insert: {
+          applied?: boolean | null
+          body: string
+          category: string
+          confidence?: number | null
+          created_at?: string | null
+          id?: string
+          impact_pct?: number | null
+          title: string
+        }
+        Update: {
+          applied?: boolean | null
+          body?: string
+          category?: string
+          confidence?: number | null
+          created_at?: string | null
+          id?: string
+          impact_pct?: number | null
+          title?: string
+        }
+        Relationships: []
+      }
       checkout_rate_limits: {
         Row: {
           attempts: number
+          blocked_until: string | null
           created_at: string
           id: string
           ip: string | null
@@ -147,6 +199,7 @@ export type Database = {
         }
         Insert: {
           attempts?: number
+          blocked_until?: string | null
           created_at?: string
           id?: string
           ip?: string | null
@@ -155,6 +208,7 @@ export type Database = {
         }
         Update: {
           attempts?: number
+          blocked_until?: string | null
           created_at?: string
           id?: string
           ip?: string | null
@@ -215,7 +269,14 @@ export type Database = {
             foreignKeyName: "cost_of_goods_menu_item_id_fkey"
             columns: ["menu_item_id"]
             isOneToOne: true
-            referencedRelation: "menu_items_full"
+            referencedRelation: "menu_items_admin_full"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cost_of_goods_menu_item_id_fkey"
+            columns: ["menu_item_id"]
+            isOneToOne: true
+            referencedRelation: "menu_items_public"
             referencedColumns: ["id"]
           },
         ]
@@ -389,6 +450,7 @@ export type Database = {
       }
       growth_campaigns: {
         Row: {
+          active: boolean
           budget_cents: number | null
           channel: string | null
           created_at: string | null
@@ -398,6 +460,7 @@ export type Database = {
           spent_cents: number | null
         }
         Insert: {
+          active?: boolean
           budget_cents?: number | null
           channel?: string | null
           created_at?: string | null
@@ -407,6 +470,7 @@ export type Database = {
           spent_cents?: number | null
         }
         Update: {
+          active?: boolean
           budget_cents?: number | null
           channel?: string | null
           created_at?: string | null
@@ -731,7 +795,14 @@ export type Database = {
             foreignKeyName: "menu_item_modifier_groups_menu_item_id_fkey"
             columns: ["menu_item_id"]
             isOneToOne: false
-            referencedRelation: "menu_items_full"
+            referencedRelation: "menu_items_admin_full"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "menu_item_modifier_groups_menu_item_id_fkey"
+            columns: ["menu_item_id"]
+            isOneToOne: false
+            referencedRelation: "menu_items_public"
             referencedColumns: ["id"]
           },
           {
@@ -977,6 +1048,80 @@ export type Database = {
           },
         ]
       }
+      order_items: {
+        Row: {
+          created_at: string
+          id: string
+          line_index: number
+          line_total_cents: number
+          menu_item_id: string | null
+          modifiers: Json
+          name: string
+          notes: string | null
+          order_id: string
+          pricing_hash: string | null
+          quantity: number
+          unit_price_cents: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          line_index: number
+          line_total_cents: number
+          menu_item_id?: string | null
+          modifiers?: Json
+          name: string
+          notes?: string | null
+          order_id: string
+          pricing_hash?: string | null
+          quantity: number
+          unit_price_cents: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          line_index?: number
+          line_total_cents?: number
+          menu_item_id?: string | null
+          modifiers?: Json
+          name?: string
+          notes?: string | null
+          order_id?: string
+          pricing_hash?: string | null
+          quantity?: number
+          unit_price_cents?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "order_items_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "financial_revenue_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_items_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "order_performance"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "order_items_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "order_timeline"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "order_items_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       order_status_audit: {
         Row: {
           changed_at: string | null
@@ -1128,8 +1273,10 @@ export type Database = {
           discount_cents: number
           expires_at: string | null
           id: string
+          idempotency_key: string | null
           items: Json
           promo_id: string | null
+          stripe_session_id: string | null
           subtotal_cents: number
           tax_cents: number
           total_cents: number
@@ -1141,8 +1288,10 @@ export type Database = {
           discount_cents?: number
           expires_at?: string | null
           id: string
+          idempotency_key?: string | null
           items: Json
           promo_id?: string | null
+          stripe_session_id?: string | null
           subtotal_cents?: number
           tax_cents?: number
           total_cents?: number
@@ -1154,8 +1303,10 @@ export type Database = {
           discount_cents?: number
           expires_at?: string | null
           id?: string
+          idempotency_key?: string | null
           items?: Json
           promo_id?: string | null
+          stripe_session_id?: string | null
           subtotal_cents?: number
           tax_cents?: number
           total_cents?: number
@@ -1549,18 +1700,25 @@ export type Database = {
     Views: {
       admin_executive_snapshot: {
         Row: {
-          avg_order_value_cents: number | null
+          generated_at: string | null
+          net_revenue_30d_cents: number | null
+          total_gross_profit_cents: number | null
+        }
+        Relationships: []
+      }
+      admin_fraud_snapshot: {
+        Row: {
+          avg_delta_cents_7d: number | null
           fraud_events_7d: number | null
-          lifetime_revenue_cents: number | null
-          outstanding_loyalty_points: number | null
-          total_orders: number | null
+          last_event_at: string | null
+          mismatch_events_7d: number | null
         }
         Relationships: []
       }
       admin_hourly_heatmap: {
         Row: {
           hour_of_day: number | null
-          orders: number | null
+          orders_count: number | null
           revenue_cents: number | null
         }
         Relationships: []
@@ -1568,87 +1726,47 @@ export type Database = {
       admin_item_consumption: {
         Row: {
           item_name: string | null
+          orders_with_item: number | null
+          qty_sold: number | null
           revenue_impact_cents: number | null
-          total_quantity: number | null
         }
         Relationships: []
-      }
-      admin_item_hourly_velocity: {
-        Row: {
-          hour_of_day: number | null
-          item_name: string | null
-          quantity: number | null
-        }
-        Relationships: []
-      }
-      admin_loyalty_abuse: {
-        Row: {
-          account_id: string | null
-          adjustment_count: number | null
-          total_earned: number | null
-          total_redeemed: number | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "loyalty_ledger_account_id_fkey"
-            columns: ["account_id"]
-            isOneToOne: false
-            referencedRelation: "loyalty_accounts"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "loyalty_ledger_account_id_fkey"
-            columns: ["account_id"]
-            isOneToOne: false
-            referencedRelation: "v2_account_summary"
-            referencedColumns: ["id"]
-          },
-        ]
       }
       admin_loyalty_liability: {
         Row: {
-          total_points_outstanding: number | null
+          accounts_count: number | null
+          avg_points_per_account: number | null
+          total_points_liability: number | null
         }
         Relationships: []
       }
       admin_loyalty_summary: {
         Row: {
-          total_issuances: number | null
-          total_issued: number | null
-          total_redeemed: number | null
-          total_redemptions: number | null
+          active_users_30d: number | null
+          points_earned_30d: number | null
+          points_redeemed_30d: number | null
         }
         Relationships: []
       }
       admin_revenue_summary: {
         Row: {
-          avg_order_value_cents: number | null
           day: string | null
-          total_orders: number | null
-          total_revenue_cents: number | null
+          gross_revenue_cents: number | null
+          net_revenue_cents: number | null
+          paid_orders_count: number | null
+          refunded_cents: number | null
+          refunds_count: number | null
         }
         Relationships: []
       }
       admin_risk_snapshot: {
         Row: {
-          cancelled_orders: number | null
-          disputes: number | null
-          failed_payments: number | null
-        }
-        Relationships: []
-      }
-      admin_top_items: {
-        Row: {
-          item_name: string | null
-          total_quantity: number | null
-        }
-        Relationships: []
-      }
-      admin_weekday_heatmap: {
-        Row: {
-          day_of_week: number | null
-          orders: number | null
-          revenue_cents: number | null
+          abandoned_sessions_24h: number | null
+          abandoned_value_cents_24h: number | null
+          high_attempt_users_24h: number | null
+          rate_limit_attempts_24h: number | null
+          rate_limit_rows_24h: number | null
+          recovered_sessions_24h: number | null
         }
         Relationships: []
       }
@@ -1709,7 +1827,7 @@ export type Database = {
         }
         Relationships: []
       }
-      menu_items_full: {
+      menu_items_admin_full: {
         Row: {
           allergens: string[] | null
           available: boolean | null
@@ -1778,6 +1896,29 @@ export type Database = {
           sort_order?: number | null
           spicy_level?: number | null
           updated_at?: string | null
+        }
+        Relationships: []
+      }
+      menu_items_public: {
+        Row: {
+          allergens: string[] | null
+          available: boolean | null
+          category: Database["public"]["Enums"]["menu_category"] | null
+          created_at: string | null
+          description: string | null
+          featured: boolean | null
+          id: string | null
+          image_url: string | null
+          is_gluten_free: boolean | null
+          is_vegan: boolean | null
+          is_vegetarian: boolean | null
+          modifier_groups: Json | null
+          name: string | null
+          pairs_with: string[] | null
+          price: number | null
+          sort_order: number | null
+          spicy_level: number | null
+          updated_at: string | null
         }
         Relationships: []
       }
@@ -2037,6 +2178,10 @@ export type Database = {
           server_time: string
           status: string
         }[]
+      }
+      increment_promo_usage_if_available: {
+        Args: { p_promo_id: string }
+        Returns: boolean
       }
       is_admin: { Args: { uid: string }; Returns: boolean }
       issue_loyalty_correction: {

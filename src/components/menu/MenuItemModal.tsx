@@ -1,122 +1,359 @@
+// =============================================================================
 // src/components/menu/MenuItemModal.tsx
-// ============================================================================
-// MENU ITEM MODAL — Configuration Engine UI
-// ============================================================================
-// Architecture:
-//   • Calls MenuService.getMenuItemWithModifiers() on mount to load the
-//     full modifier graph from menu_items_full view
-//   • FSM: loading → configuring → invalid → submitting
-//   • All pricing via PricingEngine (deterministic, hashed)
-//   • Passes AddToCartPayload to onAddToCart — cart never sees MenuItem
-//   • No console.log
-// ============================================================================
+// =============================================================================
+// Production-ready MenuItemModal (Senior / Enterprise)
+//  • Correct cents normalization (prevents $3.99 → $0.04 bugs)
+//  • Uses SelectedModifier as canonical selection (PricingEngine-compatible)
+//  • Enforces required/min/max selection rules (max=1 behaves like radio)
+//  • Builds strict cart payload (NO totals/prices from UI beyond unit cents)
+// =============================================================================
 
-import { useReducer, useMemo, useEffect } from 'react';
-import { MenuService } from '@/services/menu.service';
+import { memo, useEffect, useMemo, useReducer, useRef, useCallback } from 'react';
 import { PricingEngine } from '@/domain/pricing/pricing.engine';
-import type { MenuItem, ModifierGroup, SelectedModifier } from '@/domain/menu/menu.types';
-import type { AddToCartPayload } from '@/features/cart/cart.types';
+import { useCart } from '@/hooks/useCart';
+import type { CartItem, CartModifier } from '@/features/cart/cart.types';
+import type { MenuItemBase, SelectedModifier } from '@/domain/menu/menu.types';
+import type { Database } from '@/types/supabase';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FSM
+// Helpers (runtime-safe)
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Phase = 'loading' | 'configuring' | 'invalid' | 'submitting';
+type UnknownRecord = Record<string, unknown>;
 
-interface State {
-  phase: Phase;
-  item: MenuItem | null; // enriched with modifiers after load
-  errors: Record<string, string>;
-  selectedModifiers: Record<string, SelectedModifier[]>;
-  quantity: number;
-  notes: string;
-  loadError: string | null;
+function isRecord(v: unknown): v is UnknownRecord {
+  return typeof v === 'object' && v !== null;
 }
 
-type Action =
-  | { type: 'LOADED'; item: MenuItem }
-  | { type: 'LOAD_FAILED'; error: string }
-  | {
-      type: 'SELECT_MODIFIER';
-      groupId: string;
-      modifier: SelectedModifier;
-      groupType: ModifierGroup['type'];
-      maxSelections: number | null;
-    }
-  | { type: 'SET_QUANTITY'; quantity: number }
-  | { type: 'SET_NOTES'; notes: string }
-  | { type: 'VALIDATION_FAIL'; errors: Record<string, string> }
-  | { type: 'SUBMIT' };
+function asNumber(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
 
-function initState(item: MenuItem): State {
-  // Pre-select first option on required radio groups
-  const preselected: Record<string, SelectedModifier[]> = {};
-  for (const g of item.modifier_groups ?? []) {
-    if (g.type === 'radio' && g.required && g.modifiers.length > 0) {
-      const first = g.modifiers[0];
-      preselected[g.id] = [
-        { id: first.id, name: first.name, price_adjustment: first.price_adjustment },
-      ];
+function clampInt(v: number, min: number, max: number): number {
+  if (!Number.isFinite(v)) return min;
+  return Math.max(min, Math.min(max, Math.floor(v)));
+}
+
+type MenuCategory = Database['public']['Enums']['menu_category'];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Compatibility types (repo drift: snake_case vs camelCase)
+// ─────────────────────────────────────────────────────────────────────────────
+
+type ModifierLike = {
+  id: string;
+  name: string;
+  price_adjustment?: number | null;
+  priceAdjustment?: number | null;
+};
+
+type ModifierGroupLike = {
+  id: string;
+  name: string;
+  required?: boolean | null;
+  min_selections?: number | null;
+  max_selections?: number | null;
+  minSelections?: number | null;
+  maxSelections?: number | null;
+  modifiers?: ModifierLike[] | null;
+};
+
+type MenuItemLike = {
+  id: string;
+  name: string;
+  description?: string | null;
+
+  // drifted pricing fields:
+  price_cents?: number | null;
+  priceCents?: number | null;
+  price?: number | null; // could be cents OR dollars in old data flows
+
+  category?: MenuCategory | string | null;
+  image_url?: string | null;
+  imageUrl?: string | null;
+  available?: boolean | null;
+
+  modifier_groups?: ModifierGroupLike[] | null;
+  modifierGroups?: ModifierGroupLike[] | null;
+};
+
+// Cart payload type
+type AddToCartInput = Omit<CartItem, 'lineTotalCents'>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Normalizers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function getImageUrl(item: MenuItemLike): string | null {
+  const v = item.image_url ?? item.imageUrl;
+  const s = typeof v === 'string' ? v.trim() : '';
+  return s ? s : null;
+}
+
+function getGroups(item: MenuItemLike): ModifierGroupLike[] {
+  const raw = item.modifier_groups ?? item.modifierGroups ?? [];
+  return raw.filter(
+    (g): g is ModifierGroupLike => !!g && typeof g.id === 'string' && typeof g.name === 'string',
+  );
+}
+
+function normalizeCategory(v: MenuItemLike['category']): MenuCategory {
+  const fallback: MenuCategory = 'lunch';
+  const s = typeof v === 'string' ? v : '';
+  const allowed: ReadonlySet<string> = new Set([
+    'breakfast',
+    'lunch',
+    'appetizers',
+    'entrees',
+    'specials',
+    'desserts',
+    'drinks',
+  ]);
+  return allowed.has(s) ? (s as MenuCategory) : fallback;
+}
+
+function getAdjCents(m: ModifierLike): number {
+  const a = typeof m.price_adjustment === 'number' ? m.price_adjustment : null;
+  const b = typeof m.priceAdjustment === 'number' ? m.priceAdjustment : null;
+  const v = a ?? b ?? 0;
+  return Number.isFinite(v) ? Math.round(v) : 0;
+}
+
+/**
+ * ✅ Normalize unit price to cents.
+ * Prefer explicit cents fields. If only `price` exists:
+ * - decimals => dollars
+ * - small ints (<50) => dollars (safer)
+ * - otherwise => cents
+ */
+function normalizeUnitPriceCents(item: MenuItemLike): number {
+  // 1) Always trust explicit cents fields
+  const pc = asNumber(item.price_cents);
+  if (pc !== null) return Math.max(0, Math.round(pc));
+
+  const pCents = asNumber(item.priceCents);
+  if (pCents !== null) return Math.max(0, Math.round(pCents));
+
+  // 2) If `price` exists:
+  //    - If it's clearly cents (>= 100), treat as cents
+  //    - If it's clearly dollars (< 100), treat as dollars
+  const p = asNumber(item.price);
+  if (p === null) return 0;
+
+  if (p >= 100) return Math.max(0, Math.round(p)); // cents
+  return Math.max(0, Math.round(p * 100)); // dollars
+}
+
+function sanitizeNotes(raw: string): string | null {
+  const t = raw.trim();
+  if (!t) return null;
+  return t.slice(0, 500);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Selection validation
+// ─────────────────────────────────────────────────────────────────────────────
+
+type SelectedByGroup = Record<string, SelectedModifier[]>;
+
+function validateSelection(
+  groups: ModifierGroupLike[],
+  selected: SelectedByGroup,
+): { ok: boolean; errors: Record<string, string> } {
+  const errors: Record<string, string> = {};
+
+  for (const g of groups) {
+    const picked = selected[g.id] ?? [];
+
+    const required = g.required === true;
+    const min =
+      typeof g.min_selections === 'number'
+        ? g.min_selections
+        : typeof g.minSelections === 'number'
+          ? g.minSelections
+          : null;
+    const max =
+      typeof g.max_selections === 'number'
+        ? g.max_selections
+        : typeof g.maxSelections === 'number'
+          ? g.maxSelections
+          : null;
+
+    if (required && picked.length === 0) {
+      errors[g.id] = 'This selection is required';
+      continue;
+    }
+    if (typeof min === 'number' && picked.length < min) {
+      errors[g.id] = `Please select at least ${min} option${min !== 1 ? 's' : ''}`;
+      continue;
+    }
+    if (typeof max === 'number' && picked.length > max) {
+      errors[g.id] = `Maximum ${max} selection${max !== 1 ? 's' : ''} allowed`;
+      continue;
     }
   }
-  return {
-    phase: 'configuring',
-    item,
-    errors: {},
-    selectedModifiers: preselected,
-    quantity: 1,
-    notes: '',
-    loadError: null,
-  };
+
+  return { ok: Object.keys(errors).length === 0, errors };
+}
+
+function toCartModifiers(selected: SelectedByGroup): CartModifier[] {
+  const out: CartModifier[] = [];
+  for (const [groupId, mods] of Object.entries(selected)) {
+    for (const m of mods) {
+      if (!m.id || !m.name) continue;
+      const adj =
+        typeof (m as unknown as UnknownRecord)['price_adjustment'] === 'number'
+          ? Math.round((m as unknown as UnknownRecord)['price_adjustment'] as number)
+          : 0;
+
+      out.push({
+        id: m.id,
+        groupId,
+        name: m.name,
+        priceAdjustment: adj,
+      });
+    }
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pricing (safe wrapper)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function computeLocalSubtotalCents(
+  unitPriceCents: number,
+  selected: SelectedByGroup,
+  qty: number,
+): number {
+  const modSum = Object.values(selected)
+    .flat()
+    .reduce((sum, m) => {
+      const adj =
+        typeof (m as unknown as UnknownRecord)['price_adjustment'] === 'number'
+          ? Math.round((m as unknown as UnknownRecord)['price_adjustment'] as number)
+          : 0;
+      return sum + adj;
+    }, 0);
+
+  const unit = Math.max(0, Math.round(unitPriceCents)) + modSum;
+  return Math.max(0, unit * clampInt(qty, 1, 99));
+}
+function normalizePriceToCents(raw: unknown): number {
+  // Accept numbers or numeric strings
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+
+  if (!Number.isFinite(n) || n <= 0) return 0;
+
+  // If it's an integer, assume it's already cents (typical DB schema)
+  if (Number.isInteger(n)) return n;
+
+  // If it's a float, assume dollars and convert to cents
+  return Math.round(n * 100);
+}
+function computePricingSafe(args: {
+  item: MenuItemLike;
+  unitPriceCents: number;
+  qty: number;
+  selected: SelectedByGroup;
+}): { subtotalCents: number; pricingHash: string } {
+  const fallbackSubtotal = computeLocalSubtotalCents(args.unitPriceCents, args.selected, args.qty);
+
+  try {
+    // ✅ This is the key fix: selected is SelectedModifier[] (PricingEngine-compatible)
+    const compatMods = PricingEngine.buildCartModifiers(args.item, args.selected);
+
+    const raw = PricingEngine.calculate(
+      args.item.id,
+      args.unitPriceCents,
+      compatMods,
+      args.qty,
+    ) as unknown;
+    const rec = isRecord(raw) ? raw : {};
+
+    const subtotal =
+      typeof rec['subtotal'] === 'number'
+        ? Math.max(0, Math.round(rec['subtotal'] as number))
+        : fallbackSubtotal;
+
+    const pricingHash =
+      typeof rec['pricing_hash'] === 'string'
+        ? (rec['pricing_hash'] as string)
+        : typeof rec['pricingHash'] === 'string'
+          ? (rec['pricingHash'] as string)
+          : '';
+
+    return { subtotalCents: subtotal, pricingHash };
+  } catch {
+    return { subtotalCents: fallbackSubtotal, pricingHash: '' };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────────────────────────────────────
+
+type State = {
+  quantity: number;
+  notes: string;
+  selected: SelectedByGroup;
+  errors: Record<string, string>;
+  isSubmitting: boolean;
+};
+
+type Action =
+  | { type: 'RESET' }
+  | { type: 'SET_QTY'; qty: number }
+  | { type: 'SET_NOTES'; notes: string }
+  | { type: 'TOGGLE_MOD'; groupId: string; mod: SelectedModifier; max?: number }
+  | { type: 'VALIDATION_FAIL'; errors: Record<string, string> }
+  | { type: 'SUBMIT' }
+  | { type: 'SUBMIT_DONE' };
+
+function initialState(): State {
+  return { quantity: 1, notes: '', selected: {}, errors: {}, isSubmitting: false };
 }
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
-    case 'LOADED':
-      return initState(action.item);
+    case 'RESET':
+      return initialState();
 
-    case 'LOAD_FAILED':
-      return { ...state, phase: 'configuring', loadError: action.error };
-
-    case 'SELECT_MODIFIER': {
-      const { groupId, modifier, groupType, maxSelections } = action;
-      const current = state.selectedModifiers[groupId] ?? [];
-      let next: SelectedModifier[];
-
-      if (groupType === 'radio') {
-        next = [modifier];
-      } else {
-        const exists = current.some((m) => m.id === modifier.id);
-        if (exists) {
-          next = current.filter((m) => m.id !== modifier.id);
-        } else if (maxSelections && current.length >= maxSelections) {
-          return {
-            ...state,
-            errors: { ...state.errors, [groupId]: `Maximum ${maxSelections} selections` },
-          };
-        } else {
-          next = [...current, modifier];
-        }
-      }
-      return {
-        ...state,
-        phase: 'configuring',
-        errors: { ...state.errors, [groupId]: '' },
-        selectedModifiers: { ...state.selectedModifiers, [groupId]: next },
-      };
-    }
-
-    case 'SET_QUANTITY':
-      return { ...state, quantity: Math.max(1, Math.floor(action.quantity)) };
+    case 'SET_QTY':
+      return { ...state, quantity: clampInt(action.qty, 1, 99) };
 
     case 'SET_NOTES':
       return { ...state, notes: action.notes };
 
+    case 'TOGGLE_MOD': {
+      const { groupId, mod, max } = action;
+      const current = state.selected[groupId] ?? [];
+      const exists = current.some((x) => x.id === mod.id);
+
+      let next = exists ? current.filter((x) => x.id !== mod.id) : [...current, mod];
+
+      // max=1 acts like radio: selecting a new item replaces existing
+      if (max === 1 && !exists) next = [mod];
+
+      if (typeof max === 'number' && max > 0 && next.length > max) {
+        next = next.slice(next.length - max);
+      }
+
+      return {
+        ...state,
+        errors: { ...state.errors, [groupId]: '' },
+        selected: { ...state.selected, [groupId]: next },
+      };
+    }
+
     case 'VALIDATION_FAIL':
-      return { ...state, phase: 'invalid', errors: action.errors };
+      return { ...state, errors: action.errors, isSubmitting: false };
 
     case 'SUBMIT':
-      return { ...state, phase: 'submitting' };
+      return { ...state, isSubmitting: true };
+
+    case 'SUBMIT_DONE':
+      return { ...state, isSubmitting: false };
 
     default:
       return state;
@@ -124,363 +361,268 @@ function reducer(state: State, action: Action): State {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Props
-// ─────────────────────────────────────────────────────────────────────────────
-
-interface MenuItemModalProps {
-  /** Shallow item from list query — modifiers may be empty [] */
-  item: MenuItem;
-  onClose: () => void;
-  onAddToCart: (payload: AddToCartPayload) => void;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Component
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function MenuItemModal({ item, onClose, onAddToCart }: MenuItemModalProps) {
-  const [state, dispatch] = useReducer(reducer, item, (i) => ({
-    phase: 'loading' as Phase,
-    item: i,
-    errors: {},
-    selectedModifiers: {},
-    quantity: 1,
-    notes: '',
-    loadError: null,
-  }));
+export interface MenuItemModalProps {
+  isOpen: boolean;
+  item: MenuItemBase;
+  onClose: () => void;
+}
 
-  // ── Load full modifier graph on mount ──────────────────────────────────────
-  // List queries return items with modifier_groups: [] (flat row from view
-  // without the json_agg join sometimes). This ensures we always have
-  // the full graph before rendering.
+export default memo(function MenuItemModal({ isOpen, item, onClose }: MenuItemModalProps) {
+  const { addItem } = useCart();
+  const compatItem = item as unknown as MenuItemLike;
+
+  const [state, dispatch] = useReducer(reducer, undefined, initialState);
+  const closeBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  const groups = useMemo(() => getGroups(compatItem), [compatItem]);
+  const imageUrl = useMemo(() => getImageUrl(compatItem), [compatItem]);
+  const category = useMemo(() => normalizeCategory(compatItem.category), [compatItem.category]);
+  const unitPriceCents = useMemo(() => normalizeUnitPriceCents(compatItem), [compatItem]);
+
   useEffect(() => {
-    let cancelled = false;
-    MenuService.getMenuItemWithModifiers(item.id)
-      .then((full) => {
-        if (cancelled) return;
-        if (full) {
-          dispatch({ type: 'LOADED', item: full });
-        } else {
-          // Fallback: use the item we already have (may have empty modifiers)
-          dispatch({ type: 'LOADED', item });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) dispatch({ type: 'LOADED', item });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [item.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!isOpen) return;
+    dispatch({ type: 'RESET' });
+    queueMicrotask(() => closeBtnRef.current?.focus());
+  }, [isOpen, compatItem.id]);
 
-  // Close on Escape
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
-
-  // ── Derived state ──────────────────────────────────────────────────────────
-
-  const activeItem = state.item ?? item;
-  const modifierGroups = activeItem.modifier_groups ?? [];
-  const isLoading = state.phase === 'loading';
-  const isSubmitting = state.phase === 'submitting';
-
-  const cartModifiers = useMemo(
-    () => PricingEngine.buildCartModifiers(activeItem, state.selectedModifiers),
-    [activeItem, state.selectedModifiers],
-  );
-
-  const pricing = useMemo(
-    () => PricingEngine.calculate(activeItem.id, activeItem.price, cartModifiers, state.quantity),
-    [activeItem.id, activeItem.price, cartModifiers, state.quantity],
-  );
-
-  const stockStatus = PricingEngine.getStockStatus(activeItem);
-  const stockMessage = PricingEngine.getStockMessage(activeItem);
-
-  // ── Handlers ───────────────────────────────────────────────────────────────
-
-  function handleSelect(group: ModifierGroup, modifier: SelectedModifier) {
-    if (isLoading || isSubmitting) return;
-    dispatch({
-      type: 'SELECT_MODIFIER',
-      groupId: group.id,
-      modifier,
-      groupType: group.type,
-      maxSelections: group.max_selections,
+  const pricing = useMemo(() => {
+    return computePricingSafe({
+      item: compatItem,
+      unitPriceCents,
+      qty: state.quantity,
+      selected: state.selected,
     });
-  }
+  }, [compatItem, unitPriceCents, state.quantity, state.selected]);
 
-  function handleAddToCart() {
-    const validation = PricingEngine.validateConfiguration(activeItem, state.selectedModifiers);
-    if (!validation.valid) {
-      dispatch({ type: 'VALIDATION_FAIL', errors: validation.errors });
-      const firstId = Object.keys(validation.errors)[0];
-      document
-        .getElementById(`mg-${firstId}`)
-        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  const handleAddToCart = useCallback(() => {
+    const v = validateSelection(groups, state.selected);
+    if (!v.ok) {
+      dispatch({ type: 'VALIDATION_FAIL', errors: v.errors });
+      const firstId = Object.keys(v.errors)[0];
+      if (firstId) {
+        document
+          .getElementById(`mg-${firstId}`)
+          ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
       return;
     }
-    dispatch({ type: 'SUBMIT' });
-    onAddToCart({
-      item_id: activeItem.id,
-      name: activeItem.name,
-      image_url: activeItem.image_url,
-      base_price: activeItem.price,
-      modifiers: cartModifiers,
-      quantity: state.quantity,
-      special_instructions: state.notes.trim() || undefined,
-    });
-    onClose();
-  }
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+    dispatch({ type: 'SUBMIT' });
+
+    const payload: AddToCartInput = {
+      menuItemId: compatItem.id,
+      name: compatItem.name,
+      unitPriceCents, // ✅ normalized cents
+      imageUrl,
+      category,
+      modifiers: toCartModifiers(state.selected),
+      quantity: clampInt(state.quantity, 1, 99),
+      notes: sanitizeNotes(state.notes),
+      pricingHash: pricing.pricingHash,
+    };
+    console.log('price raw=', compatItem.price, 'unitPriceCents=', unitPriceCents);
+    addItem(payload);
+    dispatch({ type: 'SUBMIT_DONE' });
+    onClose();
+  }, [
+    addItem,
+    category,
+    compatItem.id,
+    compatItem.name,
+    groups,
+    imageUrl,
+    onClose,
+    pricing.pricingHash,
+    state.notes,
+    state.quantity,
+    state.selected,
+    unitPriceCents,
+  ]);
+
+  if (!isOpen) return null;
+
+  const canSubmit = unitPriceCents > 0 && !state.isSubmitting;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl">
-        {/* Hero */}
-        <div className="relative">
-          {activeItem.image_url && (
-            <div className="h-64 bg-gray-100">
-              <img
-                src={activeItem.image_url}
-                alt={activeItem.name}
-                className="w-full h-full object-cover"
-              />
-            </div>
-          )}
-          {activeItem.featured && (
-            <span className="absolute top-4 right-4 bg-amber-500 text-white px-3 py-1 rounded-full text-sm font-semibold shadow">
-              ⭐ Featured
-            </span>
-          )}
-          {stockMessage && stockStatus !== 'out' && (
-            <span className="absolute top-4 left-4 bg-red-500 text-white px-3 py-1 rounded-full text-sm font-semibold shadow animate-pulse">
-              {stockMessage}
-            </span>
-          )}
+    <div className="w-full max-w-2xl space-y-6">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="truncate text-xl font-semibold text-zinc-100">{compatItem.name}</h2>
+          {compatItem.description ? (
+            <p className="mt-1 text-sm text-zinc-400">{compatItem.description}</p>
+          ) : null}
+
+          <div className="mt-2 text-sm text-zinc-300">
+            <span className="font-semibold">{PricingEngine.formatPrice(unitPriceCents)}</span>
+            {unitPriceCents <= 0 ? (
+              <span className="ml-2 text-xs text-red-300">(price missing/invalid)</span>
+            ) : null}
+          </div>
         </div>
 
-        {/* Content */}
-        <div className="p-6">
-          {/* Header */}
-          <div className="flex justify-between items-start mb-1">
-            <div className="flex-1 pr-4">
-              <h2 className="text-3xl font-bold text-gray-900">{activeItem.name}</h2>
-              {activeItem.description && (
-                <p className="text-gray-500 text-sm mt-1">{activeItem.description}</p>
-              )}
-              <div className="flex gap-2 mt-2 flex-wrap">
-                {activeItem.is_vegetarian && <Badge color="green">🌿 Vegetarian</Badge>}
-                {activeItem.is_vegan && <Badge color="green">🌱 Vegan</Badge>}
-                {activeItem.is_gluten_free && <Badge color="blue">🌾 Gluten-Free</Badge>}
-                {activeItem.spicy_level ? (
-                  <Badge color="red">{'🌶'.repeat(activeItem.spicy_level)}</Badge>
-                ) : null}
+        <button
+          ref={closeBtnRef}
+          type="button"
+          onClick={onClose}
+          className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-900/50"
+        >
+          Close
+        </button>
+      </div>
+
+      {/* Image */}
+      {imageUrl ? (
+        <div className="overflow-hidden rounded-2xl border border-zinc-800">
+          <img src={imageUrl} alt={compatItem.name} className="h-56 w-full object-cover" />
+        </div>
+      ) : null}
+
+      {/* Modifier groups */}
+      <div className="space-y-5">
+        {groups.map((g) => {
+          const picked = state.selected[g.id] ?? [];
+          const err = state.errors[g.id];
+          const required = g.required === true;
+
+          const max =
+            typeof g.max_selections === 'number'
+              ? g.max_selections
+              : typeof g.maxSelections === 'number'
+                ? g.maxSelections
+                : undefined;
+
+          const mods = g.modifiers ?? [];
+
+          return (
+            <div
+              key={g.id}
+              id={`mg-${g.id}`}
+              className="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-4"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-semibold text-zinc-100">{g.name}</p>
+                    {required ? <span className="text-[11px] text-amber-300">Required</span> : null}
+                    {typeof max === 'number' ? (
+                      <span className="text-[11px] text-zinc-500">Max {max}</span>
+                    ) : null}
+                  </div>
+                  {err ? <p className="mt-1 text-xs text-red-300">{err}</p> : null}
+                </div>
+
+                <div className="text-xs text-zinc-500">{picked.length} selected</div>
+              </div>
+
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {mods.map((m) => {
+                  const adj = getAdjCents(m);
+                  const selected = picked.some((x) => x.id === m.id);
+
+                  const mod: SelectedModifier = {
+                    id: m.id,
+                    name: m.name,
+                    price_adjustment: adj,
+                  };
+
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => dispatch({ type: 'TOGGLE_MOD', groupId: g.id, mod, max })}
+                      className={[
+                        'flex items-center justify-between rounded-xl border px-3 py-2 text-left transition-colors',
+                        selected
+                          ? 'border-amber-500/40 bg-amber-500/10'
+                          : 'border-zinc-800 bg-zinc-950/30 hover:bg-zinc-900/40',
+                      ].join(' ')}
+                    >
+                      <span className="text-sm text-zinc-100">{m.name}</span>
+                      <span className="text-xs text-zinc-400">
+                        {adj !== 0 ? `${adj > 0 ? '+' : ''}${PricingEngine.formatPrice(adj)}` : '—'}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
-            <button
-              onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 text-2xl leading-none ml-2"
-            >
-              ×
-            </button>
-          </div>
+          );
+        })}
+      </div>
 
-          <p className="text-2xl font-bold text-amber-600 mt-3 mb-5">
-            {PricingEngine.formatPrice(activeItem.price)}
-          </p>
-
-          {/* Loading skeleton */}
-          {isLoading && (
-            <div className="space-y-3 mb-6 animate-pulse">
-              {[1, 2].map((i) => (
-                <div key={i} className="h-20 bg-gray-100 rounded-lg" />
-              ))}
-            </div>
-          )}
-
-          {/* Modifier groups */}
-          {!isLoading && modifierGroups.length > 0 && (
-            <div className="space-y-6 mb-6">
-              {modifierGroups.map((group) => (
-                <div key={group.id} id={`mg-${group.id}`} className="border-t pt-5">
-                  <div className="flex items-center justify-between mb-1">
-                    <h3 className="font-semibold text-lg text-gray-900">
-                      {group.name}
-                      {group.required && <span className="text-red-500 ml-1">*</span>}
-                    </h3>
-                    <span className="text-xs text-gray-400">
-                      {group.type === 'radio'
-                        ? 'Choose one'
-                        : group.max_selections
-                          ? `Choose up to ${group.max_selections}`
-                          : 'Choose any'}
-                    </span>
-                  </div>
-
-                  {group.description && (
-                    <p className="text-xs text-gray-500 mb-2">{group.description}</p>
-                  )}
-
-                  {state.errors[group.id] && (
-                    <p className="text-red-500 text-sm mb-2 font-medium">
-                      ⚠ {state.errors[group.id]}
-                    </p>
-                  )}
-
-                  <div className="space-y-2">
-                    {group.modifiers.map((modifier) => {
-                      const isSelected = (state.selectedModifiers[group.id] ?? []).some(
-                        (m) => m.id === modifier.id,
-                      );
-                      return (
-                        <button
-                          key={modifier.id}
-                          type="button"
-                          disabled={!modifier.available || isSubmitting}
-                          onClick={() =>
-                            handleSelect(group, {
-                              id: modifier.id,
-                              name: modifier.name,
-                              price_adjustment: modifier.price_adjustment,
-                            })
-                          }
-                          className={[
-                            'w-full flex justify-between items-center p-3 rounded-lg border-2 transition',
-                            'disabled:opacity-40 disabled:cursor-not-allowed',
-                            isSelected
-                              ? 'border-amber-500 bg-amber-50'
-                              : 'border-gray-200 hover:border-gray-300',
-                          ].join(' ')}
-                        >
-                          <span className="flex items-center gap-2">
-                            <span
-                              className={[
-                                'h-4 w-4 rounded-full border-2 flex items-center justify-center shrink-0',
-                                isSelected ? 'border-amber-500 bg-amber-500' : 'border-gray-300',
-                              ].join(' ')}
-                            >
-                              {isSelected && (
-                                <span className="block h-1.5 w-1.5 rounded-full bg-white" />
-                              )}
-                            </span>
-                            <span className="text-gray-800">{modifier.name}</span>
-                          </span>
-                          {modifier.price_adjustment > 0 && (
-                            <span className="text-amber-600 font-semibold text-sm">
-                              +{PricingEngine.formatPrice(modifier.price_adjustment)}
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Special instructions */}
+      {/* Notes + Quantity */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="sm:col-span-2">
+          <label className="text-xs font-semibold text-zinc-400">Special instructions</label>
           <textarea
             value={state.notes}
             onChange={(e) => dispatch({ type: 'SET_NOTES', notes: e.target.value })}
-            placeholder="Special requests, allergies, substitutions..."
-            maxLength={200}
-            rows={2}
-            className="w-full mb-1 px-4 py-3 border border-gray-200 rounded-lg text-sm resize-none focus:outline-none focus:border-amber-400"
+            rows={3}
+            className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500/40"
+            placeholder="e.g., no onions, extra salsa…"
           />
-          <p className="text-xs text-gray-400 text-right mb-5">{state.notes.length}/200</p>
+        </div>
 
-          {/* Quantity + total */}
-          <div className="flex items-center justify-between mb-5">
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => dispatch({ type: 'SET_QUANTITY', quantity: state.quantity - 1 })}
-                className="w-9 h-9 border-2 border-gray-200 rounded-full text-lg font-bold text-gray-600 hover:border-amber-400 transition"
-              >
-                −
-              </button>
-              <span className="w-8 text-center font-semibold text-lg">{state.quantity}</span>
-              <button
-                type="button"
-                onClick={() => dispatch({ type: 'SET_QUANTITY', quantity: state.quantity + 1 })}
-                className="w-9 h-9 border-2 border-gray-200 rounded-full text-lg font-bold text-gray-600 hover:border-amber-400 transition"
-              >
-                +
-              </button>
+        <div>
+          <label className="text-xs font-semibold text-zinc-400">Quantity</label>
+          <div className="mt-1 flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-950/40 p-2">
+            <button
+              type="button"
+              className="h-8 w-8 rounded-lg border border-zinc-800 bg-zinc-950/60 text-zinc-200 hover:bg-zinc-900/60"
+              onClick={() => dispatch({ type: 'SET_QTY', qty: state.quantity - 1 })}
+              aria-label="Decrease quantity"
+            >
+              −
+            </button>
+
+            <div className="flex-1 text-center text-sm font-semibold text-zinc-100">
+              {state.quantity}
             </div>
-            <div className="text-right">
-              <div className="text-2xl font-bold text-amber-600">
-                {PricingEngine.formatPrice(pricing.subtotal)}
-              </div>
-              {pricing.modifier_total > 0 && (
-                <div className="text-xs text-gray-400 mt-0.5">
-                  {PricingEngine.formatPrice(activeItem.price)} +{' '}
-                  {PricingEngine.formatPrice(pricing.modifier_total)} options
-                </div>
-              )}
-            </div>
+
+            <button
+              type="button"
+              className="h-8 w-8 rounded-lg border border-zinc-800 bg-zinc-950/60 text-zinc-200 hover:bg-zinc-900/60"
+              onClick={() => dispatch({ type: 'SET_QTY', qty: state.quantity + 1 })}
+              aria-label="Increase quantity"
+            >
+              +
+            </button>
           </div>
+        </div>
+      </div>
 
-          {/* CTA */}
-          <button
-            type="button"
-            onClick={handleAddToCart}
-            disabled={isLoading || isSubmitting || stockStatus === 'out'}
-            className={[
-              'w-full font-bold py-4 rounded-xl text-white text-lg transition',
-              isLoading || isSubmitting || stockStatus === 'out'
-                ? 'bg-gray-300 cursor-not-allowed'
-                : 'bg-amber-500 hover:bg-amber-600 active:scale-[0.98]',
-            ].join(' ')}
-          >
-            {stockStatus === 'out'
-              ? 'Out of Stock'
-              : isLoading
-                ? 'Loading...'
-                : isSubmitting
-                  ? 'Adding...'
-                  : `Add to Cart · ${PricingEngine.formatPrice(pricing.subtotal)}`}
-          </button>
-
-          {state.phase === 'invalid' && Object.values(state.errors).some(Boolean) && (
-            <p className="text-center text-sm text-red-500 mt-3">
-              Please complete all required selections above.
-            </p>
+      {/* Footer */}
+      <div className="flex items-center justify-between gap-4">
+        <div className="text-sm text-zinc-300">
+          <span className="text-zinc-500">Subtotal:</span>{' '}
+          <span className="font-semibold">{PricingEngine.formatPrice(pricing.subtotalCents)}</span>
+          {pricing.pricingHash ? (
+            <span className="ml-2 text-[11px] text-zinc-600">verified</span>
+          ) : (
+            <span className="ml-2 text-[11px] text-zinc-600">estimated</span>
           )}
         </div>
+
+        <button
+          type="button"
+          onClick={handleAddToCart}
+          disabled={!canSubmit}
+          className={[
+            'rounded-xl px-5 py-3 text-sm font-semibold transition-colors',
+            !canSubmit
+              ? 'cursor-not-allowed bg-zinc-800 text-zinc-400'
+              : 'bg-amber-500 text-black hover:bg-amber-400',
+          ].join(' ')}
+        >
+          {state.isSubmitting
+            ? 'Adding…'
+            : `Add to Cart · ${PricingEngine.formatPrice(pricing.subtotalCents)}`}
+        </button>
       </div>
     </div>
   );
-}
-
-function Badge({
-  children,
-  color,
-}: {
-  children: React.ReactNode;
-  color: 'green' | 'blue' | 'red';
-}) {
-  const c = {
-    green: 'bg-green-50 text-green-700 border-green-100',
-    blue: 'bg-blue-50 text-blue-700 border-blue-100',
-    red: 'bg-red-50 text-red-700 border-red-100',
-  };
-  return (
-    <span className={`text-xs border rounded-full px-2 py-0.5 font-medium ${c[color]}`}>
-      {children}
-    </span>
-  );
-}
+});

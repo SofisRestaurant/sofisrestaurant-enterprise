@@ -15,7 +15,7 @@ import {
   type KitchenOrder,
   KITCHEN_STATUSES,
 } from '@/domain/orders/order.types'
-import type { Database } from '@/lib/supabase/database.types'
+import type { Database } from '@/types/supabase';
 import {
   ChefHat,
   Bell,

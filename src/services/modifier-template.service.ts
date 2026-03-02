@@ -94,7 +94,7 @@ export class ModifierTemplateService {
     // Create clone group
     const clonedGroup = await ModifierGroupService.create({
       name:           `${sourceGroup.name} (copy)`,
-      description:    sourceGroup.description,
+      description: sourceGroup.description ?? undefined,
       type:           sourceGroup.type,
       required:       sourceGroup.required,
       min_selections: sourceGroup.min_selections,

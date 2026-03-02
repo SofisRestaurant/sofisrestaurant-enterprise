@@ -17,25 +17,25 @@
 
 import type { MenuCategory } from '@/domain/menu/menu.types';
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { MenuService, MenuServiceError } from '@/services/menu.service';
-import type { MenuItem } from '@/domain/menu/menu.types';
 import { ModalShell } from '@/components/ui/ModalShell';
 import { AsyncButton } from '@/components/ui/AsyncButton';
 import { ErrorBanner } from '@/components/ui/ErrorBanner';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
-import { MenuGeneralTab, GENERAL_TAB_EMPTY } from './components/MenuGeneralTab';
-import type { GeneralTabFormState } from './components/MenuGeneralTab';
+import { MenuGeneralTab, GENERAL_TAB_EMPTY } from '@/features/admin/menu/MenuGeneralTab';
+import type { GeneralTabFormState } from '@/features/admin/menu/MenuGeneralTab';
 import { isGeneralTabFormValid } from '@/domain/menu/menu-general.schema';
-import { MenuModifiersTab } from './components/MenuModifiersTab';
+import { MenuModifiersTab } from '@/features/admin/menu/MenuModifiersTab';
 import { PricingEngine } from '@/domain/pricing/pricing.engine';
-
+import type { MenuItemAdmin } from '@/domain/menu/menu.types';
+import { MenuAdminService } from '@/domain/menu/menu.service.admin';
+import { MenuWriteService } from '@/domain/menu/menu.service.write';
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
 type EditorTab = 'general' | 'modifiers';
 
-function itemToForm(item: MenuItem): GeneralTabFormState {
+function itemToForm(item: MenuItemAdmin): GeneralTabFormState {
   return {
     name: item.name,
     category: item.category,
@@ -44,9 +44,9 @@ function itemToForm(item: MenuItem): GeneralTabFormState {
     image_url: item.image_url ?? '',
     featured: item.featured,
     available: item.available,
-    is_vegetarian: item.is_vegetarian,
-    is_vegan: item.is_vegan,
-    is_gluten_free: item.is_gluten_free,
+    is_vegetarian: item.is_vegetarian ?? false,
+    is_vegan: item.is_vegan ?? false,
+    is_gluten_free: item.is_gluten_free ?? false,
     spicy_level: item.spicy_level?.toString() ?? '',
     sort_order: item.sort_order?.toString() ?? '',
     inventory_count: item.inventory_count?.toString() ?? '',
@@ -66,13 +66,13 @@ function numOrUndef(s: string): number | undefined {
 
 export default function AdminMenuEditor() {
   // ── List state ─────────────────────────────────────────────────────────────
-  const [items, setItems] = useState<MenuItem[]>([]);
+  const [items, setItems] = useState<MenuItemAdmin[]>([]);
   const [loading, setLoading] = useState(true);
   const [pageError, setPageError] = useState<string | null>(null);
 
   // ── Modal state ─────────────────────────────────────────────────────────────
   const [isOpen, setIsOpen] = useState(false);
-  const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
+  const [editingItem, setEditingItem] = useState<MenuItemAdmin | null>(null);
   const [activeTab, setActiveTab] = useState<EditorTab>('general');
   const [form, setForm] = useState<GeneralTabFormState>(GENERAL_TAB_EMPTY);
   const [isDirty, setIsDirty] = useState(false);
@@ -81,7 +81,7 @@ export default function AdminMenuEditor() {
   const originalForm = useRef<GeneralTabFormState>(GENERAL_TAB_EMPTY);
 
   // ── Confirm delete state ───────────────────────────────────────────────────
-  const [deleteTarget, setDeleteTarget] = useState<MenuItem | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<MenuItemAdmin | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -91,11 +91,16 @@ export default function AdminMenuEditor() {
   const fetchItems = useCallback(async () => {
     setLoading(true);
     setPageError(null);
+
     try {
-      const data = await MenuService.getMenuItems();
+      const data = await MenuAdminService.getAllItems();
       setItems(data);
-    } catch (err) {
-      setPageError(err instanceof MenuServiceError ? err.message : 'Failed to load menu.');
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setPageError(err.message);
+      } else {
+        setPageError('Failed to load menu.');
+      }
     } finally {
       setLoading(false);
     }
@@ -110,8 +115,9 @@ export default function AdminMenuEditor() {
   // ─────────────────────────────────────────────────────────────────────────
 
   function openCreate() {
-    setEditingItem(null);
     const empty = { ...GENERAL_TAB_EMPTY };
+
+    setEditingItem(null);
     setForm(empty);
     originalForm.current = empty;
     setIsDirty(false);
@@ -120,9 +126,10 @@ export default function AdminMenuEditor() {
     setIsOpen(true);
   }
 
-  function openEdit(item: MenuItem) {
-    setEditingItem(item);
+  function openEdit(item: MenuItemAdmin) {
     const f = itemToForm(item);
+
+    setEditingItem(item);
     setForm(f);
     originalForm.current = f;
     setIsDirty(false);
@@ -133,29 +140,38 @@ export default function AdminMenuEditor() {
 
   function closeModal() {
     if (saving) return;
+
     setIsOpen(false);
     setModalError(null);
+    setIsDirty(false);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
   // Form change handler — tracks dirty state
   // ─────────────────────────────────────────────────────────────────────────
+
   function handleFormChange(
     key: keyof GeneralTabFormState,
     value: GeneralTabFormState[keyof GeneralTabFormState],
   ) {
-    setForm((p) => {
-      const next = { ...p, [key]: value };
-      setIsDirty(JSON.stringify(next) !== JSON.stringify(originalForm.current));
+    setForm((prev) => {
+      const next = { ...prev, [key]: value };
+
+      const isChanged = JSON.stringify(next) !== JSON.stringify(originalForm.current);
+
+      setIsDirty(isChanged);
+
       return next;
     });
   }
+
   // ─────────────────────────────────────────────────────────────────────────
   // Save
   // ─────────────────────────────────────────────────────────────────────────
 
   async function handleSave() {
     if (!isGeneralTabFormValid(form)) return;
+
     setSaving(true);
     setModalError(null);
 
@@ -178,23 +194,28 @@ export default function AdminMenuEditor() {
     };
 
     try {
+      let result: MenuItemAdmin;
+
       if (editingItem) {
-        const updated = await MenuService.updateMenuItem(editingItem.id, payload);
-        setItems((p) => p.map((i) => (i.id === updated.id ? updated : i)));
-        setEditingItem(updated);
-        setIsDirty(false);
-        originalForm.current = form;
+        result = await MenuWriteService.update(editingItem.id, payload);
+
+        setItems((prev) => prev.map((i) => (i.id === result.id ? result : i)));
       } else {
-        const created = await MenuService.createMenuItem(payload);
-        setItems((p) => [created, ...p]);
-        setEditingItem(created);
-        setActiveTab('modifiers');
-        setIsDirty(false);
-        setSaving(false);
-        return;
+        result = await MenuWriteService.create(payload);
+
+        setItems((prev) => [result, ...prev]);
+        setActiveTab('modifiers'); // unlock modifiers for new item
       }
-    } catch (err) {
-      setModalError(err instanceof MenuServiceError ? err.message : 'Failed to save.');
+
+      setEditingItem(result);
+      originalForm.current = itemToForm(result);
+      setIsDirty(false);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setModalError(err.message);
+      } else {
+        setModalError('Failed to save.');
+      }
     } finally {
       setSaving(false);
     }
@@ -208,7 +229,7 @@ export default function AdminMenuEditor() {
     if (!deleteTarget) return;
     setDeleteLoading(true);
     try {
-      await MenuService.deleteMenuItem(deleteTarget.id);
+      await MenuWriteService.delete(deleteTarget.id);
       setItems((p) => p.filter((i) => i.id !== deleteTarget.id));
       setDeleteTarget(null);
     } catch {
@@ -223,11 +244,14 @@ export default function AdminMenuEditor() {
   // Availability toggle — optimistic
   // ─────────────────────────────────────────────────────────────────────────
 
-  async function handleToggle(item: MenuItem, available: boolean) {
+  async function handleToggle(item: MenuItemAdmin, available: boolean) {
+    // optimistic update
     setItems((p) => p.map((i) => (i.id === item.id ? { ...i, available } : i)));
+
     try {
-      await MenuService.toggleAvailability(item.id, available);
+      await MenuWriteService.update(item.id, { available });
     } catch {
+      // revert if failed
       setItems((p) => p.map((i) => (i.id === item.id ? { ...i, available: !available } : i)));
     }
   }
@@ -240,7 +264,7 @@ export default function AdminMenuEditor() {
   const canSave = isGeneralTabFormValid(form) && !saving;
   const hasModifiers = (editingItem?.modifier_groups?.length ?? 0) > 0;
 
-  const byCategory: Record<MenuCategory, MenuItem[]> = {
+  const byCategory: Record<MenuCategory, MenuItemAdmin[]> = {
     appetizers: [],
     entrees: [],
     desserts: [],

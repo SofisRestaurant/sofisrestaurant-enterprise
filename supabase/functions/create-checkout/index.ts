@@ -1,55 +1,44 @@
-// supabase/functions/create-checkout/index.ts
 // =============================================================================
-// CREATE CHECKOUT — ENTERPRISE GRADE (PROMO + CREDITS + LOYALTY + AUDIT)
+// CREATE CHECKOUT — HARDENED v2
 // =============================================================================
-//
-// Discount pipeline (server-only, never frontend):
-//   1. validateItems()       — prices from DB, totals computed server-side
-//   2. applyPromoCode()      — validate + atomic-increment promo use
-//   3. applyUserCredit()     — consume user_credits (loyalty or marketing)
-//   4. Anti-stack guard      — enforce discount ceiling
-//   5. Stripe session        — receives only final computed total
-//
-// Security guarantees:
-//   ✔ No client-supplied price is ever trusted
-//   ✔ Promo incremented atomically (UPDATE ... WHERE current_uses < max_uses)
-//   ✔ Credit consumed atomically (UPDATE ... WHERE used = false)
-//   ✔ Both writes are rolled back if Stripe session creation fails
-//   ✔ Full audit in Stripe metadata + promo_redemptions table
-//   ✔ Rate limiting per user
-//   ✔ Idempotency key enforced
-// =============================================================================
-
 import Stripe from "stripe";
-import { createClient } from "@supabase/supabase-js";
+import {
+  createServiceClient,
+  createAnonClient,
+  type SvcClient,
+} from "../_shared/supabase.ts";
+import type { Json } from "../_shared/database.types.ts";
 
 // ── Env ───────────────────────────────────────────────────────────────────────
-const SUPABASE_URL      = Deno.env.get("SUPABASE_URL")!;
-const SERVICE_ROLE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY")!;
+const HASH_VERSION = "v1"; // bump when pricing schema changes to invalidate old hashes
 
 if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY || !STRIPE_SECRET_KEY) {
   throw new Error("Missing required environment variables");
 }
 
 const stripe = new Stripe(STRIPE_SECRET_KEY, {
-  apiVersion:  "2026-01-28.clover",
-  httpClient:  Stripe.createFetchHttpClient(),
+  // NOTE: This will typecheck once your Stripe SDK is upgraded to a version
+  // whose typings include this Clover API version.
+  apiVersion: "2026-02-25.clover",
+  httpClient: Stripe.createFetchHttpClient(),
 });
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const CONFIG = {
-  MAX_ITEMS:               100,
-  MIN_AMOUNT_CENTS:        500,
-  MAX_AMOUNT_CENTS:        100_000_000,
+  MAX_ITEMS: 100,
+  MIN_AMOUNT_CENTS: 500,
+  MAX_AMOUNT_CENTS: 100_000_000,
   SESSION_EXPIRES_MINUTES: 30,
   MAX_ATTEMPTS_PER_WINDOW: 10,
-  WINDOW_MINUTES:          5,
-  BLOCK_MINUTES:           15,
-  TAX_RATE:                0.08,
-  // Max combined discount as fraction of subtotal (prevent 100% free orders)
-  MAX_DISCOUNT_FRACTION:   0.50,
+  WINDOW_MINUTES: 5,
+  BLOCK_MINUTES: 15,
+  TAX_RATE: 0.08,
+  MAX_DISCOUNT_FRACTION: 0.5,
+  SAFE_MARGIN_PERCENT: 20,
 } as const;
 
 const ALLOWED_ORIGINS = [
@@ -61,34 +50,94 @@ const ALLOWED_ORIGINS = [
 ];
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-interface RawItem       { id: unknown; quantity: unknown; notes?: unknown }
-interface ValidatedItem { id: string; name: string; price_cents: number; quantity: number; notes?: string }
 
-// Unified discount contract — both applyPromoCode and applyUserCredit return this shape
+/** A single validated modifier selection stored for audit/replay */
+interface ValidatedModifier {
+  modifier_id: string;
+  modifier_group_id: string;
+  name: string;
+  price_adjustment_cents: number;
+}
+
+/**
+ * v2 ValidatedItem — now includes full modifier audit trail + notes + pricing_hash.
+ * This is what gets persisted in pending_carts.items[].
+ */
+interface ValidatedItem {
+  id: string;
+  name: string;
+  base_cents: number; // base price before modifiers
+  price_cents: number; // base + modifiers per unit
+  quantity: number;
+  modifiers: ValidatedModifier[];
+  notes: string | null;
+  pricing_hash: string; // deterministic per-line integrity hash
+}
+
 interface DiscountResult {
-  discount_cents:  number;   // canonical field used by the pipeline
-  promo_id?:       string;
-  promo_code?:     string;
-  promo_applied?:  number;
-  credit_id?:      string;
+  discount_cents: number;
+  promo_id?: string;
+  promo_code?: string;
+  promo_applied?: number;
+  credit_id?: string;
   credit_applied?: number;
 }
 
-interface RawBody {
-  items:           RawItem[];
-  email:           unknown;
-  successUrl:      unknown;
-  cancelUrl:       unknown;
-  frontend_total?: number;
-  promo_code?:     unknown;
-  credit_id?:      unknown;
+interface RawModifierSelection {
+  id: unknown;
+  notes?: unknown;
 }
+
+interface RawItem {
+  id: unknown;
+  quantity: unknown;
+  notes?: unknown;
+  modifiers?: RawModifierSelection[];
+}
+
+interface ModifierGroupRow {
+  id: string;
+  required: boolean;
+  min_selections: number | null;
+  max_selections: number | null; // null = no max
+  active: boolean;
+}
+
+interface RawBody {
+  items: RawItem[];
+  email: unknown;
+
+  // ✅ accept BOTH styles
+  successUrl?: unknown;
+  cancelUrl?: unknown;
+  success_url?: unknown;
+  cancel_url?: unknown;
+
+  frontend_total?: number;
+  promo_code?: unknown;
+  credit_id?: unknown;
+  order_notes?: unknown;
+}
+
+interface ModifierRow {
+  id: string;
+  modifier_group_id: string;
+  name: string;
+  price_adjustment: number;
+  available: boolean;
+}
+
+type MenuProductRow = {
+  id: string;
+  name: string;
+  price: number;
+  available: boolean;
+};
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
 function getCorsHeaders(req: Request): Record<string, string> | null {
   const origin = req.headers.get("origin") ?? "";
   if (!ALLOWED_ORIGINS.includes(origin)) return null;
-
   return {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Headers":
@@ -96,6 +145,7 @@ function getCorsHeaders(req: Request): Record<string, string> | null {
     "Access-Control-Allow-Methods": "POST, OPTIONS",
   };
 }
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function log(level: "info" | "warn" | "error", msg: string, data?: unknown) {
   console.log(JSON.stringify({ level, msg, data, time: new Date().toISOString() }));
@@ -113,92 +163,271 @@ function err(message: string, cors: Record<string, string>, status = 400) {
   return json({ error: message }, cors, status);
 }
 
-function s(v: unknown, max: number) { return String(v ?? "").slice(0, max).trim(); }
-function n(v: unknown, min: number, max: number) {
+function s(v: unknown, max: number): string {
+  return String(v ?? "").slice(0, max).trim();
+}
+
+function n(v: unknown, min: number, max: number): number {
   const x = Number(v);
-  if (isNaN(x)) return min;
+  if (Number.isNaN(x)) return min;
   return Math.max(min, Math.min(max, Math.round(x)));
 }
 
+// ── Pricing hash ──────────────────────────────────────────────────────────────
+async function computePricingHash(
+  itemId: string,
+  baseCents: number,
+  modifiers: { modifier_id: string; price_adjustment_cents: number }[],
+  quantity: number,
+): Promise<string> {
+  const sortedMods = [...modifiers]
+    .sort((a, b) => a.modifier_id.localeCompare(b.modifier_id))
+    .map((m) => `${m.modifier_id}:${m.price_adjustment_cents}`)
+    .join(",");
+
+  const payload = `${HASH_VERSION}|${itemId}|${baseCents}|${sortedMods}|${quantity}`;
+  const encoded = new TextEncoder().encode(payload);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
-async function authenticate(req: Request) {
+async function authenticate(
+  req: Request,
+): Promise<{ ok: false } | { ok: true; userId: string }> {
   const authHeader = req.headers.get("authorization");
-  if (!authHeader?.startsWith("Bearer ")) return { ok: false as const };
+  if (!authHeader?.startsWith("Bearer ")) return { ok: false };
 
-  const token = authHeader.replace("Bearer ", "");
-  const anonClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    global: { headers: { Authorization: `Bearer ${token}` } },
-    auth:   { persistSession: false },
-  });
+  const token = authHeader.slice("Bearer ".length).trim();
+  if (!token) return { ok: false };
 
-  const { data: { user }, error } = await anonClient.auth.getUser();
-  if (error || !user) return { ok: false as const };
-  return { ok: true as const, userId: user.id };
+  const anonClient = createAnonClient(token);
+  const { data, error } = await anonClient.auth.getUser();
+
+  if (error || !data?.user) return { ok: false };
+  return { ok: true, userId: data.user.id };
 }
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
-async function checkRateLimit(userId: string) {
-  const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+// IMPORTANT: this code expects checkout_rate_limits has columns:
+// user_id, attempts, last_attempt_at, blocked_until
+async function checkRateLimit(userId: string): Promise<{ blocked: boolean }> {
+  const svc = createServiceClient();
   const now = new Date();
   const windowStart = new Date(now.getTime() - CONFIG.WINDOW_MINUTES * 60_000);
 
-  const { data } = await svc
-    .from("checkout_rate_limits")
-    .select("*")
-    .eq("user_id", userId)
-    .maybeSingle();
+ const { data, error } = await svc
+  .from("checkout_rate_limits")
+  .select("user_id,attempts,last_attempt_at,blocked_until")
+  .eq("user_id", userId)
+  .order("last_attempt_at", { ascending: false })
+  .limit(1)
+  .maybeSingle();
 
-  if (data?.blocked_until && new Date(data.blocked_until) > now) return { blocked: true };
+  if (error) {
+    log("warn", "rate_limit_read_failed", { userId, error });
+    // fail-open to avoid blocking purchases due to telemetry table issues
+    return { blocked: false };
+  }
 
-  const attempts = !data || new Date(data.last_attempt) < windowStart ? 1 : data.attempts + 1;
-  const blocked  = attempts > CONFIG.MAX_ATTEMPTS_PER_WINDOW;
+  const blockedUntil = data?.blocked_until ? new Date(data.blocked_until) : null;
+  if (blockedUntil && blockedUntil > now) return { blocked: true };
+
+  const lastAttemptAt = data?.last_attempt_at ? new Date(data.last_attempt_at) : null;
+  const attempts =
+    !data || !lastAttemptAt || lastAttemptAt < windowStart
+      ? 1
+      : (data.attempts ?? 0) + 1;
+
+  const blocked = attempts > CONFIG.MAX_ATTEMPTS_PER_WINDOW;
 
   await svc.from("checkout_rate_limits").upsert({
-    user_id:       userId,
+    user_id: userId,
     attempts,
-    last_attempt:  now,
-    blocked_until: blocked ? new Date(now.getTime() + CONFIG.BLOCK_MINUTES * 60_000) : null,
+    last_attempt_at: now.toISOString(),
+    blocked_until: blocked
+      ? new Date(now.getTime() + CONFIG.BLOCK_MINUTES * 60_000).toISOString()
+      : null,
   });
 
   return { blocked };
 }
 
+// ── Modifier groups fetch (stable, avoids nested typing pitfalls) ─────────────
+async function fetchModifierGroupsForItem(
+  svc: SvcClient,
+  menuItemId: string,
+): Promise<Map<string, ModifierGroupRow>> {
+  const groupMap = new Map<string, ModifierGroupRow>();
+
+  const { data: links, error: linkErr } = await svc
+    .from("menu_item_modifier_groups")
+    .select("modifier_group_id")
+    .eq("menu_item_id", menuItemId);
+
+  if (linkErr) {
+    log("warn", "modifier_group_links_failed", { menuItemId, linkErr });
+    return groupMap;
+  }
+
+  const groupIds = (links ?? [])
+    .map((r) => (r as { modifier_group_id?: string }).modifier_group_id)
+    .filter((x): x is string => typeof x === "string" && x.length > 0);
+
+  if (groupIds.length === 0) return groupMap;
+
+  const { data: groups, error: groupsErr } = await svc
+    .from("modifier_groups")
+    .select("id,required,min_selections,max_selections,active")
+    .in("id", groupIds);
+
+  if (groupsErr) {
+    log("warn", "modifier_groups_fetch_failed", { menuItemId, groupsErr });
+    return groupMap;
+  }
+
+  for (const g of (groups ?? []) as ModifierGroupRow[]) groupMap.set(g.id, g);
+  return groupMap;
+}
+
 // ── Item validation ───────────────────────────────────────────────────────────
 async function validateItems(
-  rawItems: RawItem[]
-): Promise<{ ok: false } | { ok: true; items: ValidatedItem[]; subtotalCents: number }> {
-  const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+  rawItems: RawItem[],
+): Promise<
+  | { ok: false; reason: string }
+  | { ok: true; items: ValidatedItem[]; subtotalCents: number }
+> {
+  const svc = createServiceClient();
 
-  if (!rawItems.length || rawItems.length > CONFIG.MAX_ITEMS) return { ok: false };
+  if (!rawItems.length || rawItems.length > CONFIG.MAX_ITEMS) {
+    return { ok: false, reason: "Item count out of range" };
+  }
 
-  const ids = rawItems.map((i) => s(i.id, 100));
-  const { data: products } = await svc.from("menu_items").select("id,name,price").in("id", ids);
+  const itemIds = rawItems.map((i) => s(i.id, 100));
+  if (itemIds.some((id) => !id)) return { ok: false, reason: "Item missing id" };
 
-  if (!products || products.length !== ids.length) return { ok: false };
+  const { data: products, error: prodErr } = await svc
+    .from("menu_items_admin_full")
+    .select("id,name,price,available")
+    .in("id", itemIds);
 
-  const map = new Map(products.map((p) => [p.id, p]));
+  if (prodErr) return { ok: false, reason: "Failed to load products" };
+
+  const typedProducts = (products ?? []) as MenuProductRow[];
+  if (typedProducts.length !== itemIds.length) {
+    return { ok: false, reason: "One or more items not found" };
+  }
+
+  const productMap = new Map<string, MenuProductRow>(typedProducts.map((p) => [p.id, p]));
+
   let subtotalCents = 0;
   const items: ValidatedItem[] = [];
 
   for (const raw of rawItems) {
-    const product = map.get(s(raw.id, 100));
-    if (!product) return { ok: false };
+    const itemId = s(raw.id, 100);
+    const product = productMap.get(itemId);
+    if (!product) return { ok: false, reason: `Product not found: ${itemId}` };
+    if (!product.available) return { ok: false, reason: `"${product.name}" is not available` };
 
-    const qty   = n(raw.quantity, 1, 100);
-    const cents = Math.round(Number(product.price) * 100);
-    subtotalCents += cents * qty;
+    const qty = n(raw.quantity, 1, 100);
+    const notes = raw.notes != null ? s(raw.notes, 500) || null : null;
+
+    const groupMap = await fetchModifierGroupsForItem(svc, itemId);
+
+    const selectedRaw: RawModifierSelection[] = Array.isArray(raw.modifiers) ? raw.modifiers : [];
+    const modifierIds = selectedRaw.map((m) => s(m.id, 100)).filter(Boolean);
+
+    const dedupeCheck = new Set(modifierIds);
+    if (dedupeCheck.size !== modifierIds.length) {
+      return { ok: false, reason: "Duplicate modifier IDs in selection" };
+    }
+
+    const { data: modifierData, error: modErr } = modifierIds.length
+      ? await svc
+          .from("modifiers")
+          .select("id,modifier_group_id,name,price_adjustment,available")
+          .in("id", modifierIds)
+      : { data: [] as ModifierRow[], error: null };
+
+    if (modErr) return { ok: false, reason: "Failed to load modifiers" };
+
+    const modifiersList: ModifierRow[] = Array.isArray(modifierData) ? (modifierData as ModifierRow[]) : [];
+    const modifierDbMap = new Map<string, ModifierRow>(modifiersList.map((m) => [m.id, m]));
+
+    const groupSelectionCount = new Map<string, number>();
+    const validatedModifiers: ValidatedModifier[] = [];
+
+    const baseCents = Math.round(Number(product.price) * 100);
+    let modifierSumCents = 0;
+
+for (const rawMod of selectedRaw) {
+  const modId = s(rawMod.id, 100)
+
+  // ✅ NEW: explicit guard for empty id (this is your current 422 cause)
+  if (!modId) {
+    return { ok: false, reason: `Modifier id missing (item ${itemId})` }
+  }
+
+  const mod = modifierDbMap.get(modId)
+
+  // ✅ UPDATED message (safe: itemId is in-scope)
+  if (!mod) {
+    return { ok: false, reason: `Modifier not found: "${modId}" (item ${itemId})` }
+  }
+
+  // Everything below is now safe because mod is guaranteed defined
+  if (!mod.available) return { ok: false, reason: `Modifier unavailable: ${mod.name}` }
+
+  const group = groupMap.get(mod.modifier_group_id)
+  if (!group) return { ok: false, reason: `Modifier "${mod.name}" does not belong to this item` }
+  if (!group.active) return { ok: false, reason: `Modifier group is inactive for "${mod.name}"` }
+
+  const currentCount = groupSelectionCount.get(mod.modifier_group_id) ?? 0
+  const maxSelections = group.max_selections ?? Infinity
+  if (currentCount + 1 > maxSelections) return { ok: false, reason: 'Too many selections for modifier group' }
+
+  groupSelectionCount.set(mod.modifier_group_id, currentCount + 1)
+
+  const adjCents = Math.round(Number(mod.price_adjustment) * 100)
+  modifierSumCents += adjCents
+
+  validatedModifiers.push({
+    modifier_id: mod.id,
+    modifier_group_id: mod.modifier_group_id,
+    name: mod.name,
+    price_adjustment_cents: adjCents,
+      });
+    }
+
+    for (const [groupId, group] of groupMap.entries()) {
+      const selectedCount = groupSelectionCount.get(groupId) ?? 0;
+      const minSelections = group.min_selections ?? 0;
+
+      if (group.required && selectedCount === 0) return { ok: false, reason: "Required modifier group has no selection" };
+      if (selectedCount < minSelections) return { ok: false, reason: "Minimum selections not met for a modifier group" };
+    }
+
+    const unitPriceCents = baseCents + modifierSumCents;
+    const lineTotalCents = unitPriceCents * qty;
+    subtotalCents += lineTotalCents;
+
+    const pricingHash = await computePricingHash(itemId, baseCents, validatedModifiers, qty);
 
     items.push({
-      id:         product.id,
-      name:       product.name,
-      price_cents: cents,
-      quantity:   qty,
-      notes:      raw.notes ? s(raw.notes, 500) : undefined,
+      id: itemId,
+      name: product.name,
+      base_cents: baseCents,
+      price_cents: unitPriceCents,
+      quantity: qty,
+      modifiers: validatedModifiers,
+      notes,
+      pricing_hash: pricingHash,
     });
   }
 
   if (subtotalCents < CONFIG.MIN_AMOUNT_CENTS || subtotalCents > CONFIG.MAX_AMOUNT_CENTS) {
-    return { ok: false };
+    return { ok: false, reason: "Order total out of allowed range" };
   }
 
   return { ok: true, items, subtotalCents };
@@ -207,117 +436,89 @@ async function validateItems(
 // =============================================================================
 // DISCOUNT MODULE A: applyPromoCode
 // =============================================================================
-// Validates promo code and performs atomic usage increment.
-// Returns discount in cents. Throws descriptive error on any violation.
-// IMPORTANT: Caller must call rollbackPromo() if Stripe creation fails.
-// =============================================================================
-
-async function applyPromoCode(
-  code: string,
-  userId: string,
-  subtotalCents: number
-): Promise<DiscountResult> {
-  const svc  = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
-  const now  = new Date();
+async function applyPromoCode(code: string, userId: string, subtotalCents: number): Promise<DiscountResult> {
+  const svc = createServiceClient();
+  const now = new Date();
   const upper = code.toUpperCase().trim();
 
-  // ── 1. Fetch promo ────────────────────────────────────────────────────────
   const { data: promo, error: promoErr } = await svc
     .from("promotions")
-    .select("id,type,value,max_uses,current_uses,per_user_limit,min_order_cents,expires_at,active")
+    .select("id,type,value,max_uses,current_uses,per_user_limit,min_order_cents,expires_at,ends_at,active,starts_at,code")
     .ilike("code", upper)
     .single();
 
   if (promoErr || !promo) throw new Error("Promo code not found");
   if (!promo.active) throw new Error("Promo code is inactive");
-  if (promo.expires_at && new Date(promo.expires_at) < now) throw new Error("Promo code has expired");
+  if (promo.starts_at && new Date(promo.starts_at) > now) throw new Error("Promo code is not yet active");
+
+  const expiry = promo.expires_at ?? promo.ends_at ?? null;
+  if (expiry && new Date(expiry) < now) throw new Error("Promo code has expired");
   if (subtotalCents < promo.min_order_cents) {
     throw new Error(`Promo requires a minimum order of $${(promo.min_order_cents / 100).toFixed(2)}`);
   }
 
-  // ── 2. Per-user limit check ───────────────────────────────────────────────
   const { count: userUseCount } = await svc
     .from("promo_redemptions")
     .select("id", { count: "exact", head: true })
     .eq("promotion_id", promo.id)
     .eq("user_id", userId);
 
-  if (
-    promo.per_user_limit != null &&
-    (userUseCount ?? 0) >= promo.per_user_limit
-  ) {
+  if (promo.per_user_limit != null && (userUseCount ?? 0) >= promo.per_user_limit) {
     throw new Error("You have already used this promo code");
   }
 
-  // ── 3. Atomic global usage increment (DB-side, race-condition safe) ──────────
-  // The RPC runs UPDATE ... WHERE (max_uses IS NULL OR current_uses < max_uses)
-  // entirely inside Postgres. No read-modify-write in JS — concurrent requests
-  // cannot both read the same current_uses value and double-increment.
-  const { data: incrementResult, error: incErr } = await svc
-    .rpc("increment_promo_usage_if_available", { p_promo_id: promo.id });
+  const { data: incrementResult, error: incErr } = await svc.rpc("increment_promo_usage_if_available", {
+    p_promo_id: promo.id,
+  });
 
-  if (incErr)          throw new Error("Failed to reserve promo code");
+  if (incErr) throw new Error("Failed to reserve promo code");
   if (!incrementResult) throw new Error("Promo code has reached its usage limit");
 
-  // ── 4. Calculate discount ─────────────────────────────────────────────────
   let discountCents = 0;
-  if (promo.type === "percent") {
-    discountCents = Math.round(subtotalCents * (promo.value / 100));
-  } else {
-    // fixed
-    discountCents = Math.min(promo.value, subtotalCents);
-  }
+  if (promo.type === "percent") discountCents = Math.round(subtotalCents * (promo.value / 100));
+  else discountCents = Math.min(Math.round(promo.value * 100), subtotalCents);
 
   log("info", "promo_applied", { promoId: promo.id, code: upper, userId, discountCents });
 
-  return { discount_cents: discountCents, promo_id: promo.id, promo_code: upper, promo_applied: discountCents };
+  return {
+    discount_cents: discountCents,
+    promo_id: promo.id,
+    promo_code: upper,
+    promo_applied: discountCents,
+  };
 }
 
 async function rollbackPromo(promoId: string) {
-  const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
-  // Safe DB-side decrement — never goes below 0, matches the increment RPC
+  const svc = createServiceClient();
   await svc.rpc("promotions_decrement_uses", { p_promo_id: promoId });
 }
 
 // =============================================================================
 // DISCOUNT MODULE B: applyUserCredit
 // =============================================================================
-// Atomically reserves a user credit for this checkout.
-// Marks it used immediately; rolled back if Stripe creation fails.
-// =============================================================================
-
-async function applyUserCredit(
-  creditId: string,
-  userId: string,
-  remainingTotal: number  // total after promo — credit can't exceed this
-): Promise<DiscountResult> {
-  const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+async function applyUserCredit(creditId: string, userId: string, remainingTotal: number): Promise<DiscountResult> {
+  const svc = createServiceClient();
   const now = new Date();
 
-  // ── 1. Fetch and validate credit ─────────────────────────────────────────
   const { data: credit, error: creditErr } = await svc
     .from("user_credits")
     .select("id,user_id,amount_cents,used,expires_at")
     .eq("id", creditId)
     .single();
 
-  if (creditErr || !credit)                       throw new Error("Credit not found");
-  if (credit.user_id !== userId)                  throw new Error("Credit does not belong to this user");
-  if (credit.used)                                throw new Error("Credit has already been used");
-  if (credit.expires_at && new Date(credit.expires_at) < now) {
-    throw new Error("Credit has expired");
-  }
+  if (creditErr || !credit) throw new Error("Credit not found");
+  if (credit.user_id !== userId) throw new Error("Credit does not belong to this user");
+  if (credit.used) throw new Error("Credit has already been used");
+  if (credit.expires_at && new Date(credit.expires_at) < now) throw new Error("Credit has expired");
 
   const appliedCents = Math.min(credit.amount_cents, remainingTotal);
   if (appliedCents <= 0) throw new Error("Credit cannot be applied to this order");
 
-  // ── 2. Atomic mark-as-used ────────────────────────────────────────────────
-  // WHERE used = false ensures no double-spend even under concurrent requests.
   const { data: consumed, error: consumeErr } = await svc
     .from("user_credits")
     .update({ used: true, used_at: now.toISOString() })
     .eq("id", creditId)
-    .eq("used", false)   // atomic guard
+    .eq("used", false)
     .select("id")
     .single();
 
@@ -325,11 +526,15 @@ async function applyUserCredit(
 
   log("info", "credit_applied", { creditId, userId, appliedCents });
 
-  return { discount_cents: appliedCents, credit_id: creditId, credit_applied: appliedCents };
+  return {
+    discount_cents: appliedCents,
+    credit_id: creditId,
+    credit_applied: appliedCents,
+  };
 }
 
 async function rollbackCredit(creditId: string) {
-  const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+  const svc = createServiceClient();
   await svc
     .from("user_credits")
     .update({ used: false, used_at: null, checkout_session_id: null })
@@ -337,340 +542,356 @@ async function rollbackCredit(creditId: string) {
 }
 
 // =============================================================================
-// DISCOUNT MODULE C: Anti-stack guard
+// DISCOUNT MODULE C: Anti-stack ceiling
 // =============================================================================
-// Enforces maximum combined discount ceiling.
-// Promo is applied first; credit is capped to remaining total.
-// =============================================================================
-
 function enforceDiscountCeiling(
-  subtotalCents:  number,
-  promoCents:     number,
-  creditCents:    number
+  subtotalCents: number,
+  promoCents: number,
+  creditCents: number,
 ): { final_promo: number; final_credit: number; total_discount: number } {
-  const maxDiscount     = Math.floor(subtotalCents * CONFIG.MAX_DISCOUNT_FRACTION);
-  const clampedPromo    = Math.min(promoCents,  maxDiscount);
+  const maxDiscount = Math.floor(subtotalCents * CONFIG.MAX_DISCOUNT_FRACTION);
+  const clampedPromo = Math.min(promoCents, maxDiscount);
   const remainingBudget = Math.max(0, maxDiscount - clampedPromo);
-  const clampedCredit   = Math.min(creditCents, remainingBudget);
+  const clampedCredit = Math.min(creditCents, remainingBudget);
 
   return {
-    final_promo:     clampedPromo,
-    final_credit:    clampedCredit,
-    total_discount:  clampedPromo + clampedCredit,
+    final_promo: clampedPromo,
+    final_credit: clampedCredit,
+    total_discount: clampedPromo + clampedCredit,
   };
+}
+
+// =============================================================================
+// Stripe Coupon helper
+// =============================================================================
+async function createStripeCoupon(discountCents: number, label: string): Promise<string> {
+  const coupon = await stripe.coupons.create({
+    name: label.slice(0, 40),
+    amount_off: discountCents,
+    currency: "usd",
+    duration: "once",
+    redeem_by: Math.floor(Date.now() / 1000) + CONFIG.SESSION_EXPIRES_MINUTES * 60,
+    metadata: { generated_by: "create-checkout", label },
+  });
+  return coupon.id;
+}
+
+// =============================================================================
+// DB idempotency helpers
+// =============================================================================
+async function findExistingCart(
+  svc: SvcClient,
+  userId: string,
+  idempotencyKey: string,
+): Promise<{ stripe_session_id: string | null } | null> {
+  const { data, error } = await svc
+    .from("pending_carts")
+    .select("stripe_session_id")
+    .eq("user_id", userId)
+    .eq("idempotency_key", idempotencyKey)
+    .maybeSingle();
+
+  if (error) {
+    log("warn", "findExistingCart_error", { userId, idempotencyKey, error });
+    return null;
+  }
+  if (!data) return null;
+
+  return { stripe_session_id: data.stripe_session_id ?? null };
 }
 
 // =============================================================================
 // MAIN
 // =============================================================================
-
- Deno.serve(async (req): Promise<Response> => {
+Deno.serve(async (req): Promise<Response> => {
   const cors = getCorsHeaders(req);
-  if (!cors) {
-    return new Response("Origin not allowed", { status: 403 });
-  }
+  if (!cors) return new Response("Origin not allowed", { status: 403 });
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
-  if (req.method !== "POST")   return err("Method not allowed", cors, 405);
+  if (req.method !== "POST") return err("Method not allowed", cors, 405);
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   const authResult = await authenticate(req);
   if (!authResult.ok) return err("Unauthorized", cors, 401);
-  const { userId } = authResult;
+  const userId = authResult.userId;
+
+  // ── Require idempotency key ──────────────────────────────────────────────
+  const idempotencyKey = req.headers.get("x-idempotency-key")?.trim();
+  if (!idempotencyKey) return err("x-idempotency-key header is required", cors, 400);
 
   // ── Rate limit ────────────────────────────────────────────────────────────
   const rate = await checkRateLimit(userId);
-if (rate.blocked) return err("Too many attempts", cors, 429);
+  if (rate.blocked) return err("Too many attempts. Please wait.", cors, 429);
 
-// Create once per request
-const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+  const svc = createServiceClient();
 
-  // ── Body ──────────────────────────────────────────────────────────────────
-  let body: RawBody;
-  try { body = await req.json(); } catch { return err("Invalid JSON", cors); }
-  if (!body?.items?.length) return err("Cart empty", cors);
+  // ── DB idempotency check — return existing if same key ────────────────────
+  const existing = await findExistingCart(svc, userId, idempotencyKey);
+  if (existing?.stripe_session_id) {
+    log("info", "idempotent_replay", { userId, idempotencyKey });
 
-  // ── Validate items (server-side prices) ───────────────────────────────────
-  const validation = await validateItems(body.items);
-  if (!validation.ok) return err("Invalid cart", cors);
-
-  const { items, subtotalCents } = validation;
-  const preTaxTotal = subtotalCents; // discounts apply to subtotal; tax recomputed on discounted total
-
-  // ── Frontend fraud check (soft signal, not a security gate) ──────────────
-  if (typeof body.frontend_total === "number") {
-    const frontendCents  = Math.round(body.frontend_total * 100);
-    // Gross pre-discount estimate for fraud signal only — not authoritative
-    const serverEstimate = subtotalCents + Math.round(subtotalCents * CONFIG.TAX_RATE);
-    if (Math.abs(frontendCents - serverEstimate) > 10) {
-      log("warn", "frontend_total_mismatch", { frontendCents, serverEstimate, userId });
-      // Log only — discount pipeline computes the authoritative final total
+    try {
+      const session = await stripe.checkout.sessions.retrieve(existing.stripe_session_id);
+      if (session.url && session.status === "open") {
+        return json({ id: session.id, url: session.url, replayed: true }, cors);
+      }
+    } catch {
+      log("warn", "idempotent_session_expired", { sessionId: existing.stripe_session_id });
     }
   }
 
-  // ── Origin validation ────────────────────────────────────────────
-  // Wrap URL construction — an invalid successUrl would otherwise throw and
-  // crash the function before returning a proper error response.
-  let requestedOrigin: string;
+  // ── Body ──────────────────────────────────────────────────────────────────
+  let body: RawBody;
   try {
-    requestedOrigin = new URL(String(body.successUrl)).origin;
+    body = await req.json();
   } catch {
-    return err("Invalid redirect URL", cors, 400);
+    return err("Invalid JSON", cors);
   }
-  if (!ALLOWED_ORIGINS.includes(requestedOrigin)) return err("Invalid redirect origin", cors);
+  if (!body?.items?.length) return err("Cart is empty", cors);
+// ── Redirect URL compatibility (camelCase + snake_case) ─────────────────────
+const success_url = body.success_url ?? body.successUrl;
+const cancel_url  = body.cancel_url  ?? body.cancelUrl;
+
+if (!success_url || !cancel_url) {
+  return err("Missing success/cancel URL", cors, 400);
+}
+  // ── Validate items ────────────────────────────────────────────────────────
+  const validation = await validateItems(body.items);
+  if (!validation.ok) return err(validation.reason, cors, 422);
+
+  const { items, subtotalCents } = validation;
+
+  // ── Frontend fraud signal ─────────────────────────────────────────────────
+  if (typeof body.frontend_total === "number") {
+    const frontendCents = Math.round(body.frontend_total * 100);
+    const serverEstimate = subtotalCents + Math.round(subtotalCents * CONFIG.TAX_RATE);
+    if (Math.abs(frontendCents - serverEstimate) > 10) {
+      log("warn", "frontend_total_mismatch", { frontendCents, serverEstimate, userId });
+    }
+  }
+
+// ── Origin validation ─────────────────────────────────────────────────────
+let requestedOrigin: string;
+try {
+  requestedOrigin = new URL(s(success_url, 500)).origin;
+} catch {
+  return err("Invalid redirect URL", cors, 400);
+}
+
+if (!ALLOWED_ORIGINS.includes(requestedOrigin)) {
+  return err("Invalid redirect origin", cors, 400);
+}
+  // ── Email ─────────────────────────────────────────────────────────────────
+  const customerEmail = s(body.email, 320).toLowerCase();
+  if (!customerEmail.includes("@") || customerEmail.length < 5) {
+    return err("Invalid email address", cors, 400);
+  }
 
   // =========================================================================
   // DISCOUNT PIPELINE
   // =========================================================================
-  // Track what was applied so we can roll back on Stripe failure.
-
-  let promoResult:  DiscountResult | null = null;
+  let promoResult: DiscountResult | null = null;
   let creditResult: DiscountResult | null = null;
-
-  let promoDiscountCents  = 0;
+  let promoDiscountCents = 0;
   let creditDiscountCents = 0;
 
-  // ── A. Promo code ─────────────────────────────────────────────────────────
   const rawPromoCode = s(body.promo_code, 50);
   if (rawPromoCode) {
     try {
-      promoResult        = await applyPromoCode(rawPromoCode, userId, subtotalCents);
+      promoResult = await applyPromoCode(rawPromoCode, userId, subtotalCents);
       promoDiscountCents = promoResult.discount_cents;
     } catch (e) {
       return err(e instanceof Error ? e.message : "Promo code invalid", cors, 422);
     }
   }
 
-// ── B. User credit ────────────────────────────────────────────────────────
-const rawCreditId = s(body.credit_id, 100);
-if (rawCreditId) {
-  const remainingAfterPromo = Math.max(0, preTaxTotal - promoDiscountCents);
-
-  try {
-    creditResult        = await applyUserCredit(rawCreditId, userId, remainingAfterPromo);
-    creditDiscountCents = creditResult.discount_cents;
-
-  } catch (_e) {
-
-    // Roll back promo reservation if credit application fails
-    if (promoResult?.promo_id) {
-      await rollbackPromo(promoResult.promo_id);
+  const rawCreditId = s(body.credit_id, 100);
+  if (rawCreditId) {
+    const remainingAfterPromo = Math.max(0, subtotalCents - promoDiscountCents);
+    try {
+      creditResult = await applyUserCredit(rawCreditId, userId, remainingAfterPromo);
+      creditDiscountCents = creditResult.discount_cents;
+    } catch (e) {
+      if (promoResult?.promo_id) await rollbackPromo(promoResult.promo_id);
+      return err(e instanceof Error ? e.message : "Credit invalid", cors, 422);
     }
-
-    return err(
-      _e instanceof Error ? _e.message : "Credit invalid",
-      cors,
-      422
-    );
   }
-}
-  // ── C. Anti-stack ceiling ─────────────────────────────────────────────────
+
   const { final_promo, final_credit, total_discount } = enforceDiscountCeiling(
     subtotalCents,
     promoDiscountCents,
-    creditDiscountCents
+    creditDiscountCents,
   );
 
-  // Reflect clamped values back into result objects so Stripe metadata and
-  // promo_redemptions audit rows record what was actually applied, not the
-  // pre-ceiling amount that may have been higher.
-  if (promoResult)  promoResult.promo_applied  = final_promo;
+  if (promoResult) promoResult.promo_applied = final_promo;
   if (creditResult) creditResult.credit_applied = final_credit;
 
-  // Recompute final amounts
   const discountedSubtotal = Math.max(0, subtotalCents - total_discount);
-  const finalTaxCents      = Math.round(discountedSubtotal * CONFIG.TAX_RATE);
-  const grandTotalCents    = discountedSubtotal + finalTaxCents;
-
-  log("info", "checkout_totals", {
-    userId, subtotalCents, promoDiscountCents: final_promo,
-    creditDiscountCents: final_credit, total_discount,
-    discountedSubtotal, finalTaxCents, grandTotalCents,
-  });
+  const finalTaxCents = Math.round(discountedSubtotal * CONFIG.TAX_RATE);
+  const grandTotalCents = discountedSubtotal + finalTaxCents;
 
   if (grandTotalCents <= 0) {
-    // Roll back any applied discounts before rejecting
-    if (promoResult)  await rollbackPromo(promoResult.promo_id!);
-    if (creditResult) await rollbackCredit(creditResult.credit_id!);
+    if (promoResult?.promo_id) await rollbackPromo(promoResult.promo_id);
+    if (creditResult?.credit_id) await rollbackCredit(creditResult.credit_id);
     return err("Order total must be greater than $0 after discounts", cors, 400);
   }
-  // ── Margin Protection Guard ─────────────────────────────
+log("info", "margin_inputs", {
+  subtotalCents,
+  total_discount,
+  discountedSubtotal,
+  promoDiscountCents,
+  creditDiscountCents,
+  final_promo,
+  final_credit,
+});
+// ── Margin protection (only when discounts are applied) ─────────────────────
+if (total_discount > 0) {
+  const { data: profitSnapshot, error: marginErr } = await svc
+    .from("admin_profit_snapshot")
+    .select("total_gross_profit_cents")
+    .single();
 
-const SAFE_MARGIN_PERCENT = 20;
+  if (marginErr || !profitSnapshot) {
+    if (promoResult?.promo_id) await rollbackPromo(promoResult.promo_id);
+    if (creditResult?.credit_id) await rollbackCredit(creditResult.credit_id);
+    return err("Margin snapshot unavailable", cors, 500);
+  }
 
-const { data: profitSnapshot, error: marginErr } = await svc
-  .from("admin_profit_snapshot")
-  .select("total_gross_profit_cents")
-  .single();
+  const gross = Number(profitSnapshot.total_gross_profit_cents ?? 0);
 
-if (marginErr || !profitSnapshot) {
-  // Fail safe: do NOT allow checkout if analytics broken
-  if (promoResult)  await rollbackPromo(promoResult.promo_id!);
-  if (creditResult) await rollbackCredit(creditResult.credit_id!);
+  // If snapshot is missing/invalid, fail-open (don’t block checkout)
+  if (!Number.isFinite(gross) || gross <= 0) {
+    log("warn", "margin_snapshot_invalid_failopen", { gross, userId });
+  } else {
+    const projectedMargin =
+      ((gross - total_discount) / Math.max(discountedSubtotal, 1)) * 100;
 
-  return err("Margin snapshot unavailable", cors, 500);
+    if (projectedMargin < CONFIG.SAFE_MARGIN_PERCENT) {
+      if (promoResult?.promo_id) await rollbackPromo(promoResult.promo_id);
+      if (creditResult?.credit_id) await rollbackCredit(creditResult.credit_id);
+      log("warn", "margin_threshold_blocked", { projectedMargin, userId });
+      return err("Discount exceeds safe margin threshold", cors, 400);
+    }
+  }
 }
-
-// Avoid divide-by-zero
-const discountedTotal = Math.max(discountedSubtotal, 1);
-
-const projectedMargin =
-  ((profitSnapshot.total_gross_profit_cents - total_discount) /
-    discountedTotal) * 100;
-
-if (projectedMargin < SAFE_MARGIN_PERCENT) {
-
-  if (promoResult)  await rollbackPromo(promoResult.promo_id!);
-  if (creditResult) await rollbackCredit(creditResult.credit_id!);
-
-  log("warn", "margin_threshold_blocked", {
-    projectedMargin,
-    SAFE_MARGIN_PERCENT,
-    userId,
-  });
-
-  return err("Discount exceeds safe margin threshold", cors, 400);
-}
-  // ── Store pending cart ────────────────────────────────────────────────────
+  // ── Store pending cart with idempotency_key ────────────────────────────────
   const cartRef = crypto.randomUUID();
+  const cartPricingHash = items.map((i) => i.pricing_hash).join("|");
+  const itemsJson: Json = items as unknown as Json;
 
   const { error: cartErr } = await svc.from("pending_carts").insert({
-    id:                   cartRef,
-    user_id:              userId,
-    items,
-    subtotal_cents:       subtotalCents,
-    discount_cents:       total_discount,
-    tax_cents:            finalTaxCents,
-    total_cents:          grandTotalCents,
-    promo_id:             promoResult?.promo_id ?? null,
-    credit_id:            creditResult?.credit_id ?? null,
-    created_at:           new Date().toISOString(),
+    id: cartRef,
+    user_id: userId,
+    idempotency_key: idempotencyKey,
+    items: itemsJson,
+    subtotal_cents: subtotalCents,
+    discount_cents: total_discount,
+    tax_cents: finalTaxCents,
+    total_cents: grandTotalCents,
+    promo_id: promoResult?.promo_id ?? null,
+    credit_id: creditResult?.credit_id ?? null,
+    created_at: new Date().toISOString(),
   });
 
-if (cartErr) {
-  if (promoResult?.promo_id) {
-    await rollbackPromo(promoResult.promo_id);
+  if (cartErr) {
+    if (promoResult?.promo_id) await rollbackPromo(promoResult.promo_id);
+    if (creditResult?.credit_id) await rollbackCredit(creditResult.credit_id);
+    log("error", "pending_cart_insert_failed", cartErr);
+    return err("Failed to create pending cart", cors, 500);
   }
 
-  if (creditResult?.credit_id) {
-    await rollbackCredit(creditResult.credit_id);
-  }
-
-  log("error", "pending_cart_insert_failed", cartErr);
-
-  return err("Failed to create pending cart", cors, 500);
-}
-
-  // ── Stripe session ────────────────────────────────────────────────────────
+  // =========================================================================
+  // STRIPE SESSION
+  // =========================================================================
   try {
-    // Build line items: show original prices + a discount line if applicable
     const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
       ...items.map((i) => ({
         price_data: {
-          currency:     "usd",
-          product_data: { name: i.name },
-          unit_amount:  i.price_cents,
+          currency: "usd",
+          product_data: {
+            name: i.name,
+            metadata: {
+              menu_item_id: i.id,
+              pricing_hash: i.pricing_hash,
+              modifier_count: String(i.modifiers.length),
+            },
+          },
+          unit_amount: i.price_cents,
         },
         quantity: i.quantity,
       })),
       {
         price_data: {
-          currency:     "usd",
-          product_data: { name: "Tax" },
-          unit_amount:  finalTaxCents,
+          currency: "usd",
+          product_data: { name: `Tax (${(CONFIG.TAX_RATE * 100).toFixed(0)}%)` },
+          unit_amount: finalTaxCents,
         },
         quantity: 1,
       },
     ];
 
-    if (total_discount > 0) {
-      lineItems.push({
-        price_data: {
-          currency:     "usd",
-          product_data: { name: promoResult ? `Discount (${promoResult.promo_code})` : "Credit Applied" },
-          unit_amount:  -total_discount,   // negative = discount line
-        },
-        quantity: 1,
-      });
-    }
-
-    const customerEmail = String(body.email ?? "").toLowerCase().trim();
-    if (!customerEmail.includes("@") || customerEmail.length < 5) {
-      return err("Invalid email address", cors, 400);
-    }
-
-    const session = await stripe.checkout.sessions.create(
-      {
-        mode:           "payment",
-        line_items:     lineItems,
-        success_url:    `${requestedOrigin}/order-success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url:     `${requestedOrigin}/checkout`,
-        customer_email: customerEmail,
-        expires_at:     Math.floor(Date.now() / 1000) + CONFIG.SESSION_EXPIRES_MINUTES * 60,
-        metadata: {
-          customer_uid:       userId,
-          cart_ref:           cartRef,
-          server_total:       String(grandTotalCents),
-          subtotal_cents:     String(subtotalCents),
-          discount_cents:     String(total_discount),
-          promo_code:         promoResult?.promo_code ?? "",
-          promo_id:           promoResult?.promo_id ?? "",
-          credit_id:          creditResult?.credit_id ?? "",
-          credit_applied:     String(final_credit),
-          request_id:         crypto.randomUUID(),
-        },
+    const sessionParams: Stripe.Checkout.SessionCreateParams = {
+      mode: "payment",
+      line_items: lineItems,
+      success_url: `${requestedOrigin}/order-success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${requestedOrigin}/checkout`,
+      customer_email: customerEmail,
+      expires_at: Math.floor(Date.now() / 1000) + CONFIG.SESSION_EXPIRES_MINUTES * 60,
+      metadata: {
+        customer_uid: userId,
+        cart_ref: cartRef,
+        server_total: String(grandTotalCents),
+        subtotal_cents: String(subtotalCents),
+        discount_cents: String(total_discount),
+        promo_code: promoResult?.promo_code ?? "",
+        promo_id: promoResult?.promo_id ?? "",
+        credit_id: creditResult?.credit_id ?? "",
+        credit_applied: String(final_credit),
+        pricing_hash: cartPricingHash,
+        hash_version: HASH_VERSION,
+        idempotency_key: idempotencyKey,
+        request_id: crypto.randomUUID(),
       },
-      {
-        idempotencyKey: req.headers.get("x-idempotency-key") ?? crypto.randomUUID(),
-      }
-    );
+    };
 
-    // ── Write promo_redemption record (after session exists) ───────────────
-    if (promoResult) {
+    if (total_discount > 0) {
+      const couponLabel = promoResult ? `Discount (${promoResult.promo_code})` : "Credit Applied";
+      const couponId = await createStripeCoupon(total_discount, couponLabel);
+      sessionParams.discounts = [{ coupon: couponId }];
+    }
+
+    const session = await stripe.checkout.sessions.create(sessionParams, { idempotencyKey });
+
+    await svc.from("pending_carts").update({ stripe_session_id: session.id }).eq("id", cartRef);
+
+    // Promo redemption now correctly records checkout_session_id AFTER session exists
+    if (promoResult?.promo_id) {
       await svc.from("promo_redemptions").insert({
-        promotion_id:        promoResult.promo_id,
-        user_id:             userId,
-        discount_cents:      final_promo,
+        promotion_id: promoResult.promo_id,
+        user_id: userId,
+        discount_cents: final_promo,
         checkout_session_id: session.id,
       });
     }
 
- // ── Attach Stripe session ID to credit (after session exists) ──────────
-if (creditResult?.credit_id) {
-  await svc
-    .from("user_credits")
-    .update({ checkout_session_id: session.id })
-    .eq("id", creditResult.credit_id);
-}
+    if (creditResult?.credit_id) {
+      await svc.from("user_credits").update({ checkout_session_id: session.id }).eq("id", creditResult.credit_id);
+    }
 
-log("info", "checkout_session_created", {
-  sessionId: session.id,
-  userId,
-  grandTotalCents,
+    log("info", "checkout_session_created", {
+      sessionId: session.id,
+      userId,
+      grandTotalCents,
+      pricingHash: cartPricingHash,
+    });
+
+    return json({ id: session.id, url: session.url }, cors);
+  } catch (e) {
+    if (promoResult?.promo_id) await rollbackPromo(promoResult.promo_id);
+    if (creditResult?.credit_id) await rollbackCredit(creditResult.credit_id);
+
+    await svc.from("pending_carts").delete().eq("id", cartRef);
+
+    log("error", "stripe_error", e);
+    return err("Payment service unavailable. Please try again.", cors, 500);
+  }
 });
-
-return json({ id: session.id, url: session.url }, cors);
-
-} catch (e) {
-
-  // ── Stripe failed — roll back all discount reservations ─────────────
-
-  if (promoResult?.promo_id) {
-    await rollbackPromo(promoResult.promo_id);
-  }
-
-  if (creditResult?.credit_id) {
-    await rollbackCredit(creditResult.credit_id);
-  }
-
-  // Clean up pending cart
-  await svc.from("pending_carts").delete().eq("id", cartRef);
-
-  log("error", "stripe_error", e);
-
-  return err(
-    "Payment service unavailable. Please try again.",
-    cors,
-    500
-  );
-}
- })

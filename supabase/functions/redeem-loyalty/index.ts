@@ -1,13 +1,6 @@
 // supabase/functions/redeem-loyalty/index.ts
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
-// ─────────────────────────────────────────────
-// Environment
-// ─────────────────────────────────────────────
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+import { createServiceClient, createAnonClient, type SvcClient } from "../_shared/supabase.ts";
 
 // ─────────────────────────────────────────────
 // Strict CORS (Dev + Prod)
@@ -42,31 +35,31 @@ function isValidUUID(value: string) {
 // ─────────────────────────────────────────────
 // Authenticate Admin
 // ─────────────────────────────────────────────
-async function authenticateAdmin(req: Request) {
+async function authenticateAdmin(req: Request): Promise<string | null> {
   const authHeader = req.headers.get("authorization");
   if (!authHeader?.startsWith("Bearer ")) return null;
 
-  const token = authHeader.replace("Bearer ", "");
+  const token = authHeader.slice("Bearer ".length).trim();
+  if (!token) return null;
 
-  const anon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    global: { headers: { Authorization: `Bearer ${token}` } },
-    auth: { persistSession: false },
-  });
+  // 1) Identify caller using anon client + JWT
+  const anon = createAnonClient(token);
+  const { data, error } = await anon.auth.getUser();
+  if (error || !data?.user) return null;
 
-  const { data: { user }, error } = await anon.auth.getUser();
-  if (error || !user) return null;
+  const userId = data.user.id;
 
-  const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
-
-  const { data: profile } = await svc
+  // 2) Confirm admin role using service role client
+  const svc: SvcClient = createServiceClient();
+  const { data: profile, error: profErr } = await svc
     .from("profiles")
     .select("role")
-    .eq("id", user.id)
+    .eq("id", userId)
     .single();
 
-  if (!profile || profile.role !== "admin") return null;
+  if (profErr || !profile || profile.role !== "admin") return null;
 
-  return user.id;
+  return userId;
 }
 
 // ─────────────────────────────────────────────
@@ -115,7 +108,7 @@ const points = Number(rawPoints);
   );
 }
 
-    const svc = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+    const svc: SvcClient = createServiceClient();
 
     const { data, error } = await svc.rpc("v2_redeem_points", {
       p_account_id: account_id,

@@ -1,15 +1,17 @@
-// src/types/menu.ts
 // ============================================================================
-// MENU + CART DOMAIN TYPES
+// src/domain/menu/menu.types.ts
+// MENU DOMAIN TYPES — canonical, strict, app-safe
 // ============================================================================
-// Single source of truth. Every type here is derived from real DB schema
-// confirmed in database.types.ts (Feb 2026).
-// No type is duplicated in cart.types.ts or anywhere else.
+// Goals:
+// - Ensure MenuItemPublic.modifier_groups is ALWAYS ModifierGroup[] (never {} / null)
+// - Ensure image_url is string | null (so cart payload can map safely)
+// - Provide CartItemModifier / SelectedModifier types used by PricingEngine + services
+// - Provide MenuItem alias used by legacy imports
 // ============================================================================
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Primitives
-// ─────────────────────────────────────────────────────────────────────────────
+/* ─────────────────────────────────────────────────────────────
+   Primitives
+──────────────────────────────────────────────────────────── */
 
 export type MenuCategory =
   | 'appetizers'
@@ -19,139 +21,120 @@ export type MenuCategory =
   | 'lunch'
   | 'breakfast'
   | 'specials'
+
 export type ModifierGroupType = 'radio' | 'checkbox' | 'quantity'
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Modifier layer
-// ─────────────────────────────────────────────────────────────────────────────
+/* ─────────────────────────────────────────────────────────────
+   Modifier Layer
+──────────────────────────────────────────────────────────── */
 
-/** Matches modifiers table row */
 export interface Modifier {
-  id:                string
+  id: string
   modifier_group_id: string
-  name:              string
-  price_adjustment:  number   // 0.00 if no price change
-  available:         boolean
-  sort_order:        number
+  name: string
+  /** cents */
+  price_adjustment: number
+  available: boolean
+  sort_order: number
 }
 
-/** Matches modifier_groups table row + nested modifiers array */
 export interface ModifierGroup {
   id: string
   name: string
-  description?: string
+  description: string | null
   type: ModifierGroupType
   required: boolean
   min_selections: number
   max_selections: number | null
   sort_order: number
-  active: boolean   // ← MUST EXIST
+  active: boolean
   modifiers: Modifier[]
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MenuItem — domain model (not a DB row)
-// ─────────────────────────────────────────────────────────────────────────────
-// Read from menu_items_full VIEW which aggregates modifier_groups as Json.
-// Written to menu_items TABLE (no modifier_groups column there).
-// ─────────────────────────────────────────────────────────────────────────────
+/* ─────────────────────────────────────────────────────────────
+   Base Menu Model (DB-compatible shape)
+──────────────────────────────────────────────────────────── */
 
-export interface MenuItem {
-  id:          string
-  name:        string
-  description?: string
-  price:       number
-  image_url?:  string
-  category:    MenuCategory
-  featured:    boolean
-  available:   boolean
-  sort_order:  number
+export interface MenuItemBase {
+  id: string
+  name: string
+  inventory_count?: number | null
+  price: number
+  category: MenuCategory
+  featured: boolean
+  available: boolean
+  sort_order: number
 
-  // Dietary — confirmed on menu_items table + menu_items_full view
-  spicy_level?:    number
-  is_vegetarian:   boolean
-  is_vegan:        boolean
-  is_gluten_free:  boolean
-  allergens?:      string[]  // NOTE: on menu_items TABLE only, not in view
+  description: string | null
+  /** IMPORTANT: always string | null (not undefined, not {}) */
+  image_url: string | null
 
-  // Inventory — confirmed on both table and view
-  inventory_count?:     number
-  low_stock_threshold:  number  // defaults to 0
+  spicy_level: number | null
+  is_vegetarian: boolean
+  is_vegan: boolean
+  is_gluten_free: boolean
+  allergens: string[]
+  pairs_with: string[]
 
-  // Engagement — confirmed on both table and view
-  popularity_score?: number
-  pairs_with?:       string[]
-
-  // Modifiers — populated from menu_items_full view's Json column
-  // Always an array; empty [] when item has no modifier groups
+  /** IMPORTANT: ALWAYS an array */
   modifier_groups: ModifierGroup[]
 
   created_at: string
-  updated_at?: string
+  updated_at: string | null
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Cart types — immutable pricing snapshots
-// ─────────────────────────────────────────────────────────────────────────────
+/* ─────────────────────────────────────────────────────────────
+   Public + Admin Models
+──────────────────────────────────────────────────────────── */
 
-/** User's selection within one modifier group */
+export type MenuItemPublic = MenuItemBase
+
+export interface InventoryFields {
+  low_stock_threshold: number
+  inventory_count?: number | null;
+}
+
+export interface MenuItemAdmin extends MenuItemBase, InventoryFields {
+  popularity_score: number | null
+}
+
+/** Back-compat alias used across repo */
+export type MenuItem = MenuItemPublic
+
+/* ─────────────────────────────────────────────────────────────
+   Selection + Cart Modifier Shapes (PricingEngine / Checkout)
+──────────────────────────────────────────────────────────── */
+
+/** What a single selected modifier looks like in the cart. */
 export interface SelectedModifier {
-  id:               string
-  name:             string
-  price_adjustment: number  // locked at add-to-cart time
+  id: string
+  name: string
+  price_adjustment: number
 }
 
-/** One group's worth of selections stored per cart line item */
+/** What a modifier group looks like inside a cart item. */
 export interface CartItemModifier {
-  group_id:   string
-  group_name: string
+  modifier_group_id: string
   selections: SelectedModifier[]
 }
 
-/**
- * Immutable cart line item — a pricing snapshot.
- * Once added to cart, prices are LOCKED via pricing_hash.
- * Never hold a reference to MenuItem here; only copy what you need.
- */
-export interface CartItem {
-  id:                    string   // stable UUID for React keys
-  item_id:               string   // references menu_items.id
-  name:                  string
-  image_url?:            string
-  base_price:            number   // item.price at add-to-cart time
-  modifiers:             CartItemModifier[]
-  subtotal:              number   // (base_price + modifier_total) * quantity
-  quantity:              number
-  special_instructions?: string
-  pricing_hash:          string   // tamper-detection; validated at checkout
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Pricing types
-// ─────────────────────────────────────────────────────────────────────────────
+/* ─────────────────────────────────────────────────────────────
+   Pricing & Validation Types (used by UI / engines)
+──────────────────────────────────────────────────────────── */
 
 export interface PricingBreakdown {
-  base_price:      number
-  modifier_total:  number
-  unit_price:      number   // base_price + modifier_total
-  quantity:        number
-  subtotal:        number   // unit_price × quantity
-  tax:             number
-  total:           number
-  pricing_hash:    string
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Validation types
-// ─────────────────────────────────────────────────────────────────────────────
-
-export interface ModifierValidationResult {
-  valid:  boolean
-  error?: string
-  code?:  'REQUIRED_MISSING' | 'MIN_NOT_MET' | 'MAX_EXCEEDED'
+  base_price: number
+  modifier_total: number
+  unit_price: number
+  quantity: number
+  subtotal: number
+  tax: number
+  total: number
+  pricing_hash: string
 }
 
 export interface ConfigurationValidation {
-  valid:  boolean
-  errors: Record<string, string>  // group_id → human-readable error
+  valid: boolean
+  errors: Record<string, string>
 }
+export interface ModifierValidationResult { ok: boolean; code?: string; message?: string }

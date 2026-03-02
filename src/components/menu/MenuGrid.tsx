@@ -1,10 +1,9 @@
-import { MenuItem } from '@/domain/menu/menu.types';
+import type { MenuItemPublic } from '@/domain/menu/menu.types';
 import { MenuItemCard } from './MenuItemCard';
 
 interface MenuGridProps {
-  items: MenuItem[];
+  items: MenuItemPublic[];
 }
-
 export function MenuGrid({ items }: MenuGridProps) {
   if (items.length === 0) {
     return (

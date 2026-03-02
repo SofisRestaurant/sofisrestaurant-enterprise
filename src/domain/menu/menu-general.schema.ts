@@ -15,7 +15,7 @@
 // Both return MenuItemValidationResult so callers can show per-field messages.
 // ============================================================================
 
-import type { MenuItemWritePayload } from '@/services/menu.service'
+import type { MenuItemWritePayload } from '@/services/_legacy/menu.service'
 import type {
   GeneralTabFormState,
   MenuItemField,
@@ -27,15 +27,15 @@ import type {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const MENU_ITEM_LIMITS = {
-  name:                { min: 1,    max: 100    },
-  description:         { max: 500               },
-  image_url:           { max: 2048              },
-  price:               { min: 0.01, max: 9999.99 },
-  spicy_level:         { min: 0,    max: 5      },
-  sort_order:          { min: 0,    max: 99999  },
-  inventory_count:     { min: 0,    max: 999999 },
-  low_stock_threshold: { min: 0,    max: 999999 },
-  popularity_score:    { min: 0,    max: 999999 },
+  name:                { min: 1,     max: 100     },
+  description:         { max: 500                },
+  image_url:           { max: 2048               },
+  price:               { min: 0.01,  max: 9999.99 },
+  spicy_level:         { min: 0,     max: 5       },
+  sort_order:          { min: 0,     max: 99999   },
+  inventory_count:     { min: 0,     max: 999999  },
+  low_stock_threshold: { min: 0,     max: 999999  },
+  popularity_score:    { min: 0,     max: 999999  },
 } as const
 
 /**
@@ -49,26 +49,46 @@ export const VALID_CATEGORIES = [
 export type ValidCategory = typeof VALID_CATEGORIES[number]
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Core field validators — pure functions, return error string or null
+// Types / helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function validateName(v: string | undefined): string | null {
-  if (!v?.trim()) return 'Name is required'
-  if (v.trim().length > MENU_ITEM_LIMITS.name.max)
+type Nullable<T> = T | null | undefined
+
+function isBlank(v: string | null | undefined): boolean {
+  return !v || v.trim().length === 0
+}
+
+function clampInt(n: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, n))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Core field validators — pure functions, return error string or null
+// NOTE: All validators accept nullable inputs to support:
+//   - undefined → field not provided
+//   - null      → explicit "clear this field"
+// This prevents service-layer `Partial<...>` update payloads from breaking.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function validateName(v: Nullable<string>): string | null {
+  if (isBlank(v)) return 'Name is required'
+  const t = v!.trim()
+  if (t.length > MENU_ITEM_LIMITS.name.max)
     return `Name must be ${MENU_ITEM_LIMITS.name.max} characters or fewer`
   return null
 }
 
-function validateCategory(v: string | undefined): string | null {
-  if (!v) return 'Category is required'
-  if (!(VALID_CATEGORIES as readonly string[]).includes(v))
+function validateCategory(v: Nullable<string>): string | null {
+  if (isBlank(v)) return 'Category is required'
+  const t = v!.trim()
+  if (!(VALID_CATEGORIES as readonly string[]).includes(t))
     return `Category must be one of: ${VALID_CATEGORIES.join(', ')}`
   return null
 }
 
-function validatePrice(v: number | undefined): string | null {
+function validatePrice(v: Nullable<number>): string | null {
   if (v === undefined || v === null) return 'Price is required'
-  if (isNaN(v))  return 'Price must be a number'
+  if (!Number.isFinite(v)) return 'Price must be a number'
   if (v < MENU_ITEM_LIMITS.price.min)
     return `Price must be at least $${MENU_ITEM_LIMITS.price.min.toFixed(2)}`
   if (v > MENU_ITEM_LIMITS.price.max)
@@ -76,23 +96,48 @@ function validatePrice(v: number | undefined): string | null {
   return null
 }
 
-function validateDescription(v: string | undefined): string | null {
-  if (!v) return null
-  if (v.length > MENU_ITEM_LIMITS.description.max)
+/**
+ * Optional text field.
+ * - undefined/null → ok
+ * - empty string → treated as "clear" → ok
+ */
+function validateDescription(v: Nullable<string>): string | null {
+  if (v == null) return null
+  const t = v.trim()
+  if (t.length === 0) return null
+  if (t.length > MENU_ITEM_LIMITS.description.max)
     return `Description must be ${MENU_ITEM_LIMITS.description.max} characters or fewer`
   return null
 }
 
-function validateImageUrl(v: string | undefined): string | null {
-  if (!v) return null
-  if (v.length > MENU_ITEM_LIMITS.image_url.max)
+/**
+ * Optional URL field.
+ * - undefined/null → ok
+ * - empty string → treated as "clear" → ok
+ */
+function validateImageUrl(v: Nullable<string>): string | null {
+  if (v == null) return null
+  const t = v.trim()
+  if (t.length === 0) return null
+  if (t.length > MENU_ITEM_LIMITS.image_url.max)
     return `Image URL is too long (max ${MENU_ITEM_LIMITS.image_url.max} characters)`
-  if (!/^https?:\/\/.+/.test(v)) return 'Image URL must start with http:// or https://'
+  if (!/^https?:\/\/.+/i.test(t)) return 'Image URL must start with http:// or https://'
+  try {
+    // Ensures it's parseable as a URL; doesn't require a real host.
+    new URL(t)
+  } catch {
+    return 'Image URL is invalid'
+  }
   return null
 }
 
-function validateSpicyLevel(v: number | undefined): string | null {
+/**
+ * Optional integer field.
+ * - undefined/null → ok
+ */
+function validateSpicyLevel(v: Nullable<number>): string | null {
   if (v === undefined || v === null) return null
+  if (!Number.isFinite(v)) return 'Spicy level must be a number'
   if (!Number.isInteger(v)) return 'Spicy level must be a whole number'
   if (v < MENU_ITEM_LIMITS.spicy_level.min || v > MENU_ITEM_LIMITS.spicy_level.max)
     return `Spicy level must be between ${MENU_ITEM_LIMITS.spicy_level.min} and ${MENU_ITEM_LIMITS.spicy_level.max}`
@@ -100,23 +145,24 @@ function validateSpicyLevel(v: number | undefined): string | null {
 }
 
 function validateNonNegativeInt(
-  v:         number | undefined,
+  v: Nullable<number>,
   fieldName: string,
-  max:       number,
+  max: number,
 ): string | null {
   if (v === undefined || v === null) return null
-  if (isNaN(v))             return `${fieldName} must be a number`
+  if (!Number.isFinite(v)) return `${fieldName} must be a number`
   if (!Number.isInteger(v)) return `${fieldName} must be a whole number`
-  if (v < 0)                return `${fieldName} cannot be negative`
-  if (v > max)              return `${fieldName} cannot exceed ${max.toLocaleString()}`
+  if (v < 0) return `${fieldName} cannot be negative`
+  if (v > max) return `${fieldName} cannot exceed ${max.toLocaleString()}`
   return null
 }
 
 function validateStockConsistency(
-  inventoryCount: number | undefined,
-  threshold:      number | undefined,
+  inventoryCount: Nullable<number>,
+  threshold: Nullable<number>,
 ): string | null {
-  if (inventoryCount === undefined || threshold === undefined) return null
+  if (inventoryCount === undefined || inventoryCount === null) return null
+  if (threshold === undefined || threshold === null) return null
   if (threshold > inventoryCount)
     return 'Low stock threshold cannot exceed inventory count'
   return null
@@ -128,8 +174,8 @@ function validateStockConsistency(
 
 function attach(
   errors: MenuItemValidationResult['errors'],
-  field:  MenuItemField,
-  msg:    string | null,
+  field: MenuItemField,
+  msg: string | null,
 ): void {
   if (msg) errors[field] = msg
 }
@@ -183,49 +229,74 @@ export function validateGeneralTabForm(
 
   attach(errors, 'name',        validateName(form.name))
   attach(errors, 'category',    validateCategory(form.category))
-  attach(errors, 'description', validateDescription(form.description || undefined))
-  attach(errors, 'image_url',   validateImageUrl(form.image_url || undefined))
+  attach(errors, 'description', validateDescription(form.description))
+  attach(errors, 'image_url',   validateImageUrl(form.image_url))
 
   // price — requires explicit parse
-  if (!form.price.trim()) {
+  if (isBlank(form.price)) {
     errors.price = 'Price is required'
   } else {
-    const n = parseFloat(form.price)
-    attach(errors, 'price', validatePrice(isNaN(n) ? undefined : n))
+    const parsed = Number.parseFloat(form.price)
+    attach(errors, 'price', validatePrice(Number.isFinite(parsed) ? parsed : undefined))
   }
 
-  // optional integer fields — only validate when non-empty, return parsed value
+  // optional integer fields — only validate when non-empty
   const parseOptionalInt = (
-    raw:   string,
+    raw: string,
     field: MenuItemField,
     label: string,
-    max:   number,
+    max: number,
     extra?: (n: number) => string | null,
   ): number | undefined => {
-    if (!raw.trim()) return undefined
-    const n = Number(raw)
-    attach(errors, field, validateNonNegativeInt(isNaN(n) ? undefined : n, label, max))
-    if (!errors[field] && !isNaN(n) && extra) attach(errors, field, extra(n))
-    return isNaN(n) ? undefined : n
+    if (isBlank(raw)) return undefined
+
+    const parsed = Number(raw)
+    const n = Number.isFinite(parsed) ? Math.trunc(parsed) : NaN
+
+    // validateNonNegativeInt expects a number | null | undefined
+    attach(errors, field, validateNonNegativeInt(Number.isFinite(parsed) ? parsed : undefined, label, max))
+
+    // extra checks after the base validator passed
+    if (!errors[field] && Number.isFinite(parsed) && extra) {
+      attach(errors, field, extra(parsed))
+    }
+
+    return Number.isFinite(parsed) ? clampInt(n, 0, max) : undefined
   }
 
-  parseOptionalInt(
-    form.spicy_level, 'spicy_level', 'Spicy level', MENU_ITEM_LIMITS.spicy_level.max,
-    (n) => !Number.isInteger(n) ? 'Spicy level must be a whole number' : null,
+  // spicy_level has its own integer + range semantics (0..5)
+  const spicyParsed = parseOptionalInt(
+    form.spicy_level,
+    'spicy_level',
+    'Spicy level',
+    MENU_ITEM_LIMITS.spicy_level.max,
+    (n) => (!Number.isInteger(n) ? 'Spicy level must be a whole number' : null),
   )
-  parseOptionalInt(
-    form.sort_order, 'sort_order', 'Sort order', MENU_ITEM_LIMITS.sort_order.max,
-  )
+  // Ensure spicyLevel range error uses the same message as validateSpicyLevel
+  if (!errors.spicy_level) {
+    attach(errors, 'spicy_level', validateSpicyLevel(spicyParsed))
+  }
+
+  parseOptionalInt(form.sort_order, 'sort_order', 'Sort order', MENU_ITEM_LIMITS.sort_order.max)
 
   const invNum = parseOptionalInt(
-    form.inventory_count, 'inventory_count', 'Inventory count', MENU_ITEM_LIMITS.inventory_count.max,
+    form.inventory_count,
+    'inventory_count',
+    'Inventory count',
+    MENU_ITEM_LIMITS.inventory_count.max,
   )
   const lstNum = parseOptionalInt(
-    form.low_stock_threshold, 'low_stock_threshold', 'Low stock threshold', MENU_ITEM_LIMITS.low_stock_threshold.max,
+    form.low_stock_threshold,
+    'low_stock_threshold',
+    'Low stock threshold',
+    MENU_ITEM_LIMITS.low_stock_threshold.max,
   )
 
   parseOptionalInt(
-    form.popularity_score, 'popularity_score', 'Popularity score', MENU_ITEM_LIMITS.popularity_score.max,
+    form.popularity_score,
+    'popularity_score',
+    'Popularity score',
+    MENU_ITEM_LIMITS.popularity_score.max,
   )
 
   // cross-field: stock consistency
@@ -242,7 +313,7 @@ export function validateGeneralTabForm(
 
 export function validateMenuItemField(
   field: MenuItemField,
-  form:  GeneralTabFormState,
+  form: GeneralTabFormState,
 ): string | null {
   return validateGeneralTabForm(form).errors[field] ?? null
 }

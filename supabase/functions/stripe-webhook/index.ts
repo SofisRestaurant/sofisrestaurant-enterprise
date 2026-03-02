@@ -1,6 +1,6 @@
-
 import Stripe from "stripe";
-import { createClient } from "@supabase/supabase-js";
+import { createServiceClient } from "../_shared/supabase.ts";
+import type { Json } from "../_shared/database.types.ts";
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const WEBHOOK_TIMEOUT_MS = 25_000;
@@ -10,21 +10,17 @@ const EXPECTED_CURRENCY  = "usd";
 
 const STRIPE_SECRET_KEY     = Deno.env.get("STRIPE_SECRET_KEY")!;
 const STRIPE_WEBHOOK_SECRET = Deno.env.get("STRIPE_WEBHOOK_SECRET")!;
-const SUPABASE_URL          = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 // ─── Stripe client (Deno-compatible) ─────────────────────────────────────────
 
 const stripe = new Stripe(STRIPE_SECRET_KEY, {
-  apiVersion: "2026-01-28.clover",
+  apiVersion: "2026-02-25.clover",
   httpClient: Stripe.createFetchHttpClient(),
 });
 
 // ─── Supabase SERVICE ROLE client (bypasses RLS) ─────────────────────────────
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE, {
-  auth: { persistSession: false },
-});
+const supabase = createServiceClient();
 
 // ============================================================================
 // MAIN HANDLER
@@ -248,14 +244,14 @@ async function handleCheckoutCompleted(
     }
   }
 
-  // ── 5. Load pending cart ──────────────────────────────────────────────────
-  let cartItems:   CartItem[]         = [];
-  let pendingCart: PendingCart | null = null;
+    // ── 5. Load pending cart ──────────────────────────────────────────────────
+  let cartItems: CartItem[] = [];
+  let pendingTotalCents: number | null = null;
 
   if (cartId) {
     const { data, error } = await supabase
       .from("pending_carts")
-      .select("*")
+      .select("items, total_cents")
       .eq("id", cartId)
       .maybeSingle();
 
@@ -266,8 +262,14 @@ async function handleCheckoutCompleted(
         error: error.message,
       });
     } else if (data) {
-      pendingCart = data as PendingCart;
-      cartItems   = data.items as CartItem[];
+      pendingTotalCents = data.total_cents ?? null;
+
+      // SAFE parse Json → CartItem[]
+      cartItems = parsePendingCartItems(data.items);
+
+      if (data.items && cartItems.length === 0) {
+        log("warn", "pending_cart_items_unexpected_shape", { requestId, cartId });
+      }
     }
   }
 
@@ -278,7 +280,7 @@ async function handleCheckoutCompleted(
     const itemIds = cartItems.map((i) => i.id);
 
     const { data: menuItems, error: menuError } = await supabase
-      .from("menu_items")
+      .from("menu_items_admin_full")
       .select("id, price")
       .in("id", itemIds);
 
@@ -315,7 +317,7 @@ async function handleCheckoutCompleted(
         await supabase.from("fraud_logs").insert({
           user_id:        customerUid,
           reason:         "total_mismatch",
-          frontend_total: pendingCart?.total_cents ?? null,
+          frontend_total: pendingTotalCents,
           server_total:   serverTotal,
           stripe_total:   stripeTotal,
           metadata: {
@@ -344,51 +346,54 @@ async function handleCheckoutCompleted(
     } | null;
   };
 
-  const sessionWithShipping = session as SessionWithShipping;
-  const shipping = sessionWithShipping.shipping_details ?? session.customer_details;
+ const shipping = getShippingDetails(session);
 
-  const shippingAddress = shipping?.address
-    ? {
-        line1:       shipping.address.line1,
-        line2:       shipping.address.line2,
-        city:        shipping.address.city,
-        state:       shipping.address.state,
-        postal_code: shipping.address.postal_code,
-        country:     shipping.address.country,
-      }
-    : null;
+const shippingAddress = shipping?.address
+  ? {
+      line1: shipping.address.line1 ?? null,
+      line2: shipping.address.line2 ?? null,
+      city: shipping.address.city ?? null,
+      state: shipping.address.state ?? null,
+      postal_code: shipping.address.postal_code ?? null,
+      country: shipping.address.country ?? null,
+    }
+  : null;
 
   // ── 8. Insert order (service role → bypasses RLS) ────────────────────────
-  const { data: newOrder, error: orderError } = await supabase
-    .from("orders")
-    .insert({
-      stripe_session_id:        session.id,
-      stripe_payment_intent_id: paymentIntentId,
-      order_type:               orderType,
-      customer_uid:             customerUid,
-      customer_email:           session.customer_details?.email ?? null,
-      customer_name:            session.customer_details?.name  ?? null,
-      customer_phone:           session.customer_details?.phone ?? null,
-      amount_subtotal:          session.amount_subtotal ?? 0,
-      amount_tax:               session.total_details?.amount_tax     ?? 0,
-      amount_shipping:          session.total_details?.amount_shipping ?? 0,
-      amount_total:             session.amount_total ?? 0,
-      currency:                 EXPECTED_CURRENCY,
-      payment_status:           "paid",
-      status:                   "confirmed",
-      shipping_name:            shipping?.name ?? null,
-      shipping_address:         shippingAddress,
-      shipping_phone:           session.customer_details?.phone ?? null,
-      cart_items:               cartItems.length > 0 ? cartItems : null,
-      metadata: {
-        cart_id:            cartId,
-        stripe_event_id:    eventId,
-        stripe_charge_id:   stripeChargeId,   // stored here for zero-cost dispute lookups
-        server_total_cents: serverTotal || null,
-      },
-    })
-    .select("id, order_number")
-    .single();
+  
+const cartItemsJson: Json | null =
+  cartItems.length > 0 ? (cartItems as unknown as Json) : null;
+
+const { data: newOrder, error: orderError } = await supabase
+  .from("orders")
+  .insert({
+    stripe_session_id: session.id,
+    stripe_payment_intent_id: paymentIntentId,
+    order_type: orderType,
+    customer_uid: customerUid,
+    customer_email: session.customer_details?.email ?? null,
+    customer_name: session.customer_details?.name ?? null,
+    customer_phone: session.customer_details?.phone ?? null,
+    amount_subtotal: session.amount_subtotal ?? 0,
+    amount_tax: session.total_details?.amount_tax ?? 0,
+    amount_shipping: session.total_details?.amount_shipping ?? 0,
+    amount_total: session.amount_total ?? 0,
+    currency: EXPECTED_CURRENCY,
+    payment_status: "paid",
+    status: "confirmed",
+    shipping_name: shipping?.name ?? null,
+    shipping_address: shippingAddress,
+    shipping_phone: session.customer_details?.phone ?? null,
+    cart_items: cartItemsJson,
+    metadata: {
+      cart_id: cartId,
+      stripe_event_id: eventId,
+      stripe_charge_id: stripeChargeId,
+      server_total_cents: serverTotal || null,
+    },
+  })
+  .select("id, order_number")
+  .single();
 
   if (orderError) {
     log("error", "order_insert_failed", {
@@ -790,8 +795,18 @@ async function awardLoyaltyPoints({
       return;
     }
 
-    const result = data as LoyaltyResult;
+   const raw = data as unknown;
 
+if (!isLoyaltyResult(raw)) {
+  log("warn", "loyalty_rpc_unexpected_shape", {
+    requestId,
+    orderId,
+    customerUid,
+  });
+  return;
+}
+
+const result: LoyaltyResult = raw;
     // Log the full picture — visible in Supabase Edge Function logs
     log("info", "loyalty_points_awarded", {
       requestId,
@@ -832,54 +847,26 @@ async function awardLoyaltyPoints({
   }
 }
 
-// ============================================================================
-// HELPERS
-// ============================================================================
-
-/**
- * ATOMIC replay lock.
- *
- * INSERT the event ID immediately — do not check first.
- *   Success (no error)     → lock acquired → safe to process
- *   Unique violation 23505 → already processed → return false
- *   Other DB error         → throw → caller handles safely
- *
- * Eliminates the check-then-insert race condition entirely.
- * This is how payment processors do it.
- */
-async function acquireEventLock(
-  eventId:   string,
-  eventType: string,
-): Promise<boolean> {
-  const { error } = await supabase
-    .from("stripe_events")
-    .insert({
-      id:         eventId,
-      type:       eventType,
-      created_at: new Date().toISOString(),
-    });
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+async function acquireEventLock(eventId: string, eventType: string): Promise<boolean> {
+  const { error } = await supabase.from("stripe_events").insert({
+    id: eventId,
+    type: eventType,
+    created_at: new Date().toISOString(),
+  });
 
   if (!error) return true;
-
-  if (error.code === "23505") return false; // Already processed — safe skip
+  if (error.code === "23505") return false; // already processed
 
   throw new Error(`Replay lock failure: ${error.message}`);
 }
 
-/**
- * Find an order by stripe_charge_id stored in order metadata.
- *
- * Primary path  → metadata->stripe_charge_id (zero Stripe API calls)
- * Fallback path → Stripe charges.retrieve → payment_intent → DB lookup
- *                 (handles orders created before v3 was deployed)
- */
-async function findOrderByChargeId(
-  chargeId:  string | null,
-  requestId: string,
-): Promise<{ id: string } | null> {
+async function findOrderByChargeId(chargeId: string | null, requestId: string): Promise<{ id: string } | null> {
   if (!chargeId) return null;
 
-  // Primary: fast DB-only lookup using stored charge ID
+  // Primary: JSON path equality (fast, indexable if you add expression index later)
   const { data: byMeta } = await supabase
     .from("orders")
     .select("id")
@@ -888,15 +875,12 @@ async function findOrderByChargeId(
 
   if (byMeta) return byMeta;
 
-  // Fallback: one Stripe API call for legacy orders (pre-v3)
+  // Fallback: one Stripe API call for legacy orders
   log("info", "charge_meta_miss_fallback", { requestId, chargeId });
 
   try {
-    const charge          = await stripe.charges.retrieve(chargeId);
-    const paymentIntentId = typeof charge.payment_intent === "string"
-      ? charge.payment_intent
-      : null;
-
+    const charge = await stripe.charges.retrieve(chargeId);
+    const paymentIntentId = typeof charge.payment_intent === "string" ? charge.payment_intent : null;
     if (!paymentIntentId) return null;
 
     const { data: byIntent } = await supabase
@@ -906,42 +890,12 @@ async function findOrderByChargeId(
       .maybeSingle();
 
     return byIntent ?? null;
-
   } catch (err) {
-    log("warn", "charge_fallback_failed", {
-      requestId,
-      chargeId,
-      error: String(err),
-    });
+    log("warn", "charge_fallback_failed", { requestId, chargeId, error: asErr(err) });
     return null;
   }
 }
 
-/**
- * Structured JSON logger.
- * Parses cleanly in Supabase Edge Function log viewer.
- */
-function log(
-  level: "info" | "warn" | "error",
-  event: string,
-  data?: Record<string, unknown>,
-): void {
-  const entry = JSON.stringify({
-    level,
-    event,
-    service:   "stripe-webhook",
-    timestamp: new Date().toISOString(),
-    ...data,
-  });
-
-  if (level === "error")     console.error(entry);
-  else if (level === "warn") console.warn(entry);
-  else                       console.log(entry);
-}
-
-/**
- * Standard JSON response builder.
- */
 function respond(status: number, body: Record<string, unknown>): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -949,36 +903,129 @@ function respond(status: number, body: Record<string, unknown>): Response {
   });
 }
 
-// ============================================================================
-// TYPES
-// ============================================================================
+function log(level: "info" | "warn" | "error", event: string, data?: Record<string, unknown>): void {
+  const entry = JSON.stringify({
+    level,
+    event,
+    service: "stripe-webhook",
+    timestamp: new Date().toISOString(),
+    ...(data ?? {}),
+  });
 
-interface CartItem {
-  id:       string;
-  name?:    string;
-  quantity: number;
-  price?:   number;
+  if (level === "error") console.error(entry);
+  else if (level === "warn") console.warn(entry);
+  else console.log(entry);
 }
 
-interface PendingCart {
-  id:          string;
-  user_id:     string;
-  items:       CartItem[];
-  total_cents: number;
-  created_at:  string;
-  expires_at:  string;
+function asErr(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return String(e);
+  }
+}
+
+// Shipping details helper (Stripe TS can be inconsistent across versions)
+function getShippingDetails(
+  session: Stripe.Checkout.Session,
+): { name?: string | null; phone?: string | null; address?: Stripe.Address | null } | null {
+  const s = session as unknown as {
+    shipping_details?: { name?: string | null; phone?: string | null; address?: Stripe.Address | null } | null;
+    customer_details?: { name?: string | null; phone?: string | null; address?: Stripe.Address | null } | null;
+  };
+
+  return s.shipping_details ?? s.customer_details ?? null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Runtime validation for Json → CartItem[]
+// ─────────────────────────────────────────────────────────────────────────────
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function asNonEmptyString(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim();
+  return t.length ? t : null;
+}
+
+function asFiniteNumber(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function asInt(v: unknown): number | null {
+  const n = asFiniteNumber(v);
+  if (n === null) return null;
+  return Number.isInteger(n) ? n : Math.round(n);
+}
+
+function isCartItem(v: unknown): v is CartItem {
+  if (!isRecord(v)) return false;
+
+  const id = asNonEmptyString(v.id);
+  const quantity = asInt(v.quantity);
+  if (!id || quantity === null) return false;
+
+  const nameOk = v.name === undefined || v.name === null || typeof v.name === "string";
+  const priceOk = v.price === undefined || v.price === null || typeof v.price === "number";
+
+  return nameOk && priceOk;
+}
+
+function parsePendingCartItems(itemsJson: unknown): CartItem[] {
+  if (!Array.isArray(itemsJson)) return [];
+  const out: CartItem[] = [];
+  for (const el of itemsJson) {
+    if (isCartItem(el)) out.push(el);
+  }
+  return out;
+}
+
+function isLoyaltyResult(v: unknown): v is LoyaltyResult {
+  if (!isRecord(v)) return false;
+
+  const num = (k: keyof LoyaltyResult) => typeof v[k] === "number";
+  const bool = (k: keyof LoyaltyResult) => typeof v[k] === "boolean";
+  const str = (k: keyof LoyaltyResult) => typeof v[k] === "string";
+
+  return (
+    num("points_earned") &&
+    num("base_points") &&
+    num("tier_multiplier") &&
+    num("streak_multiplier") &&
+    num("new_balance") &&
+    num("new_lifetime") &&
+    num("streak") &&
+    bool("tier_changed") &&
+    str("tier") &&
+    str("tier_before") &&
+    bool("same_day_order")
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+interface CartItem {
+  id: string;
+  name?: string;
+  quantity: number;
+  price?: number;
 }
 
 interface LoyaltyResult {
-  points_earned:      number;
-  base_points:        number;
-  tier_multiplier:    number;
-  streak_multiplier:  number;
-  new_balance:        number;
-  new_lifetime:       number;
-  streak:             number;
-  tier:               "bronze" | "silver" | "gold" | "platinum";
-  tier_changed:       boolean;
-  tier_before:        string;
-  same_day_order:     boolean;
+  points_earned: number;
+  base_points: number;
+  tier_multiplier: number;
+  streak_multiplier: number;
+  new_balance: number;
+  new_lifetime: number;
+  streak: number;
+  tier: "bronze" | "silver" | "gold" | "platinum";
+  tier_changed: boolean;
+  tier_before: string;
+  same_day_order: boolean;
 }

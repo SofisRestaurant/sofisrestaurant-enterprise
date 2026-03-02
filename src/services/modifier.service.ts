@@ -14,14 +14,13 @@
 // ============================================================================
 import type { AdminModifier } from '@/types/admin-menu'
 import { supabase } from '@/lib/supabase/supabaseClient'
-import type { Database } from '@/lib/supabase/database.types'
 import type { Modifier } from '@/domain/menu/menu.types'
 import type {
   ModifierWritePayload,
   ReorderPayload,
 } from '@/types/admin-menu'
 import { validateModifierPayload } from '@/domain/menu/modifier.schema'
-
+import type { Database } from '@/types/supabase'
 // ─────────────────────────────────────────────────────────────────────────────
 // DB Types
 // ─────────────────────────────────────────────────────────────────────────────

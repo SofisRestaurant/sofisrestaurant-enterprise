@@ -13,8 +13,7 @@ import {
 import { mapOrderRowToDomain } from "@/domain/orders/order.mapper"
 import { useOrdersRealtime } from "@/features/orders/useOrdersRealtime"
 import { updateOrderStatus } from "@/features/orders/orders.api"
-import type { Database } from "@/lib/supabase/database.types"
-
+import type { Database } from '@/types/supabase';
 // ============================================================================
 // TYPES
 // ============================================================================
