@@ -21,12 +21,27 @@
 export type MoneyUnit = 'cents' | 'dollars';
 
 export type CartItemModifierCompat = {
-  id: string;
-  groupId: string;
-  name: string;
+  id: string
+  groupId: string
+  name: string
   /** integer cents; may be negative */
-  priceAdjustmentCents: number;
-};
+  priceAdjustmentCents: number
+
+  // legacy aliases (old code paths)
+  modifier_group_id?: string
+  group_id?: string
+}
+
+export type CartItemModifierGroupCompat = {
+  groupId: string
+  // legacy aliases
+  modifier_group_id?: string
+  group_id?: string
+
+  selections: CartItemModifierCompat[]
+}
+
+export type CartItemModifiersCompat = Array<CartItemModifierCompat | CartItemModifierGroupCompat>
 
 export type SelectedModLike = {
   id: string;
@@ -195,6 +210,9 @@ export class PricingEngine {
    * This is used ONLY for display math + pricing_hash input.
    * Server must re-price from DB.
    */
+
+
+  
   static buildCartModifiers(item: unknown, selected: unknown): CartItemModifierCompat[] {
     const out: CartItemModifierCompat[] = [];
 
@@ -261,7 +279,39 @@ export class PricingEngine {
 
     return out;
   }
+  // -----------------------------------------------------------------------------
+  // Stock helpers (used by admin/menu UI + inventory engine)
+  // -----------------------------------------------------------------------------
+  static getStockStatus(
+    stockCount: number | null | undefined,
+    lowThreshold = 5,
+  ): 'in_stock' | 'low_stock' | 'out_of_stock' | 'unknown' {
+    if (stockCount === null || stockCount === undefined) return 'unknown'
+    const n = Math.max(0, Math.floor(Number(stockCount)))
+    if (!Number.isFinite(n)) return 'unknown'
+    if (n <= 0) return 'out_of_stock'
+    if (n <= lowThreshold) return 'low_stock'
+    return 'in_stock'
+  }
 
+  static isOutOfStock(stockCount: number | null | undefined): boolean {
+    return PricingEngine.getStockStatus(stockCount) === 'out_of_stock'
+  }
+
+  static isLowStock(stockCount: number | null | undefined, lowThreshold = 5): boolean {
+    return PricingEngine.getStockStatus(stockCount, lowThreshold) === 'low_stock'
+  }
+
+  static getStockMessage(
+    stockCount: number | null | undefined,
+    lowThreshold = 5,
+  ): string {
+    const status = PricingEngine.getStockStatus(stockCount, lowThreshold)
+    if (status === 'out_of_stock') return 'Out of stock'
+    if (status === 'low_stock') return 'Low stock'
+    if (status === 'in_stock') return 'In stock'
+    return 'Stock unknown'
+  }
   /**
    * Core pricing math (CLIENT DISPLAY ONLY)
    * - itemId: string identifier

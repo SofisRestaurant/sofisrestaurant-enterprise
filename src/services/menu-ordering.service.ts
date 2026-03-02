@@ -14,9 +14,8 @@ import { supabase } from '@/lib/supabase/supabaseClient'
 import { PricingEngine } from '@/domain/pricing/pricing.engine'
 import { validateItemConfiguration } from '@/domain/menu/modifier.validation'
 import { checkSelectionInventory } from '@/domain/menu/modifier-inventory.engine'
-
+import type { CartItemModifierCompat, CartItemModifierGroupCompat } from '@/domain/pricing/pricing.engine'
 import type { MenuItemPublic, SelectedModifier, CartItemModifier } from '@/domain/menu/menu.types'
-import type { CartItemModifierCompat } from '@/domain/pricing/pricing.engine'
 
 // ─────────────────────────────────────────────────────────────
 // Errors
@@ -40,37 +39,80 @@ export class MenuOrderingError extends Error {
 type UnknownRecord = Record<string, unknown>
 const isRecord = (v: unknown): v is UnknownRecord => typeof v === 'object' && v !== null
 
-function normalizeCartItemModifiers(mods: CartItemModifierCompat[]): CartItemModifier[] {
-  const out: CartItemModifier[] = []
-
-  for (const m of mods) {
-    const modifier_group_id =
-      typeof m.modifier_group_id === 'string'
-        ? m.modifier_group_id
-        : typeof m.group_id === 'string'
-          ? m.group_id
-          : null
 type CompatSelection = {
   id: string
   name?: string
   price_adjustment?: number | null
+  priceAdjustment?: number | null
 }
 
 function isCompatSelection(v: unknown): v is CompatSelection {
-  if (!v || typeof v !== 'object') return false
-  return typeof (v as { id?: unknown }).id === 'string'
+  if (!isRecord(v)) return false
+  return typeof v.id === 'string' && v.id.length > 0
 }
-    if (!modifier_group_id) continue
 
-    const selectionsRaw = Array.isArray(m.selections) ? m.selections : []
-   const selections = selectionsRaw
-  .filter(isCompatSelection)
-  .map((s) => ({
-    id: s.id,
-    name: typeof s.name === 'string' ? s.name : '',
-    price_adjustment: typeof s.price_adjustment === 'number' ? s.price_adjustment : 0,
-  }))
+function getGroupId(m: unknown): string {
+  if (!isRecord(m)) return ''
+  const raw =
+    (typeof m.groupId === 'string' && m.groupId) ||
+    (typeof m.modifier_group_id === 'string' && m.modifier_group_id) ||
+    (typeof m.group_id === 'string' && m.group_id) ||
+    ''
+  return String(raw)
+}
 
+/**
+ * Normalize ANY incoming "mods" shape into:
+ *   [{ modifier_group_id, selections: [{id,name,price_adjustment}] }]
+ *
+ * Accepts:
+ *  A) Flat:   CartItemModifierCompat[]  (each item has groupId/modifier_group_id/group_id)
+ *  B) Group:  Array<{ groupId, selections: CompatSelection[] }>
+ */
+function normalizeCartItemModifiers(mods: unknown): CartItemModifier[] {
+  // Collect selections by group
+  const grouped = new Map<string, CartItemModifier['selections']>()
+
+  const addSelection = (groupId: string, sel: CompatSelection) => {
+    if (!groupId) return
+    if (!isCompatSelection(sel)) return
+
+    const price =
+      typeof sel.price_adjustment === 'number'
+        ? sel.price_adjustment
+        : typeof sel.priceAdjustment === 'number'
+          ? sel.priceAdjustment
+          : 0
+
+    const entry = grouped.get(groupId) ?? []
+    entry.push({
+      id: sel.id,
+      name: typeof sel.name === 'string' ? sel.name : '',
+      price_adjustment: Number.isFinite(price) ? price : 0,
+    })
+    grouped.set(groupId, entry)
+  }
+
+  // Case A or B: always iterate array if possible
+  const arr = Array.isArray(mods) ? mods : []
+
+  for (const mod of arr) {
+    const groupId = getGroupId(mod)
+
+    // If this is a grouped object: { groupId, selections: [...] }
+    if (isRecord(mod) && Array.isArray(mod.selections)) {
+      for (const s of mod.selections) addSelection(groupId, s as CompatSelection)
+      continue
+    }
+
+    // Otherwise treat as a flat selection itself
+    addSelection(groupId, mod as CompatSelection)
+  }
+
+  // Build final output, drop empty groups
+  const out: CartItemModifier[] = []
+  for (const [modifier_group_id, selections] of grouped.entries()) {
+    if (!selections.length) continue
     out.push({ modifier_group_id, selections })
   }
 
