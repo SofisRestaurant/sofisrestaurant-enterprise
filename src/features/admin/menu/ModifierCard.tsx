@@ -29,12 +29,12 @@ export function ModifierCard({
   draggable = false,
   saving = false,
 }: ModifierCardProps) {
-  const priceLabel =
-    modifier.price_adjustment === 0
-      ? 'No charge'
-      : modifier.price_adjustment > 0
-        ? `+${PricingEngine.formatPrice(modifier.price_adjustment)}`
-        : PricingEngine.formatPrice(modifier.price_adjustment)
+ const priceLabel =
+   modifier.price_adjustment === 0
+     ? 'No charge'
+     : modifier.price_adjustment > 0
+       ? `+${PricingEngine.formatDollars(modifier.price_adjustment)}`
+       : `-${PricingEngine.formatDollars(Math.abs(modifier.price_adjustment))}`;
 
   return (
     <div

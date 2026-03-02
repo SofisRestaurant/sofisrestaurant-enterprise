@@ -355,7 +355,7 @@ export default function AdminMenuEditor() {
                               )}
                             </td>
                             <td className="px-4 py-3 font-mono text-sm">
-                              {PricingEngine.formatPrice(item.price)}
+                              {PricingEngine.formatDollars(item.price)}
                             </td>
                             <td className="px-4 py-3 text-xs">
                               {item.modifier_groups.length > 0 ? (

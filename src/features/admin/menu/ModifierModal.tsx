@@ -78,11 +78,12 @@ export function ModifierModal({
   }
 
   const priceNum = parseFloat(form.price_adjustment)
-  const priceLabel = isNaN(priceNum) || priceNum === 0
-    ? 'No price change'
-    : priceNum > 0
-      ? `Customer pays +${PricingEngine.formatPrice(priceNum)}`
-      : `Discount of ${PricingEngine.formatPrice(Math.abs(priceNum))}`
+  const priceLabel =
+    isNaN(priceNum) || priceNum === 0
+      ? 'No price change'
+      : priceNum > 0
+        ? `Customer pays +${PricingEngine.formatDollars(priceNum)}`
+        : `Discount of ${PricingEngine.formatDollars(Math.abs(priceNum))}`;
 
   function buildPayload(): Omit<ModifierWritePayload, 'modifier_group_id'> {
     return {
