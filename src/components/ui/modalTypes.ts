@@ -4,27 +4,14 @@ export type ModalType =
   | 'signup'
   | 'forgot-password'
   | 'menu-item'
-  | 'custom'; // for future custom modals
-  
-/**
- * Generic modal configuration.
- * T represents the shape of data passed to the modal.
- */
+  | 'custom'
+
 export interface ModalConfig<T = Record<string, unknown>> {
-  /** Optional modal title for display */
-  title?: string;
-
-  /** Data passed to the modal (e.g., prefilled form info) */
-  data?: T;
-
-  /** Called when the modal action is successful (e.g., login completed) */
-  onSuccess?: (result?: T) => void;
-
-  /** Called when the modal is cancelled/closed without success */
-  onCancel?: () => void;
-
-  /** Optional extra props specific to the modal */
-  props?: Record<string, unknown>;
+  title?: string
+  data?: T
+  onSuccess?: (result?: T) => void
+  onCancel?: () => void
+  props?: Record<string, unknown>
 }
 
 /**

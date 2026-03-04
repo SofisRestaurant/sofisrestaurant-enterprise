@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { useUserContext } from '@/contexts/useUserContext'
 import { Spinner } from '@/components/ui/Spinner'
-import { fetchOrdersByCustomer } from '@/features/orders/orders.api'
+import { fetchOrdersByCustomer } from '@/modules/orders/api/orders.api';
 import type { Order } from '@/domain/orders/order.types'
 
 function formatMoney(cents: number, currency: string) {

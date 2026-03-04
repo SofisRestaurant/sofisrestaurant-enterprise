@@ -1,4 +1,15 @@
 // src/lib/supabase/auth.api.ts
+// =============================================================================
+// AUTH API — Production Grade (2026)
+// =============================================================================
+// Key upgrades:
+// - ✅ login-guard is a gate only (rate-limit / lockout / anti-bot), NOT a session issuer
+// - ✅ never calls supabase.auth.setSession() from a custom payload
+//   (prevents refresh-token bugs + random 403 -> signed_out)
+// - ✅ consistent error normalization + safe JSON parsing
+// - ✅ strongly-typed, minimal surface area
+// - ✅ optional requestId propagation if your guards return it
+// =============================================================================
 
 import { supabase } from '@/lib/supabase/supabaseClient'
 import type { User, Session, AuthError } from '@supabase/supabase-js'
@@ -28,11 +39,92 @@ export interface SignInData {
 }
 
 /* =========================
-   Helpers
+   Internal Helpers
 ========================= */
+
+type GuardOk = { ok: true; requestId?: string }
+type GuardFail = { ok: false; error?: string; code?: string; requestId?: string }
+type GuardResponse = GuardOk | GuardFail
 
 function logAuth(message: string, extra?: unknown) {
   console.log(`🔐 [AUTH] ${message}`, extra ?? '')
+}
+
+function env(key: 'VITE_SUPABASE_URL' | 'VITE_SUPABASE_ANON_KEY'): string {
+  const v = (import.meta as any).env?.[key] as string | undefined
+  return (v ?? '').trim()
+}
+
+function asAuthError(message: string, name = 'AuthError'): AuthError {
+  return { name, message } as AuthError
+}
+
+async function safeJson(res: Response): Promise<unknown> {
+  const ct = (res.headers.get('content-type') ?? '').toLowerCase()
+  if (!ct.includes('application/json')) return null
+  try {
+    return await res.json()
+  } catch {
+    return null
+  }
+}
+
+function guardHeaders(): Record<string, string> {
+  const url = env('VITE_SUPABASE_URL')
+  const anon = env('VITE_SUPABASE_ANON_KEY')
+  if (!url || !anon) {
+    // Do not throw; keep client resilient. Caller will get a friendly error.
+    return {
+      'Content-Type': 'application/json',
+      'x-application-name': 'sofis-restaurant-v2',
+    }
+  }
+
+  // NOTE: Edge Functions often expect apikey; Authorization is not required for guard endpoints,
+  // but keeping it as anon is harmless if your server expects it.
+  return {
+    'Content-Type': 'application/json',
+    apikey: anon,
+    Authorization: `Bearer ${anon}`,
+    'x-application-name': 'sofis-restaurant-v2',
+  }
+}
+
+/**
+ * Gate requests through an Edge Function guard.
+ * This MUST NOT return a "session" used in supabase.auth.setSession().
+ */
+async function callGuard(
+  path: 'login-guard' | 'password-guard',
+  body: unknown,
+): Promise<GuardResponse> {
+  const baseUrl = env('VITE_SUPABASE_URL')
+  if (!baseUrl) return { ok: false, error: 'Missing VITE_SUPABASE_URL', code: 'ENV_MISSING' }
+
+  const res = await fetch(`${baseUrl}/functions/v1/${path}`, {
+    method: 'POST',
+    headers: guardHeaders(),
+    body: JSON.stringify(body),
+  })
+
+  const data = (await safeJson(res)) as any
+
+  if (res.ok) {
+    // If your guard returns structured envelopes, preserve requestId when present.
+    const requestId = typeof data?.requestId === 'string' ? data.requestId : undefined
+    return { ok: true, requestId }
+  }
+
+  // Normalize known server shapes:
+  const msg =
+    (typeof data?.error === 'string' && data.error) ||
+    (typeof data?.message === 'string' && data.message) ||
+    `Request blocked (${res.status})`
+
+  const code = typeof data?.code === 'string' ? data.code : `HTTP_${res.status}`
+  const requestId = typeof data?.requestId === 'string' ? data.requestId : undefined
+
+  return { ok: false, error: msg, code, requestId }
 }
 
 /* =========================
@@ -41,159 +133,83 @@ function logAuth(message: string, extra?: unknown) {
 
 export const authAPI = {
   /* -------------------------
-     Sign In
+     Sign In (PRODUCTION SAFE)
+     - Guard first
+     - Real Supabase signInWithPassword second
   -------------------------- */
-async signIn(
-  credentials: SignInData
-): Promise<ApiResponse<{ user: User; session: Session }>> {
-  logAuth("Attempt login", credentials.email)
+  async signIn(credentials: SignInData): Promise<ApiResponse<{ user: User; session: Session }>> {
+    logAuth('Attempt login', credentials.email)
 
-  const res = await fetch(
-    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/login-guard`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-      },
-      body: JSON.stringify(credentials),
+    // 1) Guard (rate limit / lockout / anti-bot)
+    const gate = await callGuard('login-guard', credentials)
+    if (!gate.ok) {
+      console.error('❌ Guard blocked login:', gate.code, gate.error, gate.requestId ?? '')
+      return { data: null, error: asAuthError(gate.error ?? 'Login blocked') }
     }
-  )
 
-  const result = await res.json()
+    // 2) Real Supabase login (supabase-js owns refresh tokens + session rotation)
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: credentials.email,
+      password: credentials.password,
+    })
 
-  if (!res.ok) {
-    console.error("❌ Guard blocked login:", result.error)
+    if (error) {
+      console.error('❌ Supabase login failed:', error.message)
+      return { data: null, error }
+    }
+
+    if (!data?.user || !data?.session) {
+      return { data: null, error: asAuthError('Login failed: missing session') }
+    }
+
+    logAuth('Login success', data.user.id)
+
     return {
-      data: null,
-      error: {
-        name: "AuthError",
-        message: result.error || "Login failed",
-      } as AuthError,
+      data: { user: data.user, session: data.session },
+      error: null,
     }
-  }
-
-  // 🔐 Apply session returned from guard
- const { error: sessionError } = await supabase.auth.setSession(result.session)
-if (sessionError) {
-  return { data: null, error: sessionError }
-}
-
-// 🔐 Wait for session to be fully applied
-await new Promise<void>((resolve) => {
-  const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-    if (session?.access_token === result.session.access_token) {
-      sub.subscription.unsubscribe()
-      resolve()
-    }
-  })
-})
-
-  if (sessionError) {
-    return {
-      data: null,
-      error: sessionError,
-    }
-  }
-
-  const { data: userData } = await supabase.auth.getUser()
-
-  if (!userData.user) {
-    return {
-      data: null,
-      error: {
-        name: "AuthError",
-        message: "User not found after login",
-      } as AuthError,
-    }
-  }
-
-  logAuth("Login success", userData.user.id)
-
-  return {
-    data: {
-      user: userData.user,
-      session: result.session,
-    },
-    error: null,
-  }
-},
+  },
 
   /* -------------------------
      Sign Up
   -------------------------- */
-  async signUp(
-  payload: SignUpData
-): Promise<ApiResponse<{ user: User; session: Session | null }>> {
-  const { email, password, fullName } = payload
+  async signUp(payload: SignUpData): Promise<ApiResponse<{ user: User; session: Session | null }>> {
+    const { email, password, fullName } = payload
+    logAuth('Attempt signup', email)
 
-  logAuth("Attempt signup", email)
-
-  // 🔐 PASSWORD GUARD
-  const guardRes = await fetch(
-  `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/password-guard`,
-  {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
-      "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-    },
-    body: JSON.stringify({ email, password }),
-  }
-)
-
-  const guardData = await guardRes.json()
-
-  if (!guardRes.ok) {
-  console.log("⛔ GUARD BLOCKED SIGNUP");
-  return {
-    data: null,
-    error: {
-      name: "PasswordError",
-      message: guardData.error || "Password validation failed",
-    } as AuthError,
-  }
-}
-
-  // ✅ Safe to continue
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: {
-      data: {
-        full_name: fullName,
-      },
-      emailRedirectTo: `${window.location.origin}/auth/callback`,
-    },
-  })
-
-  if (error) {
-    console.error("❌ Signup failed:", error.message)
-    return { data: null, error }
-  }
-
-  if (!data.user) {
-    return {
-      data: null,
-      error: {
-        name: "AuthError",
-        message: "Signup failed",
-      } as AuthError,
+    // Guard password policy / known-bad patterns / etc.
+    const gate = await callGuard('password-guard', { email, password })
+    if (!gate.ok) {
+      console.log('⛔ GUARD BLOCKED SIGNUP', gate.code, gate.requestId ?? '')
+      return { data: null, error: asAuthError(gate.error ?? 'Password validation failed', 'PasswordError') }
     }
-  }
 
-  logAuth("Signup success", data.user.id)
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { full_name: fullName },
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
+      },
+    })
 
-  return {
-    data: {
-      user: data.user,
-      session: data.session,
-    },
-    error: null,
-  }
-},
+    if (error) {
+      console.error('❌ Signup failed:', error.message)
+      return { data: null, error }
+    }
+
+    if (!data.user) {
+      return { data: null, error: asAuthError('Signup failed') }
+    }
+
+    logAuth('Signup success', data.user.id)
+
+    return {
+      data: { user: data.user, session: data.session },
+      error: null,
+    }
+  },
+
   /* -------------------------
      Google OAuth
   -------------------------- */
@@ -202,17 +218,11 @@ await new Promise<void>((resolve) => {
 
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-      },
+      options: { redirectTo: `${window.location.origin}/auth/callback` },
     })
 
     if (error) console.error('❌ Google login failed:', error.message)
-
-    return {
-      data: null,
-      error,
-    }
+    return { data: null, error }
   },
 
   /* -------------------------
@@ -222,13 +232,9 @@ await new Promise<void>((resolve) => {
     logAuth('Signing out')
 
     const { error } = await supabase.auth.signOut()
-
     if (error) console.error('❌ Sign out failed:', error.message)
 
-    return {
-      data: null,
-      error,
-    }
+    return { data: null, error }
   },
 
   /* -------------------------
@@ -242,7 +248,6 @@ await new Promise<void>((resolve) => {
     })
 
     if (error) console.error('❌ Reset failed:', error.message)
-
     return { data: null, error }
   },
 
@@ -252,10 +257,7 @@ await new Promise<void>((resolve) => {
   async updatePassword(newPassword: string): Promise<ApiResponse<null>> {
     logAuth('Updating password')
 
-    const { error } = await supabase.auth.updateUser({
-      password: newPassword,
-    })
-
+    const { error } = await supabase.auth.updateUser({ password: newPassword })
     if (error) console.error('❌ Password update failed:', error.message)
 
     return { data: null, error }
@@ -264,16 +266,10 @@ await new Promise<void>((resolve) => {
   /* -------------------------
      Update Profile Metadata
   -------------------------- */
-  async updateProfile(updates: {
-    full_name?: string
-    avatar_url?: string
-  }): Promise<ApiResponse<null>> {
+  async updateProfile(updates: { full_name?: string; avatar_url?: string }): Promise<ApiResponse<null>> {
     logAuth('Updating profile metadata')
 
-    const { error } = await supabase.auth.updateUser({
-      data: updates,
-    })
-
+    const { error } = await supabase.auth.updateUser({ data: updates })
     if (error) console.error('❌ Profile update failed:', error.message)
 
     return { data: null, error }
@@ -284,16 +280,11 @@ await new Promise<void>((resolve) => {
   -------------------------- */
   async getSession(): Promise<ApiResponse<Session>> {
     const { data, error } = await supabase.auth.getSession()
-
     if (error) {
       console.error('❌ Get session failed:', error.message)
       return { data: null, error }
     }
-
-    return {
-      data: data.session,
-      error: null,
-    }
+    return { data: data.session, error: null }
   },
 
   /* -------------------------
@@ -301,34 +292,20 @@ await new Promise<void>((resolve) => {
   -------------------------- */
   async getUser(): Promise<ApiResponse<User>> {
     const { data, error } = await supabase.auth.getUser()
-
     if (error) {
       console.error('❌ Get user failed:', error.message)
       return { data: null, error }
     }
-
-    return {
-      data: data.user,
-      error: null,
-    }
+    return { data: data.user, error: null }
   },
 
   /* -------------------------
      OTP Verify
   -------------------------- */
-  async verifyOtp(
-    email: string,
-    token: string,
-    type: 'email' | 'recovery'
-  ): Promise<ApiResponse<null>> {
+  async verifyOtp(email: string, token: string, type: 'email' | 'recovery'): Promise<ApiResponse<null>> {
     logAuth('Verifying OTP')
 
-    const { error } = await supabase.auth.verifyOtp({
-      email,
-      token,
-      type,
-    })
-
+    const { error } = await supabase.auth.verifyOtp({ email, token, type })
     if (error) console.error('❌ OTP failed:', error.message)
 
     return { data: null, error }
@@ -337,16 +314,10 @@ await new Promise<void>((resolve) => {
   /* -------------------------
      Resend Verification
   -------------------------- */
-  async resendVerificationEmail(
-    email: string
-  ): Promise<ApiResponse<null>> {
+  async resendVerificationEmail(email: string): Promise<ApiResponse<null>> {
     logAuth('Resending verification', email)
 
-    const { error } = await supabase.auth.resend({
-      type: 'signup',
-      email,
-    })
-
+    const { error } = await supabase.auth.resend({ type: 'signup', email })
     if (error) console.error('❌ Resend failed:', error.message)
 
     return { data: null, error }
@@ -355,9 +326,7 @@ await new Promise<void>((resolve) => {
   /* -------------------------
      Auth Listener
   -------------------------- */
-  onAuthStateChange(
-    callback: (event: string, session: Session | null) => void
-  ) {
+  onAuthStateChange(callback: (event: string, session: Session | null) => void) {
     return supabase.auth.onAuthStateChange(callback)
   },
 }

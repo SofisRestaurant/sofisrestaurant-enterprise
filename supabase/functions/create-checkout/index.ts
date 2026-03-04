@@ -1,897 +1,958 @@
+// =============================================================================
 // supabase/functions/create-checkout/index.ts
+// CREATE CHECKOUT — Enterprise Edge Function (Production, 2026)
 // =============================================================================
-// CREATE CHECKOUT — HARDENED v2 (clean + type-safe + consistent helpers)
-// =============================================================================
-// Notes:
-// - Auth required (Bearer access token). Uses shared authenticate().
-// - CORS strict allow-list.
-// - Idempotency required via x-idempotency-key.
-// - Server-authoritative pricing from DB (+ modifier validation).
-// - Persists validated cart to pending_carts, then creates Stripe Checkout Session.
-// - Optional promo + credit with rollback on failure.
-// - Rate-limit uses checkout_rate_limits (latest row wins).
+// Goals:
+// - Strict CORS allowlist (+ required headers incl x-application-name)
+// - Strict request parsing (no `any`, no unsafe casts)
+// - Server-truth rebuild of cart (menu_items + modifiers; ignore client price)
+// - pricingHash enforced + mismatch logged (best-effort)
+// - Option A anti-tamper: accept frontendTotals for mismatch telemetry
+// - Promo (by ID or CODE) + credit validated server-side
+// - Stripe Checkout session created with idempotency
+// - pending_carts persisted (best-effort, Stripe remains source of truth)
+// - ✅ UPGRADE: add stable server cart reference to Stripe metadata:
+//    - metadata.pending_cart_id AND metadata.cart_ref (supports new + old finalize-order)
+// - ✅ UPGRADE: strict CORS fail-closed (reject unknown origins with 403)
+// - ✅ UPGRADE: requestId + structured error codes (clean logs / deterministic)
+// - ✅ UPGRADE: de-duped sessionParams block (your paste had duplicates)
 // =============================================================================
 
 import Stripe from "stripe";
-import { createServiceClient, type SvcClient } from "../_shared/supabase.ts";
-import type { Json } from "../_shared/database.types.ts";
-import { authenticate } from "../_shared/auth.ts";
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Env
-// ─────────────────────────────────────────────────────────────────────────────
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
-const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
-const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
-
-const HASH_VERSION = "v1"; // bump to invalidate old hashes
-
-if (!SUPABASE_URL || !SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY || !STRIPE_SECRET_KEY) {
-  throw new Error("Missing required environment variables");
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Stripe
-// ─────────────────────────────────────────────────────────────────────────────
-const stripe = new Stripe(STRIPE_SECRET_KEY, {
-  apiVersion: "2026-02-25.clover",
-  httpClient: Stripe.createFetchHttpClient(),
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Config
-// ─────────────────────────────────────────────────────────────────────────────
-const CONFIG = {
-  MAX_ITEMS: 100,
-  MIN_AMOUNT_CENTS: 500,
-  MAX_AMOUNT_CENTS: 100_000_000,
-  SESSION_EXPIRES_MINUTES: 30,
-
-  // rate limiting
-  MAX_ATTEMPTS_PER_WINDOW: 10,
-  WINDOW_MINUTES: 5,
-  BLOCK_MINUTES: 15,
-
-  // pricing
-  TAX_RATE: 0.08,
-
-  // discounts
-  MAX_DISCOUNT_FRACTION: 0.5,
-  SAFE_MARGIN_PERCENT: 20,
-} as const;
-
-const ALLOWED_ORIGINS = [
-  "https://sofislegacy.com",
-  "https://www.sofislegacy.com",
-  "https://sofisrestaurant.netlify.app",
-  "http://localhost:3000",
-  "http://localhost:3001",
-] as const;
+import type { Database } from "../_shared/database.types.ts";
+import type { DbClient } from "../_shared/supabase.ts";
+import { createServiceClient, createAnonClient, readBearerToken } from "../_shared/supabase.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface ValidatedModifier {
-  modifier_id: string;
-  modifier_group_id: string;
-  name: string;
-  price_adjustment_cents: number;
-}
+type Db = Database;
+type MenuCategory = Db["public"]["Enums"]["menu_category"];
+type Json = Db["public"]["Tables"]["orders"]["Row"]["cart_items"]; // Json | null
 
-interface ValidatedItem {
+type OrderType = "pickup" | "delivery" | "dine_in";
+
+type IncomingCartModifier = {
   id: string;
-  name: string;
-  base_cents: number;
-  price_cents: number;
+  groupId?: string;
+  name?: string;
+  priceAdjustment?: number;
+};
+
+type IncomingCartItem = {
+  menuItemId: string;
+  name?: string;
+  unitPriceCents?: number; // untrusted
+  imageUrl?: string | null;
+  category?: MenuCategory; // untrusted (we validate)
+  modifiers: IncomingCartModifier[];
   quantity: number;
-  modifiers: ValidatedModifier[];
+  notes?: string | null;
+  pricingHash?: string; // untrusted hint, but REQUIRED for tamper telemetry
+};
+
+type FrontendTotals = {
+  subtotalCents: number;
+  discountCents: number;
+  creditCents: number;
+  taxCents: number;
+  totalCents: number;
+};
+
+type CreateCheckoutRequest = {
+  items: IncomingCartItem[];
+  // ✅ support both
+  promoId: string | null;
+  promoCode: string | null;
+
+  creditId: string | null;
+  orderType: OrderType;
   notes: string | null;
-  pricing_hash: string;
-}
+  idempotencyKey?: string | null;
 
-interface DiscountResult {
-  discount_cents: number;
-  promo_id?: string;
-  promo_code?: string;
-  promo_applied?: number;
-  credit_id?: string;
-  credit_applied?: number;
-}
+  // ✅ Option A anti-tamper telemetry
+  frontendTotals: FrontendTotals | null;
+};
 
-interface RawModifierSelection {
-  id: unknown;
-  notes?: unknown;
-}
+type Totals = FrontendTotals;
 
-interface RawItem {
-  id: unknown;
-  quantity: unknown;
-  notes?: unknown;
-  modifiers?: RawModifierSelection[];
-}
+type CreateCheckoutResponse =
+  | {
+      ok: true;
+      session_id: string;
+      url: string | null;
+      totals: Totals;
+      pending_cart_id: string;
+    }
+  | { ok: false; error: string; code?: string; requestId?: string };
 
-interface ModifierGroupRow {
-  id: string;
-  required: boolean;
-  min_selections: number | null;
-  max_selections: number | null;
-  active: boolean;
-}
-
-interface RawBody {
-  items: RawItem[];
-  email: unknown;
-
-  successUrl?: unknown;
-  cancelUrl?: unknown;
-  success_url?: unknown;
-  cancel_url?: unknown;
-
-  frontend_total?: number;
-  promo_code?: unknown;
-  credit_id?: unknown;
-  order_notes?: unknown;
-}
-
-interface ModifierRow {
+type CanonicalModifier = {
   id: string;
   modifier_group_id: string;
   name: string;
   price_adjustment: number;
-  available: boolean;
-}
-
-type MenuProductRow = {
-  id: string;
-  name: string;
-  price: number;
-  available: boolean;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CORS
-// ─────────────────────────────────────────────────────────────────────────────
-function getCorsHeaders(req: Request): Record<string, string> | null {
-  const origin = req.headers.get("origin") ?? "";
-  if (!ALLOWED_ORIGINS.includes(origin as (typeof ALLOWED_ORIGINS)[number])) return null;
+type CanonicalItem = {
+  menuItemId: string;
+  name: string;
+  imageUrl: string | null;
+  category: MenuCategory;
+  quantity: number;
+  notes: string | null;
 
+  unitPriceCents: number;
+  modifiers: Array<{
+    id: string;
+    groupId: string;
+    name: string;
+    priceAdjustment: number;
+  }>;
+
+  lineTotalCents: number;
+  pricingHash: string;
+};
+
+type JsonRecord = Record<string, unknown>;
+
+type FraudMetadata =
+  | {
+      kind: "pricing_hash_mismatch";
+      menuItemId: string;
+      clientHash: string;
+      serverHash: string;
+      clientUnitPriceCents: number | null;
+      serverUnitPriceCents: number;
+      clientQty: number;
+      serverQty: number;
+    }
+  | {
+      kind: "totals_mismatch";
+      frontendTotals: FrontendTotals;
+      serverTotals: Totals;
+    }
+  | { kind: "menu_item_not_found"; menuItemId: string }
+  | { kind: "pending_cart_upsert_failed"; message: string; session_id: string }
+  | { kind: "request_invalid"; reason: string }
+  | { kind: "checkout_failed"; message: string }
+  | { kind: "promo_invalid"; promo: { promoId: string | null; promoCode: string | null } }
+  | { kind: "credit_invalid"; creditId: string }
+  | { kind: "unknown"; data?: Record<string, unknown> };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Config
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ALLOWED_ORIGINS = new Set([
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  "http://localhost:5173",
+  "https://sofislegacy.com",
+  "https://www.sofislegacy.com",
+]);
+
+function mustEnv(name: string): string {
+  const v = Deno.env.get(name)?.trim() ?? "";
+  if (!v) throw new Error(`Missing ${name}`);
+  return v;
+}
+
+const STRIPE_SECRET_KEY = mustEnv("STRIPE_SECRET_KEY");
+
+const APP_NAME = (Deno.env.get("APP_NAME")?.trim() ?? "sofis-restaurant-v2") as string;
+
+const DEFAULT_TAX_RATE = Number(Deno.env.get("TAX_RATE") ?? "0.0825");
+const TAX_RATE = Number.isFinite(DEFAULT_TAX_RATE) ? DEFAULT_TAX_RATE : 0.0825;
+
+const CHECKOUT_SUCCESS_URL =
+  (Deno.env.get("CHECKOUT_SUCCESS_URL")?.trim() || "http://localhost:3000/order-success") +
+  "?session_id={CHECKOUT_SESSION_ID}";
+
+const CHECKOUT_CANCEL_URL =
+  (Deno.env.get("CHECKOUT_CANCEL_URL")?.trim() || "http://localhost:3000/order-canceled") +
+  "?session_id={CHECKOUT_SESSION_ID}";
+
+// If this apiVersion causes bundling issues, set STRIPE_API_VERSION env and use it.
+const STRIPE_API_VERSION = (Deno.env.get("STRIPE_API_VERSION")?.trim() || "2024-06-20") as Stripe.LatestApiVersion;
+
+const stripe = new Stripe(STRIPE_SECRET_KEY, {
+  apiVersion: STRIPE_API_VERSION,
+  httpClient: Stripe.createFetchHttpClient(),
+});
+
+// If your enum differs, update this list to match your Database enum exactly.
+const MENU_CATEGORIES: ReadonlySet<MenuCategory> = new Set<MenuCategory>([
+  "appetizers",
+  "entrees",
+  "desserts",
+  "drinks",
+  "lunch",
+  "breakfast",
+  "specials",
+]);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Utilities
+// ─────────────────────────────────────────────────────────────────────────────
+
+function makeRequestId(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  }
+}
+
+function corsHeadersFor(origin: string | null): HeadersInit {
+  const o = origin ?? "";
+  const allow = ALLOWED_ORIGINS.has(o) ? o : "null"; // used only for OPTIONS
   return {
-    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Origin": allow,
+    Vary: "Origin",
     "Access-Control-Allow-Headers":
-      "authorization, x-client-info, apikey, content-type, x-idempotency-key, x-application-name",
+      "authorization, x-client-info, apikey, content-type, x-application-name, x-idempotency-key, x-request-id, x-requested-with",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Credentials": "true",
-    Vary: "Origin",
+    "Access-Control-Max-Age": "86400",
   };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-function log(level: "info" | "warn" | "error", msg: string, data?: unknown) {
-  console.log(JSON.stringify({ level, msg, data, time: new Date().toISOString() }));
+function json(data: unknown, init: ResponseInit = {}, cors: HeadersInit = {}): Response {
+  const headers = new Headers(init.headers);
+  headers.set("Content-Type", "application/json");
+  for (const [k, v] of Object.entries(cors)) headers.set(k, String(v));
+  return new Response(JSON.stringify(data), { ...init, headers });
 }
 
-function json(data: unknown, cors: Record<string, string>, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { ...cors, "Content-Type": "application/json" },
-  });
+function isRecord(v: unknown): v is JsonRecord {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function err(cors: Record<string, string>, message: string, status = 400, extra?: unknown) {
-  log(status >= 500 ? "error" : "warn", message, extra);
-  return json({ error: message }, cors, status);
+function asString(v: unknown, fallback = ""): string {
+  return typeof v === "string" ? v : fallback;
 }
 
-function s(v: unknown, max = 320): string {
-  return String(v ?? "").slice(0, max).trim();
+function asNullableString(v: unknown): string | null {
+  return typeof v === "string" ? v : null;
 }
 
-function n(v: unknown, min: number, max: number): number {
-  const x = Number(v);
-  if (!Number.isFinite(x)) return min;
-  return Math.max(min, Math.min(max, Math.round(x)));
+function asNumber(v: unknown, fallback = 0): number {
+  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : fallback;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Pricing hash
-// ─────────────────────────────────────────────────────────────────────────────
-async function computePricingHash(
-  itemId: string,
-  baseCents: number,
-  modifiers: { modifier_id: string; price_adjustment_cents: number }[],
-  quantity: number,
-): Promise<string> {
-  const sortedMods = [...modifiers]
-    .sort((a, b) => a.modifier_id.localeCompare(b.modifier_id))
-    .map((m) => `${m.modifier_id}:${m.price_adjustment_cents}`)
-    .join(",");
-
-  const payload = `${HASH_VERSION}|${itemId}|${baseCents}|${sortedMods}|${quantity}`;
-  const encoded = new TextEncoder().encode(payload);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+function clampInt(v: unknown, min: number, max: number): number {
+  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, Math.trunc(n)));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Rate limiting (checkout_rate_limits)
-// Columns: user_id, attempts, last_attempt_at, blocked_until
-// Reads latest row safely (handles legacy duplicates).
-// ─────────────────────────────────────────────────────────────────────────────
-async function checkRateLimit(userId: string): Promise<{ blocked: boolean }> {
-  const svc = createServiceClient();
-  const now = new Date();
-  const windowStart = new Date(now.getTime() - CONFIG.WINDOW_MINUTES * 60_000);
-
-  const { data, error } = await svc
-    .from("checkout_rate_limits")
-    .select("user_id,attempts,last_attempt_at,blocked_until")
-    .eq("user_id", userId)
-    .order("last_attempt_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) {
-    log("warn", "rate_limit_read_failed", { userId, error: error.message });
-    return { blocked: false }; // fail-open
-  }
-
-  const blockedUntil = data?.blocked_until ? new Date(data.blocked_until) : null;
-  if (blockedUntil && blockedUntil > now) return { blocked: true };
-
-  const lastAttemptAt = data?.last_attempt_at ? new Date(data.last_attempt_at) : null;
-  const attempts =
-    !data || !lastAttemptAt || lastAttemptAt < windowStart ? 1 : (data.attempts ?? 0) + 1;
-
-  const blocked = attempts > CONFIG.MAX_ATTEMPTS_PER_WINDOW;
-
-  const { error: upErr } = await svc.from("checkout_rate_limits").upsert({
-    user_id: userId,
-    attempts,
-    last_attempt_at: now.toISOString(),
-    blocked_until: blocked
-      ? new Date(now.getTime() + CONFIG.BLOCK_MINUTES * 60_000).toISOString()
-      : null,
-  });
-
-  if (upErr) log("warn", "rate_limit_upsert_failed", { userId, error: upErr.message });
-
-  return { blocked };
+function safeId(v: unknown, maxLen = 128): string {
+  const s = asString(v, "").trim();
+  if (!s) return "";
+  return s.length > maxLen ? s.slice(0, maxLen) : s;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Modifier groups fetch
-// ─────────────────────────────────────────────────────────────────────────────
-async function fetchModifierGroupsForItem(
-  svc: SvcClient,
-  menuItemId: string,
-): Promise<Map<string, ModifierGroupRow>> {
-  const groupMap = new Map<string, ModifierGroupRow>();
+function safePromoCode(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim().toUpperCase();
+  if (!s) return null;
+  return s.length > 32 ? s.slice(0, 32) : s;
+}
 
-  const { data: links, error: linkErr } = await svc
-    .from("menu_item_modifier_groups")
-    .select("modifier_group_id")
-    .eq("menu_item_id", menuItemId);
+function safeNotes(v: unknown, maxLen = 1200): string | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  if (!s) return null;
+  return s.length > maxLen ? s.slice(0, maxLen) : s;
+}
 
-  if (linkErr) {
-    log("warn", "modifier_group_links_failed", { menuItemId, error: linkErr.message });
-    return groupMap;
-  }
+function safeImageUrl(v: unknown): string | null {
+  if (v === null) return null;
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  if (!s) return null;
+  if (s.length > 1000) return null;
+  return s;
+}
 
-  const groupIds = (links ?? [])
-    .map((r) => (r as { modifier_group_id?: string }).modifier_group_id)
-    .filter((x): x is string => typeof x === "string" && x.length > 0);
+function safeCategory(v: unknown): MenuCategory | null {
+  if (typeof v !== "string") return null;
+  return MENU_CATEGORIES.has(v as MenuCategory) ? (v as MenuCategory) : null;
+}
 
-  if (groupIds.length === 0) return groupMap;
+function safePricingHash(v: unknown): string {
+  const s = asString(v, "").trim();
+  if (!s) return "";
+  return s.length > 256 ? s.slice(0, 256) : s;
+}
 
-  const { data: groups, error: groupsErr } = await svc
-    .from("modifier_groups")
-    .select("id,required,min_selections,max_selections,active")
-    .in("id", groupIds);
+function cents(n: unknown): number {
+  const x = asNumber(n, 0);
+  if (!Number.isFinite(x) || x < 0) return 0;
+  return Math.round(x);
+}
 
-  if (groupsErr) {
-    log("warn", "modifier_groups_fetch_failed", { menuItemId, error: groupsErr.message });
-    return groupMap;
-  }
+function dollarsToCentsFromDb(price: unknown): number {
+  const d = asNumber(price, 0);
+  if (!Number.isFinite(d) || d < 0) return 0;
+  return Math.round(d * 100);
+}
 
-  for (const g of (groups ?? []) as ModifierGroupRow[]) groupMap.set(g.id, g);
-  return groupMap;
+function computeLineTotalCents(unitPriceCents: number, modifiers: CanonicalModifier[], qty: number): number {
+  const modifierSum = modifiers.reduce((s, m) => s + cents(m.price_adjustment), 0);
+  return (cents(unitPriceCents) + modifierSum) * clampInt(qty, 1, 20);
+}
+
+function computeTotals(items: CanonicalItem[], discountCents: number, creditCents: number, taxRate: number): Totals {
+  const subtotalCents = items.reduce((s, i) => s + cents(i.lineTotalCents), 0);
+
+  const discount = Math.max(0, Math.min(subtotalCents, cents(discountCents)));
+  const afterDiscount = Math.max(0, subtotalCents - discount);
+
+  const credit = Math.max(0, Math.min(afterDiscount, cents(creditCents)));
+  const taxable = Math.max(0, afterDiscount - credit);
+
+  const rate = Number.isFinite(taxRate) && taxRate >= 0 ? taxRate : 0;
+  const taxCents = Math.max(0, Math.round(taxable * rate));
+  const totalCents = taxable + taxCents;
+
+  return { subtotalCents, discountCents: discount, creditCents: credit, taxCents, totalCents };
+}
+
+function buildPricingHashV1(menuItemId: string, unitPriceCents: number, qty: number): string {
+  return `v1:preflight:${menuItemId}:${cents(unitPriceCents)}:${clampInt(qty, 1, 20)}`;
+}
+
+function uniq<T>(arr: T[]): T[] {
+  return Array.from(new Set(arr));
+}
+
+function parseFrontendTotals(v: unknown): FrontendTotals | null {
+  if (!isRecord(v)) return null;
+  const subtotalCents = cents(v.subtotalCents);
+  const discountCents = cents(v.discountCents);
+  const creditCents = cents(v.creditCents);
+  const taxCents = cents(v.taxCents);
+  const totalCents = cents(v.totalCents);
+  if (totalCents > 50_000_000) return null;
+  return { subtotalCents, discountCents, creditCents, taxCents, totalCents };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Item validation (server-authoritative)
+// Validation (request) — strict, supports promoId OR promoCode
 // ─────────────────────────────────────────────────────────────────────────────
-async function validateItems(
-  rawItems: RawItem[],
-): Promise<{ ok: false; reason: string } | { ok: true; items: ValidatedItem[]; subtotalCents: number }> {
-  const svc = createServiceClient();
 
-  if (!rawItems.length || rawItems.length > CONFIG.MAX_ITEMS) {
-    return { ok: false, reason: "Item count out of range" };
-  }
+function parseRequest(raw: unknown): CreateCheckoutRequest | null {
+  if (!isRecord(raw)) return null;
 
-  const itemIds = rawItems.map((i) => s(i.id, 100));
-  if (itemIds.some((id) => !id)) return { ok: false, reason: "Item missing id" };
+  const itemsRaw = raw.items;
+  if (!Array.isArray(itemsRaw) || itemsRaw.length === 0) return null;
 
-  const { data: products, error: prodErr } = await svc
-    .from("menu_items_admin_full")
-    .select("id,name,price,available")
-    .in("id", itemIds);
+  const orderType = asString(raw.orderType, "");
+  if (orderType !== "pickup" && orderType !== "delivery" && orderType !== "dine_in") return null;
 
-  if (prodErr) return { ok: false, reason: `Failed to load products: ${prodErr.message}` };
+  const promoId = safeId(raw.promoId) || null;
+  const promoCode = safePromoCode(raw.promoCode);
+  const creditId = safeId(raw.creditId) || null;
+  const frontendTotals = parseFrontendTotals(raw.frontendTotals);
 
-  const typedProducts = (products ?? []) as MenuProductRow[];
-  if (typedProducts.length !== itemIds.length) {
-    return { ok: false, reason: "One or more items not found" };
-  }
+  const items: IncomingCartItem[] = [];
 
-  const productMap = new Map<string, MenuProductRow>(typedProducts.map((p) => [p.id, p]));
+  for (const itUnknown of itemsRaw) {
+    if (!isRecord(itUnknown)) continue;
 
-  let subtotalCents = 0;
-  const items: ValidatedItem[] = [];
+    const menuItemId = safeId(itUnknown.menuItemId);
+    if (!menuItemId) continue;
 
-  for (const raw of rawItems) {
-    const itemId = s(raw.id, 100);
-    const product = productMap.get(itemId);
-    if (!product) return { ok: false, reason: `Product not found: ${itemId}` };
-    if (!product.available) return { ok: false, reason: `"${product.name}" is not available` };
+    const quantity = clampInt(itUnknown.quantity, 1, 20);
 
-    const qty = n(raw.quantity, 1, 100);
-    const notes = raw.notes != null ? s(raw.notes, 500) || null : null;
+    const modifiersRaw = itUnknown.modifiers;
+    const modifiers: IncomingCartModifier[] = Array.isArray(modifiersRaw)
+      ? modifiersRaw
+          .filter(isRecord)
+          .map((m) => ({
+            id: safeId(m.id),
+            groupId: asString(m.groupId, "").slice(0, 128),
+            name: asString(m.name, "").slice(0, 120),
+            priceAdjustment: asNumber(m.priceAdjustment, 0),
+          }))
+          .filter((m) => !!m.id)
+      : [];
 
-    const groupMap = await fetchModifierGroupsForItem(svc, itemId);
+    const category = safeCategory(itUnknown.category);
+    if (!category) continue; // fail-closed
 
-    const selectedRaw: RawModifierSelection[] = Array.isArray(raw.modifiers) ? raw.modifiers : [];
-    const modifierIds = selectedRaw.map((m) => s(m.id, 100)).filter(Boolean);
-
-    const dedupeCheck = new Set(modifierIds);
-    if (dedupeCheck.size !== modifierIds.length) {
-      return { ok: false, reason: "Duplicate modifier IDs in selection" };
-    }
-
-    const { data: modifierData, error: modErr } = modifierIds.length
-      ? await svc
-          .from("modifiers")
-          .select("id,modifier_group_id,name,price_adjustment,available")
-          .in("id", modifierIds)
-      : { data: [] as unknown[], error: null };
-
-    if (modErr) return { ok: false, reason: `Failed to load modifiers: ${modErr.message}` };
-
-    const modifiersList: ModifierRow[] = Array.isArray(modifierData) ? (modifierData as ModifierRow[]) : [];
-    const modifierDbMap = new Map<string, ModifierRow>(modifiersList.map((m) => [m.id, m]));
-
-    const groupSelectionCount = new Map<string, number>();
-    const validatedModifiers: ValidatedModifier[] = [];
-
-    const baseCents = Math.round(Number(product.price) * 100);
-    let modifierSumCents = 0;
-
-    for (const rawMod of selectedRaw) {
-      const modId = s(rawMod.id, 100);
-
-      if (!modId) return { ok: false, reason: `Modifier id missing (item ${itemId})` };
-
-      const mod = modifierDbMap.get(modId);
-      if (!mod) return { ok: false, reason: `Modifier not found: "${modId}" (item ${itemId})` };
-      if (!mod.available) return { ok: false, reason: `Modifier unavailable: ${mod.name}` };
-
-      const group = groupMap.get(mod.modifier_group_id);
-      if (!group) return { ok: false, reason: `Modifier "${mod.name}" does not belong to this item` };
-      if (!group.active) return { ok: false, reason: `Modifier group is inactive for "${mod.name}"` };
-
-      const currentCount = groupSelectionCount.get(mod.modifier_group_id) ?? 0;
-      const maxSelections = group.max_selections ?? Infinity;
-      if (currentCount + 1 > maxSelections) {
-        return { ok: false, reason: "Too many selections for modifier group" };
-      }
-
-      groupSelectionCount.set(mod.modifier_group_id, currentCount + 1);
-
-      const adjCents = Math.round(Number(mod.price_adjustment) * 100);
-      modifierSumCents += adjCents;
-
-      validatedModifiers.push({
-        modifier_id: mod.id,
-        modifier_group_id: mod.modifier_group_id,
-        name: mod.name,
-        price_adjustment_cents: adjCents,
-      });
-    }
-
-    // enforce group requirements
-    for (const [groupId, group] of groupMap.entries()) {
-      const selectedCount = groupSelectionCount.get(groupId) ?? 0;
-      const minSelections = group.min_selections ?? 0;
-
-      if (group.required && selectedCount === 0) {
-        return { ok: false, reason: "Required modifier group has no selection" };
-      }
-      if (selectedCount < minSelections) {
-        return { ok: false, reason: "Minimum selections not met for a modifier group" };
-      }
-    }
-
-    const unitPriceCents = baseCents + modifierSumCents;
-    const lineTotalCents = unitPriceCents * qty;
-    subtotalCents += lineTotalCents;
-
-    const pricingHash = await computePricingHash(
-      itemId,
-      baseCents,
-      validatedModifiers.map((m) => ({ modifier_id: m.modifier_id, price_adjustment_cents: m.price_adjustment_cents })),
-      qty,
-    );
+    const pricingHash = safePricingHash(itUnknown.pricingHash);
+    if (!pricingHash) continue; // fail-closed
 
     items.push({
-      id: itemId,
-      name: product.name,
-      base_cents: baseCents,
-      price_cents: unitPriceCents,
-      quantity: qty,
-      modifiers: validatedModifiers,
-      notes,
-      pricing_hash: pricingHash,
+      menuItemId,
+      name: asString(itUnknown.name, "").slice(0, 120),
+      unitPriceCents: asNumber(itUnknown.unitPriceCents, 0),
+      imageUrl: safeImageUrl(itUnknown.imageUrl),
+      category,
+      modifiers,
+      quantity,
+      notes: safeNotes(itUnknown.notes),
+      pricingHash,
     });
   }
 
-  if (subtotalCents < CONFIG.MIN_AMOUNT_CENTS || subtotalCents > CONFIG.MAX_AMOUNT_CENTS) {
-    return { ok: false, reason: "Order total out of allowed range" };
-  }
+  if (items.length === 0) return null;
 
-  return { ok: true, items, subtotalCents };
+  return {
+    items,
+    promoId,
+    promoCode,
+    creditId,
+    orderType,
+    notes: safeNotes(raw.notes),
+    idempotencyKey: asNullableString(raw.idempotencyKey),
+    frontendTotals,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Discount module A: Promo codes
+// Server truth rebuild (menu_items + modifiers)
 // ─────────────────────────────────────────────────────────────────────────────
-async function applyPromoCode(code: string, userId: string, subtotalCents: number): Promise<DiscountResult> {
-  const svc = createServiceClient();
-  const now = new Date();
-  const upper = code.toUpperCase().trim();
 
-  const { data: promo, error: promoErr } = await svc
+async function fetchMenuItems(db: DbClient, ids: string[]) {
+  const { data, error } = await db
+    .from("menu_items")
+    .select("id, name, category, image_url, available, price, inventory_count, low_stock_threshold")
+    .in("id", ids);
+
+  if (error) throw new Error(error.message);
+
+  const map = new Map<string, NonNullable<typeof data>[number]>();
+  for (const row of data ?? []) map.set(row.id, row);
+  return map;
+}
+
+async function fetchModifiers(db: DbClient, modifierIds: string[]) {
+  if (modifierIds.length === 0) return new Map<string, CanonicalModifier>();
+
+  const { data, error } = await db
+    .from("modifiers")
+    .select("id, modifier_group_id, name, price_adjustment, available")
+    .in("id", modifierIds);
+
+  if (error) throw new Error(error.message);
+
+  const map = new Map<string, CanonicalModifier>();
+  for (const m of data ?? []) {
+    if (m.available !== true) continue;
+    map.set(m.id, {
+      id: m.id,
+      modifier_group_id: m.modifier_group_id,
+      name: m.name,
+      price_adjustment: m.price_adjustment ?? 0,
+    });
+  }
+  return map;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fraud logging (best-effort, never breaks checkout)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function toFraudMetadataInsert(
+  metadata: FraudMetadata,
+): Db["public"]["Tables"]["fraud_logs"]["Insert"]["metadata"] {
+  return metadata as unknown as Db["public"]["Tables"]["fraud_logs"]["Insert"]["metadata"];
+}
+
+async function logFraud(
+  db: DbClient,
+  userId: string,
+  reason: string,
+  metadata: FraudMetadata,
+  frontendTotal?: number,
+  serverTotal?: number,
+) {
+  try {
+    const insertRow: Db["public"]["Tables"]["fraud_logs"]["Insert"] = {
+      user_id: userId,
+      reason,
+      metadata: toFraudMetadataInsert(metadata),
+      frontend_total: typeof frontendTotal === "number" && Number.isFinite(frontendTotal) ? frontendTotal : null,
+      server_total: typeof serverTotal === "number" && Number.isFinite(serverTotal) ? serverTotal : null,
+      stripe_total: typeof serverTotal === "number" && Number.isFinite(serverTotal) ? serverTotal : 0,
+    };
+
+    await db.from("fraud_logs").insert(insertRow);
+  } catch {
+    // ignore
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Promo resolution (id vs code)
+// ─────────────────────────────────────────────────────────────────────────────
+
+type PromoResolution =
+  | { mode: "id"; value: string }
+  | { mode: "code"; value: string }
+  | { mode: "none"; value: "" };
+
+function resolvePromo(promoId: string | null, promoCode: string | null): PromoResolution {
+  const id = (promoId ?? "").trim();
+  if (id) return { mode: "id", value: id };
+
+  const code = (promoCode ?? "").trim().toUpperCase();
+  if (code) return { mode: "code", value: code };
+
+  return { mode: "none", value: "" };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Promo validation (supports promoId OR promoCode)
+// ─────────────────────────────────────────────────────────────────────────────
+
+type PromoValidationResult = { promoId: string | null; discountCents: number };
+
+async function validatePromo(
+  db: DbClient,
+  promoId: string | null,
+  promoCode: string | null,
+  subtotalCents: number,
+): Promise<PromoValidationResult> {
+  const resolved = resolvePromo(promoId, promoCode);
+  if (resolved.mode === "none") return { promoId: null, discountCents: 0 };
+
+  const subtotal = Math.max(0, Math.round(subtotalCents));
+
+  const q = db
     .from("promotions")
-    .select("id,type,value,max_uses,current_uses,per_user_limit,min_order_cents,expires_at,ends_at,active,starts_at,code")
-    .ilike("code", upper)
-    .single();
+    .select("id, code, active, type, value, min_order_cents, starts_at, ends_at, expires_at, max_uses, current_uses");
 
-  if (promoErr || !promo) throw new Error("Promo code not found");
-  if (!promo.active) throw new Error("Promo code is inactive");
-  if (promo.starts_at && new Date(promo.starts_at) > now) throw new Error("Promo code is not yet active");
+  const { data, error } =
+    resolved.mode === "id"
+      ? await q.eq("id", resolved.value).maybeSingle()
+      : await q.ilike("code", resolved.value).maybeSingle();
 
-  const expiry = promo.expires_at ?? promo.ends_at ?? null;
-  if (expiry && new Date(expiry) < now) throw new Error("Promo code has expired");
-  if (subtotalCents < promo.min_order_cents) {
-    throw new Error(`Promo requires a minimum order of $${(promo.min_order_cents / 100).toFixed(2)}`);
+  if (error || !data) return { promoId: null, discountCents: 0 };
+
+  const now = Date.now();
+  const startsAt = data.starts_at ? new Date(data.starts_at).getTime() : null;
+  const expiresAt = data.expires_at ? new Date(data.expires_at).getTime() : null;
+  const endsAt = data.ends_at ? new Date(data.ends_at).getTime() : null;
+  const exp = expiresAt ?? endsAt;
+
+  if (data.active !== true) return { promoId: null, discountCents: 0 };
+  if (startsAt !== null && Number.isFinite(startsAt) && startsAt > now) return { promoId: null, discountCents: 0 };
+  if (exp !== null && Number.isFinite(exp) && exp < now) return { promoId: null, discountCents: 0 };
+
+  const minOrder = Math.max(0, Math.round(data.min_order_cents ?? 0));
+  if (subtotal < minOrder) return { promoId: null, discountCents: 0 };
+
+  if (
+    data.max_uses != null &&
+    data.current_uses != null &&
+    Number.isFinite(data.max_uses) &&
+    Number.isFinite(data.current_uses) &&
+    data.current_uses >= data.max_uses
+  ) {
+    return { promoId: null, discountCents: 0 };
   }
 
-  const { count: userUseCount } = await svc
-    .from("promo_redemptions")
-    .select("id", { count: "exact", head: true })
-    .eq("promotion_id", promo.id)
-    .eq("user_id", userId);
-
-  if (promo.per_user_limit != null && (userUseCount ?? 0) >= promo.per_user_limit) {
-    throw new Error("You have already used this promo code");
-  }
-
-  const { data: incrementResult, error: incErr } = await svc.rpc("increment_promo_usage_if_available", {
-    p_promo_id: promo.id,
-  });
-
-  if (incErr) throw new Error("Failed to reserve promo code");
-  if (!incrementResult) throw new Error("Promo code has reached its usage limit");
+  const type = asString(data.type, "");
+  const value = asNumber(data.value, 0);
 
   let discountCents = 0;
-  if (promo.type === "percent") discountCents = Math.round(subtotalCents * (promo.value / 100));
-  else discountCents = Math.min(Math.round(promo.value * 100), subtotalCents);
 
-  log("info", "promo_applied", { promoId: promo.id, code: upper, userId, discountCents });
+  if (type === "percent") {
+    const pct = Math.max(0, Math.min(100, value));
+    discountCents = Math.round(subtotal * (pct / 100));
+  } else if (type === "fixed") {
+    discountCents = Math.round(Math.max(0, value));
+  }
 
-  return {
-    discount_cents: discountCents,
-    promo_id: promo.id,
-    promo_code: upper,
-    promo_applied: discountCents,
-  };
-}
-
-async function rollbackPromo(promoId: string) {
-  const svc = createServiceClient();
-  await svc.rpc("promotions_decrement_uses", { p_promo_id: promoId });
+  discountCents = Math.max(0, Math.min(subtotal, discountCents));
+  return { promoId: data.id, discountCents };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Discount module B: Credits
+// Credit validation (user-bound, expiry, used flag)
 // ─────────────────────────────────────────────────────────────────────────────
-async function applyUserCredit(creditId: string, userId: string, remainingTotal: number): Promise<DiscountResult> {
-  const svc = createServiceClient();
-  const now = new Date();
 
-  const { data: credit, error: creditErr } = await svc
-    .from("user_credits")
-    .select("id,user_id,amount_cents,used,expires_at")
-    .eq("id", creditId)
-    .single();
+type CreditValidationResult = { creditId: string | null; creditCents: number };
 
-  if (creditErr || !credit) throw new Error("Credit not found");
-  if (credit.user_id !== userId) throw new Error("Credit does not belong to this user");
-  if (credit.used) throw new Error("Credit has already been used");
-  if (credit.expires_at && new Date(credit.expires_at) < now) throw new Error("Credit has expired");
-
-  const appliedCents = Math.min(credit.amount_cents, remainingTotal);
-  if (appliedCents <= 0) throw new Error("Credit cannot be applied to this order");
-
-  const { data: consumed, error: consumeErr } = await svc
-    .from("user_credits")
-    .update({ used: true, used_at: now.toISOString() })
-    .eq("id", creditId)
-    .eq("used", false)
-    .select("id")
-    .single();
-
-  if (consumeErr || !consumed) throw new Error("Credit already consumed (concurrent request)");
-
-  log("info", "credit_applied", { creditId, userId, appliedCents });
-
-  return {
-    discount_cents: appliedCents,
-    credit_id: creditId,
-    credit_applied: appliedCents,
-  };
-}
-
-async function rollbackCredit(creditId: string) {
-  const svc = createServiceClient();
-  await svc
-    .from("user_credits")
-    .update({ used: false, used_at: null, checkout_session_id: null })
-    .eq("id", creditId);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Discount module C: anti-stack ceiling
-// ─────────────────────────────────────────────────────────────────────────────
-function enforceDiscountCeiling(
-  subtotalCents: number,
-  promoCents: number,
-  creditCents: number,
-): { final_promo: number; final_credit: number; total_discount: number } {
-  const maxDiscount = Math.floor(subtotalCents * CONFIG.MAX_DISCOUNT_FRACTION);
-  const clampedPromo = Math.min(promoCents, maxDiscount);
-  const remainingBudget = Math.max(0, maxDiscount - clampedPromo);
-  const clampedCredit = Math.min(creditCents, remainingBudget);
-
-  return {
-    final_promo: clampedPromo,
-    final_credit: clampedCredit,
-    total_discount: clampedPromo + clampedCredit,
-  };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Stripe coupon helper
-// ─────────────────────────────────────────────────────────────────────────────
-async function createStripeCoupon(discountCents: number, label: string): Promise<string> {
-  const coupon = await stripe.coupons.create({
-    name: label.slice(0, 40),
-    amount_off: discountCents,
-    currency: "usd",
-    duration: "once",
-    redeem_by: Math.floor(Date.now() / 1000) + CONFIG.SESSION_EXPIRES_MINUTES * 60,
-    metadata: { generated_by: "create-checkout", label },
-  });
-  return coupon.id;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// DB idempotency helpers
-// ─────────────────────────────────────────────────────────────────────────────
-async function findExistingCart(
-  svc: SvcClient,
+async function validateCredit(
+  db: DbClient,
   userId: string,
-  idempotencyKey: string,
-): Promise<{ stripe_session_id: string | null } | null> {
-  const { data, error } = await svc
-    .from("pending_carts")
-    .select("stripe_session_id")
-    .eq("user_id", userId)
-    .eq("idempotency_key", idempotencyKey)
+  creditId: string | null,
+  maxApplicableCents: number,
+): Promise<CreditValidationResult> {
+  const id = (creditId ?? "").trim();
+  if (!id) return { creditId: null, creditCents: 0 };
+
+  const maxApplicable = Math.max(0, Math.round(maxApplicableCents));
+
+  const { data, error } = await db
+    .from("user_credits")
+    .select("id, user_id, amount_cents, used, expires_at")
+    .eq("id", id)
     .maybeSingle();
 
-  if (error) {
-    log("warn", "findExistingCart_error", { userId, idempotencyKey, error: error.message });
-    return null;
+  if (error || !data) return { creditId: null, creditCents: 0 };
+  if (data.user_id !== userId) return { creditId: null, creditCents: 0 };
+  if (data.used === true) return { creditId: null, creditCents: 0 };
+
+  if (data.expires_at) {
+    const exp = new Date(data.expires_at).getTime();
+    if (Number.isFinite(exp) && exp < Date.now()) return { creditId: null, creditCents: 0 };
   }
 
-  if (!data) return null;
-  return { stripe_session_id: data.stripe_session_id ?? null };
+  const amt = Math.max(0, Math.round(data.amount_cents ?? 0));
+  const creditCents = Math.max(0, Math.min(maxApplicable, amt));
+
+  return { creditId: data.id, creditCents };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MAIN
+// Canonical cart build (server-truth, pricingHash enforcement + mismatch log)
 // ─────────────────────────────────────────────────────────────────────────────
-Deno.serve(async (req): Promise<Response> => {
-  const cors = getCorsHeaders(req);
-  if (!cors) return new Response("Origin not allowed", { status: 403 });
 
-  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
-  if (req.method !== "POST") return err(cors, "Method not allowed", 405);
+async function buildCanonicalCart(db: DbClient, userId: string, incoming: IncomingCartItem[]): Promise<CanonicalItem[]> {
+  const menuIds = uniq(incoming.map((i) => i.menuItemId));
+  const menuMap = await fetchMenuItems(db, menuIds);
 
-  // Auth (shared)
-  const auth = await authenticate(req);
-  if (!auth.ok) return err(cors, "Unauthorized", 401);
-  const userId = auth.userId;
+  const modifierIds = uniq(incoming.flatMap((i) => i.modifiers.map((m) => m.id)));
+  const modifierMap = await fetchModifiers(db, modifierIds);
 
-  // Idempotency required
-  const idempotencyKey = (req.headers.get("x-idempotency-key") ?? "").trim();
-  if (!idempotencyKey) return err(cors, "x-idempotency-key header is required", 400);
+  const canonical: CanonicalItem[] = [];
 
-  // Rate limit
-  const rate = await checkRateLimit(userId);
-  if (rate.blocked) return err(cors, "Too many attempts. Please wait.", 429);
+  for (const line of incoming) {
+    const row = menuMap.get(line.menuItemId);
 
-  const svc = createServiceClient();
-
-  // If same key already created a session, return it if still open
-  const existing = await findExistingCart(svc, userId, idempotencyKey);
-  if (existing?.stripe_session_id) {
-    log("info", "idempotent_replay", { userId, idempotencyKey });
-    try {
-      const session = await stripe.checkout.sessions.retrieve(existing.stripe_session_id);
-      if (session.url && session.status === "open") {
-        return json({ id: session.id, url: session.url, replayed: true }, cors);
-      }
-    } catch {
-      log("warn", "idempotent_session_expired", { sessionId: existing.stripe_session_id });
-    }
-  }
-
-  // Body
-  let body: RawBody;
-  try {
-    body = await req.json();
-  } catch {
-    return err(cors, "Invalid JSON", 400);
-  }
-
-  if (!body?.items?.length) return err(cors, "Cart is empty", 400);
-
-  // Redirect URL compatibility
-  const success_url = body.success_url ?? body.successUrl;
-  const cancel_url = body.cancel_url ?? body.cancelUrl;
-
-  if (!success_url || !cancel_url) return err(cors, "Missing success/cancel URL", 400);
-
-  // Validate items (server authority)
-  const validation = await validateItems(body.items);
-  if (!validation.ok) return err(cors, validation.reason, 422);
-
-  const { items, subtotalCents } = validation;
-
-  // Origin validation (derived from success_url)
-  let requestedOrigin: string;
-  try {
-    requestedOrigin = new URL(s(success_url, 500)).origin;
-  } catch {
-    return err(cors, "Invalid redirect URL", 400);
-  }
-
-  if (!ALLOWED_ORIGINS.includes(requestedOrigin as (typeof ALLOWED_ORIGINS)[number])) {
-    return err(cors, "Invalid redirect origin", 400);
-  }
-
-  // Email
-  const customerEmail = s(body.email, 320).toLowerCase();
-  if (!customerEmail.includes("@") || customerEmail.length < 5) {
-    return err(cors, "Invalid email address", 400);
-  }
-
-  // Frontend fraud signal (optional)
-  if (typeof body.frontend_total === "number") {
-    const frontendCents = Math.round(body.frontend_total * 100);
-    const serverEstimate = subtotalCents + Math.round(subtotalCents * CONFIG.TAX_RATE);
-    if (Math.abs(frontendCents - serverEstimate) > 10) {
-      log("warn", "frontend_total_mismatch", { frontendCents, serverEstimate, userId });
-    }
-  }
-
-  // Discounts
-  let promoResult: DiscountResult | null = null;
-  let creditResult: DiscountResult | null = null;
-  let promoDiscountCents = 0;
-  let creditDiscountCents = 0;
-
-  const rawPromoCode = s(body.promo_code, 50);
-  if (rawPromoCode) {
-    try {
-      promoResult = await applyPromoCode(rawPromoCode, userId, subtotalCents);
-      promoDiscountCents = promoResult.discount_cents;
-    } catch (e) {
-      return err(cors, e instanceof Error ? e.message : "Promo code invalid", 422);
-    }
-  }
-
-  const rawCreditId = s(body.credit_id, 100);
-  if (rawCreditId) {
-    const remainingAfterPromo = Math.max(0, subtotalCents - promoDiscountCents);
-    try {
-      creditResult = await applyUserCredit(rawCreditId, userId, remainingAfterPromo);
-      creditDiscountCents = creditResult.discount_cents;
-    } catch (e) {
-      if (promoResult?.promo_id) await rollbackPromo(promoResult.promo_id);
-      return err(cors, e instanceof Error ? e.message : "Credit invalid", 422);
-    }
-  }
-
-  const { final_promo, final_credit, total_discount } = enforceDiscountCeiling(
-    subtotalCents,
-    promoDiscountCents,
-    creditDiscountCents,
-  );
-
-  if (promoResult) promoResult.promo_applied = final_promo;
-  if (creditResult) creditResult.credit_applied = final_credit;
-
-  const discountedSubtotal = Math.max(0, subtotalCents - total_discount);
-  const finalTaxCents = Math.round(discountedSubtotal * CONFIG.TAX_RATE);
-  const grandTotalCents = discountedSubtotal + finalTaxCents;
-
-  if (grandTotalCents <= 0) {
-    if (promoResult?.promo_id) await rollbackPromo(promoResult.promo_id);
-    if (creditResult?.credit_id) await rollbackCredit(creditResult.credit_id);
-    return err(cors, "Order total must be greater than $0 after discounts", 400);
-  }
-
-  // Margin protection only when discounts applied
-  if (total_discount > 0) {
-    const { data: profitSnapshot, error: marginErr } = await svc
-      .from("admin_profit_snapshot")
-      .select("total_gross_profit_cents")
-      .single();
-
-    if (marginErr || !profitSnapshot) {
-      if (promoResult?.promo_id) await rollbackPromo(promoResult.promo_id);
-      if (creditResult?.credit_id) await rollbackCredit(creditResult.credit_id);
-      return err(cors, "Margin snapshot unavailable", 500);
+    if (!row) {
+      await logFraud(db, userId, "menu_item_not_found", { kind: "menu_item_not_found", menuItemId: line.menuItemId });
+      continue;
     }
 
-    const gross = Number(profitSnapshot.total_gross_profit_cents ?? 0);
+    const available = Boolean(row.available);
+    const stockCount =
+      row.inventory_count === null || row.inventory_count === undefined
+        ? null
+        : clampInt(row.inventory_count, 0, 1_000_000);
 
-    if (!Number.isFinite(gross) || gross <= 0) {
-      log("warn", "margin_snapshot_invalid_failopen", { gross, userId });
-    } else {
-      const projectedMargin = ((gross - total_discount) / Math.max(discountedSubtotal, 1)) * 100;
-      if (projectedMargin < CONFIG.SAFE_MARGIN_PERCENT) {
-        if (promoResult?.promo_id) await rollbackPromo(promoResult.promo_id);
-        if (creditResult?.credit_id) await rollbackCredit(creditResult.credit_id);
-        log("warn", "margin_threshold_blocked", { projectedMargin, userId });
-        return err(cors, "Discount exceeds safe margin threshold", 400);
-      }
+    const effectiveAvailable = available && (stockCount == null ? true : stockCount > 0);
+    if (!effectiveAvailable) throw new Error(`Item unavailable: ${row.name}`);
+
+    const qtyHard = clampInt(line.quantity, 1, 20);
+    const qty = stockCount == null ? qtyHard : Math.max(1, Math.min(qtyHard, stockCount));
+
+    const unitPriceCents = dollarsToCentsFromDb(row.price);
+
+    const canonicalMods: CanonicalModifier[] = [];
+    for (const m of line.modifiers) {
+      const cm = modifierMap.get(m.id);
+      if (!cm) continue;
+      canonicalMods.push(cm);
     }
-  }
 
-  // Persist pending cart
-  const cartRef = crypto.randomUUID();
-  const cartPricingHash = items.map((i) => i.pricing_hash).join("|");
-  const itemsJson: Json = items as unknown as Json;
+    const lineTotalCents = computeLineTotalCents(unitPriceCents, canonicalMods, qty);
 
-  const { error: cartErr } = await svc.from("pending_carts").insert({
-    id: cartRef,
-    user_id: userId,
-    idempotency_key: idempotencyKey,
-    items: itemsJson,
-    subtotal_cents: subtotalCents,
-    discount_cents: total_discount,
-    tax_cents: finalTaxCents,
-    total_cents: grandTotalCents,
-    promo_id: promoResult?.promo_id ?? null,
-    credit_id: creditResult?.credit_id ?? null,
-    created_at: new Date().toISOString(),
-  });
+    const serverPricingHash = buildPricingHashV1(row.id, unitPriceCents, qty);
 
-  if (cartErr) {
-    if (promoResult?.promo_id) await rollbackPromo(promoResult.promo_id);
-    if (creditResult?.credit_id) await rollbackCredit(creditResult.credit_id);
-    log("error", "pending_cart_insert_failed", { message: cartErr.message });
-    return err(cors, "Failed to create pending cart", 500);
-  }
+    const clientHash = safePricingHash(line.pricingHash);
+    if (clientHash && clientHash !== serverPricingHash) {
+      await logFraud(db, userId, "pricing_hash_mismatch", {
+        kind: "pricing_hash_mismatch",
+        menuItemId: row.id,
+        clientHash,
+        serverHash: serverPricingHash,
+        clientUnitPriceCents:
+          typeof line.unitPriceCents === "number" && Number.isFinite(line.unitPriceCents)
+            ? Math.round(line.unitPriceCents)
+            : null,
+        serverUnitPriceCents: unitPriceCents,
+        clientQty: clampInt(line.quantity, 1, 20),
+        serverQty: qty,
+      });
+    }
 
-  // Create Stripe Session
-  try {
-    const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
-      ...items.map((i) => ({
-        price_data: {
-          currency: "usd",
-          product_data: {
-            name: i.name,
-            metadata: {
-              menu_item_id: i.id,
-              pricing_hash: i.pricing_hash,
-              modifier_count: String(i.modifiers.length),
-            },
-          },
-          unit_amount: i.price_cents,
-        },
-        quantity: i.quantity,
+    canonical.push({
+      menuItemId: row.id,
+      name: row.name,
+      imageUrl: row.image_url ?? null,
+      category: row.category,
+      quantity: qty,
+      notes: safeNotes(line.notes),
+
+      unitPriceCents,
+      modifiers: canonicalMods.map((m) => ({
+        id: m.id,
+        groupId: m.modifier_group_id,
+        name: m.name,
+        priceAdjustment: cents(m.price_adjustment),
       })),
-      {
-        price_data: {
-          currency: "usd",
-          product_data: { name: `Tax (${(CONFIG.TAX_RATE * 100).toFixed(0)}%)` },
-          unit_amount: finalTaxCents,
-        },
-        quantity: 1,
-      },
-    ];
 
+      lineTotalCents,
+      pricingHash: serverPricingHash,
+    });
+  }
+
+  if (canonical.length === 0) throw new Error("Cart is empty after server validation.");
+  return canonical;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stripe mapping
+// ─────────────────────────────────────────────────────────────────────────────
+
+function stripeLineItemsFromCart(items: CanonicalItem[]): Stripe.Checkout.SessionCreateParams.LineItem[] {
+  return items.map((i) => {
+    const modSum = i.modifiers.reduce((s, m) => s + cents(m.priceAdjustment), 0);
+    const unit = Math.max(0, cents(i.unitPriceCents) + modSum);
+
+    const modNames = i.modifiers
+      .map((m) => m.name)
+      .filter((x) => typeof x === "string" && x.trim().length > 0);
+
+    const desc = modNames.length ? `Modifiers: ${modNames.join(", ")}` : undefined;
+
+    return {
+      quantity: i.quantity,
+      price_data: {
+        currency: "usd",
+        unit_amount: unit,
+        product_data: {
+          name: i.name,
+          description: desc,
+          ...(i.imageUrl ? { images: [i.imageUrl] } : {}),
+          metadata: {
+            menu_item_id: i.menuItemId,
+            pricing_hash: i.pricingHash,
+          },
+        },
+      },
+    };
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main handler
+// ─────────────────────────────────────────────────────────────────────────────
+
+Deno.serve(async (req: Request) => {
+  const requestId = makeRequestId();
+  const origin = req.headers.get("origin");
+  const cors = corsHeadersFor(origin);
+
+  // ✅ fail closed for non-OPTIONS requests
+  if (req.method !== "OPTIONS") {
+    const o = origin ?? "";
+    if (!ALLOWED_ORIGINS.has(o)) {
+      return new Response("Origin not allowed", { status: 403 });
+    }
+  }
+
+  if (req.method === "OPTIONS") return new Response("ok", { status: 200, headers: cors });
+
+  if (req.method !== "POST") {
+    return json(
+      { ok: false, error: "Method not allowed", code: "METHOD_NOT_ALLOWED", requestId } satisfies CreateCheckoutResponse,
+      { status: 405 },
+      cors,
+    );
+  }
+
+  const jwt = readBearerToken(req);
+  if (!jwt) {
+    return json(
+      { ok: false, error: "Unauthorized", code: "UNAUTHORIZED", requestId } satisfies CreateCheckoutResponse,
+      { status: 401 },
+      cors,
+    );
+  }
+
+  // Require x-application-name for basic abuse resistance and client identification
+  const appHeader = (req.headers.get("x-application-name") ?? "").trim();
+  if (!appHeader) {
+    return json(
+      { ok: false, error: "Missing x-application-name", code: "MISSING_APP_HEADER", requestId } satisfies CreateCheckoutResponse,
+      { status: 400 },
+      cors,
+    );
+  }
+
+  let body: CreateCheckoutRequest | null = null;
+  try {
+    const raw = await req.json().catch(() => null);
+    body = parseRequest(raw);
+    if (!body) {
+      return json(
+        { ok: false, error: "Invalid request payload", code: "BAD_REQUEST", requestId } satisfies CreateCheckoutResponse,
+        { status: 400 },
+        cors,
+      );
+    }
+  } catch {
+    return json(
+      { ok: false, error: "Invalid JSON", code: "BAD_JSON", requestId } satisfies CreateCheckoutResponse,
+      { status: 400 },
+      cors,
+    );
+  }
+
+  // ✅ 1) Auth client (RLS) ONLY to validate who the caller is
+  const auth = createAnonClient(jwt);
+  const { data: authData, error: authErr } = await auth.auth.getUser();
+  const user = authData?.user ?? null;
+
+  if (authErr || !user) {
+    return json(
+      { ok: false, error: "Unauthorized", code: "UNAUTHORIZED", requestId } satisfies CreateCheckoutResponse,
+      { status: 401 },
+      cors,
+    );
+  }
+
+  const userId = user.id;
+
+  // ✅ 2) Service client for server-truth DB work (bypasses RLS)
+  const db = createServiceClient();
+
+  const idem =
+    (body.idempotencyKey && body.idempotencyKey.trim()) ||
+    req.headers.get("x-idempotency-key")?.trim() ||
+    `auto:${crypto.randomUUID()}`;
+
+  try {
+    // 1) Canonical cart
+    const canonicalItems = await buildCanonicalCart(db, userId, body.items);
+
+    // 2) Promo + credit (promoId OR promoCode)
+    const subtotalCents = canonicalItems.reduce((s, i) => s + cents(i.lineTotalCents), 0);
+    const promo = await validatePromo(db, body.promoId, body.promoCode, subtotalCents);
+
+    const afterDiscount = Math.max(0, subtotalCents - promo.discountCents);
+    const credit = await validateCredit(db, userId, body.creditId, afterDiscount);
+
+    const totals = computeTotals(canonicalItems, promo.discountCents, credit.creditCents, TAX_RATE);
+
+    // Option A anti-tamper mismatch log
+    if (body.frontendTotals && body.frontendTotals.totalCents > 0) {
+      const diff = Math.abs(body.frontendTotals.totalCents - totals.totalCents);
+      if (diff >= 50) {
+        await logFraud(
+          db,
+          userId,
+          "totals_mismatch",
+          {
+            kind: "totals_mismatch",
+            frontendTotals: body.frontendTotals,
+            serverTotals: totals,
+          },
+          body.frontendTotals.totalCents,
+          totals.totalCents,
+        );
+      }
+    }
+
+    // 3) Stripe session
+    const lineItems = stripeLineItemsFromCart(canonicalItems);
+
+    // ✅ UPGRADE: generate cart id BEFORE Stripe (stable internal ref)
+    const pendingCartId = crypto.randomUUID();
+
+    // ✅ UPGRADE: include BOTH keys so finalize-order can support old + new conventions
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
       mode: "payment",
+      success_url: CHECKOUT_SUCCESS_URL,
+      cancel_url: CHECKOUT_CANCEL_URL,
+      payment_method_types: ["card"],
       line_items: lineItems,
-      success_url: `${requestedOrigin}/order-success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: String(cancel_url),
-      customer_email: customerEmail,
-      expires_at: Math.floor(Date.now() / 1000) + CONFIG.SESSION_EXPIRES_MINUTES * 60,
       metadata: {
-        customer_uid: userId,
-        cart_ref: cartRef,
-        server_total: String(grandTotalCents),
-        subtotal_cents: String(subtotalCents),
-        discount_cents: String(total_discount),
-        promo_code: promoResult?.promo_code ?? "",
-        promo_id: promoResult?.promo_id ?? "",
-        credit_id: creditResult?.credit_id ?? "",
-        credit_applied: String(final_credit),
-        pricing_hash: cartPricingHash,
-        hash_version: HASH_VERSION,
-        idempotency_key: idempotencyKey,
-        request_id: crypto.randomUUID(),
+        app: APP_NAME,
+
+        // ✅ ownership + cart lookup
+        user_id: userId,
+        cart_ref: pendingCartId,
+        pending_cart_id: pendingCartId,
+
+        // business fields
+        order_type: body.orderType,
+        promo_id: promo.promoId ?? "",
+        promo_code: body.promoCode ?? "",
+        credit_id: credit.creditId ?? "",
+        subtotal_cents: String(totals.subtotalCents),
+        discount_cents: String(totals.discountCents),
+        credit_cents: String(totals.creditCents),
+        tax_cents: String(totals.taxCents),
+        total_cents: String(totals.totalCents),
+        idempotency_key: idem,
       },
     };
 
-    if (total_discount > 0) {
-      const couponLabel = promoResult ? `Discount (${promoResult.promo_code})` : "Credit Applied";
-      const couponId = await createStripeCoupon(total_discount, couponLabel);
-      sessionParams.discounts = [{ coupon: couponId }];
-    }
+    const session = await stripe.checkout.sessions.create(sessionParams, { idempotencyKey: idem });
 
-    const session = await stripe.checkout.sessions.create(sessionParams, { idempotencyKey });
-
-    await svc.from("pending_carts").update({ stripe_session_id: session.id }).eq("id", cartRef);
-
-    if (promoResult?.promo_id) {
-      await svc.from("promo_redemptions").insert({
-        promotion_id: promoResult.promo_id,
+    // 4) Persist pending cart (best-effort)
+    const { error: upsertErr } = await db.from("pending_carts").upsert(
+      {
+        id: pendingCartId, // ✅ internal cart id
         user_id: userId,
-        discount_cents: final_promo,
-        checkout_session_id: session.id,
-      });
+        idempotency_key: idem,
+        items: canonicalItems as unknown as Json,
+        promo_id: promo.promoId,
+        credit_id: credit.creditId,
+        subtotal_cents: totals.subtotalCents,
+        discount_cents: totals.discountCents,
+        tax_cents: totals.taxCents,
+        total_cents: totals.totalCents,
+        stripe_session_id: session.id, // ✅ Stripe id stored separately
+        expires_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+        created_at: new Date().toISOString(),
+      },
+      { onConflict: "id" },
+    );
+
+    if (upsertErr) {
+      await logFraud(
+        db,
+        userId,
+        "pending_cart_upsert_failed",
+        {
+          kind: "pending_cart_upsert_failed",
+          message: upsertErr.message,
+          session_id: session.id,
+        },
+        body.frontendTotals?.totalCents ?? undefined,
+        totals.totalCents,
+      );
     }
 
-    if (creditResult?.credit_id) {
-      await svc.from("user_credits").update({ checkout_session_id: session.id }).eq("id", creditResult.credit_id);
-    }
+    const res: CreateCheckoutResponse = {
+      ok: true,
+      session_id: session.id,
+      url: session.url ?? null,
+      totals,
+      pending_cart_id: pendingCartId, // ✅ internal id returned to client
+    };
 
-    log("info", "checkout_session_created", {
-      sessionId: session.id,
-      userId,
-      grandTotalCents,
-      pricingHash: cartPricingHash,
-    });
-
-    return json({ id: session.id, url: session.url }, cors);
+    return json(res, { status: 200 }, cors);
   } catch (e) {
-    if (promoResult?.promo_id) await rollbackPromo(promoResult.promo_id);
-    if (creditResult?.credit_id) await rollbackCredit(creditResult.credit_id);
+    const msg = e instanceof Error ? e.message : "Checkout failed";
 
-    await svc.from("pending_carts").delete().eq("id", cartRef);
+    // best-effort fraud log
+    await logFraud(
+      db,
+      userId,
+      "checkout_failed",
+      { kind: "checkout_failed", message: msg },
+      body.frontendTotals?.totalCents ?? undefined,
+      undefined,
+    );
 
-    log("error", "stripe_error", { message: e instanceof Error ? e.message : String(e) });
-    return err(cors, "Payment service unavailable. Please try again.", 500);
+    return json(
+      { ok: false, error: msg, code: "CHECKOUT_FAILED", requestId } satisfies CreateCheckoutResponse,
+      { status: 400 },
+      cors,
+    );
   }
 });

@@ -1,93 +1,219 @@
 // supabase/functions/_shared/auth.ts
 // =============================================================================
-// Shared Auth — Production Hardened (2026)
-// - Extracts Bearer token safely
-// - Validates JWT via Supabase Auth (anon client)
-// - Provides admin gate using service role client
-// - Normalizes failure reasons for logs / responses
+// AUTH — Shared helpers for Supabase Edge Functions (Production Hardened, 2026)
+// =============================================================================
+// Exports (stable API):
+//   - AuthError
+//   - serviceClient()
+//   - anonClient(jwt)
+//   - requireAuth(req)          // throws AuthError
+//   - authenticate(req)         // alias for requireAuth (keeps old imports working)
+//   - authenticateAdmin(req)    // returns ok/result (no throw)
+//   - requireAdmin(req)         // throws AuthError
+//
+// Auth source of truth:
+//   - Caller identity: anon JWT client -> auth.getUser() (server-validated JWT)
+//   - Admin check: prefer RPC public.is_admin(uid uuid) (SECURITY DEFINER)
+//                fallback to profiles.role === 'admin'
+//
+// Notes:
+//   - Deno edge safe
+//   - No `any`
+//   - Fail-closed for admin authorization
 // =============================================================================
 
-import { createAnonClient, createServiceClient } from './supabase.ts'
+import type { Database } from "./database.types.ts";
+import type { AnonClient, SvcClient } from "./supabase.ts";
+import { createAnonClient, createServiceClient, readBearerToken } from "./supabase.ts";
 
-export type AuthFailReason =
-  | 'missing_bearer'
-  | 'empty_token'
-  | 'invalid_token'
-  | 'auth_error'
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
 
-export type AuthResult =
-  | { ok: true; userId: string; token: string }
-  | { ok: false; reason: AuthFailReason; message: string }
+export type AuthUser = {
+  id: string;
+  email: string | null;
+};
 
-export type AdminAuthFailReason = AuthFailReason | 'not_admin' | 'admin_check_failed'
+export type RequireAuthResult = AuthUser;
 
-export type AdminAuthResult =
-  | { ok: true; userId: string; token: string }
-  | { ok: false; reason: AdminAuthFailReason; message: string }
+export type AdminAuthReason =
+  | "missing_bearer"
+  | "empty_token"
+  | "invalid_token"
+  | "not_admin"
+  | "admin_check_failed";
 
-function readAuthHeader(req: Request): string {
-  // Headers are case-insensitive; some runtimes normalize to lowercase only.
-  return req.headers.get('authorization') ?? req.headers.get('Authorization') ?? ''
-}
+export type AuthenticateAdminResult =
+  | { ok: true; userId: string; email: string | null }
+  | { ok: false; reason: AdminAuthReason; message: string };
 
-export function getBearerToken(req: Request): string | null {
-  const raw = readAuthHeader(req)
-  if (!raw) return null
+// ─────────────────────────────────────────────────────────────────────────────
+// AuthError
+// ─────────────────────────────────────────────────────────────────────────────
 
-  const prefix = 'Bearer '
-  if (!raw.startsWith(prefix)) return null
+export class AuthError extends Error {
+  code: string;
+  status: number;
+  reason?: string;
 
-  const token = raw.slice(prefix.length).trim()
-  return token.length ? token : null
-}
-
-export async function authenticate(req: Request): Promise<AuthResult> {
-  const raw = readAuthHeader(req)
-  if (!raw) {
-    return { ok: false, reason: 'missing_bearer', message: 'Missing Authorization header' }
+  constructor(code: string, message: string, status = 401, reason?: string) {
+    super(message);
+    this.name = "AuthError";
+    this.code = code;
+    this.status = status;
+    this.reason = reason;
   }
+}
 
-  const token = getBearerToken(req)
+// ─────────────────────────────────────────────────────────────────────────────
+// Clients
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function serviceClient(): SvcClient {
+  return createServiceClient();
+}
+
+export function anonClient(jwt: string): AnonClient {
+  return createAnonClient(jwt);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function isProd(): boolean {
+  const a = (Deno.env.get("APP_ENV") ?? "").trim().toLowerCase();
+  const n = (Deno.env.get("NODE_ENV") ?? "").trim().toLowerCase();
+  return a === "production" || n === "production";
+}
+
+function safeMsgProd(prodMsg: string, devMsg: string): string {
+  return isProd() ? prodMsg : devMsg;
+}
+
+function hasBearerHeader(req: Request): boolean {
+  const raw = req.headers.get("authorization") ?? req.headers.get("Authorization") ?? "";
+  return /^bearer\s+/i.test(raw.trim());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// requireAuth + authenticate alias
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Validates Bearer JWT and returns authenticated user.
+ * Throws AuthError on failure.
+ */
+export async function requireAuth(req: Request): Promise<RequireAuthResult> {
+  const token = readBearerToken(req);
+
   if (!token) {
-    // header exists, but not a valid Bearer token format
-    return { ok: false, reason: 'missing_bearer', message: 'Missing Authorization Bearer token' }
+    const reason: AdminAuthReason = hasBearerHeader(req) ? "empty_token" : "missing_bearer";
+    throw new AuthError("AUTH_MISSING", "Missing Authorization Bearer token", 401, reason);
   }
 
-  if (!token.trim()) {
-    return { ok: false, reason: 'empty_token', message: 'Empty Bearer token' }
+  const anon = createAnonClient(token);
+
+  // Server-side validation of JWT
+  const { data, error } = await anon.auth.getUser();
+  if (error || !data?.user?.id) {
+    throw new AuthError("AUTH_INVALID", "Invalid or expired token", 401, "invalid_token");
   }
 
-  try {
-    const anon = createAnonClient(token)
-    const { data, error } = await anon.auth.getUser()
-
-    if (error || !data?.user?.id) {
-      return { ok: false, reason: 'invalid_token', message: 'Invalid or expired token' }
-    }
-
-    return { ok: true, userId: data.user.id, token }
-  } catch {
-    return { ok: false, reason: 'auth_error', message: 'Authentication failed' }
-  }
+  return {
+    id: data.user.id,
+    email: data.user.email ?? null,
+  };
 }
 
-export async function authenticateAdmin(req: Request): Promise<AdminAuthResult> {
-  const base = await authenticate(req)
-  if (!base.ok) return base
-
-  try {
-    const svc = createServiceClient()
-    const { data: isAdmin, error } = await svc.rpc('is_admin', { uid: base.userId })
-
-    if (error) {
-      return { ok: false, reason: 'admin_check_failed', message: 'Admin check failed' }
-    }
-    if (isAdmin !== true) {
-      return { ok: false, reason: 'not_admin', message: 'Insufficient permissions' }
-    }
-
-    return { ok: true, userId: base.userId, token: base.token }
-  } catch {
-    return { ok: false, reason: 'admin_check_failed', message: 'Admin check failed' }
-  }
+/**
+ * Backwards-compatible alias used by older functions (like finalize-order).
+ */
+export function authenticate(req: Request): Promise<RequireAuthResult> {
+  return requireAuth(req);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin checks
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function checkAdminByRpc(svc: SvcClient, uid: string): Promise<boolean> {
+  const { data, error } = await svc.rpc("is_admin", { uid });
+  if (error) throw new Error(error.message);
+  return Boolean(data);
+}
+
+async function checkAdminByProfilesRole(svc: SvcClient, uid: string): Promise<boolean> {
+  const { data, error } = await svc
+    .from("profiles")
+    .select("role")
+    .eq("id", uid)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  const role = (data?.role ?? "").toLowerCase();
+  return role === "admin";
+}
+
+/**
+ * Auth + admin authorization (no throw).
+ */
+export async function authenticateAdmin(req: Request): Promise<AuthenticateAdminResult> {
+  if (!hasBearerHeader(req)) {
+    return { ok: false, reason: "missing_bearer", message: "Missing Bearer token" };
+  }
+
+  let user: RequireAuthResult;
+  try {
+    user = await requireAuth(req);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Unauthorized";
+    return { ok: false, reason: "invalid_token", message: safeMsgProd("Unauthorized", msg) };
+  }
+
+  const svc = createServiceClient();
+
+  let isAdmin = false;
+  try {
+    isAdmin = await checkAdminByRpc(svc, user.id);
+  } catch {
+    try {
+      isAdmin = await checkAdminByProfilesRole(svc, user.id);
+    } catch {
+      return {
+        ok: false,
+        reason: "admin_check_failed",
+        message: safeMsgProd("Forbidden", "Unable to verify admin role"),
+      };
+    }
+  }
+
+  if (!isAdmin) {
+    return { ok: false, reason: "not_admin", message: safeMsgProd("Forbidden", "User is not admin") };
+  }
+
+  return { ok: true, userId: user.id, email: user.email };
+}
+
+/**
+ * Admin auth (throws AuthError).
+ */
+export async function requireAdmin(req: Request): Promise<{ userId: string; email: string | null }> {
+  const res = await authenticateAdmin(req);
+  if (!res.ok) {
+    const status = res.reason === "not_admin" ? 403 : 401;
+    const code =
+      res.reason === "not_admin"
+        ? "AUTH_FORBIDDEN"
+        : res.reason === "missing_bearer" || res.reason === "empty_token"
+          ? "AUTH_MISSING"
+          : "AUTH_INVALID";
+
+    throw new AuthError(code, res.message, status, res.reason);
+  }
+  return { userId: res.userId, email: res.email };
+}
+
+// Re-export Database if you like consistent imports elsewhere
+export type { Database };

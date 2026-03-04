@@ -6,8 +6,8 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { supabase } from '@/lib/supabase/supabaseClient'
 import { mapOrderRowToDomain } from '@/domain/orders/order.mapper'
-import { useOrdersRealtime } from '@/features/orders/useOrdersRealtime'
-import { updateOrderStatus, assignOrderToStaff } from '@/features/orders/orders.api'
+import { useOrdersRealtime } from '@/modules/orders/hooks/useOrdersRealtime';
+import { updateOrderStatus, assignOrderToStaff } from '@/modules/orders/api/orders.api';
 import {
   OrderStatus,
   PaymentStatus,

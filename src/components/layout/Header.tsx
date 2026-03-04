@@ -24,12 +24,12 @@ import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Menu, X, ShoppingCart, LogOut, User } from 'lucide-react';
 
-import { useAuth } from '@/features/auth/useAuth';
-import { useCart } from '@/hooks/useCart';
+import { useAuth } from '@/modules/auth/hooks/useAuth';
+import { useCart } from '@/modules/cart/hooks/useCart';
 import { useModal } from '@/components/ui/useModal';
-import { CartDrawer } from '@/components/cart/CartDrawer';
+import { CartDrawer } from '@/modules/cart/components/CartDrawer';
 import { Button } from '@/components/ui/Button';
-import { useActiveOrder } from '@/features/orders/useActiveOrder';
+import { useActiveOrder } from '@/modules/orders/hooks/useActiveOrder';
 import { canAccessAdmin } from '@/security/permissions';
 
 // ── Types ─────────────────────────────────────────────────────────────────────

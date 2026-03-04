@@ -15,13 +15,14 @@
 
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      "@/modules/*": ["src/modules/*"],
+      "@/domain/*": ["src/domain/*"],
+      "@/lib/*": ["src/lib/*"]
     },
 
     "types": ["vite/client", "vitest/globals"]
   },
-
   "include": ["src"],
-
   "exclude": ["node_modules", "dist"]
 }

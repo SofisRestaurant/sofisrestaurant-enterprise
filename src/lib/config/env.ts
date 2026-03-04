@@ -21,8 +21,8 @@ function getOptionalString(key: EnvKey): string | undefined {
 }
 
 function mode(): AppMode {
-  const m = import.meta.env.MODE
-  return m === 'production' || m === 'test' ? m : 'development'
+  const m = import.meta.env.MODE; // ok
+  return m === 'production' || m === 'test' ? m : 'development';
 }
 
 const stripePublicKey = getOptionalString('VITE_STRIPE_PUBLIC_KEY')

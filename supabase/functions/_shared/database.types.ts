@@ -12,6 +12,1021 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.1"
   }
+  auth: {
+    Tables: {
+      audit_log_entries: {
+        Row: {
+          created_at: string | null
+          id: string
+          instance_id: string | null
+          ip_address: string
+          payload: Json | null
+        }
+        Insert: {
+          created_at?: string | null
+          id: string
+          instance_id?: string | null
+          ip_address?: string
+          payload?: Json | null
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          instance_id?: string | null
+          ip_address?: string
+          payload?: Json | null
+        }
+        Relationships: []
+      }
+      custom_oauth_providers: {
+        Row: {
+          acceptable_client_ids: string[]
+          attribute_mapping: Json
+          authorization_params: Json
+          authorization_url: string | null
+          cached_discovery: Json | null
+          client_id: string
+          client_secret: string
+          created_at: string
+          discovery_cached_at: string | null
+          discovery_url: string | null
+          email_optional: boolean
+          enabled: boolean
+          id: string
+          identifier: string
+          issuer: string | null
+          jwks_uri: string | null
+          name: string
+          pkce_enabled: boolean
+          provider_type: string
+          scopes: string[]
+          skip_nonce_check: boolean
+          token_url: string | null
+          updated_at: string
+          userinfo_url: string | null
+        }
+        Insert: {
+          acceptable_client_ids?: string[]
+          attribute_mapping?: Json
+          authorization_params?: Json
+          authorization_url?: string | null
+          cached_discovery?: Json | null
+          client_id: string
+          client_secret: string
+          created_at?: string
+          discovery_cached_at?: string | null
+          discovery_url?: string | null
+          email_optional?: boolean
+          enabled?: boolean
+          id?: string
+          identifier: string
+          issuer?: string | null
+          jwks_uri?: string | null
+          name: string
+          pkce_enabled?: boolean
+          provider_type: string
+          scopes?: string[]
+          skip_nonce_check?: boolean
+          token_url?: string | null
+          updated_at?: string
+          userinfo_url?: string | null
+        }
+        Update: {
+          acceptable_client_ids?: string[]
+          attribute_mapping?: Json
+          authorization_params?: Json
+          authorization_url?: string | null
+          cached_discovery?: Json | null
+          client_id?: string
+          client_secret?: string
+          created_at?: string
+          discovery_cached_at?: string | null
+          discovery_url?: string | null
+          email_optional?: boolean
+          enabled?: boolean
+          id?: string
+          identifier?: string
+          issuer?: string | null
+          jwks_uri?: string | null
+          name?: string
+          pkce_enabled?: boolean
+          provider_type?: string
+          scopes?: string[]
+          skip_nonce_check?: boolean
+          token_url?: string | null
+          updated_at?: string
+          userinfo_url?: string | null
+        }
+        Relationships: []
+      }
+      flow_state: {
+        Row: {
+          auth_code: string | null
+          auth_code_issued_at: string | null
+          authentication_method: string
+          code_challenge: string | null
+          code_challenge_method:
+            | Database["auth"]["Enums"]["code_challenge_method"]
+            | null
+          created_at: string | null
+          email_optional: boolean
+          id: string
+          invite_token: string | null
+          linking_target_id: string | null
+          oauth_client_state_id: string | null
+          provider_access_token: string | null
+          provider_refresh_token: string | null
+          provider_type: string
+          referrer: string | null
+          updated_at: string | null
+          user_id: string | null
+        }
+        Insert: {
+          auth_code?: string | null
+          auth_code_issued_at?: string | null
+          authentication_method: string
+          code_challenge?: string | null
+          code_challenge_method?:
+            | Database["auth"]["Enums"]["code_challenge_method"]
+            | null
+          created_at?: string | null
+          email_optional?: boolean
+          id: string
+          invite_token?: string | null
+          linking_target_id?: string | null
+          oauth_client_state_id?: string | null
+          provider_access_token?: string | null
+          provider_refresh_token?: string | null
+          provider_type: string
+          referrer?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          auth_code?: string | null
+          auth_code_issued_at?: string | null
+          authentication_method?: string
+          code_challenge?: string | null
+          code_challenge_method?:
+            | Database["auth"]["Enums"]["code_challenge_method"]
+            | null
+          created_at?: string | null
+          email_optional?: boolean
+          id?: string
+          invite_token?: string | null
+          linking_target_id?: string | null
+          oauth_client_state_id?: string | null
+          provider_access_token?: string | null
+          provider_refresh_token?: string | null
+          provider_type?: string
+          referrer?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      identities: {
+        Row: {
+          created_at: string | null
+          email: string | null
+          id: string
+          identity_data: Json
+          last_sign_in_at: string | null
+          provider: string
+          provider_id: string
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          email?: string | null
+          id?: string
+          identity_data: Json
+          last_sign_in_at?: string | null
+          provider: string
+          provider_id: string
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          email?: string | null
+          id?: string
+          identity_data?: Json
+          last_sign_in_at?: string | null
+          provider?: string
+          provider_id?: string
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "identities_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      instances: {
+        Row: {
+          created_at: string | null
+          id: string
+          raw_base_config: string | null
+          updated_at: string | null
+          uuid: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          id: string
+          raw_base_config?: string | null
+          updated_at?: string | null
+          uuid?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          raw_base_config?: string | null
+          updated_at?: string | null
+          uuid?: string | null
+        }
+        Relationships: []
+      }
+      mfa_amr_claims: {
+        Row: {
+          authentication_method: string
+          created_at: string
+          id: string
+          session_id: string
+          updated_at: string
+        }
+        Insert: {
+          authentication_method: string
+          created_at: string
+          id: string
+          session_id: string
+          updated_at: string
+        }
+        Update: {
+          authentication_method?: string
+          created_at?: string
+          id?: string
+          session_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mfa_amr_claims_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mfa_challenges: {
+        Row: {
+          created_at: string
+          factor_id: string
+          id: string
+          ip_address: unknown
+          otp_code: string | null
+          verified_at: string | null
+          web_authn_session_data: Json | null
+        }
+        Insert: {
+          created_at: string
+          factor_id: string
+          id: string
+          ip_address: unknown
+          otp_code?: string | null
+          verified_at?: string | null
+          web_authn_session_data?: Json | null
+        }
+        Update: {
+          created_at?: string
+          factor_id?: string
+          id?: string
+          ip_address?: unknown
+          otp_code?: string | null
+          verified_at?: string | null
+          web_authn_session_data?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mfa_challenges_auth_factor_id_fkey"
+            columns: ["factor_id"]
+            isOneToOne: false
+            referencedRelation: "mfa_factors"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mfa_factors: {
+        Row: {
+          created_at: string
+          factor_type: Database["auth"]["Enums"]["factor_type"]
+          friendly_name: string | null
+          id: string
+          last_challenged_at: string | null
+          last_webauthn_challenge_data: Json | null
+          phone: string | null
+          secret: string | null
+          status: Database["auth"]["Enums"]["factor_status"]
+          updated_at: string
+          user_id: string
+          web_authn_aaguid: string | null
+          web_authn_credential: Json | null
+        }
+        Insert: {
+          created_at: string
+          factor_type: Database["auth"]["Enums"]["factor_type"]
+          friendly_name?: string | null
+          id: string
+          last_challenged_at?: string | null
+          last_webauthn_challenge_data?: Json | null
+          phone?: string | null
+          secret?: string | null
+          status: Database["auth"]["Enums"]["factor_status"]
+          updated_at: string
+          user_id: string
+          web_authn_aaguid?: string | null
+          web_authn_credential?: Json | null
+        }
+        Update: {
+          created_at?: string
+          factor_type?: Database["auth"]["Enums"]["factor_type"]
+          friendly_name?: string | null
+          id?: string
+          last_challenged_at?: string | null
+          last_webauthn_challenge_data?: Json | null
+          phone?: string | null
+          secret?: string | null
+          status?: Database["auth"]["Enums"]["factor_status"]
+          updated_at?: string
+          user_id?: string
+          web_authn_aaguid?: string | null
+          web_authn_credential?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mfa_factors_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      oauth_authorizations: {
+        Row: {
+          approved_at: string | null
+          authorization_code: string | null
+          authorization_id: string
+          client_id: string
+          code_challenge: string | null
+          code_challenge_method:
+            | Database["auth"]["Enums"]["code_challenge_method"]
+            | null
+          created_at: string
+          expires_at: string
+          id: string
+          nonce: string | null
+          redirect_uri: string
+          resource: string | null
+          response_type: Database["auth"]["Enums"]["oauth_response_type"]
+          scope: string
+          state: string | null
+          status: Database["auth"]["Enums"]["oauth_authorization_status"]
+          user_id: string | null
+        }
+        Insert: {
+          approved_at?: string | null
+          authorization_code?: string | null
+          authorization_id: string
+          client_id: string
+          code_challenge?: string | null
+          code_challenge_method?:
+            | Database["auth"]["Enums"]["code_challenge_method"]
+            | null
+          created_at?: string
+          expires_at?: string
+          id: string
+          nonce?: string | null
+          redirect_uri: string
+          resource?: string | null
+          response_type?: Database["auth"]["Enums"]["oauth_response_type"]
+          scope: string
+          state?: string | null
+          status?: Database["auth"]["Enums"]["oauth_authorization_status"]
+          user_id?: string | null
+        }
+        Update: {
+          approved_at?: string | null
+          authorization_code?: string | null
+          authorization_id?: string
+          client_id?: string
+          code_challenge?: string | null
+          code_challenge_method?:
+            | Database["auth"]["Enums"]["code_challenge_method"]
+            | null
+          created_at?: string
+          expires_at?: string
+          id?: string
+          nonce?: string | null
+          redirect_uri?: string
+          resource?: string | null
+          response_type?: Database["auth"]["Enums"]["oauth_response_type"]
+          scope?: string
+          state?: string | null
+          status?: Database["auth"]["Enums"]["oauth_authorization_status"]
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "oauth_authorizations_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "oauth_clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "oauth_authorizations_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      oauth_client_states: {
+        Row: {
+          code_verifier: string | null
+          created_at: string
+          id: string
+          provider_type: string
+        }
+        Insert: {
+          code_verifier?: string | null
+          created_at: string
+          id: string
+          provider_type: string
+        }
+        Update: {
+          code_verifier?: string | null
+          created_at?: string
+          id?: string
+          provider_type?: string
+        }
+        Relationships: []
+      }
+      oauth_clients: {
+        Row: {
+          client_name: string | null
+          client_secret_hash: string | null
+          client_type: Database["auth"]["Enums"]["oauth_client_type"]
+          client_uri: string | null
+          created_at: string
+          deleted_at: string | null
+          grant_types: string
+          id: string
+          logo_uri: string | null
+          redirect_uris: string
+          registration_type: Database["auth"]["Enums"]["oauth_registration_type"]
+          token_endpoint_auth_method: string
+          updated_at: string
+        }
+        Insert: {
+          client_name?: string | null
+          client_secret_hash?: string | null
+          client_type?: Database["auth"]["Enums"]["oauth_client_type"]
+          client_uri?: string | null
+          created_at?: string
+          deleted_at?: string | null
+          grant_types: string
+          id: string
+          logo_uri?: string | null
+          redirect_uris: string
+          registration_type: Database["auth"]["Enums"]["oauth_registration_type"]
+          token_endpoint_auth_method: string
+          updated_at?: string
+        }
+        Update: {
+          client_name?: string | null
+          client_secret_hash?: string | null
+          client_type?: Database["auth"]["Enums"]["oauth_client_type"]
+          client_uri?: string | null
+          created_at?: string
+          deleted_at?: string | null
+          grant_types?: string
+          id?: string
+          logo_uri?: string | null
+          redirect_uris?: string
+          registration_type?: Database["auth"]["Enums"]["oauth_registration_type"]
+          token_endpoint_auth_method?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      oauth_consents: {
+        Row: {
+          client_id: string
+          granted_at: string
+          id: string
+          revoked_at: string | null
+          scopes: string
+          user_id: string
+        }
+        Insert: {
+          client_id: string
+          granted_at?: string
+          id: string
+          revoked_at?: string | null
+          scopes: string
+          user_id: string
+        }
+        Update: {
+          client_id?: string
+          granted_at?: string
+          id?: string
+          revoked_at?: string | null
+          scopes?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "oauth_consents_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "oauth_clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "oauth_consents_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      one_time_tokens: {
+        Row: {
+          created_at: string
+          id: string
+          relates_to: string
+          token_hash: string
+          token_type: Database["auth"]["Enums"]["one_time_token_type"]
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id: string
+          relates_to: string
+          token_hash: string
+          token_type: Database["auth"]["Enums"]["one_time_token_type"]
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          relates_to?: string
+          token_hash?: string
+          token_type?: Database["auth"]["Enums"]["one_time_token_type"]
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "one_time_tokens_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      refresh_tokens: {
+        Row: {
+          created_at: string | null
+          id: number
+          instance_id: string | null
+          parent: string | null
+          revoked: boolean | null
+          session_id: string | null
+          token: string | null
+          updated_at: string | null
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          id?: number
+          instance_id?: string | null
+          parent?: string | null
+          revoked?: boolean | null
+          session_id?: string | null
+          token?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          id?: number
+          instance_id?: string | null
+          parent?: string | null
+          revoked?: boolean | null
+          session_id?: string | null
+          token?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "refresh_tokens_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      saml_providers: {
+        Row: {
+          attribute_mapping: Json | null
+          created_at: string | null
+          entity_id: string
+          id: string
+          metadata_url: string | null
+          metadata_xml: string
+          name_id_format: string | null
+          sso_provider_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          attribute_mapping?: Json | null
+          created_at?: string | null
+          entity_id: string
+          id: string
+          metadata_url?: string | null
+          metadata_xml: string
+          name_id_format?: string | null
+          sso_provider_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          attribute_mapping?: Json | null
+          created_at?: string | null
+          entity_id?: string
+          id?: string
+          metadata_url?: string | null
+          metadata_xml?: string
+          name_id_format?: string | null
+          sso_provider_id?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "saml_providers_sso_provider_id_fkey"
+            columns: ["sso_provider_id"]
+            isOneToOne: false
+            referencedRelation: "sso_providers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      saml_relay_states: {
+        Row: {
+          created_at: string | null
+          flow_state_id: string | null
+          for_email: string | null
+          id: string
+          redirect_to: string | null
+          request_id: string
+          sso_provider_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          flow_state_id?: string | null
+          for_email?: string | null
+          id: string
+          redirect_to?: string | null
+          request_id: string
+          sso_provider_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          flow_state_id?: string | null
+          for_email?: string | null
+          id?: string
+          redirect_to?: string | null
+          request_id?: string
+          sso_provider_id?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "saml_relay_states_flow_state_id_fkey"
+            columns: ["flow_state_id"]
+            isOneToOne: false
+            referencedRelation: "flow_state"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "saml_relay_states_sso_provider_id_fkey"
+            columns: ["sso_provider_id"]
+            isOneToOne: false
+            referencedRelation: "sso_providers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      schema_migrations: {
+        Row: {
+          version: string
+        }
+        Insert: {
+          version: string
+        }
+        Update: {
+          version?: string
+        }
+        Relationships: []
+      }
+      sessions: {
+        Row: {
+          aal: Database["auth"]["Enums"]["aal_level"] | null
+          created_at: string | null
+          factor_id: string | null
+          id: string
+          ip: unknown
+          not_after: string | null
+          oauth_client_id: string | null
+          refresh_token_counter: number | null
+          refresh_token_hmac_key: string | null
+          refreshed_at: string | null
+          scopes: string | null
+          tag: string | null
+          updated_at: string | null
+          user_agent: string | null
+          user_id: string
+        }
+        Insert: {
+          aal?: Database["auth"]["Enums"]["aal_level"] | null
+          created_at?: string | null
+          factor_id?: string | null
+          id: string
+          ip?: unknown
+          not_after?: string | null
+          oauth_client_id?: string | null
+          refresh_token_counter?: number | null
+          refresh_token_hmac_key?: string | null
+          refreshed_at?: string | null
+          scopes?: string | null
+          tag?: string | null
+          updated_at?: string | null
+          user_agent?: string | null
+          user_id: string
+        }
+        Update: {
+          aal?: Database["auth"]["Enums"]["aal_level"] | null
+          created_at?: string | null
+          factor_id?: string | null
+          id?: string
+          ip?: unknown
+          not_after?: string | null
+          oauth_client_id?: string | null
+          refresh_token_counter?: number | null
+          refresh_token_hmac_key?: string | null
+          refreshed_at?: string | null
+          scopes?: string | null
+          tag?: string | null
+          updated_at?: string | null
+          user_agent?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sessions_oauth_client_id_fkey"
+            columns: ["oauth_client_id"]
+            isOneToOne: false
+            referencedRelation: "oauth_clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sessions_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sso_domains: {
+        Row: {
+          created_at: string | null
+          domain: string
+          id: string
+          sso_provider_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          domain: string
+          id: string
+          sso_provider_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          domain?: string
+          id?: string
+          sso_provider_id?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sso_domains_sso_provider_id_fkey"
+            columns: ["sso_provider_id"]
+            isOneToOne: false
+            referencedRelation: "sso_providers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sso_providers: {
+        Row: {
+          created_at: string | null
+          disabled: boolean | null
+          id: string
+          resource_id: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          disabled?: boolean | null
+          id: string
+          resource_id?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          disabled?: boolean | null
+          id?: string
+          resource_id?: string | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      users: {
+        Row: {
+          aud: string | null
+          banned_until: string | null
+          confirmation_sent_at: string | null
+          confirmation_token: string | null
+          confirmed_at: string | null
+          created_at: string | null
+          deleted_at: string | null
+          email: string | null
+          email_change: string | null
+          email_change_confirm_status: number | null
+          email_change_sent_at: string | null
+          email_change_token_current: string | null
+          email_change_token_new: string | null
+          email_confirmed_at: string | null
+          encrypted_password: string | null
+          id: string
+          instance_id: string | null
+          invited_at: string | null
+          is_anonymous: boolean
+          is_sso_user: boolean
+          is_super_admin: boolean | null
+          last_sign_in_at: string | null
+          phone: string | null
+          phone_change: string | null
+          phone_change_sent_at: string | null
+          phone_change_token: string | null
+          phone_confirmed_at: string | null
+          raw_app_meta_data: Json | null
+          raw_user_meta_data: Json | null
+          reauthentication_sent_at: string | null
+          reauthentication_token: string | null
+          recovery_sent_at: string | null
+          recovery_token: string | null
+          role: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          aud?: string | null
+          banned_until?: string | null
+          confirmation_sent_at?: string | null
+          confirmation_token?: string | null
+          confirmed_at?: string | null
+          created_at?: string | null
+          deleted_at?: string | null
+          email?: string | null
+          email_change?: string | null
+          email_change_confirm_status?: number | null
+          email_change_sent_at?: string | null
+          email_change_token_current?: string | null
+          email_change_token_new?: string | null
+          email_confirmed_at?: string | null
+          encrypted_password?: string | null
+          id: string
+          instance_id?: string | null
+          invited_at?: string | null
+          is_anonymous?: boolean
+          is_sso_user?: boolean
+          is_super_admin?: boolean | null
+          last_sign_in_at?: string | null
+          phone?: string | null
+          phone_change?: string | null
+          phone_change_sent_at?: string | null
+          phone_change_token?: string | null
+          phone_confirmed_at?: string | null
+          raw_app_meta_data?: Json | null
+          raw_user_meta_data?: Json | null
+          reauthentication_sent_at?: string | null
+          reauthentication_token?: string | null
+          recovery_sent_at?: string | null
+          recovery_token?: string | null
+          role?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          aud?: string | null
+          banned_until?: string | null
+          confirmation_sent_at?: string | null
+          confirmation_token?: string | null
+          confirmed_at?: string | null
+          created_at?: string | null
+          deleted_at?: string | null
+          email?: string | null
+          email_change?: string | null
+          email_change_confirm_status?: number | null
+          email_change_sent_at?: string | null
+          email_change_token_current?: string | null
+          email_change_token_new?: string | null
+          email_confirmed_at?: string | null
+          encrypted_password?: string | null
+          id?: string
+          instance_id?: string | null
+          invited_at?: string | null
+          is_anonymous?: boolean
+          is_sso_user?: boolean
+          is_super_admin?: boolean | null
+          last_sign_in_at?: string | null
+          phone?: string | null
+          phone_change?: string | null
+          phone_change_sent_at?: string | null
+          phone_change_token?: string | null
+          phone_confirmed_at?: string | null
+          raw_app_meta_data?: Json | null
+          raw_user_meta_data?: Json | null
+          reauthentication_sent_at?: string | null
+          reauthentication_token?: string | null
+          recovery_sent_at?: string | null
+          recovery_token?: string | null
+          role?: string | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      email: { Args: never; Returns: string }
+      jwt: { Args: never; Returns: Json }
+      role: { Args: never; Returns: string }
+      uid: { Args: never; Returns: string }
+    }
+    Enums: {
+      aal_level: "aal1" | "aal2" | "aal3"
+      code_challenge_method: "s256" | "plain"
+      factor_status: "unverified" | "verified"
+      factor_type: "totp" | "webauthn" | "phone"
+      oauth_authorization_status: "pending" | "approved" | "denied" | "expired"
+      oauth_client_type: "public" | "confidential"
+      oauth_registration_type: "dynamic" | "manual"
+      oauth_response_type: "code"
+      one_time_token_type:
+        | "confirmation_token"
+        | "reauthentication_token"
+        | "recovery_token"
+        | "email_change_token_new"
+        | "email_change_token_current"
+        | "phone_change_token"
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
       abandoned_cart_sessions: {
@@ -187,6 +1202,180 @@ export type Database = {
         }
         Relationships: []
       }
+      auth_audit_log: {
+        Row: {
+          created_at: string
+          device_id: string | null
+          event_data: Json | null
+          event_type: string
+          id: string
+          ip_address: string | null
+          risk_score: number | null
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          device_id?: string | null
+          event_data?: Json | null
+          event_type: string
+          id?: string
+          ip_address?: string | null
+          risk_score?: number | null
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          device_id?: string | null
+          event_data?: Json | null
+          event_type?: string
+          id?: string
+          ip_address?: string | null
+          risk_score?: number | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      auth_risk_rate_limits: {
+        Row: {
+          attempts: number
+          blocked_until: string | null
+          created_at: string
+          last_attempt_at: string | null
+          session_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          attempts?: number
+          blocked_until?: string | null
+          created_at?: string
+          last_attempt_at?: string | null
+          session_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          attempts?: number
+          blocked_until?: string | null
+          created_at?: string
+          last_attempt_at?: string | null
+          session_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      auth_risk_scores: {
+        Row: {
+          device_unknown_pts: number
+          evaluated_at: string
+          expires_at: string
+          geo_mismatch_pts: number
+          pw_mismatch_pts: number
+          rapid_attempts_pts: number
+          requires_device_trust: boolean
+          requires_mfa: boolean
+          requires_step_up: boolean
+          risk_score: number
+          session_id: string
+          unusual_time_pts: number
+          user_id: string
+        }
+        Insert: {
+          device_unknown_pts?: number
+          evaluated_at?: string
+          expires_at: string
+          geo_mismatch_pts?: number
+          pw_mismatch_pts?: number
+          rapid_attempts_pts?: number
+          requires_device_trust?: boolean
+          requires_mfa?: boolean
+          requires_step_up?: boolean
+          risk_score?: number
+          session_id: string
+          unusual_time_pts?: number
+          user_id: string
+        }
+        Update: {
+          device_unknown_pts?: number
+          evaluated_at?: string
+          expires_at?: string
+          geo_mismatch_pts?: number
+          pw_mismatch_pts?: number
+          rapid_attempts_pts?: number
+          requires_device_trust?: boolean
+          requires_mfa?: boolean
+          requires_step_up?: boolean
+          risk_score?: number
+          session_id?: string
+          unusual_time_pts?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
+      auth_session_validation_cooldowns: {
+        Row: {
+          action: string
+          last_seen_at: string
+          session_id: string
+          user_id: string
+        }
+        Insert: {
+          action: string
+          last_seen_at?: string
+          session_id: string
+          user_id: string
+        }
+        Update: {
+          action?: string
+          last_seen_at?: string
+          session_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      auth_sessions_meta: {
+        Row: {
+          country_code: string | null
+          created_at: string
+          device_trust_id: string | null
+          invalidated_at: string | null
+          invalidation_reason: string | null
+          ip_address: string | null
+          is_trusted_device: boolean
+          last_active_at: string | null
+          risk_score: number
+          session_id: string
+          user_id: string
+        }
+        Insert: {
+          country_code?: string | null
+          created_at?: string
+          device_trust_id?: string | null
+          invalidated_at?: string | null
+          invalidation_reason?: string | null
+          ip_address?: string | null
+          is_trusted_device?: boolean
+          last_active_at?: string | null
+          risk_score?: number
+          session_id: string
+          user_id: string
+        }
+        Update: {
+          country_code?: string | null
+          created_at?: string
+          device_trust_id?: string | null
+          invalidated_at?: string | null
+          invalidation_reason?: string | null
+          ip_address?: string | null
+          is_trusted_device?: boolean
+          last_active_at?: string | null
+          risk_score?: number
+          session_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       checkout_rate_limits: {
         Row: {
           attempts: number
@@ -295,6 +1484,57 @@ export type Database = {
           last_number?: number
         }
         Relationships: []
+      }
+      device_trust: {
+        Row: {
+          fingerprint_hash: string
+          id: string
+          ip_at_trust: string | null
+          is_revoked: boolean
+          last_seen_at: string | null
+          revoked_at: string | null
+          trust_label: string | null
+          trusted_at: string
+          user_id: string
+        }
+        Insert: {
+          fingerprint_hash: string
+          id?: string
+          ip_at_trust?: string | null
+          is_revoked?: boolean
+          last_seen_at?: string | null
+          revoked_at?: string | null
+          trust_label?: string | null
+          trusted_at?: string
+          user_id: string
+        }
+        Update: {
+          fingerprint_hash?: string
+          id?: string
+          ip_at_trust?: string | null
+          is_revoked?: boolean
+          last_seen_at?: string | null
+          revoked_at?: string | null
+          trust_label?: string | null
+          trusted_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "device_trust_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "loyalty_leaderboard"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "device_trust_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       discount_optimizer_rules: {
         Row: {
@@ -450,6 +1690,7 @@ export type Database = {
       }
       growth_campaigns: {
         Row: {
+          active: boolean
           budget_cents: number | null
           channel: string | null
           created_at: string | null
@@ -459,6 +1700,7 @@ export type Database = {
           spent_cents: number | null
         }
         Insert: {
+          active?: boolean
           budget_cents?: number | null
           channel?: string | null
           created_at?: string | null
@@ -468,6 +1710,7 @@ export type Database = {
           spent_cents?: number | null
         }
         Update: {
+          active?: boolean
           budget_cents?: number | null
           channel?: string | null
           created_at?: string | null
@@ -1729,6 +2972,19 @@ export type Database = {
         }
         Relationships: []
       }
+      admin_layout_snapshot: {
+        Row: {
+          abandoned_carts: number | null
+          fraud_events_7d: number | null
+          generated_at: string | null
+          pending_carts: number | null
+          pending_orders: number | null
+          today_orders: number | null
+          today_revenue_cents: number | null
+          unread_notifications: number | null
+        }
+        Relationships: []
+      }
       admin_loyalty_liability: {
         Row: {
           accounts_count: number | null
@@ -2107,6 +3363,7 @@ export type Database = {
       }
       cleanup_pending_carts: { Args: never; Returns: undefined }
       custom_access_token_hook: { Args: { event: Json }; Returns: Json }
+      get_admin_layout_snapshot: { Args: never; Returns: Json }
       get_loyalty_by_order: {
         Args: { p_order_id: string }
         Returns: {
@@ -2181,6 +3438,7 @@ export type Database = {
         Returns: boolean
       }
       is_admin: { Args: { uid: string }; Returns: boolean }
+      is_admin_uid: { Args: { uid: string }; Returns: boolean }
       issue_loyalty_correction: {
         Args: {
           p_admin_id: string
@@ -2411,6 +3669,26 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  auth: {
+    Enums: {
+      aal_level: ["aal1", "aal2", "aal3"],
+      code_challenge_method: ["s256", "plain"],
+      factor_status: ["unverified", "verified"],
+      factor_type: ["totp", "webauthn", "phone"],
+      oauth_authorization_status: ["pending", "approved", "denied", "expired"],
+      oauth_client_type: ["public", "confidential"],
+      oauth_registration_type: ["dynamic", "manual"],
+      oauth_response_type: ["code"],
+      one_time_token_type: [
+        "confirmation_token",
+        "reauthentication_token",
+        "recovery_token",
+        "email_change_token_new",
+        "email_change_token_current",
+        "phone_change_token",
+      ],
+    },
+  },
   public: {
     Enums: {
       menu_category: [

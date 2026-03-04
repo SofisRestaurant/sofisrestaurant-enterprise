@@ -73,7 +73,7 @@ export const router = createBrowserRouter([
       {
         path: 'menu',
         lazy: async () => {
-          const m = await import('@/pages/Menu');
+          const m = await import('@/modules/menu/pages/MenuPage');
           return { Component: m.default };
         },
       },
@@ -160,7 +160,7 @@ export const router = createBrowserRouter([
       {
         path: 'checkout',
         lazy: async () => {
-          const m = await import('@/pages/Checkout');
+          const m = await import('@/modules/checkout/pages/CheckoutPage');
           return { Component: withAuth(m.default) };
         },
       },
@@ -171,14 +171,14 @@ export const router = createBrowserRouter([
       {
         path: 'order-success',
         lazy: async () => {
-          const m = await import('@/pages/OrderSuccess');
+          const m = await import('@/modules/orders/pages/OrderSuccess');
           return { Component: m.default };
         },
       },
       {
         path: 'order-canceled',
         lazy: async () => {
-          const m = await import('@/pages/OrderCanceled');
+          const m = await import('@/modules/orders/pages/OrderCanceled');
           return { Component: m.default };
         },
       },
@@ -189,7 +189,7 @@ export const router = createBrowserRouter([
       {
         path: 'order-status/:orderId',
         lazy: async () => {
-          const m = await import('@/pages/OrderStatus');
+          const m = await import('@/modules/orders/pages/OrderStatus');
           return { Component: m.default };
         },
       },
@@ -236,14 +236,14 @@ export const router = createBrowserRouter([
       {
         path: 'kitchen',
         lazy: async () => {
-          const m = await import('@/features/orders/KitchenScreen');
+          const m = await import('@/modules/orders/components/KitchenScreen');
           return { Component: withRole(['admin', 'staff'], m.default) };
         },
       },
       {
         path: 'expo',
         lazy: async () => {
-          const m = await import('@/features/orders/ExpoCommandCenter');
+          const m = await import('@/modules/orders/components/ExpoCommandCenter');
           return { Component: withRole(['admin', 'staff'], m.default) };
         },
       },
@@ -278,7 +278,7 @@ export const router = createBrowserRouter([
           {
             path: 'kitchen',
             lazy: async () => {
-              const m = await import('@/features/orders/KitchenScreen');
+              const m = await import('@/modules/orders/components/KitchenScreen');
               return { Component: m.default };
             },
           },

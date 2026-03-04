@@ -1,16 +1,10 @@
 // src/features/admin/dashboard/AdminRevenuePanel.tsx
 // ZERO frontend calculations - displays server metrics only
-
-import { useState, useEffect } from 'react';
-import { createClient } from '@supabase/supabase-js';
+import { useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabase/supabaseClient';
 import { StatCard, MetricGrid, Alert, LoadingSpinner } from '../ui/AdminPrimitives';
 import { ROIChart } from './ROIChart';
 import { RevenueByChannelCard } from './RevenueByChannelCard';
-
-const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-);
 
 interface AdminMetrics {
   revenue: {

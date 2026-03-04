@@ -1,455 +1,297 @@
 // src/pages/Account/AccountHome.tsx
 // ============================================================================
-// ACCOUNT HOME — LOYALTY DASHBOARD + QR CARD
+// ACCOUNT HOME — Enterprise Loyalty Dashboard (2026) • Sofi's Restaurant
 // ============================================================================
-//
-// DB queries aligned to database.types.ts (Feb 2026 schema):
-//   • loyalty_accounts  → replaces v2_account_summary (view doesn't exist in types)
-//   • loyalty_ledger    → direct select replaces get_loyalty_ledger_secure RPC
-//   • profiles          → loyalty_public_id
+// ✅ Uses Edge Function `loyalty-account` as source of truth
+// ✅ Matches current Edge payload shape:
+//    { ok, meta, account, profile, ledger }
+// ✅ Hardened against runtime crashes (never blanks the route)
+// ✅ Premium UX: QR card, perks, next reward, activity ledger, orders shortcut
 // ============================================================================
+
 import type { Database } from '@/types/supabase';
-import { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { QRCodeSVG, QRCodeCanvas } from 'qrcode.react';
+
 import { useUserContext } from '@/contexts/useUserContext';
 import { supabase } from '@/lib/supabase/supabaseClient';
-import { LOYALTY_TIERS, TIER_ORDER, getNextTier, type LoyaltyTier } from '@/domain/loyalty/tiers';
-import type { LoyaltyProfile } from '@/features/checkout/checkout.api';
+import { invokeEdge } from '@/lib/supabase/invoke';
 
-const STREAK_LABEL = (streak: number): string => {
-  if (streak >= 30) return '🔥 Legendary'
-  if (streak >= 14) return '🔥 On Fire'
-  if (streak >= 7)  return '⚡ Weekly'
-  if (streak >= 3)  return '✨ Heating up'
-  if (streak >= 1)  return '🌱 Started'
-  return '🌱 Start your streak today'
-}
+import {
+  LOYALTY_TIERS,
+  TIER_ORDER,
+  getNextTier,
+  asTier,
+  type LoyaltyTier,
+} from '@/domain/loyalty/tiers';
+import type { LoyaltyProfile } from '@/modules/checkout/api/checkout.api';
 
-const STREAK_COLOR = (streak: number): string => {
-  if (streak >= 30) return 'text-red-600 bg-red-50 border-red-200'
-  if (streak >= 14) return 'text-orange-600 bg-orange-50 border-orange-200'
-  if (streak >= 7)  return 'text-amber-600 bg-amber-50 border-amber-200'
-  if (streak >= 3)  return 'text-yellow-600 bg-yellow-50 border-yellow-200'
-  return 'text-gray-500 bg-gray-50 border-gray-200'
-}
+// ─────────────────────────────────────────────────────────────
+// Types (match your Edge Function response)
+// ─────────────────────────────────────────────────────────────
 
-type LedgerRow = Database['public']['Tables']['loyalty_ledger']['Row'];
-type Json = Database['public']['Tables']['loyalty_ledger']['Row']['metadata'];
+type LedgerMeta = Database['public']['Tables']['loyalty_ledger']['Row']['metadata']
 
-interface LoyaltyTransaction {
-  id: string;
-  transaction_type: 'earned' | 'redeemed' | 'bonus' | 'expired' | 'adjusted';
-  points_delta: number;
-  points_balance: number;
-  tier_at_time: string;
-  streak_at_time: number;
-  tier_multiplier: number;
-  streak_multiplier: number;
-  created_at: string;
-  metadata: Json;
+type LoyaltyTransactionType = 'earned' | 'redeemed' | 'bonus' | 'expired' | 'adjusted'
+
+type LoyaltyTransaction = {
+  id: string
+  transaction_type: LoyaltyTransactionType
+  points_delta: number
+  points_balance: number
+  tier_at_time: string
+  streak_at_time: number
+  tier_multiplier: number
+  streak_multiplier: number
+  created_at: string
+  metadata: LedgerMeta | null
+  source: string
+  reference_id: string | null
 }
 
 interface LoyaltyProfileWithQR extends LoyaltyProfile {
-  loyaltyPublicId: string | null
+  loyaltyPublicId: string | null;
+  fullName: string | null;
 }
 
-function mapEntryType(raw: LedgerRow['entry_type']): LoyaltyTransaction['transaction_type'] {
-  const map: Record<string, LoyaltyTransaction['transaction_type']> = {
-    earn: 'earned',
-    redeem: 'redeemed',
-    bonus: 'bonus',
-    expired: 'expired',
-    adjusted: 'adjusted',
-  };
-  return map[raw] ?? 'adjusted';
+type LoyaltyAccountEdgeResp = {
+  ok?: boolean;
+  meta?: { requestId?: string; ts?: string };
+  account?: {
+    id?: string;
+    balance?: number;
+    lifetime_earned?: number;
+    tier?: string;
+    streak?: number;
+    status?: string;
+    last_activity?: string | null;
+    last_award_at?: string | null;
+    last_redeem_at?: string | null;
+    updated_at?: string | null;
+  } | null;
+  profile?: {
+    loyalty_public_id?: string | null;
+    full_name?: string | null;
+  } | null;
+  ledger?: Array<{
+    id?: string;
+    entry_type?: string;
+    amount?: number;
+    balance_after?: number;
+    tier_at_time?: string;
+    streak_at_time?: number;
+    created_at?: string;
+    metadata?: unknown | null;
+    source?: string;
+    reference_id?: string | null;
+  }>;
+  error?: unknown;
+  code?: unknown;
+};
+
+// ─────────────────────────────────────────────────────────────
+// Safe helpers
+// ─────────────────────────────────────────────────────────────
+
+function safeStr(v: unknown, fallback = ''): string {
+  return typeof v === 'string' ? v : fallback;
 }
 
-function useLoyaltyData() {
-  const [profile, setProfile] = useState<LoyaltyProfileWithQR | null>(null);
-  const [transactions, setTransactions] = useState<LoyaltyTransaction[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function load() {
-      try {
-        setLoading(true);
-        setError(null);
-
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (!session?.user?.id) {
-          setLoading(false);
-          return;
-        }
-
-        const uid = session.user.id;
-
-        const [accountRes, profileRes] = await Promise.all([
-          supabase
-            .from('loyalty_accounts')
-            .select('id, balance, lifetime_earned, tier, streak, last_activity')
-            .eq('user_id', uid)
-            .single(),
-          supabase.from('profiles').select('loyalty_public_id').eq('id', uid).single(),
-        ]);
-
-        if (cancelled) return;
-
-        if (accountRes.data) {
-          setProfile({
-            points: accountRes.data.balance ?? 0,
-            lifetimePoints: accountRes.data.lifetime_earned ?? 0,
-            tier: accountRes.data.tier as LoyaltyTier,
-            streak: accountRes.data.streak ?? 0,
-            lastOrderDate: accountRes.data.last_activity ?? null,
-            loyaltyPublicId: profileRes.data?.loyalty_public_id ?? null,
-          });
-        }
-
-        const accountId = accountRes.data?.id;
-        if (!accountId) return;
-
-        // Direct table query — get_loyalty_ledger_secure RPC doesn't exist in types
-        const { data: ledger } = await supabase
-          .from('loyalty_ledger')
-          .select(
-            'id, entry_type, amount, balance_after, tier_at_time, streak_at_time, created_at, metadata',
-          )
-          .eq('account_id', accountId)
-          .order('created_at', { ascending: false })
-          .limit(50);
-
-        if (cancelled || !ledger) return;
-
-        setTransactions(
-          ledger.map((row) => ({
-            id: row.id,
-            transaction_type: mapEntryType(row.entry_type),
-            points_delta: row.amount,
-            points_balance: row.balance_after,
-            tier_at_time: row.tier_at_time ?? 'bronze',
-            streak_at_time: row.streak_at_time ?? 0,
-            tier_multiplier: 1,
-            streak_multiplier: 1,
-            created_at: row.created_at,
-            metadata: row.metadata,
-          })),
-        );
-      } catch {
-        if (!cancelled) setError('Unable to load loyalty data');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return { profile, transactions, loading, error };
-}
-
-function TierCard({ profile }: { profile: LoyaltyProfile }) {
-  const tier   = profile.tier
-  const config = LOYALTY_TIERS[tier]
-  const next   = getNextTier(tier)
-  const progressPct = config.nextAt
-    ? Math.min((profile.lifetimePoints / config.nextAt) * 100, 100)
-    : 100;
-  const pointsToNext = config.nextAt ? Math.max(config.nextAt - profile.lifetimePoints, 0) : 0;
-
-  return (
-    <div
-      className={`relative overflow-hidden rounded-2xl ring-2 ${config.ring} shadow-lg ${config.glow}`}
-    >
-      <div className={`bg-linear-to-br ${config.gradient} px-6 py-5`}>
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-widest text-white/70">
-              Loyalty Tier
-            </div>
-            <div className="mt-1 flex items-center gap-2">
-              <span className="text-2xl">{config.icon}</span>
-              <span className="text-2xl font-bold tracking-tight text-white">{config.label}</span>
-            </div>
-          </div>
-          <div className="text-right">
-            <div className="text-xs font-medium text-white/70">Spendable balance</div>
-            <div className="text-3xl font-bold tabular-nums text-white">
-              {profile.points.toLocaleString()}
-              <span className="ml-1 text-sm font-medium text-white/70">pts</span>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div className="bg-white px-6 py-4">
-        {config.nextAt && next ? (
-          <>
-            <div className="mb-2 flex items-center justify-between text-xs text-gray-500">
-              <span className="font-medium">
-                {profile.lifetimePoints.toLocaleString()} lifetime pts
-              </span>
-              <span>
-                {pointsToNext.toLocaleString()} pts until{' '}
-                <span className="font-semibold text-gray-700">{LOYALTY_TIERS[next].label}</span>
-              </span>
-            </div>
-            <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
-              <div
-                className={`h-full rounded-full transition-all duration-700 ${config.bar}`}
-                style={{ width: `${progressPct}%` }}
-              />
-            </div>
-          </>
-        ) : (
-          <div className="text-center text-sm font-medium text-blue-700">
-            💎 Maximum tier achieved — {config.multiplier}× points on every order
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function StatsRow({ profile }: { profile: LoyaltyProfile }) {
-  const streakLabel = STREAK_LABEL(profile.streak)
-  const streakColor = STREAK_COLOR(profile.streak)
-  const tierConfig = LOYALTY_TIERS[profile.tier];
-  return (
-    <div className="grid grid-cols-3 gap-3">
-      <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-        <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">Streak</div>
-        <div className="mt-1 text-2xl font-bold tabular-nums text-gray-900">
-          {profile.streak}
-          <span className="ml-0.5 text-sm font-medium text-gray-400">d</span>
-        </div>
-        <div
-          className={`mt-2 inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${streakColor}`}
-        >
-          {streakLabel}
-        </div>
-      </div>
-      <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-        <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">Lifetime</div>
-        <div className="mt-1 text-2xl font-bold tabular-nums text-gray-900">
-          {profile.lifetimePoints.toLocaleString()}
-        </div>
-        <div className="mt-2 text-xs font-medium text-gray-400">total earned</div>
-      </div>
-      <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-        <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-          Multiplier
-        </div>
-        <div className="mt-1 text-2xl font-bold tabular-nums text-gray-900">
-          {tierConfig.multiplier}
-          <span className="ml-0.5 text-sm font-medium text-gray-400">×</span>
-        </div>
-        <div className="mt-2 text-xs font-medium text-gray-400">pts per $1</div>
-      </div>
-    </div>
-  );
-}
-
-function StreakBonusInfo({ streak }: { streak: number }) {
-  const nextMilestone =
-    streak < 3
-      ? { at: 3, bonus: '+10%', label: '3-day streak' }
-      : streak < 7
-        ? { at: 7, bonus: '+25%', label: '7-day streak' }
-        : streak < 30
-          ? { at: 30, bonus: '+50%', label: '30-day streak' }
-          : null;
-  if (!nextMilestone) {
-    return (
-      <div className="flex items-center gap-3 rounded-xl border border-orange-100 bg-orange-50 px-4 py-3">
-        <span className="text-xl">🔥</span>
-        <p className="text-sm font-medium text-orange-800">
-          Legendary 30-day streak active — earning +50% bonus points on every order
-        </p>
-      </div>
-    );
+function safeNum(v: unknown, fallback = 0): number {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
   }
-  const daysLeft = nextMilestone.at - streak
-  return (
-    <div className="flex items-center gap-3 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
-      <span className="text-xl">⚡</span>
-      <p className="text-sm text-amber-800">
-        <span className="font-semibold">{daysLeft} more day{daysLeft !== 1 ? 's' : ''}</span> to unlock{' '}
-        <span className="font-semibold">{nextMilestone.label}</span> — {nextMilestone.bonus} point bonus
-      </p>
-    </div>
-  )
+  return fallback;
 }
 
-function TransactionRow({ tx }: { tx: LoyaltyTransaction }) {
-  const isPositive = tx.points_delta > 0;
-  const typeLabel: Record<LoyaltyTransaction['transaction_type'], string> = {
-    earned: 'Points earned',
-    redeemed: 'Points redeemed',
-    bonus: 'Bonus awarded',
-    expired: 'Points expired',
-    adjusted: 'Manual adjustment',
-  };
-  const typeIcon: Record<LoyaltyTransaction['transaction_type'], string> = {
-    earned: '⬆',
-    redeemed: '⬇',
-    bonus: '🎁',
-    expired: '⏱',
-    adjusted: '✏',
-  };
-  const date = new Date(tx.created_at).toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
-  return (
-    <div className="flex items-center justify-between py-3">
-      <div className="flex items-center gap-3">
-        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100 text-sm">
-          {typeIcon[tx.transaction_type]}
-        </div>
-        <div>
-          <div className="text-sm font-medium text-gray-900">{typeLabel[tx.transaction_type]}</div>
-          <div className="text-xs text-gray-400">
-            {date}
-            {tx.tier_multiplier > 1 && (
-              <>
-                <span className="ml-1.5 text-gray-300">·</span>
-                <span className="ml-1.5">{tx.tier_multiplier}× tier</span>
-              </>
-            )}
-            {tx.streak_multiplier > 1 && (
-              <>
-                <span className="ml-1.5 text-gray-300">·</span>
-                <span className="ml-1.5">{tx.streak_multiplier}× streak</span>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-      <div className="text-right">
-        <div
-          className={`text-sm font-semibold tabular-nums ${isPositive ? 'text-emerald-600' : 'text-red-500'}`}
-        >
-          {isPositive ? '+' : ''}
-          {tx.points_delta.toLocaleString()} pts
-        </div>
-        <div className="text-xs text-gray-400">Balance: {tx.points_balance.toLocaleString()}</div>
-      </div>
-    </div>
-  );
+function safeIso(v: unknown): string {
+  const s = safeStr(v, '');
+  return s && !Number.isNaN(Date.parse(s)) ? s : new Date().toISOString();
 }
+
+const fmt = (n: number) => n.toLocaleString();
+
+function mapEntryType(raw: unknown): LoyaltyTransactionType {
+  const t = String(raw ?? '').toLowerCase();
+  if (t === 'earn' || t === 'earned') return 'earned';
+  if (t === 'redeem' || t === 'redeemed') return 'redeemed';
+  if (t === 'bonus') return 'bonus';
+  if (t === 'expired') return 'expired';
+  return 'adjusted';
+}
+
+function streakLabel(streak: number): string {
+  if (streak >= 30) return '🔥 Legendary';
+  if (streak >= 14) return '🔥 On Fire';
+  if (streak >= 7) return '⚡ Weekly';
+  if (streak >= 3) return '✨ Heating up';
+  if (streak >= 1) return '🌱 Started';
+  return '🌱 Start your streak today';
+}
+
+function streakBadgeClass(streak: number): string {
+  if (streak >= 30) return 'text-red-700 bg-red-50 border-red-200';
+  if (streak >= 14) return 'text-orange-700 bg-orange-50 border-orange-200';
+  if (streak >= 7) return 'text-amber-700 bg-amber-50 border-amber-200';
+  if (streak >= 3) return 'text-yellow-700 bg-yellow-50 border-yellow-200';
+  return 'text-gray-600 bg-gray-50 border-gray-200';
+}
+
+function buildTransactions(ledger: LoyaltyAccountEdgeResp['ledger']): LoyaltyTransaction[] {
+  const rows = Array.isArray(ledger) ? ledger : [];
+
+  return rows.map((row) => {
+    const type = mapEntryType(row.entry_type);
+
+    // IMPORTANT:
+    // Your API already returns signed amounts (redeem = -2500).
+    // So we keep amount as-is. No double-sign.
+    const delta = safeNum(row.amount, 0);
+
+    const tierAt = safeStr(row.tier_at_time, 'bronze');
+    const tierMult = LOYALTY_TIERS[asTier(tierAt)]?.multiplier ?? 1;
+
+    return {
+      id: safeStr(row.id, crypto.randomUUID()),
+      transaction_type: type,
+      points_delta: delta,
+      points_balance: safeNum(row.balance_after, 0),
+      tier_at_time: tierAt,
+      streak_at_time: safeNum(row.streak_at_time, 0),
+      tier_multiplier: tierMult,
+      streak_multiplier: 1,
+      created_at: safeIso(row.created_at),
+      metadata: (row.metadata ?? null) as LedgerMeta | null,
+      source: safeStr(row.source, 'unknown'),
+      reference_id: typeof row.reference_id === 'string' ? row.reference_id : null,
+    };
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// UI: Skeleton
+// ─────────────────────────────────────────────────────────────
 
 function LoadingSkeleton() {
   return (
     <div className="animate-pulse space-y-4">
-      <div className="h-36 rounded-2xl bg-gray-100" />
+      <div className="h-40 rounded-2xl bg-gray-100" />
       <div className="grid grid-cols-3 gap-3">
         {[0, 1, 2].map((i) => (
           <div key={i} className="h-24 rounded-xl bg-gray-100" />
         ))}
       </div>
-      <div className="h-12 rounded-xl bg-gray-100" />
-      <div className="h-48 rounded-xl bg-gray-100" />
+      <div className="h-16 rounded-xl bg-gray-100" />
+      <div className="h-52 rounded-xl bg-gray-100" />
     </div>
   );
 }
+
+// ─────────────────────────────────────────────────────────────
+// UI: QR Card
+// ─────────────────────────────────────────────────────────────
 
 function LoyaltyQRCard({
   loyaltyPublicId,
   tier,
   name,
 }: {
-  loyaltyPublicId: string;
-  tier: LoyaltyTier;
-  name: string | null | undefined;
+  loyaltyPublicId: string
+  tier: LoyaltyTier
+  name: string | null | undefined
 }) {
-  const config = LOYALTY_TIERS[tier];
-  const canvasRef = useRef<HTMLDivElement>(null);
-  const [copied, setCopied] = useState(false);
+  const cfg = LOYALTY_TIERS[tier]
+  const canvasRef = useRef<HTMLDivElement>(null)
+  const [copied, setCopied] = useState(false)
 
-  async function handleCopy() {
+  const displayName = useMemo(() => {
+    if (!name) return 'Member'
+    const h = name.split('@')[0]?.trim()
+    return h ? h : 'Member'
+  }, [name])
+
+  const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(loyaltyPublicId);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      await navigator.clipboard.writeText(loyaltyPublicId)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
     } catch {
-      /* ignore */
+      // ignore
     }
-  }
+  }, [loyaltyPublicId])
 
-  function handleDownload() {
-    const canvas = canvasRef.current?.querySelector('canvas') as HTMLCanvasElement | null;
-    if (!canvas) return;
-    const link = document.createElement('a');
-    link.download = `loyalty-qr-${loyaltyPublicId.slice(0, 8)}.png`;
-    link.href = canvas.toDataURL('image/png');
-    link.click();
-  }
+  const handleDownload = useCallback(() => {
+    const canvas = canvasRef.current?.querySelector('canvas') as HTMLCanvasElement | null
+    if (!canvas) return
+    const link = document.createElement('a')
+    link.download = `sofis-loyalty-${loyaltyPublicId.slice(0, 8)}.png`
+    link.href = canvas.toDataURL('image/png')
+    link.click()
+  }, [loyaltyPublicId])
 
   return (
-    <div
-      className={`overflow-hidden rounded-2xl border ${config.colors.border} bg-white shadow-sm`}
-    >
-      <div className={`bg-linear-to-br ${config.gradient} px-5 py-3`}>
+    <div className={`overflow-hidden rounded-2xl border ${cfg.colors.border} bg-white shadow-sm`}>
+      <div className={`bg-linear-to-br ${cfg.gradient} px-5 py-3`}>
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/70">
+            <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/70">
               Loyalty Card
             </p>
-            <p className="mt-0.5 text-sm font-semibold text-white">
-              {name?.split('@')[0] ?? 'Member'}
-            </p>
+            <p className="mt-0.5 text-sm font-semibold text-white">{displayName}</p>
           </div>
-          <span className="text-2xl">{config.icon}</span>
+          <span className="text-2xl">{cfg.icon}</span>
         </div>
       </div>
+
       <div className="flex flex-col items-center gap-4 px-6 py-6">
-        <div className={`rounded-xl border-2 ${config.colors.border} bg-white p-3 shadow-sm`}>
+        <div className={`rounded-2xl border-2 ${cfg.colors.border} bg-white p-3 shadow-sm`}>
           <QRCodeSVG
             value={loyaltyPublicId}
-            size={180}
-            fgColor={config.qr.fg}
-            bgColor={config.qr.bg}
+            size={184}
+            fgColor={cfg.qr.fg}
+            bgColor={cfg.qr.bg}
             level="H"
-            includeMargin={false}
           />
         </div>
+
         <div ref={canvasRef} className="hidden" aria-hidden>
           <QRCodeCanvas
             value={loyaltyPublicId}
-            size={400}
-            fgColor={config.qr.fg}
-            bgColor={config.qr.bg}
+            size={420}
+            fgColor={cfg.qr.fg}
+            bgColor={cfg.qr.bg}
             level="H"
             includeMargin
           />
         </div>
+
         <div className="text-center">
           <p className="text-xs font-medium text-gray-500">Show this code to staff at any visit</p>
-          <p className="mt-1 font-mono text-[11px] text-gray-400 select-all break-all">
+          <p className="mt-1 select-all break-all font-mono text-[11px] text-gray-400">
             {loyaltyPublicId}
           </p>
+
           <button
+            type="button"
             onClick={handleCopy}
-            className="mt-2 text-xs text-gray-600 transition hover:text-gray-800"
+            className="mt-2 inline-flex items-center justify-center rounded-lg px-2 py-1 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
           >
             {copied ? '✓ Copied' : 'Copy ID'}
           </button>
         </div>
+
         <button
+          type="button"
           onClick={handleDownload}
-          className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-gray-50 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-100 active:scale-95"
+          className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-gray-200 bg-gray-50 py-2.5 text-xs font-semibold text-gray-800 transition hover:bg-gray-100 active:scale-95"
         >
           ↓ Save QR
         </button>
       </div>
+
       <div className="border-t border-gray-100 px-5 py-2.5">
         <p className="text-center text-[10px] text-gray-400">
           This code is permanent and unique to your account
@@ -459,64 +301,223 @@ function LoyaltyQRCard({
   );
 }
 
-function HowItWorks() {
+// ─────────────────────────────────────────────────────────────
+// UI: Transaction row
+// ─────────────────────────────────────────────────────────────
+
+function TransactionRow({ tx }: { tx: LoyaltyTransaction }) {
+  const isPositive = tx.points_delta > 0;
+
+  const typeLabel: Record<LoyaltyTransactionType, string> = {
+    earned: 'Points earned',
+    redeemed: 'Points redeemed',
+    bonus: 'Bonus awarded',
+    expired: 'Points expired',
+    adjusted: 'Manual adjustment',
+  };
+
+  const typeIcon: Record<LoyaltyTransactionType, string> = {
+    earned: '⬆',
+    redeemed: '⬇',
+    bonus: '🎁',
+    expired: '⏱',
+    adjusted: '✏',
+  };
+
+  const date = new Date(tx.created_at).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+
   return (
-    <details className="group rounded-xl border border-gray-100 bg-white">
-      <summary className="flex cursor-pointer items-center justify-between px-4 py-3 text-sm font-medium text-gray-700 select-none">
-        <span>How points work</span>
-        <span className="text-gray-400 transition-transform group-open:rotate-180">▾</span>
-      </summary>
-      <div className="space-y-2 border-t border-gray-100 px-4 py-3 text-xs text-gray-500">
-        <p>
-          <span className="font-semibold text-gray-700">Base rate</span> — 1 point per $1 spent
-        </p>
-        <p>
-          <span className="font-semibold text-gray-700">Tier multipliers</span> —{' '}
-          {TIER_ORDER.map((t) => `${LOYALTY_TIERS[t].label} ${LOYALTY_TIERS[t].multiplier}×`).join(
-            ' · ',
+    <div className="flex items-center justify-between py-3">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-gray-100 text-sm">
+          {typeIcon[tx.transaction_type]}
+        </div>
+
+        <div>
+          <div className="text-sm font-medium text-gray-900">{typeLabel[tx.transaction_type]}</div>
+          <div className="text-xs text-gray-400">
+            {date}
+            {tx.reference_id && (
+              <>
+                <span className="ml-1.5 text-gray-300">·</span>
+                <span className="ml-1.5 font-mono">
+                  ref {tx.reference_id.slice(0, 8).toUpperCase()}
+                </span>
+              </>
+            )}
+          </div>
+          {tx.source && tx.source !== 'unknown' && (
+            <div className="mt-0.5 text-[10px] text-gray-300">source: {tx.source}</div>
           )}
-        </p>
-        <p>
-          <span className="font-semibold text-gray-700">Streak bonuses</span> — 3 days +10% · 7 days
-          +25% · 30 days +50%
-        </p>
-        <p>
-          <span className="font-semibold text-gray-700">Tier thresholds</span> —{' '}
-          {TIER_ORDER.filter((t) => LOYALTY_TIERS[t].threshold > 0)
-            .map((t) => `${LOYALTY_TIERS[t].label} ${LOYALTY_TIERS[t].threshold.toLocaleString()}`)
-            .join(' · ')}{' '}
-          lifetime points
-        </p>
-        <p className="text-gray-400">
-          Tiers are based on lifetime points and are never downgraded. Streaks reset if you miss a
-          day.
-        </p>
+        </div>
       </div>
-    </details>
+
+      <div className="text-right">
+        <div
+          className={`text-sm font-semibold tabular-nums ${isPositive ? 'text-emerald-600' : 'text-red-500'}`}
+        >
+          {isPositive ? '+' : '-'}
+          {fmt(Math.abs(tx.points_delta))} pts
+        </div>
+        <div className="text-xs text-gray-400">Balance: {fmt(tx.points_balance)}</div>
+      </div>
+    </div>
   );
 }
 
+// ─────────────────────────────────────────────────────────────
+// Data hook (never blank the page)
+// ─────────────────────────────────────────────────────────────
+
+function useLoyaltyData() {
+  const [profile, setProfile] = useState<LoyaltyProfileWithQR | null>(null)
+  const [transactions, setTransactions] = useState<LoyaltyTransaction[]>([])
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const abortRef = useRef(false)
+
+  const load = useCallback(async (soft = false) => {
+    abortRef.current = false;
+
+    const setSafe = (fn: () => void) => {
+      if (!abortRef.current) fn();
+    };
+
+    setSafe(() => {
+      if (!soft) setLoading(true);
+      setRefreshing(soft);
+      setError(null);
+    });
+
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data?.session?.access_token ?? null;
+      if (!token) {
+        setSafe(() => {
+          setProfile(null);
+          setTransactions([]);
+        });
+        return;
+      }
+
+      const resp = await invokeEdge<LoyaltyAccountEdgeResp>(
+        'loyalty-account',
+        {},
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'x-request-id': crypto.randomUUID(),
+          },
+        },
+      );
+
+      if (!resp?.ok) {
+        setSafe(() => setError('Unable to load loyalty data'));
+        return;
+      }
+
+      const acct = resp.account ?? null;
+      const prof = resp.profile ?? null;
+
+      if (!acct) {
+        setSafe(() => {
+          setProfile({
+            points: 0,
+            lifetimePoints: 0,
+            tier: 'bronze',
+            streak: 0,
+            lastOrderDate: null,
+            loyaltyPublicId: prof?.loyalty_public_id ?? null,
+            fullName: prof?.full_name ?? null,
+          });
+          setTransactions([]);
+        });
+        return;
+      }
+
+      const tier = (acct.tier ? asTier(acct.tier) : 'bronze') as LoyaltyTier;
+
+      setSafe(() => {
+        setProfile({
+          points: safeNum(acct.balance, 0),
+          lifetimePoints: safeNum(acct.lifetime_earned, 0),
+          tier,
+          streak: safeNum(acct.streak, 0),
+          lastOrderDate: acct.last_activity ?? null,
+          loyaltyPublicId: prof?.loyalty_public_id ?? null, // ✅ correct field
+          fullName: prof?.full_name ?? null,
+        });
+        setTransactions(buildTransactions(resp.ledger));
+      });
+    } catch {
+      setSafe(() => setError('Unable to load loyalty data'));
+    } finally {
+      setSafe(() => {
+        setLoading(false);
+        setRefreshing(false);
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    void load(false);
+    return () => {
+      abortRef.current = true;
+    };
+  }, [load]);
+
+  const refresh = useCallback(async () => {
+    await load(true);
+  }, [load]);
+
+  return { profile, transactions, loading, refreshing, error, refresh };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Page
+// ─────────────────────────────────────────────────────────────
+
 export default function AccountHome() {
-  const { user }                                  = useUserContext()
-  const { profile, transactions, loading, error } = useLoyaltyData()
+  const { user } = useUserContext();
+  const { profile, transactions, loading, refreshing, error, refresh } = useLoyaltyData();
+
+  const email = user?.email ?? null;
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-gray-900">Account Overview</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Manage your profile and track your loyalty rewards.
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-gray-900">Account Overview</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Manage your profile and track your loyalty rewards.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          className="shrink-0 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-50 active:scale-95"
+        >
+          {refreshing ? 'Refreshing…' : 'Refresh'}
+        </button>
       </div>
+
       <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
         <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">
           Signed in as
         </div>
-        <div className="mt-1 font-medium text-gray-900">{user?.email}</div>
+        <div className="mt-1 font-medium text-gray-900">{email}</div>
         <div className="mt-0.5 text-sm text-gray-500">
           Role: <span className="font-medium text-gray-700 capitalize">{user?.role}</span>
         </div>
       </div>
+
       <div>
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-base font-semibold text-gray-900">Loyalty Rewards</h2>
@@ -528,49 +529,141 @@ export default function AccountHome() {
             </span>
           )}
         </div>
+
         {loading && <LoadingSkeleton />}
+
         {error && (
           <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}
+            <div className="mt-2">
+              <button
+                type="button"
+                onClick={() => void refresh()}
+                className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-700"
+              >
+                Try again
+              </button>
+            </div>
           </div>
         )}
+
         {!loading && !error && !profile && (
           <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-6 text-center text-sm text-gray-500">
             Place your first order to start earning loyalty points.
           </div>
         )}
+
         {!loading && !error && profile && (
           <div className="space-y-4">
-            {profile.loyaltyPublicId && (
+            {/* QR */}
+            {profile.loyaltyPublicId ? (
               <LoyaltyQRCard
                 loyaltyPublicId={profile.loyaltyPublicId}
                 tier={profile.tier}
-                name={user?.email}
+                name={email}
               />
+            ) : (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4">
+                <div className="text-sm font-semibold text-amber-900">QR card not ready yet</div>
+                <div className="mt-1 text-xs text-amber-800">
+                  Tap Refresh — it should appear once generated.
+                </div>
+              </div>
             )}
-            <TierCard profile={profile} />
-            <StatsRow profile={profile} />
-            {profile.streak > 0 && <StreakBonusInfo streak={profile.streak} />}
-            <HowItWorks />
+
+            {/* Stats row */}
+            <div className="grid grid-cols-3 gap-3">
+              <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+                <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+                  Spendable
+                </div>
+                <div className="mt-1 text-2xl font-bold tabular-nums text-gray-900">
+                  {fmt(profile.points)}{' '}
+                  <span className="text-sm font-medium text-gray-400">pts</span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+                <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+                  Streak
+                </div>
+                <div className="mt-1 text-2xl font-bold tabular-nums text-gray-900">
+                  {profile.streak}
+                  <span className="ml-0.5 text-sm font-medium text-gray-400">d</span>
+                </div>
+                <div
+                  className={`mt-2 inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${streakBadgeClass(profile.streak)}`}
+                >
+                  {streakLabel(profile.streak)}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+                <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+                  Lifetime
+                </div>
+                <div className="mt-1 text-2xl font-bold tabular-nums text-gray-900">
+                  {fmt(profile.lifetimePoints)}
+                </div>
+                <div className="mt-2 text-xs font-medium text-gray-400">total earned</div>
+              </div>
+            </div>
+
+            {/* Activity */}
             {transactions.length > 0 ? (
               <div className="rounded-xl border border-gray-100 bg-white">
                 <div className="border-b border-gray-100 px-4 py-3">
                   <h3 className="text-sm font-semibold text-gray-900">Recent Activity</h3>
                 </div>
+
                 <div className="divide-y divide-gray-50 px-4">
                   {transactions.map((tx) => (
                     <TransactionRow key={tx.id} tx={tx} />
                   ))}
                 </div>
+
+                <div className="border-t border-gray-100 px-4 py-3 text-right">
+                  <Link
+                    to="/account/orders"
+                    className="text-xs font-semibold text-gray-700 hover:text-gray-900"
+                  >
+                    View orders →
+                  </Link>
+                </div>
               </div>
             ) : (
               <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-5 text-center">
-                <p className="text-sm text-gray-500">
-                  Place your first order to start earning points.
-                </p>
-                <p className="mt-0.5 text-xs text-gray-400">Every $1 earns 1 point.</p>
+                <p className="text-sm text-gray-500">No activity yet.</p>
+                <div className="mt-3">
+                  <Link
+                    to="/menu"
+                    className="inline-flex items-center justify-center rounded-xl bg-gray-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-black"
+                  >
+                    Order now
+                  </Link>
+                </div>
               </div>
             )}
+
+            {/* Explain */}
+            <details className="group rounded-xl border border-gray-100 bg-white">
+              <summary className="flex cursor-pointer select-none items-center justify-between px-4 py-3 text-sm font-medium text-gray-700">
+                <span>How points work</span>
+                <span className="text-gray-400 transition-transform group-open:rotate-180">▾</span>
+              </summary>
+              <div className="space-y-2 border-t border-gray-100 px-4 py-3 text-xs text-gray-500">
+                <p>
+                  <span className="font-semibold text-gray-700">Base rate</span> — 1 point per $1
+                  spent
+                </p>
+                <p>
+                  <span className="font-semibold text-gray-700">Tier multipliers</span> —{' '}
+                  {TIER_ORDER.map(
+                    (t) => `${LOYALTY_TIERS[t].label} ${LOYALTY_TIERS[t].multiplier}×`,
+                  ).join(' · ')}
+                </p>
+              </div>
+            </details>
           </div>
         )}
       </div>

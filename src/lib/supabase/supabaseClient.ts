@@ -17,12 +17,8 @@ export const supabase = createClient<Database>(env.supabase.url, env.supabase.an
 })
 
 // DEV-ONLY: expose supabase to browser console for debugging
+// DEV-ONLY: expose supabase to browser console for debugging
 if (import.meta.env.DEV && typeof window !== 'undefined') {
+  ;(window as any).supabase = supabase
   console.log('🔗 Supabase connected to:', env.supabase.url)
-
-  Object.defineProperty(window, 'supabase', {
-    value: supabase,
-    writable: false,
-    configurable: false,
-  })
 }

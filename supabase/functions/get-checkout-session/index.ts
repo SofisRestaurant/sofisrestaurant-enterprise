@@ -1,122 +1,100 @@
 // supabase/functions/get-checkout-session/index.ts
 // =============================================================================
-// GET CHECKOUT SESSION — PRODUCTION HARDENED (ENTERPRISE SAFE, 2026)
+// GET CHECKOUT SESSION — Enterprise / Production Hardened (2026) • Sofi's V2
 // =============================================================================
 // Purpose:
-// - Authenticated user can fetch their own Stripe Checkout Session summary
-// - Strict CORS (origin allowlist) + credentials-safe
-// - Rate-limited per user (reuses checkout_rate_limits table)
-// - Single Stripe API call
-// - Sanitized response (no secret metadata dumps)
+// - Return a safe subset of Stripe Checkout Session fields for the authenticated owner.
+// - Prevent session scraping / ownership bypass / retry storms.
 //
-// Contract (request body):
-//   { sessionId?: string, session_id?: string }
-//
-// Response:
-//   { id, status, payment_status, amount_total, amount_subtotal, currency, customer_email,
-//     customer_name, line_items, created, expires_at }
+// Guarantees:
+// - ✅ Fail-closed CORS (403 if origin not allowlisted)
+// - ✅ No top-level env throws (prevents opaque cold-start 502s)
+// - ✅ Strict JSON parsing + payload size cap
+// - ✅ JWT required (anon client validates identity)
+// - ✅ Owner check against Stripe session metadata (user_id / customer_uid / uid)
+// - ✅ Rate limit using checkout_rate_limits table (blocked_until supported)
+// - ✅ Structured logs (no secrets)
+// - ✅ Optional geo restriction (disabled by default)
+// - ✅ x-application-name required (basic abuse resistance)
 //
 // Notes:
-// - Requires STRIPE_SECRET_KEY
-// - Requires checkout_rate_limits table: user_id, attempts, last_attempt_at, blocked_until
-// - create-checkout must set session.metadata.customer_uid = supabase user id
+// - This endpoint is read-only; it does NOT finalize orders.
+// - Do NOT return sensitive Stripe objects; only return what UI needs.
 // =============================================================================
 
 import Stripe from "stripe";
-import {
-  createAnonClient,
-  createServiceClient,
-} from "../_shared/supabase.ts";
+import { createAnonClient, createServiceClient } from "../_shared/supabase.ts";
 
-// =============================================================================
-// CONFIG
-// =============================================================================
+// ─────────────────────────────────────────────────────────────
+// Config
+// ─────────────────────────────────────────────────────────────
+
 const CONFIG = {
-  MAX_BODY_BYTES: 10_000, // 10KB max payload
+  MAX_BODY_BYTES: 10_000,
+  SESSION_ID_MAX_LEN: 255,
+
   RATE_LIMIT_MAX: 20,
   RATE_LIMIT_WINDOW_MINUTES: 5,
   RATE_LIMIT_BLOCK_MINUTES: 10,
-  SESSION_ID_MAX_LEN: 255,
+
+  // Require app identifier header (helps block random cross-origin callers)
+  REQUIRE_APP_HEADER: true,
+  APP_HEADER_NAME: "x-application-name",
+  REQUEST_ID_HEADER: "x-request-id",
+
+  // Optional geo restriction (Cloudflare style headers). Leave disabled unless you’re behind CF.
+  ENABLE_GEO_RESTRICTION: false,
+  ALLOWED_COUNTRIES: ["US"] as const, // ISO-3166-1 alpha-2
+
+  // Stripe pinned version (upgrade intentionally)
+  DEFAULT_STRIPE_API_VERSION: "2024-06-20",
 } as const;
 
-// =============================================================================
-// ENV
-// =============================================================================
-const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
-if (!STRIPE_SECRET_KEY) throw new Error("Missing STRIPE_SECRET_KEY");
+const STRIPE_SESSION_RE = /^cs_(test|live)_[a-zA-Z0-9]+$/;
 
-// =============================================================================
-// CLIENTS
-// =============================================================================
-const stripe = new Stripe(STRIPE_SECRET_KEY, {
-  apiVersion: "2026-02-25.clover",
-  httpClient: Stripe.createFetchHttpClient(),
-});
-
-// Service-role DB client (rate limiting / server-side reads)
-const svc = createServiceClient();
-
-// =============================================================================
-// CORS
-// =============================================================================
 const ALLOWED_ORIGINS = [
   "https://sofislegacy.com",
   "https://www.sofislegacy.com",
   "https://sofisrestaurant.netlify.app",
   "http://localhost:3000",
   "http://localhost:3001",
-];
+] as const;
 
-function getCorsHeaders(req: Request): Record<string, string> | null {
-  const origin = req.headers.get("origin") ?? "";
-  if (!ALLOWED_ORIGINS.includes(origin)) return null;
+const ALLOWED_HEADERS =
+  "authorization, apikey, x-client-info, content-type, x-application-name, x-idempotency-key, x-request-id";
 
-  return {
-    "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Credentials": "true",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers":
-      "authorization, x-client-info, apikey, content-type, x-application-name, x-idempotency-key",
-    "Vary": "Origin",
+const ALLOWED_METHODS = "POST, OPTIONS";
+
+// ─────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────
+
+type JsonRecord = Record<string, unknown>;
+
+type OkResp = {
+  ok: true;
+  requestId: string;
+  data: {
+    id: string;
+    status: string | null;
+    payment_status: string | null;
+    amount_total: number | null;
+    amount_subtotal: number | null;
+    currency: string | null;
+    customer_email: string | null;
+    customer_name: string | null;
+    line_items: unknown[];
+    created: number | null;
+    expires_at: number | null;
   };
-}
+};
 
-// =============================================================================
-// LOGGING
-// =============================================================================
-function log(level: "info" | "warn" | "error", msg: string, data?: unknown) {
-  console.log(JSON.stringify({ level, msg, data, time: new Date().toISOString() }));
-}
+type ErrResp = {
+  ok: false;
+  requestId: string;
+  error: { code: string; message: string };
+};
 
-// =============================================================================
-// HELPERS
-// =============================================================================
-function json(cors: Record<string, string>, data: unknown, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { ...cors, "Content-Type": "application/json" },
-  });
-}
-
-function err(cors: Record<string, string>, message: string, status = 400, code?: string) {
-  log("error", message, { status, code });
-  return json(cors, { error: message, code: code ?? `HTTP_${status}` }, status);
-}
-
-function asString(v: unknown, max = 10_000): string {
-  return String(v ?? "").slice(0, max).trim();
-}
-
-function parseJsonObject(body: unknown): Record<string, unknown> {
-  return typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
-}
-
-// Stripe checkout session ids look like: cs_test_... or cs_live_...
-const SESSION_REGEX = /^cs_(test|live)_[a-zA-Z0-9]+$/;
-
-// =============================================================================
-// RATE LIMITING (reuses checkout_rate_limits)
-// =============================================================================
 type RateLimitRow = {
   user_id: string;
   attempts: number | null;
@@ -124,199 +102,368 @@ type RateLimitRow = {
   blocked_until: string | null;
 };
 
-async function checkRateLimit(userId: string): Promise<{ blocked: boolean }> {
+// ─────────────────────────────────────────────────────────────
+// Small utils
+// ─────────────────────────────────────────────────────────────
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function isRecord(v: unknown): v is JsonRecord {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function makeRequestId(req: Request): string {
+  const h = (req.headers.get(CONFIG.REQUEST_ID_HEADER) ?? "").trim();
+  if (h) return h.slice(0, 128);
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  }
+}
+
+function prefix(id: string | null | undefined, n = 8): string | null {
+  if (!id) return null;
+  return id.slice(0, n);
+}
+
+function log(level: "info" | "warn" | "error", event: string, data?: Record<string, unknown>) {
+  const entry = JSON.stringify({
+    level,
+    event,
+    service: "get-checkout-session",
+    ts: nowIso(),
+    ...(data ?? {}),
+  });
+  if (level === "error") console.error(entry);
+  else if (level === "warn") console.warn(entry);
+  else console.log(entry);
+}
+
+function corsHeaders(req: Request): Record<string, string> | null {
+  const origin = (req.headers.get("origin") ?? "").trim();
+  const allowed = (ALLOWED_ORIGINS as readonly string[]).includes(origin);
+  if (!allowed) return null;
+
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Credentials": "true",
+    "Access-Control-Allow-Methods": ALLOWED_METHODS,
+    "Access-Control-Allow-Headers": ALLOWED_HEADERS,
+    "Access-Control-Max-Age": "86400",
+    Vary: "Origin",
+  };
+}
+
+function json(cors: Record<string, string>, body: OkResp | ErrResp, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      ...cors,
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
+function errorJson(
+  cors: Record<string, string>,
+  requestId: string,
+  code: string,
+  message: string,
+  status = 400,
+  meta?: Record<string, unknown>,
+): Response {
+  log(status >= 500 ? "error" : "warn", "error", { requestId, code, message, ...(meta ?? {}) });
+  return json(cors, { ok: false, requestId, error: { code, message } }, status);
+}
+
+async function readJsonWithLimit(req: Request, maxBytes: number): Promise<unknown> {
+  const ct = (req.headers.get("content-type") ?? "").toLowerCase();
+  if (!ct.includes("application/json")) throw new Error("UNSUPPORTED_CONTENT_TYPE");
+
+  const ab = await req.arrayBuffer();
+  if (ab.byteLength > maxBytes) throw new Error("PAYLOAD_TOO_LARGE");
+
+  const text = new TextDecoder().decode(ab);
+  if (!text.trim()) throw new Error("EMPTY_BODY");
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("INVALID_JSON");
+  }
+}
+
+function mustStripeSessionId(v: unknown): string {
+  if (typeof v !== "string") throw new Error("INVALID_SESSION_ID");
+  const s = v.trim();
+  if (!s || s.length > CONFIG.SESSION_ID_MAX_LEN || !STRIPE_SESSION_RE.test(s)) {
+    throw new Error("INVALID_SESSION_ID");
+  }
+  return s;
+}
+
+function isValidStripeApiVersion(v: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}(\.[a-zA-Z0-9_-]+)?$/.test(v);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Stripe (lazy init — no top-level env throws)
+// ─────────────────────────────────────────────────────────────
+
+let STRIPE_SINGLETON: Stripe | null = null;
+let STRIPE_SINGLETON_VERSION: string | null = null;
+
+function getStripeOrThrow(): { stripe: Stripe; apiVersion: string } {
+  const secret = (Deno.env.get("STRIPE_SECRET_KEY") ?? "").trim();
+  if (!secret) throw new Error("MISSING_STRIPE_SECRET_KEY");
+
+  const envVer = (Deno.env.get("STRIPE_API_VERSION") ?? "").trim();
+  const v = isValidStripeApiVersion(envVer) ? envVer : CONFIG.DEFAULT_STRIPE_API_VERSION;
+
+  if (STRIPE_SINGLETON && STRIPE_SINGLETON_VERSION === v) {
+    return { stripe: STRIPE_SINGLETON, apiVersion: v };
+  }
+
+  const stripe = new Stripe(secret, {
+    apiVersion: v as unknown as Stripe.LatestApiVersion,
+    httpClient: Stripe.createFetchHttpClient(),
+  });
+
+  STRIPE_SINGLETON = stripe;
+  STRIPE_SINGLETON_VERSION = v;
+  return { stripe, apiVersion: v };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Rate limit (block when DB says blocked; fail-open on DB errors)
+// ─────────────────────────────────────────────────────────────
+
+async function checkRateLimit(
+  svc: ReturnType<typeof createServiceClient>,
+  userId: string,
+  requestId: string,
+): Promise<{ blocked: boolean }> {
   const now = new Date();
   const windowStart = new Date(now.getTime() - CONFIG.RATE_LIMIT_WINDOW_MINUTES * 60_000);
 
-const { data, error } = await svc
-  .from("checkout_rate_limits")
-  .select("user_id,attempts,last_attempt_at,blocked_until")
-  .eq("user_id", userId)
-  .order("last_attempt_at", { ascending: false })
-  .limit(1)
-  .maybeSingle();
+  const { data, error } = await svc
+    .from("checkout_rate_limits")
+    .select("attempts,last_attempt_at,blocked_until")
+    .eq("user_id", userId)
+    .maybeSingle();
 
   if (error) {
-    // Fail closed on RL table errors (safer)
-    log("error", "rate_limit_read_failed", { userId, error: error.message });
-    return { blocked: true };
+    // Fail-open (don’t lock users out if DB hiccups)
+    log("warn", "rate_limit_read_failed", { requestId, userId: prefix(userId), msg: error.message });
+    return { blocked: false };
   }
 
   const row = (data ?? null) as RateLimitRow | null;
 
-  if (row?.blocked_until && new Date(row.blocked_until) > now) {
-    return { blocked: true };
-  }
+  const blockedUntil = row?.blocked_until ? new Date(row.blocked_until) : null;
+  if (blockedUntil && blockedUntil > now) return { blocked: true };
 
-  if (!row) {
-    const { error: insErr } = await svc.from("checkout_rate_limits").insert({
-      user_id: userId,
-      attempts: 1,
-      last_attempt_at: now.toISOString(),
-      blocked_until: null,
-    });
+  const lastAttemptAt = row?.last_attempt_at ? new Date(row.last_attempt_at) : null;
+  const prevAttempts = typeof row?.attempts === "number" && Number.isFinite(row.attempts) ? row.attempts : 0;
 
-    if (insErr) {
-      log("error", "rate_limit_insert_failed", { userId, error: insErr.message });
-      return { blocked: true };
-    }
-
-    return { blocked: false };
-  }
-
-  const lastAttemptAt = row.last_attempt_at ? new Date(row.last_attempt_at) : null;
-  const attempts =
-    !lastAttemptAt || lastAttemptAt < windowStart ? 1 : (row.attempts ?? 0) + 1;
+  const attempts = !lastAttemptAt || lastAttemptAt < windowStart ? 1 : prevAttempts + 1;
 
   const blocked = attempts > CONFIG.RATE_LIMIT_MAX;
-  const blockedUntil = blocked
-    ? new Date(now.getTime() + CONFIG.RATE_LIMIT_BLOCK_MINUTES * 60_000).toISOString()
-    : null;
+  const blockedUntilIso = blocked ? new Date(now.getTime() + CONFIG.RATE_LIMIT_BLOCK_MINUTES * 60_000).toISOString() : null;
 
-  const { error: upErr } = await svc.from("checkout_rate_limits").upsert({
-    user_id: userId,
-    attempts,
-    last_attempt_at: now.toISOString(),
-    blocked_until: blockedUntil,
-  });
+  const { error: upErr } = await svc.from("checkout_rate_limits").upsert(
+    { user_id: userId, attempts, last_attempt_at: now.toISOString(), blocked_until: blockedUntilIso },
+    { onConflict: "user_id" },
+  );
 
-  if (upErr) {
-    log("error", "rate_limit_upsert_failed", { userId, error: upErr.message });
-    return { blocked: true };
-  }
+  if (upErr) log("warn", "rate_limit_upsert_failed", { requestId, userId: prefix(userId), msg: upErr.message });
 
   return { blocked };
 }
 
-// =============================================================================
-// AUTH + SESSION FETCH (SINGLE STRIPE CALL)
-// =============================================================================
-async function authenticateAndAuthorize(
-  req: Request,
-  sessionId: string,
-): Promise<
-  | { ok: false; reason: string }
+// ─────────────────────────────────────────────────────────────
+// Auth + Stripe ownership check
+// ─────────────────────────────────────────────────────────────
+
+function readBearer(req: Request): string | null {
+  const raw = req.headers.get("authorization") ?? req.headers.get("Authorization");
+  if (!raw) return null;
+  const m = raw.trim().match(/^bearer\s+(.+)$/i);
+  const token = m?.[1]?.trim();
+  return token ? token : null;
+}
+
+function pickString(meta: Stripe.Metadata | null | undefined, ...keys: string[]): string {
+  if (!meta) return "";
+  for (const k of keys) {
+    const v = meta[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
+}
+
+async function authenticateAndAuthorize(args: {
+  req: Request;
+  requestId: string;
+  sessionId: string;
+  svc: ReturnType<typeof createServiceClient>;
+  stripe: Stripe;
+}): Promise<
+  | { ok: false; reason: "missing_auth" | "auth_failed" | "rate_limited" | "owner_mismatch" | "stripe_error" }
   | { ok: true; userId: string; session: Stripe.Checkout.Session }
 > {
-  const authHeader = req.headers.get("authorization") ?? "";
-  if (!authHeader.startsWith("Bearer ")) {
-    log("warn", "missing_auth_header");
-    return { ok: false, reason: "missing_auth" };
-  }
+  const { req, requestId, sessionId, svc, stripe } = args;
 
-  const token = authHeader.slice("Bearer ".length).trim();
-  if (!token) return { ok: false, reason: "missing_token" };
+  const token = readBearer(req);
+  if (!token) return { ok: false, reason: "missing_auth" };
 
   const anon = createAnonClient(token);
   const { data, error } = await anon.auth.getUser();
-  if (error || !data?.user?.id) {
-    log("warn", "auth_failed", { error: error?.message });
-    return { ok: false, reason: "auth_failed" };
-  }
+  const userId = data?.user?.id ?? null;
+  if (error || !userId) return { ok: false, reason: "auth_failed" };
 
-  const userId = data.user.id;
-
-  // Rate limit before Stripe call
-  const rate = await checkRateLimit(userId);
-  if (rate.blocked) {
-    log("warn", "rate_limited", { userId });
-    return { ok: false, reason: "rate_limited" };
-  }
+  const rl = await checkRateLimit(svc, userId, requestId);
+  if (rl.blocked) return { ok: false, reason: "rate_limited" };
 
   try {
     const session = await stripe.checkout.sessions.retrieve(sessionId, {
       expand: ["line_items", "customer", "payment_intent"],
     });
 
-    // Ownership check: create-checkout must write customer_uid in metadata
-    const sessionOwner = session.metadata?.customer_uid ?? "";
-    if (sessionOwner !== userId) {
-      log("warn", "session_owner_mismatch", { userId, sessionOwner, sessionId });
-      return { ok: false, reason: "owner_mismatch" };
-    }
+    // Support multiple metadata conventions
+    const owner =
+      pickString(session.metadata, "user_id", "customer_uid", "uid") ||
+      ""; // force string
+
+    if (!owner || owner !== userId) return { ok: false, reason: "owner_mismatch" };
 
     return { ok: true, userId, session };
   } catch (e) {
-    log("error", "stripe_retrieve_failed", {
-      sessionId,
-      error: e instanceof Error ? e.message : String(e),
-    });
+    log("warn", "stripe_retrieve_failed", { requestId, sessionId: prefix(sessionId), err: e instanceof Error ? e.message : String(e) });
     return { ok: false, reason: "stripe_error" };
   }
 }
 
-// =============================================================================
-// MAIN
-// =============================================================================
-Deno.serve(async (req) => {
-  const cors = getCorsHeaders(req);
+// ─────────────────────────────────────────────────────────────
+// Optional geo restriction (best-effort)
+// ─────────────────────────────────────────────────────────────
+
+function geoAllowed(req: Request): boolean {
+  if (!CONFIG.ENABLE_GEO_RESTRICTION) return true;
+
+  // Common CF header: CF-IPCountry (e.g. "US"). If absent, fail-open.
+  const country = (req.headers.get("cf-ipcountry") ?? req.headers.get("CF-IPCountry") ?? "").trim().toUpperCase();
+  if (!country) return true;
+
+  return (CONFIG.ALLOWED_COUNTRIES as readonly string[]).includes(country);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Handler
+// ─────────────────────────────────────────────────────────────
+
+Deno.serve(async (req: Request) => {
+  const requestId = makeRequestId(req);
+  const start = Date.now();
+
+  const cors = corsHeaders(req);
   if (!cors) return new Response("Origin not allowed", { status: 403 });
 
-  // Preflight must be 2xx and include the same CORS headers
-  if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: cors });
-  }
+  // Preflight
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
 
   if (req.method !== "POST") {
-    return err(cors, "Method not allowed", 405);
+    return errorJson(cors, requestId, "METHOD_NOT_ALLOWED", "Method not allowed", 405);
   }
 
-  // Body size guard (best-effort)
-  const contentLength = req.headers.get("content-length");
-  if (contentLength && Number(contentLength) > CONFIG.MAX_BODY_BYTES) {
-    return err(cors, "Payload too large", 413);
+  if (!geoAllowed(req)) {
+    return errorJson(cors, requestId, "GEO_BLOCKED", "Access not allowed from your region", 403);
   }
 
-  const requestId = crypto.randomUUID();
+  if (CONFIG.REQUIRE_APP_HEADER) {
+    const appName = (req.headers.get(CONFIG.APP_HEADER_NAME) ?? "").trim();
+    if (!appName) {
+      return errorJson(cors, requestId, "MISSING_APP_HEADER", `Missing ${CONFIG.APP_HEADER_NAME}`, 400);
+    }
+  }
 
-  // Parse body
-  let rawBody: unknown;
+  // Stripe init (lazy)
+  let stripe: Stripe;
+  let stripeApiVersion: string;
   try {
-    rawBody = await req.json();
+    const s = getStripeOrThrow();
+    stripe = s.stripe;
+    stripeApiVersion = s.apiVersion;
   } catch {
-    log("warn", "invalid_json", { requestId });
-    return err(cors, "Invalid JSON", 400);
+    return errorJson(cors, requestId, "STRIPE_INIT_FAILED", "Stripe is not configured on the server", 500);
   }
 
-  const body = parseJsonObject(rawBody);
-
-  // Accept both camelCase + snake_case
-  const sessionIdRaw = body["sessionId"] ?? body["session_id"];
-  const sessionId = asString(sessionIdRaw, CONFIG.SESSION_ID_MAX_LEN);
-
-  if (!sessionId || !SESSION_REGEX.test(sessionId)) {
-    log("warn", "invalid_session_id", { requestId, sessionId });
-    return err(cors, "Missing or invalid sessionId", 400);
+  // Body parse (strict)
+  let raw: unknown;
+  try {
+    raw = await readJsonWithLimit(req, CONFIG.MAX_BODY_BYTES);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "BAD_REQUEST";
+    if (msg === "PAYLOAD_TOO_LARGE") return errorJson(cors, requestId, "PAYLOAD_TOO_LARGE", "Payload too large", 413);
+    if (msg === "UNSUPPORTED_CONTENT_TYPE") return errorJson(cors, requestId, "UNSUPPORTED_MEDIA_TYPE", "Content-Type must be application/json", 415);
+    if (msg === "EMPTY_BODY") return errorJson(cors, requestId, "EMPTY_BODY", "Request body is empty", 400);
+    return errorJson(cors, requestId, "INVALID_JSON", "Invalid JSON", 400);
   }
 
-  // Auth + Stripe fetch
-  const authResult = await authenticateAndAuthorize(req, sessionId);
-  if (!authResult.ok) {
-    // Provide safe errors; don't leak internals
-    const status = authResult.reason === "rate_limited" ? 429 : 401;
-    const msg =
-      authResult.reason === "rate_limited"
-        ? "Too many requests. Please wait and try again."
-        : "Unauthorized";
-    return err(cors, msg, status);
+  if (!isRecord(raw)) {
+    return errorJson(cors, requestId, "INVALID_BODY", "Request body must be a JSON object", 400);
   }
 
-  const { session, userId } = authResult;
+  const sessionId = mustStripeSessionId(raw["sessionId"] ?? raw["session_id"]);
 
-  log("info", "checkout_session_returned", { requestId, userId, sessionId });
+  const svc = createServiceClient();
 
-  // Sanitized response (no raw metadata dump)
-  return json(cors, {
-    id: session.id,
-    status: session.status ?? null,
-    payment_status: session.payment_status ?? null,
-    amount_total: session.amount_total ?? null,
-    amount_subtotal: session.amount_subtotal ?? null,
-    currency: session.currency ?? null,
-    customer_email: session.customer_details?.email ?? null,
-    customer_name: session.customer_details?.name ?? null,
-    line_items: session.line_items?.data ?? [],
-    created: session.created ?? null,
-    expires_at: session.expires_at ?? null,
+  // Auth + owner check
+  const auth = await authenticateAndAuthorize({ req, requestId, sessionId, svc, stripe });
+  if (!auth.ok) {
+    if (auth.reason === "rate_limited") {
+      return errorJson(cors, requestId, "RATE_LIMITED", "Too many requests. Please wait and try again.", 429);
+    }
+    if (auth.reason === "owner_mismatch") {
+      return errorJson(cors, requestId, "UNAUTHORIZED", "Unauthorized", 401);
+    }
+    if (auth.reason === "stripe_error") {
+      return errorJson(cors, requestId, "STRIPE_UNAVAILABLE", "Unable to retrieve checkout session", 502);
+    }
+    return errorJson(cors, requestId, "UNAUTHORIZED", "Unauthorized", 401);
+  }
+
+  const { session } = auth;
+
+  // Response: keep it minimal + safe
+  const resp: OkResp = {
+    ok: true,
+    requestId,
+    data: {
+      id: session.id,
+      status: session.status ?? null,
+      payment_status: session.payment_status ?? null,
+      amount_total: typeof session.amount_total === "number" ? session.amount_total : null,
+      amount_subtotal: typeof session.amount_subtotal === "number" ? session.amount_subtotal : null,
+      currency: typeof session.currency === "string" ? session.currency : null,
+      customer_email: session.customer_details?.email ?? null,
+      customer_name: session.customer_details?.name ?? null,
+      line_items: session.line_items?.data ?? [],
+      created: typeof session.created === "number" ? session.created : null,
+      expires_at: typeof session.expires_at === "number" ? session.expires_at : null,
+    },
+  };
+
+  log("info", "ok", {
+    requestId,
+    ms: Date.now() - start,
+    sessionId: prefix(sessionId),
+    stripeApiVersion,
   });
+
+  return json(cors, resp, 200);
 });

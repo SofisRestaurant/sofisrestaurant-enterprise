@@ -34,7 +34,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase/supabaseClient';
-import { invokeFn } from '@/lib/supabase/invoke';
+import { invokeEdge } from '@/lib/supabase/invoke';
 import { subscribeToAdminSession, verifyAdminAccess } from '@/pages/Admin/admin.auth';
 import { buildNavGroups } from '@/features/admin/menu/nav.config';
 
@@ -414,7 +414,7 @@ export default function AdminLayout() {
       try {
         // invokeFn attaches Authorization: Bearer <token> internally
         const envelope = await withRetry(() =>
-          invokeFn<LayoutMetricsPayload>('admin-gateway', { action: 'layout' }),
+          invokeEdge<LayoutMetricsPayload>('admin-gateway', { action: 'layout' }),
         );
 
         // Runtime-validate shape — never trust unknown gateway response

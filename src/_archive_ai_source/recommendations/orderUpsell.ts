@@ -10,7 +10,7 @@
 
 
 import type { Database } from '@/types/supabase'
-import type { CartItem } from '@/features/cart/cart.types'
+import type { CartItem } from '@/modules/cart/types/cart.types'
 
 export type MenuCategory = Database['public']['Enums']['menu_category']
 

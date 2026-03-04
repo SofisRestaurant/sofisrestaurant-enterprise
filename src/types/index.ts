@@ -9,7 +9,7 @@
 // ============================================================================
 // DOMAIN TYPES
 // ============================================================================
-export type { CartItem } from '@/features/cart/cart.types'
+export type { CartItem } from '@/modules/cart/types/cart.types'
 // Menu — source of truth is src/types/menu.ts
 export type { 
   MenuItem, 
@@ -19,7 +19,7 @@ export type {
 } from '@/domain/menu/menu.types'
 
 // Cart store interface
-export type { CartStore, AddToCartPayload } from '@/features/cart/cart.types'
+export type { CartStore, AddToCartPayload } from '@/modules/cart/types/cart.types'
 
 // ============================================================================
 // USER / AUTH

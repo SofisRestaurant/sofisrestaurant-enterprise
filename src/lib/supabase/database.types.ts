@@ -187,6 +187,180 @@ export type Database = {
         }
         Relationships: []
       }
+      auth_audit_log: {
+        Row: {
+          created_at: string
+          device_id: string | null
+          event_data: Json | null
+          event_type: string
+          id: string
+          ip_address: string | null
+          risk_score: number | null
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          device_id?: string | null
+          event_data?: Json | null
+          event_type: string
+          id?: string
+          ip_address?: string | null
+          risk_score?: number | null
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          device_id?: string | null
+          event_data?: Json | null
+          event_type?: string
+          id?: string
+          ip_address?: string | null
+          risk_score?: number | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      auth_risk_rate_limits: {
+        Row: {
+          attempts: number
+          blocked_until: string | null
+          created_at: string
+          last_attempt_at: string | null
+          session_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          attempts?: number
+          blocked_until?: string | null
+          created_at?: string
+          last_attempt_at?: string | null
+          session_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          attempts?: number
+          blocked_until?: string | null
+          created_at?: string
+          last_attempt_at?: string | null
+          session_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      auth_risk_scores: {
+        Row: {
+          device_unknown_pts: number
+          evaluated_at: string
+          expires_at: string
+          geo_mismatch_pts: number
+          pw_mismatch_pts: number
+          rapid_attempts_pts: number
+          requires_device_trust: boolean
+          requires_mfa: boolean
+          requires_step_up: boolean
+          risk_score: number
+          session_id: string
+          unusual_time_pts: number
+          user_id: string
+        }
+        Insert: {
+          device_unknown_pts?: number
+          evaluated_at?: string
+          expires_at: string
+          geo_mismatch_pts?: number
+          pw_mismatch_pts?: number
+          rapid_attempts_pts?: number
+          requires_device_trust?: boolean
+          requires_mfa?: boolean
+          requires_step_up?: boolean
+          risk_score?: number
+          session_id: string
+          unusual_time_pts?: number
+          user_id: string
+        }
+        Update: {
+          device_unknown_pts?: number
+          evaluated_at?: string
+          expires_at?: string
+          geo_mismatch_pts?: number
+          pw_mismatch_pts?: number
+          rapid_attempts_pts?: number
+          requires_device_trust?: boolean
+          requires_mfa?: boolean
+          requires_step_up?: boolean
+          risk_score?: number
+          session_id?: string
+          unusual_time_pts?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
+      auth_session_validation_cooldowns: {
+        Row: {
+          action: string
+          last_seen_at: string
+          session_id: string
+          user_id: string
+        }
+        Insert: {
+          action: string
+          last_seen_at?: string
+          session_id: string
+          user_id: string
+        }
+        Update: {
+          action?: string
+          last_seen_at?: string
+          session_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      auth_sessions_meta: {
+        Row: {
+          country_code: string | null
+          created_at: string
+          device_trust_id: string | null
+          invalidated_at: string | null
+          invalidation_reason: string | null
+          ip_address: string | null
+          is_trusted_device: boolean
+          last_active_at: string | null
+          risk_score: number
+          session_id: string
+          user_id: string
+        }
+        Insert: {
+          country_code?: string | null
+          created_at?: string
+          device_trust_id?: string | null
+          invalidated_at?: string | null
+          invalidation_reason?: string | null
+          ip_address?: string | null
+          is_trusted_device?: boolean
+          last_active_at?: string | null
+          risk_score?: number
+          session_id: string
+          user_id: string
+        }
+        Update: {
+          country_code?: string | null
+          created_at?: string
+          device_trust_id?: string | null
+          invalidated_at?: string | null
+          invalidation_reason?: string | null
+          ip_address?: string | null
+          is_trusted_device?: boolean
+          last_active_at?: string | null
+          risk_score?: number
+          session_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       checkout_rate_limits: {
         Row: {
           attempts: number
@@ -295,6 +469,57 @@ export type Database = {
           last_number?: number
         }
         Relationships: []
+      }
+      device_trust: {
+        Row: {
+          fingerprint_hash: string
+          id: string
+          ip_at_trust: string | null
+          is_revoked: boolean
+          last_seen_at: string | null
+          revoked_at: string | null
+          trust_label: string | null
+          trusted_at: string
+          user_id: string
+        }
+        Insert: {
+          fingerprint_hash: string
+          id?: string
+          ip_at_trust?: string | null
+          is_revoked?: boolean
+          last_seen_at?: string | null
+          revoked_at?: string | null
+          trust_label?: string | null
+          trusted_at?: string
+          user_id: string
+        }
+        Update: {
+          fingerprint_hash?: string
+          id?: string
+          ip_at_trust?: string | null
+          is_revoked?: boolean
+          last_seen_at?: string | null
+          revoked_at?: string | null
+          trust_label?: string | null
+          trusted_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "device_trust_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "loyalty_leaderboard"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "device_trust_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       discount_optimizer_rules: {
         Row: {
@@ -1732,6 +1957,19 @@ export type Database = {
         }
         Relationships: []
       }
+      admin_layout_snapshot: {
+        Row: {
+          abandoned_carts: number | null
+          fraud_events_7d: number | null
+          generated_at: string | null
+          pending_carts: number | null
+          pending_orders: number | null
+          today_orders: number | null
+          today_revenue_cents: number | null
+          unread_notifications: number | null
+        }
+        Relationships: []
+      }
       admin_loyalty_liability: {
         Row: {
           accounts_count: number | null
@@ -2110,6 +2348,7 @@ export type Database = {
       }
       cleanup_pending_carts: { Args: never; Returns: undefined }
       custom_access_token_hook: { Args: { event: Json }; Returns: Json }
+      get_admin_layout_snapshot: { Args: never; Returns: Json }
       get_loyalty_by_order: {
         Args: { p_order_id: string }
         Returns: {
@@ -2184,6 +2423,7 @@ export type Database = {
         Returns: boolean
       }
       is_admin: { Args: { uid: string }; Returns: boolean }
+      is_admin_uid: { Args: { uid: string }; Returns: boolean }
       issue_loyalty_correction: {
         Args: {
           p_admin_id: string

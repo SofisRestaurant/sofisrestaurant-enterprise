@@ -12,7 +12,7 @@ import {
   getOrderPerformance,
   subscribeToOrderEvents,
   recordOrderEvent,
-} from '@/features/orders/order-events.api'
+} from '@/modules/orders/api/order-events.api'
 import type {
   OrderEvent,
   OrderTimeline,

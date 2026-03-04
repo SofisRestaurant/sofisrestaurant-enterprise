@@ -1,11 +1,15 @@
 // supabase/functions/admin-metrics/index.ts
 // ============================================================================
-// ADMIN METRICS — Production Hardened (fixed)
-// - Uses shared Supabase clients
-// - Auth: shared authenticateAdmin() (JWT + RPC is_admin)
-// - Strict CORS + 2xx preflight
-// - Query timeouts + total function timeout
-// - No duplicate local authenticateAdmin() (uses shared only)
+// ADMIN METRICS — Enterprise / Production Hardened (2026)
+// ----------------------------------------------------------------------------
+// Goals:
+// - Fail-closed CORS (403 if origin not allowlisted)
+// - Auth required (shared authenticateAdmin) with correct 401/403 mapping
+// - Body size guard for POST (DoS hardening)
+// - Query timeouts (per-query) + total function timeout
+// - Safe logging (structured, no secrets)
+// - Fully typed view rows
+// - No `any`, no unsafe casts
 // ============================================================================
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -14,12 +18,12 @@ import type { Database } from "../_shared/database.types.ts";
 import { authenticateAdmin } from "../_shared/auth.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Env (typed, safe)
+// Env (fail-fast)
 // ─────────────────────────────────────────────────────────────────────────────
 function mustEnv(key: string): string {
   const v = Deno.env.get(key);
-  if (!v) throw new Error(`Missing required env var: ${key}`);
-  return v;
+  if (!v || !v.trim()) throw new Error(`Missing required env var: ${key}`);
+  return v.trim();
 }
 
 // Ensure these exist (helps early fail in deploy)
@@ -30,8 +34,11 @@ mustEnv("SUPABASE_ANON_KEY");
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
 // ─────────────────────────────────────────────────────────────────────────────
-const QUERY_TIMEOUT_MS = 8_000;
-const TOTAL_TIMEOUT_MS = 20_000;
+const CONFIG = {
+  MAX_BODY_BYTES: 10_000, // POST-only (best-effort)
+  QUERY_TIMEOUT_MS: 8_000,
+  TOTAL_TIMEOUT_MS: 20_000,
+} as const;
 
 const ALLOWED_ORIGINS = [
   "https://sofislegacy.com",
@@ -41,6 +48,9 @@ const ALLOWED_ORIGINS = [
   "http://localhost:5173",
 ] as const;
 
+const ALLOWED_METHODS = "GET, POST, OPTIONS";
+const ALLOWED_HEADERS =
+  "authorization, x-client-info, apikey, content-type, x-application-name, x-request-id, x-idempotency-key";
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -52,26 +62,38 @@ type QueryResult<T> = {
   duration_ms: number;
 };
 
+// Views (typed)
+type RevenueRow = Database["public"]["Views"]["admin_revenue_summary"]["Row"];
+type ItemConsumptionRow = Database["public"]["Views"]["admin_item_consumption"]["Row"];
+type HeatmapRow = Database["public"]["Views"]["admin_hourly_heatmap"]["Row"];
+type LoyaltySummaryRow = Database["public"]["Views"]["admin_loyalty_summary"]["Row"];
+type LoyaltyLiabilityRow = Database["public"]["Views"]["admin_loyalty_liability"]["Row"];
+type RiskSnapshotRow = Database["public"]["Views"]["admin_risk_snapshot"]["Row"];
+type FraudSnapshotRow = Database["public"]["Views"]["admin_fraud_snapshot"]["Row"];
+type ExecutiveSnapshotRow = Database["public"]["Views"]["admin_executive_snapshot"]["Row"];
+
 // ─────────────────────────────────────────────────────────────────────────────
-// CORS
+// CORS (fail-closed)
 // ─────────────────────────────────────────────────────────────────────────────
 function isAllowedOrigin(origin: string): origin is (typeof ALLOWED_ORIGINS)[number] {
   return (ALLOWED_ORIGINS as readonly string[]).includes(origin);
 }
 
-function corsHeaders(origin: string | null): Record<string, string> {
-  const allowed = origin && isAllowedOrigin(origin) ? origin : ALLOWED_ORIGINS[0];
+function getCors(req: Request): Record<string, string> | null {
+  const origin = req.headers.get("origin") ?? "";
+  if (!origin || !isAllowedOrigin(origin)) return null;
+
   return {
-    "Access-Control-Allow-Origin": allowed,
-    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-application-name",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Credentials": "true",
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Headers": ALLOWED_HEADERS,
+    "Access-Control-Allow-Methods": ALLOWED_METHODS,
+    "Access-Control-Max-Age": "86400",
     Vary: "Origin",
   };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Logger
+// Logging (structured)
 // ─────────────────────────────────────────────────────────────────────────────
 function log(level: "info" | "warn" | "error", event: string, data?: Record<string, unknown>) {
   const entry = JSON.stringify({
@@ -81,6 +103,7 @@ function log(level: "info" | "warn" | "error", event: string, data?: Record<stri
     timestamp: new Date().toISOString(),
     ...(data ?? {}),
   });
+
   if (level === "error") console.error(entry);
   else if (level === "warn") console.warn(entry);
   else console.log(entry);
@@ -107,12 +130,12 @@ function jsonResponse(body: unknown, cors: Record<string, string>, status = 200)
 }
 
 function jsonError(cors: Record<string, string>, message: string, status: number, extra?: unknown): Response {
-  if (extra) log(status >= 500 ? "error" : "warn", "request_error", { status, message, extra });
+  log(status >= 500 ? "error" : "warn", "request_error", { status, message, extra });
   return jsonResponse({ error: message }, cors, status);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// safeQuery (timeout + never throws)
+// safeQuery (timeout + no-throw + clears timers)
 // ─────────────────────────────────────────────────────────────────────────────
 function safeQuery<T>(
   name: string,
@@ -120,18 +143,19 @@ function safeQuery<T>(
   svc: TypedClient,
 ): Promise<QueryResult<T>> {
   const start = Date.now();
+  let timer: ReturnType<typeof setTimeout> | null = null;
 
-  const timeoutRace = new Promise<QueryResult<T>>((resolve) =>
-    setTimeout(() => {
+  const timeoutRace = new Promise<QueryResult<T>>((resolve) => {
+    timer = setTimeout(() => {
       const duration_ms = Date.now() - start;
       log("warn", "query_timeout", { name, duration_ms });
       resolve({
         data: null,
-        error: `Query '${name}' timed out after ${QUERY_TIMEOUT_MS}ms`,
+        error: `Query '${name}' timed out after ${CONFIG.QUERY_TIMEOUT_MS}ms`,
         duration_ms,
       });
-    }, QUERY_TIMEOUT_MS),
-  );
+    }, CONFIG.QUERY_TIMEOUT_MS);
+  });
 
   const work = (async (): Promise<QueryResult<T>> => {
     try {
@@ -144,9 +168,7 @@ function safeQuery<T>(
         return { data: null, error: msg, duration_ms };
       }
 
-      if (data === null) log("warn", "query_null_result", { name, duration_ms });
-      else log("info", "query_ok", { name, duration_ms });
-
+      log("info", "query_ok", { name, duration_ms });
       return { data, error: null, duration_ms };
     } catch (e) {
       const duration_ms = Date.now() - start;
@@ -156,21 +178,14 @@ function safeQuery<T>(
     }
   })();
 
-  return Promise.race([work, timeoutRace]);
+  return Promise.race([work, timeoutRace]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Queries (typed, stable)
 // ─────────────────────────────────────────────────────────────────────────────
-type RevenueRow = Database["public"]["Views"]["admin_revenue_summary"]["Row"];
-type ItemConsumptionRow = Database["public"]["Views"]["admin_item_consumption"]["Row"];
-type HeatmapRow = Database["public"]["Views"]["admin_hourly_heatmap"]["Row"];
-type LoyaltySummaryRow = Database["public"]["Views"]["admin_loyalty_summary"]["Row"];
-type LoyaltyLiabilityRow = Database["public"]["Views"]["admin_loyalty_liability"]["Row"];
-type RiskSnapshotRow = Database["public"]["Views"]["admin_risk_snapshot"]["Row"];
-type FraudSnapshotRow = Database["public"]["Views"]["admin_fraud_snapshot"]["Row"];
-type ExecutiveSnapshotRow = Database["public"]["Views"]["admin_executive_snapshot"]["Row"];
-
 function queryRevenue(svc: TypedClient) {
   return safeQuery<RevenueRow[]>(
     "revenue",
@@ -212,7 +227,11 @@ function queryHeatmap(svc: TypedClient) {
 function queryLoyalty(svc: TypedClient) {
   return safeQuery<LoyaltySummaryRow>(
     "loyalty",
-    (s) => s.from("admin_loyalty_summary").select("points_earned_30d, points_redeemed_30d, active_users_30d").maybeSingle(),
+    (s) =>
+      s
+        .from("admin_loyalty_summary")
+        .select("points_earned_30d, points_redeemed_30d, active_users_30d")
+        .maybeSingle(),
     svc,
   );
 }
@@ -220,7 +239,11 @@ function queryLoyalty(svc: TypedClient) {
 function queryLiability(svc: TypedClient) {
   return safeQuery<LoyaltyLiabilityRow>(
     "liability",
-    (s) => s.from("admin_loyalty_liability").select("points_outstanding, accounts_count").maybeSingle(),
+    (s) =>
+      s
+        .from("admin_loyalty_liability")
+        .select("points_outstanding, accounts_count")
+        .maybeSingle(),
     svc,
   );
 }
@@ -228,7 +251,11 @@ function queryLiability(svc: TypedClient) {
 function queryRisk(svc: TypedClient) {
   return safeQuery<RiskSnapshotRow>(
     "risk",
-    (s) => s.from("admin_risk_snapshot").select("disputes, failed_payments, refunds, cancelled_orders").maybeSingle(),
+    (s) =>
+      s
+        .from("admin_risk_snapshot")
+        .select("disputes, failed_payments, refunds, cancelled_orders")
+        .maybeSingle(),
     svc,
   );
 }
@@ -259,34 +286,54 @@ function queryExecutive(svc: TypedClient) {
 Deno.serve(async (req: Request): Promise<Response> => {
   const requestId = crypto.randomUUID();
   const startTime = Date.now();
-  const cors = corsHeaders(req.headers.get("origin"));
+
+  const cors = getCors(req);
+  if (!cors) return new Response("Origin not allowed", { status: 403 });
 
   log("info", "request_received", { requestId, method: req.method });
 
-  // Preflight must be 2xx
+  // Preflight must be 2xx + same CORS headers
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
 
   if (req.method !== "GET" && req.method !== "POST") {
     return jsonError(cors, "Method not allowed", 405);
   }
 
-  // Auth (shared) — NOTE: shared type includes token too, but we only need userId here
+  // POST body size guard (best-effort)
+  if (req.method === "POST") {
+    const len = Number(req.headers.get("content-length") ?? "0");
+    if (len && Number.isFinite(len) && len > CONFIG.MAX_BODY_BYTES) {
+      return jsonError(cors, "Payload too large", 413, { len, max: CONFIG.MAX_BODY_BYTES });
+    }
+  }
+
+  // Auth (shared)
   const auth = await authenticateAdmin(req);
   if (!auth.ok) {
-    log("warn", "auth_failed", { requestId, reason: auth.reason });
-    return jsonError(cors, auth.message, 401);
+    // Correct 401/403 mapping
+    const status =
+      auth.reason === "not_admin"
+        ? 403
+        : auth.reason === "missing_bearer" || auth.reason === "empty_token"
+          ? 401
+          : 401;
+
+    log("warn", "auth_failed", { requestId, reason: auth.reason, status });
+    return jsonError(cors, auth.message, status);
   }
+
   const userId = auth.userId;
 
-  // Service client for admin reads
+  // Service client for admin reads (bypasses RLS)
   const svc = createServiceClient() as TypedClient;
 
+  // Total timeout (hard cap)
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   const totalTimeout = new Promise<Response>((resolve) => {
     timeoutId = setTimeout(() => {
       log("error", "function_timeout", { requestId, userId });
       resolve(jsonResponse({ error: "Request timed out" }, cors, 504));
-    }, TOTAL_TIMEOUT_MS);
+    }, CONFIG.TOTAL_TIMEOUT_MS);
   });
 
   const work = (async (): Promise<Response> => {
@@ -312,12 +359,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
       errorCount,
     });
 
+    // 207 is acceptable; if you prefer compatibility, set to 200 always.
     const status = errorCount === 8 ? 500 : errorCount > 0 ? 207 : 200;
 
     return jsonResponse(
       {
         meta: {
           request_id: requestId,
+          user_id: userId,
           duration_ms,
           error_count: errorCount,
           generated_at: new Date().toISOString(),

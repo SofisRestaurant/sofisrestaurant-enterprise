@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DashboardPayload, UseDashboardReturn } from '@/types/dashboard.types'
-import { invokeFn } from '@/lib/supabase/invoke'
+import { invokeEdge } from '@/lib/supabase/invoke'
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -65,7 +65,7 @@ export function useDashboard(): UseDashboardReturn {
 
       try {
         // ✅ Server source of truth (admin dashboard)
-        const payload = await invokeFn<DashboardPayload>('admin-metrics', {})
+        const payload = await invokeEdge<DashboardPayload>('admin-metrics', {})
 
         _cache = { data: payload, ts: Date.now() }
 

@@ -1,80 +1,108 @@
-// src/components/ui/ModalRenderer.tsx
-// ============================================================================
-// MODAL RENDERER
-// ============================================================================
-// Single mount point for all modals. Reads from modal context and renders
-// the correct modal component.
-//
-// This repo’s cart layer expects: addItem(Omit<CartItem,'lineTotalCents'>)
-// so MenuItemModal adds to cart internally via useCart().
-// ModalRenderer only controls open/close + shell rendering.
-// ============================================================================
-
-import React, { useMemo } from 'react';
-import { useModal } from './useModal';
-import { useScrollLock } from './hooks/useScrollLock';
-import { useModalEscape } from './hooks/useModalEscape';
-import { ModalShell } from './ModalShell';
-import MenuItemModal from '@/components/menu/MenuItemModal';
+import { useContext, useEffect, useMemo } from 'react';
+import { ModalContext } from '@/components/ui/ModalContext';
+import type { ModalConfig, ModalType } from '@/components/ui/modalTypes';
+import MenuItemModal from '@/modules/menu/components/MenuItemModal';
 import type { MenuItemPublic } from '@/domain/menu/menu.types';
 
-const MODAL_WIDTH: Partial<Record<string, string>> = {
-  'menu-item': 'max-w-2xl',
+type UnknownRecord = Record<string, unknown>;
+type AnyModalConfig = ModalConfig<Record<string, unknown>>;
+
+const isRecord = (v: unknown): v is UnknownRecord =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+function isMenuItemPublic(v: unknown): v is MenuItemPublic {
+  return isRecord(v) && typeof v.id === 'string' && v.id.length > 0 && typeof v.name === 'string';
 }
 
-type MenuItemModalData = { item: MenuItemPublic };
+function extractMenuItem(config: unknown): MenuItemPublic | null {
+  if (!isRecord(config)) return null;
 
-function isMenuItemModalData(v: unknown): v is MenuItemModalData {
-  if (!v || typeof v !== 'object') return false;
-  const r = v as Record<string, unknown>;
-  const item = r['item'];
-  if (!item || typeof item !== 'object') return false;
-  const ir = item as Record<string, unknown>;
-  return typeof ir['id'] === 'string' && typeof ir['name'] === 'string';
+  // preferred: config.data.item
+  const data = config.data;
+  if (isRecord(data) && isMenuItemPublic(data.item)) return data.item;
+
+  // tolerated legacy: config.item
+  if (isMenuItemPublic((config as UnknownRecord).item))
+    return (config as UnknownRecord).item as MenuItemPublic;
+
+  return null;
 }
 
-export function ModalRenderer() {
-  const { activeModal, modalConfig, closeModal } = useModal();
+function lockBodyScroll(locked: boolean) {
+  const body = document.body;
+  if (!body) return;
+  if (locked) {
+    if (body.dataset.modalLock !== '1') {
+      body.dataset.modalLock = '1';
+      body.dataset.modalPrevOverflow = body.style.overflow || '';
+      body.style.overflow = 'hidden';
+    }
+  } else {
+    if (body.dataset.modalLock === '1') {
+      body.style.overflow = body.dataset.modalPrevOverflow ?? '';
+      delete body.dataset.modalPrevOverflow;
+      delete body.dataset.modalLock;
+    }
+  }
+}
 
-  const isOpen = activeModal !== null;
-  useScrollLock(isOpen)
-  useModalEscape(closeModal, isOpen)
+export default function ModalRenderer() {
+  const ctx = useContext(ModalContext);
+  if (!ctx) return null;
 
-  const maxWidth = useMemo(
-    () => (activeModal ? (MODAL_WIDTH[activeModal] ?? 'max-w-2xl') : 'max-w-2xl'),
-    [activeModal],
-  );
+  const { activeModal, modalConfig, closeModal } = ctx;
 
-  if (!isOpen) return null
+  useEffect(() => {
+    if (!activeModal) return;
+    const onKeyDown = (e: KeyboardEvent) => e.key === 'Escape' && closeModal();
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [activeModal, closeModal]);
 
-  let content: React.ReactNode = null
+  useEffect(() => {
+    lockBodyScroll(Boolean(activeModal));
+    return () => lockBodyScroll(false);
+  }, [activeModal]);
 
-  switch (activeModal) {
-    case 'menu-item': {
-      const data = modalConfig?.data;
+  const content = useMemo(() => {
+    if (!activeModal) return null;
 
-      if (!isMenuItemModalData(data)) {
-        console.warn('[ModalRenderer] menu-item opened without valid item data', { data });
-        content = null;
-        break;
-      }
-
-      content = <MenuItemModal isOpen item={data.item} onClose={closeModal} />;
-      break;
+    if (activeModal === ('menu-item' as ModalType)) {
+      const item = extractMenuItem(modalConfig as AnyModalConfig);
+      if (!item) return null;
+      return <MenuItemModal item={item} onClose={closeModal} />;
     }
 
-    default:
-      content = null
-      break
-  }
+    return null;
+  }, [activeModal, modalConfig, closeModal]);
 
-  if (!content) return null;
+  if (!activeModal || !content) return null;
 
   return (
-    <ModalShell isOpen onClose={closeModal} maxWidth={maxWidth} label={activeModal ?? 'modal'}>
-      {content}
-    </ModalShell>
+    <div className="fixed inset-0 z-100">
+      <button
+        type="button"
+        aria-label="Close modal"
+        onClick={closeModal}
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+      />
+      <div className="absolute inset-0 flex items-center justify-center p-4">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="relative w-full max-w-5xl overflow-hidden rounded-3xl border border-white/10 bg-zinc-950 shadow-2xl"
+        >
+          <button
+            type="button"
+            onClick={closeModal}
+            aria-label="Close"
+            className="absolute right-3 top-3 z-10 grid h-9 w-9 place-items-center rounded-xl bg-white/10 text-white transition hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
+          >
+            ×
+          </button>
+          {content}
+        </div>
+      </div>
+    </div>
   );
 }
-
-export default ModalRenderer;

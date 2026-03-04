@@ -9,7 +9,7 @@
 //   4. Run pricing engine
 //   5. Build AddToCartPayload for cart store
 // ============================================================================
-import type { AddToCartPayload, CartModifier } from '@/features/cart/cart.types'
+import type { AddToCartPayload, CartModifier } from '@/modules/cart/types/cart.types'
 import { supabase } from '@/lib/supabase/supabaseClient'
 import { PricingEngine } from '@/domain/pricing/pricing.engine'
 import { validateItemConfiguration } from '@/domain/menu/modifier.validation'

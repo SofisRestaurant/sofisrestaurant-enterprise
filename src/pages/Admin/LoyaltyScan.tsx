@@ -2,6 +2,12 @@
 // src/pages/Admin/LoyaltyScan.tsx
 // Owns: auth guard, state, scanner lifecycle, event handlers.
 // UI → features/loyalty/components   API → domain/loyalty/loyalty.service
+//
+// UPGRADE (2026-03):
+// - Adds deterministic scan_id (crypto.randomUUID) so award-loyalty-qr can be
+//   idempotent per scan and ledger entries are traceable.
+// - Passes scan_id into awardLoyaltyPoints(..., scanId)
+// - Clears scan_id on reset + mode switch
 // =============================================================================
 
 import { useEffect, useRef, useState, useCallback } from 'react';
@@ -44,6 +50,9 @@ export default function LoyaltyScan() {
   const [scanState, setScanState] = useState<ScanState>('scanning');
   const [scannerStarted, setScannerStarted] = useState(false);
 
+  // scan id (idempotency anchor for award-loyalty-qr)
+  const [scanId, setScanId] = useState<string | null>(null);
+
   // data
   const [scannedId, setScannedId] = useState<string | null>(null);
   const [customer, setCustomer] = useState<CustomerProfile | null>(null);
@@ -67,24 +76,29 @@ export default function LoyaltyScan() {
         const {
           data: { session },
         } = await supabase.auth.getSession();
+
         if (!session?.access_token || !session?.user?.id) {
           navigate('/login', { replace: true });
           return;
         }
+
         const { data: prof, error } = await supabase
           .from('profiles')
           .select('role')
           .eq('id', session.user.id)
           .single();
+
         if (error || prof?.role !== 'admin') {
           navigate('/', { replace: true });
           return;
         }
+
         setAdminReady(true);
       } finally {
         setAuthChecking(false);
       }
     }
+
     checkAdmin();
   }, [navigate]);
 
@@ -93,6 +107,7 @@ export default function LoyaltyScan() {
     if (scannerRef.current?.isScanning) {
       await scannerRef.current.stop().catch(() => {});
     }
+
     setScannerStarted(false);
     setScanState('loading');
     setErrorMsg(null);
@@ -105,6 +120,11 @@ export default function LoyaltyScan() {
     }
 
     try {
+      // ✅ Deterministic idempotency for this scan flow:
+      // one scan -> one award attempt (server will enforce)
+      const sid = crypto.randomUUID();
+      setScanId(sid);
+
       const profile = await verifyLoyaltyQR(trimmed);
       setScannedId(trimmed);
       setCustomer(profile);
@@ -135,6 +155,7 @@ export default function LoyaltyScan() {
           },
           () => {},
         );
+
         setScannerStarted(true);
       } catch {
         setErrorMsg('Camera access denied. Please allow camera permission and reload.');
@@ -143,9 +164,9 @@ export default function LoyaltyScan() {
     }
 
     startScanner();
+
     return () => {
       const scanner = scannerRef.current;
-
       if (scanner?.isScanning) {
         void scanner.stop().catch(() => {});
       }
@@ -162,13 +183,18 @@ export default function LoyaltyScan() {
       return;
     }
 
-    const previousTier = customer.tier; // 👈 capture BEFORE update
+    // If something cleared scanId unexpectedly, regenerate (safe).
+    const sid = scanId ?? crypto.randomUUID();
+    if (!scanId) setScanId(sid);
+
+    const previousTier = customer.tier; // capture BEFORE update
 
     setScanState('awarding');
     setErrorMsg(null);
 
     try {
-      const result = await awardLoyaltyPoints(customer.account_id, Math.round(dollars * 100));
+      // ✅ Pass scanId for idempotent server awards + clean ledger metadata
+      const result = await awardLoyaltyPoints(customer.account_id, Math.round(dollars * 100), sid);
 
       // Update live customer state
       setCustomer((prev) =>
@@ -199,19 +225,24 @@ export default function LoyaltyScan() {
   // ── Redeem ───────────────────────────────────────────────────────────────
   async function handleRedeem() {
     if (!customer) return;
+
     const pts = parseInt(redeemPoints, 10);
     if (!pts || pts < 100 || pts > 50000) {
       setErrorMsg('Enter a valid point amount (min 100, max 50,000)');
       return;
     }
+
     if (pts > customer.balance) {
       setErrorMsg(`Customer only has ${Number(customer?.balance ?? 0).toLocaleString()} points`);
       return;
     }
+
     setScanState('awarding');
     setErrorMsg(null);
+
     try {
       const result = await redeemLoyaltyPoints(customer.account_id, pts);
+
       setCustomer((prev) =>
         prev
           ? {
@@ -220,6 +251,7 @@ export default function LoyaltyScan() {
             }
           : prev,
       );
+
       setRedeemResult(result);
       setScanState('success');
     } catch (err) {
@@ -235,6 +267,7 @@ export default function LoyaltyScan() {
 
   // ── Reset ────────────────────────────────────────────────────────────────
   function reset() {
+    setScanId(null);
     setScannedId(null);
     setCustomer(null);
     setAmountDollars('');

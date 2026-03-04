@@ -1,6 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
-import { useAuth } from '@/features/auth/useAuth';
-import { useCart } from '@/hooks/useCart';
+import { useAuth } from '@/modules/auth/hooks/useAuth';
+import { useCart } from '@/modules/cart/hooks/useCart';
 
 export function MobileNav() {
   const location = useLocation();
