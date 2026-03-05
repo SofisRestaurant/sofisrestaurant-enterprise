@@ -1,6 +1,9 @@
+// src/components/ui/ModalRenderer.tsx
 import { useContext, useEffect, useMemo } from 'react';
 import { ModalContext } from '@/components/ui/ModalContext';
 import type { ModalConfig, ModalType } from '@/components/ui/modalTypes';
+import { useScrollLock } from '@/lib/ui/useScrollLock';
+
 import MenuItemModal from '@/modules/menu/components/MenuItemModal';
 import type { MenuItemPublic } from '@/domain/menu/menu.types';
 
@@ -17,33 +20,16 @@ function isMenuItemPublic(v: unknown): v is MenuItemPublic {
 function extractMenuItem(config: unknown): MenuItemPublic | null {
   if (!isRecord(config)) return null;
 
-  // preferred: config.data.item
   const data = config.data;
-  if (isRecord(data) && isMenuItemPublic(data.item)) return data.item;
+  if (isRecord(data) && isMenuItemPublic((data as UnknownRecord).item)) {
+    return (data as UnknownRecord).item as MenuItemPublic;
+  }
 
-  // tolerated legacy: config.item
-  if (isMenuItemPublic((config as UnknownRecord).item))
+  if (isMenuItemPublic((config as UnknownRecord).item)) {
     return (config as UnknownRecord).item as MenuItemPublic;
+  }
 
   return null;
-}
-
-function lockBodyScroll(locked: boolean) {
-  const body = document.body;
-  if (!body) return;
-  if (locked) {
-    if (body.dataset.modalLock !== '1') {
-      body.dataset.modalLock = '1';
-      body.dataset.modalPrevOverflow = body.style.overflow || '';
-      body.style.overflow = 'hidden';
-    }
-  } else {
-    if (body.dataset.modalLock === '1') {
-      body.style.overflow = body.dataset.modalPrevOverflow ?? '';
-      delete body.dataset.modalPrevOverflow;
-      delete body.dataset.modalLock;
-    }
-  }
 }
 
 export default function ModalRenderer() {
@@ -54,32 +40,37 @@ export default function ModalRenderer() {
 
   useEffect(() => {
     if (!activeModal) return;
-    const onKeyDown = (e: KeyboardEvent) => e.key === 'Escape' && closeModal();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeModal();
+    };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [activeModal, closeModal]);
 
-  useEffect(() => {
-    lockBodyScroll(Boolean(activeModal));
-    return () => lockBodyScroll(false);
-  }, [activeModal]);
+  const isMenuItem = activeModal === ('menu-item' as ModalType);
+
+  // lock only for modals that this shell actually owns
+  useScrollLock({ enabled: Boolean(activeModal) && !isMenuItem, token: 'modal-renderer' });
 
   const content = useMemo(() => {
     if (!activeModal) return null;
 
-    if (activeModal === ('menu-item' as ModalType)) {
+    if (isMenuItem) {
       const item = extractMenuItem(modalConfig as AnyModalConfig);
       if (!item) return null;
       return <MenuItemModal item={item} onClose={closeModal} />;
     }
 
     return null;
-  }, [activeModal, modalConfig, closeModal]);
+  }, [activeModal, isMenuItem, modalConfig, closeModal]);
 
   if (!activeModal || !content) return null;
 
+  // MenuItemModal provides its own overlay
+  if (isMenuItem) return content;
+
   return (
-    <div className="fixed inset-0 z-100">
+    <div className="fixed inset-0 z-50" data-modal-root="true">
       <button
         type="button"
         aria-label="Close modal"
@@ -87,19 +78,7 @@ export default function ModalRenderer() {
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
       />
       <div className="absolute inset-0 flex items-center justify-center p-4">
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="relative w-full max-w-5xl overflow-hidden rounded-3xl border border-white/10 bg-zinc-950 shadow-2xl"
-        >
-          <button
-            type="button"
-            onClick={closeModal}
-            aria-label="Close"
-            className="absolute right-3 top-3 z-10 grid h-9 w-9 place-items-center rounded-xl bg-white/10 text-white transition hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-amber-500/60"
-          >
-            ×
-          </button>
+        <div role="dialog" aria-modal="true" className="w-full max-w-5xl rounded-3xl bg-zinc-950">
           {content}
         </div>
       </div>

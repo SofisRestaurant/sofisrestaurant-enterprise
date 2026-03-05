@@ -5,13 +5,14 @@
 // Changes from previous version:
 //   • console.log removed (was leaking modal state to production console)
 //   • ?redirect= parameter validated against allowlist — prevents open redirect
-//   • Auth security layer imported for rate limit awareness
+//   • Scroll lock now uses enterprise-safe tokenized lock
+//   • Consistent isOpen wiring (no "always true" props)
 // =============================================================================
 
 import { memo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useModal } from '@/components/ui/useModal';
-import { useScrollLock } from '@/components/ui/hooks/useScrollLock';
+import { useScrollLock } from '@/lib/ui/useScrollLock';
 import { useModalEscape } from '@/components/ui/hooks/useModalEscape';
 import { ModalShell } from '@/components/ui/ModalShell';
 import { AUTH_ALLOWED_REDIRECT_PREFIXES, AUTH_SAFE_REDIRECT_DEFAULT } from '@/security/auth';
@@ -57,6 +58,16 @@ function AuthModalsComponent() {
   const { activeModal, openModal, closeModal } = useModal();
   const navigate = useNavigate();
 
+  // ── Modal open state ─────────────────────────────────────────────────────────
+  const isOpen =
+    activeModal === 'login' || activeModal === 'signup' || activeModal === 'forgot-password';
+
+  // Enterprise-safe scroll lock (token avoids collision with other overlays)
+  useScrollLock({ enabled: isOpen, token: 'auth-modals' });
+
+  // Escape-to-close only when open
+  useModalEscape(closeModal, isOpen);
+
   // ── Modal switching (microtask-safe — prevents state collision) ─────────────
   const switchTo = useCallback(
     (next: AuthModalKey) => {
@@ -74,33 +85,36 @@ function AuthModalsComponent() {
     navigate(redirectTo);
   }, [closeModal, navigate]);
 
-  // ── Modal open state ─────────────────────────────────────────────────────────
-  const isOpen =
-    activeModal === 'login' || activeModal === 'signup' || activeModal === 'forgot-password';
-
-  useScrollLock(isOpen);
-  useModalEscape(closeModal, isOpen);
-
   if (!isOpen) return null;
 
   return (
-    <ModalShell isOpen onClose={closeModal} maxWidth="max-w-md" label={activeModal ?? 'auth-modal'}>
+    <ModalShell
+      isOpen={isOpen}
+      onClose={closeModal}
+      maxWidth="max-w-md"
+      label={activeModal ?? 'auth-modal'}
+    >
       {activeModal === 'login' && (
         <LoginModal
-          isOpen
+          isOpen={isOpen}
           onClose={closeModal}
           onSwitchToSignup={() => switchTo('signup')}
           onForgotPassword={() => switchTo('forgot-password')}
           onLoginSuccess={handleLoginSuccess}
         />
       )}
+
       {activeModal === 'signup' && (
-        <SignupModal isOpen onClose={closeModal} onSwitchToLogin={() => switchTo('login')} />
+        <SignupModal
+          isOpen={isOpen}
+          onClose={closeModal}
+          onSwitchToLogin={() => switchTo('login')}
+        />
       )}
 
       {activeModal === 'forgot-password' && (
         <ForgotPasswordModal
-          isOpen
+          isOpen={isOpen}
           onClose={closeModal}
           onSwitchToLogin={() => switchTo('login')}
         />

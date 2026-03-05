@@ -5,6 +5,7 @@ import Footer from '@/components/layout/Footer';
 import SessionExpiryWarning from '@/components/auth/SessionExpiryWarning';
 import ModalRenderer from '@/components/ui/ModalRenderer';
 import AppBoot from './AppBoot';
+import ScrollSafety from '@/components/app/ScrollSafety';
 
 export default function RootLayout() {
   return (
@@ -18,9 +19,11 @@ export default function RootLayout() {
 
         <Footer />
 
+        {/* Global UI systems */}
         <SessionExpiryWarning />
         <AuthModals />
         <ModalRenderer />
+        <ScrollSafety />
       </div>
     </AppBoot>
   );

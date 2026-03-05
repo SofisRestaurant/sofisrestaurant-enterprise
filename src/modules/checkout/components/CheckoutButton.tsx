@@ -18,7 +18,7 @@
 // - More defensive runtime guards for CartModifier
 // ============================================================================
 
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AlertCircle, CreditCard, Loader2, RefreshCw, ShieldCheck, X } from 'lucide-react'
 
 import { env } from '@/lib/config/env'
@@ -29,6 +29,7 @@ import { useCart } from '@/modules/cart/hooks/useCart'
 import type { CartItem, CartModifier } from '@/modules/cart/types/cart.types'
 import { cartItemKey } from '@/modules/cart/types/cart.types'
 
+import { useScrollLock } from '@/lib/ui/useScrollLock';
 // ============================================================================
 // Types
 // ============================================================================
@@ -180,16 +181,6 @@ function getFocusable(root: HTMLElement | null): HTMLElement[] {
   return nodes.filter((el) => !el.hasAttribute('disabled') && !el.getAttribute('aria-hidden'))
 }
 
-function useBodyScrollLock(locked: boolean) {
-  useEffect(() => {
-    if (!locked) return
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = prev
-    }
-  }, [locked])
-}
 
 // ============================================================================
 // Component
@@ -205,99 +196,102 @@ function CheckoutButton({
   className,
   disabled: disabledProp = false,
 }: CheckoutButtonProps) {
-  const { user, loading: authLoading, isAuthenticated } = useUserContext()
+  const { user, loading: authLoading, isAuthenticated } = useUserContext();
   const { checkout, isLoading, error, errorCode, canRetry, retryAfter, reset, canCheckout } =
-    useCheckout()
+    useCheckout();
 
   // Pull cart for review UI (does NOT execute checkout)
-  const cart = useCart()
+  const cart = useCart();
 
   const safeItems: CartItem[] = useMemo(() => {
-    const raw = cart.items
-    if (!Array.isArray(raw)) return []
-    return raw.filter(isCartItem)
-  }, [cart.items])
+    const raw = cart.items;
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(isCartItem);
+  }, [cart.items]);
 
   // Stripe gate
-  const stripeEnabled = Boolean(env?.stripe?.enabled)
+  const stripeEnabled = Boolean(env?.stripe?.enabled);
 
   // Refs: mount safety, click dedupe, timers, focus restore
-  const mountedRef = useRef(true)
-  const inflightRef = useRef(false)
-  const retryTimerRef = useRef<number | null>(null)
+  const mountedRef = useRef(true);
+  const inflightRef = useRef(false);
+  const retryTimerRef = useRef<number | null>(null);
 
-  const [countdown, setCountdown] = useState<CountdownState>(null)
-  const [reviewOpen, setReviewOpen] = useState(false)
+  const [countdown, setCountdown] = useState<CountdownState>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
 
-  const modalRef = useRef<HTMLDivElement | null>(null)
-  const closeBtnRef = useRef<HTMLButtonElement | null>(null)
-  const lastActiveElRef = useRef<HTMLElement | null>(null)
+  // ✅ Centralized scroll lock (prevents stuck scroll across the app)
+  useScrollLock({ enabled: reviewOpen, token: 'checkout-review-modal' });
+
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  const closeBtnRef = useRef<HTMLButtonElement | null>(null);
+  const lastActiveElRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
-    mountedRef.current = true
+    mountedRef.current = true;
     return () => {
-      mountedRef.current = false
-      if (retryTimerRef.current) window.clearInterval(retryTimerRef.current)
-      retryTimerRef.current = null
-    }
-  }, [])
+      mountedRef.current = false;
+      if (retryTimerRef.current) window.clearInterval(retryTimerRef.current);
+      retryTimerRef.current = null;
+    };
+  }, []);
 
   // Normalize inputs
-  const normalizedPromo = useMemo(() => normalizePromo(promoCode), [promoCode])
-  const normalizedCreditId = useMemo(() => normalizeCreditId(creditId), [creditId])
-  const safeNotesPreview = useMemo(() => safeTrim(notes, 400), [notes])
+  const normalizedPromo = useMemo(() => normalizePromo(promoCode), [promoCode]);
+  const normalizedCreditId = useMemo(() => normalizeCreditId(creditId), [creditId]);
+  const safeNotesPreview = useMemo(() => safeTrim(notes, 400), [notes]);
 
   // Reset hook error state when promo/credit changes
   useEffect(() => {
-    reset()
-  }, [normalizedPromo, normalizedCreditId, reset])
+    reset();
+  }, [normalizedPromo, normalizedCreditId, reset]);
 
   // Retry countdown (visibility-aware)
   useEffect(() => {
     if (retryTimerRef.current) {
-      window.clearInterval(retryTimerRef.current)
-      retryTimerRef.current = null
+      window.clearInterval(retryTimerRef.current);
+      retryTimerRef.current = null;
     }
 
     if (!retryAfter || retryAfter <= 0) {
-      setCountdown(null)
-      return
+      setCountdown(null);
+      return;
     }
 
-    const untilMs = Date.now() + retryAfter
+    const untilMs = Date.now() + retryAfter;
 
     const tick = () => {
-      if (!mountedRef.current) return
+      if (!mountedRef.current) return;
       // If tab is hidden, do less work; just compute once when visible
-      const secondsLeft = safeSecondsLeft(untilMs)
+      const secondsLeft = safeSecondsLeft(untilMs);
       if (secondsLeft <= 0) {
-        setCountdown(null)
-        reset()
-        if (retryTimerRef.current) window.clearInterval(retryTimerRef.current)
-        retryTimerRef.current = null
-        return
+        setCountdown(null);
+        reset();
+        if (retryTimerRef.current) window.clearInterval(retryTimerRef.current);
+        retryTimerRef.current = null;
+        return;
       }
-      setCountdown({ secondsLeft, untilMs })
-    }
+      setCountdown({ secondsLeft, untilMs });
+    };
 
-    tick()
+    tick();
     retryTimerRef.current = window.setInterval(() => {
-      if (document.visibilityState !== 'visible') return
-      tick()
-    }, 250)
+      if (document.visibilityState !== 'visible') return;
+      tick();
+    }, 250);
 
     return () => {
-      if (retryTimerRef.current) window.clearInterval(retryTimerRef.current)
-      retryTimerRef.current = null
-    }
-  }, [retryAfter, reset])
+      if (retryTimerRef.current) window.clearInterval(retryTimerRef.current);
+      retryTimerRef.current = null;
+    };
+  }, [retryAfter, reset]);
 
   // Derived UI state
-  const isAuthed = Boolean(isAuthenticated && user?.id)
-  const cooldownSeconds = countdown?.secondsLeft ?? 0
-  const disabledBecauseCooldown = cooldownSeconds > 0
+  const isAuthed = Boolean(isAuthenticated && user?.id);
+  const cooldownSeconds = countdown?.secondsLeft ?? 0;
+  const disabledBecauseCooldown = cooldownSeconds > 0;
 
-  const hasItems = safeItems.length > 0
+  const hasItems = safeItems.length > 0;
 
   const disabled =
     disabledProp ||
@@ -308,16 +302,16 @@ function CheckoutButton({
     !hasItems ||
     isLoading ||
     disabledBecauseCooldown ||
-    inflightRef.current
+    inflightRef.current;
 
   const buttonLabel = useMemo(() => {
-    if (!stripeEnabled) return 'Checkout unavailable'
-    if (authLoading) return 'Loading…'
-    if (!isAuthed) return 'Log in to pay'
-    if (!hasItems) return 'Cart is empty'
-    if (isLoading) return 'Creating secure checkout…'
-    if (disabledBecauseCooldown) return `Retry in ${cooldownSeconds}s`
-    return reviewFirst ? 'Review Order' : 'Proceed to Payment'
+    if (!stripeEnabled) return 'Checkout unavailable';
+    if (authLoading) return 'Loading…';
+    if (!isAuthed) return 'Log in to pay';
+    if (!hasItems) return 'Cart is empty';
+    if (isLoading) return 'Creating secure checkout…';
+    if (disabledBecauseCooldown) return `Retry in ${cooldownSeconds}s`;
+    return reviewFirst ? 'Review Order' : 'Proceed to Payment';
   }, [
     stripeEnabled,
     authLoading,
@@ -327,96 +321,93 @@ function CheckoutButton({
     disabledBecauseCooldown,
     cooldownSeconds,
     reviewFirst,
-  ])
+  ]);
 
   // Review data
-  const reviewSubtotalCents = useMemo(() => sumCartSubtotalCents(safeItems), [safeItems])
+  const reviewSubtotalCents = useMemo(() => sumCartSubtotalCents(safeItems), [safeItems]);
 
   const reviewSubtotalLabel = useMemo(() => {
-    const s = typeof cart.subtotalFormatted === 'string' ? cart.subtotalFormatted.trim() : ''
-    return s ? s : formatCents(reviewSubtotalCents)
-  }, [cart.subtotalFormatted, reviewSubtotalCents])
+    const s = typeof cart.subtotalFormatted === 'string' ? cart.subtotalFormatted.trim() : '';
+    return s ? s : formatCents(reviewSubtotalCents);
+  }, [cart.subtotalFormatted, reviewSubtotalCents]);
 
   const reviewTotalLabel = useMemo(() => {
-    const s = typeof cart.totalFormatted === 'string' ? cart.totalFormatted.trim() : ''
-    return s ? s : formatCents(reviewSubtotalCents)
-  }, [cart.totalFormatted, reviewSubtotalCents])
-
-  // Modal: scroll lock
-  useBodyScrollLock(reviewOpen)
+    const s = typeof cart.totalFormatted === 'string' ? cart.totalFormatted.trim() : '';
+    return s ? s : formatCents(reviewSubtotalCents);
+  }, [cart.totalFormatted, reviewSubtotalCents]);
 
   // Modal: open/close focus management + ESC + focus trap-lite
   useEffect(() => {
-    if (!reviewOpen) return
+    if (!reviewOpen) return;
 
     // store last active element so we can restore focus on close
-    lastActiveElRef.current = (document.activeElement as HTMLElement) ?? null
+    lastActiveElRef.current = (document.activeElement as HTMLElement) ?? null;
 
     // focus close button
-    window.setTimeout(() => closeBtnRef.current?.focus(), 0)
+    window.setTimeout(() => closeBtnRef.current?.focus(), 0);
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        e.preventDefault()
-        setReviewOpen(false)
-        return
+        e.preventDefault();
+        setReviewOpen(false);
+        return;
       }
 
       if (e.key === 'Tab') {
-        const root = modalRef.current
-        const focusables = getFocusable(root)
-        if (!focusables.length) return
+        const root = modalRef.current;
+        const focusables = getFocusable(root);
+        if (!focusables.length) return;
 
-        const first = focusables[0]
-        const last = focusables[focusables.length - 1]
-        const active = document.activeElement as HTMLElement | null
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        const active = document.activeElement as HTMLElement | null;
 
         if (e.shiftKey) {
           if (!active || active === first || !root?.contains(active)) {
-            e.preventDefault()
-            last.focus()
+            e.preventDefault();
+            last.focus();
           }
         } else {
           if (!active || active === last || !root?.contains(active)) {
-            e.preventDefault()
-            first.focus()
+            e.preventDefault();
+            first.focus();
           }
         }
       }
-    }
+    };
 
-    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keydown', onKeyDown);
     return () => {
-      window.removeEventListener('keydown', onKeyDown)
-    }
-  }, [reviewOpen])
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [reviewOpen]);
 
   useEffect(() => {
-    if (reviewOpen) return
+    if (reviewOpen) return;
     // restore focus after modal close
-    const prev = lastActiveElRef.current
+    const prev = lastActiveElRef.current;
     if (prev && typeof prev.focus === 'function') {
-      window.setTimeout(() => prev.focus(), 0)
+      window.setTimeout(() => prev.focus(), 0);
     }
-  }, [reviewOpen])
+  }, [reviewOpen]);
 
   // Checkout executor (only calls hook)
   const doCheckout = useCallback(async () => {
-    if (disabled) return
+    if (disabled) return;
 
     if (!stripeEnabled) {
-      onPromoError?.('Checkout is temporarily unavailable. Please try again later.')
-      return
+      onPromoError?.('Checkout is temporarily unavailable. Please try again later.');
+      return;
     }
 
     if (!isAuthed || !user) {
-      window.alert('Please log in to continue')
-      return
+      window.alert('Please log in to continue');
+      return;
     }
 
     // idempotent click lock (also prevents modal -> button race)
-    if (inflightRef.current) return
-    inflightRef.current = true
+    if (inflightRef.current) return;
+    inflightRef.current = true;
 
     try {
       await checkout({
@@ -428,12 +419,12 @@ function CheckoutButton({
         credit_id: normalizedCreditId,
         orderType,
         notes,
-      })
+      });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Checkout failed'
-      if (onPromoError && isPromoRelatedMessage(msg)) onPromoError(msg)
+      const msg = e instanceof Error ? e.message : 'Checkout failed';
+      if (onPromoError && isPromoRelatedMessage(msg)) onPromoError(msg);
     } finally {
-      inflightRef.current = false
+      inflightRef.current = false;
     }
   }, [
     disabled,
@@ -446,21 +437,21 @@ function CheckoutButton({
     onPromoError,
     orderType,
     notes,
-  ])
+  ]);
 
   const handlePrimaryClick = useCallback(() => {
-    if (disabled) return
-    if (reviewFirst) setReviewOpen(true)
-    else void doCheckout()
-  }, [disabled, reviewFirst, doCheckout])
+    if (disabled) return;
+    if (reviewFirst) setReviewOpen(true);
+    else void doCheckout();
+  }, [disabled, reviewFirst, doCheckout]);
 
   const handleRetry = useCallback(() => {
-    if (disabledBecauseCooldown) return
-    reset()
-  }, [disabledBecauseCooldown, reset])
+    if (disabledBecauseCooldown) return;
+    reset();
+  }, [disabledBecauseCooldown, reset]);
 
-  const modalTitleId = useMemo(() => `review-order-title-${crypto.randomUUID()}`, [])
-  const modalDescId = useMemo(() => `review-order-desc-${crypto.randomUUID()}`, [])
+  const modalTitleId = useId();
+  const modalDescId = useId();
 
   // --------------------------------------------------------------------------
   // Render: auth loading skeleton
@@ -482,7 +473,7 @@ function CheckoutButton({
           <span className="text-base font-semibold">Loading…</span>
         </div>
       </button>
-    )
+    );
   }
 
   // --------------------------------------------------------------------------
@@ -513,7 +504,7 @@ function CheckoutButton({
           </span>
         </button>
       </div>
-    )
+    );
   }
 
   // --------------------------------------------------------------------------
@@ -528,7 +519,9 @@ function CheckoutButton({
             <p className="text-sm font-semibold text-red-900">{error}</p>
             {errorCode ? <p className="mt-1 text-xs text-red-700">Code: {errorCode}</p> : null}
             {disabledBecauseCooldown ? (
-              <p className="mt-1 text-xs text-red-700">Please wait {cooldownSeconds}s before retrying.</p>
+              <p className="mt-1 text-xs text-red-700">
+                Please wait {cooldownSeconds}s before retrying.
+              </p>
             ) : null}
           </div>
         </div>
@@ -559,10 +552,10 @@ function CheckoutButton({
           ← Back to checkout
         </button>
       </div>
-    )
+    );
   }
 
-  const shimmerEnabled = !prefersReducedMotion()
+  const shimmerEnabled = !prefersReducedMotion();
 
   // --------------------------------------------------------------------------
   // Render: Normal button + Review modal
@@ -611,12 +604,13 @@ function CheckoutButton({
       {reviewOpen ? (
         <div
           className="fixed inset-0 z-80 flex items-center justify-center bg-black/50 p-4"
+          data-modal-root="true"
           role="dialog"
           aria-modal="true"
           aria-labelledby={modalTitleId}
           aria-describedby={modalDescId}
           onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setReviewOpen(false)
+            if (e.target === e.currentTarget) setReviewOpen(false);
           }}
         >
           <div ref={modalRef} className="w-full max-w-xl rounded-2xl bg-white shadow-2xl">
@@ -650,42 +644,55 @@ function CheckoutButton({
                 <>
                   <div className="space-y-3">
                     {safeItems.map((it) => {
-                      const mods = modifierLabel(it.modifiers)
-                      const key = cartItemKey(it.menuItemId, it.modifiers)
+                      const mods = modifierLabel(it.modifiers);
+                      const key = cartItemKey(it.menuItemId, it.modifiers);
 
                       return (
                         <div key={key} className="rounded-xl border border-zinc-200 p-4">
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold text-zinc-900">{it.name}</p>
+                              <p className="truncate text-sm font-semibold text-zinc-900">
+                                {it.name}
+                              </p>
                               {mods ? <p className="mt-1 text-xs text-zinc-600">{mods}</p> : null}
                               {it.notes ? (
-                                <p className="mt-1 text-xs text-zinc-500">Note: {String(it.notes).slice(0, 200)}</p>
+                                <p className="mt-1 text-xs text-zinc-500">
+                                  Note: {String(it.notes).slice(0, 200)}
+                                </p>
                               ) : null}
                             </div>
                             <div className="shrink-0 text-right">
-                              <p className="text-sm font-semibold text-zinc-900">{formatCents(safeLineTotalCents(it))}</p>
-                              <p className="mt-1 text-xs text-zinc-500">Qty {clampInt(it.quantity, 1, 100)}</p>
+                              <p className="text-sm font-semibold text-zinc-900">
+                                {formatCents(safeLineTotalCents(it))}
+                              </p>
+                              <p className="mt-1 text-xs text-zinc-500">
+                                Qty {clampInt(it.quantity, 1, 100)}
+                              </p>
                             </div>
                           </div>
                         </div>
-                      )
+                      );
                     })}
                   </div>
 
                   <div className="mt-5 rounded-2xl bg-zinc-50 p-4 ring-1 ring-zinc-200">
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-zinc-600">Subtotal</span>
-                      <span className="font-semibold text-zinc-900 tabular-nums">{reviewSubtotalLabel}</span>
+                      <span className="font-semibold text-zinc-900 tabular-nums">
+                        {reviewSubtotalLabel}
+                      </span>
                     </div>
 
                     <div className="mt-3 flex items-center justify-between text-sm">
                       <span className="text-zinc-700">Estimated total</span>
-                      <span className="text-base font-bold text-zinc-900 tabular-nums">{reviewTotalLabel}</span>
+                      <span className="text-base font-bold text-zinc-900 tabular-nums">
+                        {reviewTotalLabel}
+                      </span>
                     </div>
 
                     <p className="mt-2 text-[11px] text-zinc-500">
-                      Final total (tax, promo eligibility, credits) is calculated server-side at checkout.
+                      Final total (tax, promo eligibility, credits) is calculated server-side at
+                      checkout.
                     </p>
                   </div>
 
@@ -737,8 +744,8 @@ function CheckoutButton({
                   'disabled:cursor-not-allowed disabled:opacity-60',
                 )}
                 onClick={() => {
-                  setReviewOpen(false)
-                  void doCheckout()
+                  setReviewOpen(false);
+                  void doCheckout();
                 }}
                 disabled={disabled}
               >
@@ -749,7 +756,7 @@ function CheckoutButton({
         </div>
       ) : null}
     </>
-  )
+  );
 }
 
 export default memo(CheckoutButton)
