@@ -3,7 +3,7 @@
 // CREATE CHECKOUT — Enterprise Edge Function (Production, 2026)
 // =============================================================================
 // Goals:
-// - Strict CORS allowlist (+ required headers incl x-application-name)
+// - Strict CORS allowlist (fail-closed; NEVER returns ACAO "null")
 // - Strict request parsing (no `any`, no unsafe casts)
 // - Server-truth rebuild of cart (menu_items + modifiers; ignore client price)
 // - pricingHash enforced + mismatch logged (best-effort)
@@ -11,11 +11,9 @@
 // - Promo (by ID or CODE) + credit validated server-side
 // - Stripe Checkout session created with idempotency
 // - pending_carts persisted (best-effort, Stripe remains source of truth)
-// - ✅ UPGRADE: add stable server cart reference to Stripe metadata:
-//    - metadata.pending_cart_id AND metadata.cart_ref (supports new + old finalize-order)
-// - ✅ UPGRADE: strict CORS fail-closed (reject unknown origins with 403)
-// - ✅ UPGRADE: requestId + structured error codes (clean logs / deterministic)
-// - ✅ UPGRADE: de-duped sessionParams block (your paste had duplicates)
+// - Adds stable server cart reference to Stripe metadata:
+//   - metadata.pending_cart_id AND metadata.cart_ref (supports new + old finalize-order)
+// - requestId + structured error codes
 // =============================================================================
 
 import Stripe from "stripe";
@@ -150,7 +148,11 @@ const ALLOWED_ORIGINS = new Set([
   "http://localhost:5173",
   "https://sofislegacy.com",
   "https://www.sofislegacy.com",
+  "https://sofisrestaurant.netlify.app",
 ]);
+
+const ALLOWED_HEADERS =
+  "authorization, x-client-info, apikey, content-type, x-application-name, x-idempotency-key, x-request-id, x-requested-with";
 
 function mustEnv(name: string): string {
   const v = Deno.env.get(name)?.trim() ?? "";
@@ -193,6 +195,24 @@ const MENU_CATEGORIES: ReadonlySet<MenuCategory> = new Set<MenuCategory>([
 ]);
 
 // ─────────────────────────────────────────────────────────────────────────────
+// CORS (FIXED): fail-closed + NEVER send ACAO "null"
+// ─────────────────────────────────────────────────────────────────────────────
+
+function corsHeadersFor(origin: string | null): HeadersInit | null {
+  const o = (origin ?? "").trim();
+  if (!o || !ALLOWED_ORIGINS.has(o)) return null;
+
+  return {
+    "Access-Control-Allow-Origin": o,
+    "Vary": "Origin",
+    "Access-Control-Allow-Headers": ALLOWED_HEADERS,
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Credentials": "true",
+    "Access-Control-Max-Age": "86400",
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Utilities
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -202,20 +222,6 @@ function makeRequestId(): string {
   } catch {
     return `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   }
-}
-
-function corsHeadersFor(origin: string | null): HeadersInit {
-  const o = origin ?? "";
-  const allow = ALLOWED_ORIGINS.has(o) ? o : "null"; // used only for OPTIONS
-  return {
-    "Access-Control-Allow-Origin": allow,
-    Vary: "Origin",
-    "Access-Control-Allow-Headers":
-      "authorization, x-client-info, apikey, content-type, x-application-name, x-idempotency-key, x-request-id, x-requested-with",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Credentials": "true",
-    "Access-Control-Max-Age": "86400",
-  };
 }
 
 function json(data: unknown, init: ResponseInit = {}, cors: HeadersInit = {}): Response {
@@ -255,7 +261,7 @@ function safeId(v: unknown, maxLen = 128): string {
 }
 
 function safePromoCode(v: unknown): string | null {
-  if (typeof v !== "string") return null;
+  if (typeof v !== 'string') return null;
   const s = v.trim().toUpperCase();
   if (!s) return null;
   return s.length > 32 ? s.slice(0, 32) : s;
@@ -744,15 +750,14 @@ Deno.serve(async (req: Request) => {
   const origin = req.headers.get("origin");
   const cors = corsHeadersFor(origin);
 
-  // ✅ fail closed for non-OPTIONS requests
-  if (req.method !== "OPTIONS") {
-    const o = origin ?? "";
-    if (!ALLOWED_ORIGINS.has(o)) {
-      return new Response("Origin not allowed", { status: 403 });
-    }
+  // ✅ Preflight (OPTIONS) must include the correct origin headers.
+  if (req.method === "OPTIONS") {
+    if (!cors) return new Response("Origin not allowed", { status: 403 });
+    return new Response(null, { status: 204, headers: cors });
   }
 
-  if (req.method === "OPTIONS") return new Response("ok", { status: 200, headers: cors });
+  // ✅ fail closed for non-OPTIONS requests
+  if (!cors) return new Response("Origin not allowed", { status: 403 });
 
   if (req.method !== "POST") {
     return json(
@@ -858,10 +863,9 @@ Deno.serve(async (req: Request) => {
     // 3) Stripe session
     const lineItems = stripeLineItemsFromCart(canonicalItems);
 
-    // ✅ UPGRADE: generate cart id BEFORE Stripe (stable internal ref)
+    // ✅ generate cart id BEFORE Stripe (stable internal ref)
     const pendingCartId = crypto.randomUUID();
 
-    // ✅ UPGRADE: include BOTH keys so finalize-order can support old + new conventions
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
       mode: "payment",
       success_url: CHECKOUT_SUCCESS_URL,
@@ -895,7 +899,7 @@ Deno.serve(async (req: Request) => {
     // 4) Persist pending cart (best-effort)
     const { error: upsertErr } = await db.from("pending_carts").upsert(
       {
-        id: pendingCartId, // ✅ internal cart id
+        id: pendingCartId,
         user_id: userId,
         idempotency_key: idem,
         items: canonicalItems as unknown as Json,
@@ -905,7 +909,7 @@ Deno.serve(async (req: Request) => {
         discount_cents: totals.discountCents,
         tax_cents: totals.taxCents,
         total_cents: totals.totalCents,
-        stripe_session_id: session.id, // ✅ Stripe id stored separately
+        stripe_session_id: session.id,
         expires_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
         created_at: new Date().toISOString(),
       },
@@ -932,7 +936,7 @@ Deno.serve(async (req: Request) => {
       session_id: session.id,
       url: session.url ?? null,
       totals,
-      pending_cart_id: pendingCartId, // ✅ internal id returned to client
+      pending_cart_id: pendingCartId,
     };
 
     return json(res, { status: 200 }, cors);
