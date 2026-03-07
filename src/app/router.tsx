@@ -1,29 +1,34 @@
 // =============================================================================
-// src/app/router.tsx — 2026 Enterprise Router (fixed)
+// src/app/router.tsx — 2026 Enterprise Router (production-hardened)
 // =============================================================================
 //
-// ROUTE MAP:
-//   /admin                         → Dashboard (index)
-//   /admin/orders                  → Orders
-//   /admin/kitchen                 → Kitchen
-//   /admin/menu                    → Menu Editor
-//   /admin/loyalty-scan            → Loyalty Scan
-//   /admin/marketing               → CampaignManager (index)
-//   /admin/marketing/campaigns     → CampaignManager
-//   /admin/marketing/promos        → PromoManager
-//   /admin/marketing/abandoned     → AbandonedCartAnalytics
-//   /admin/marketing/optimizer     → AIOptimizerPanel
-//   /admin/finance                 → Finance
-//   /admin/fraud                   → FraudLog
-//   /admin/notifications           → Notifications
+// Fixes:
+// - ✅ Prevents "leaf route has no element" by ensuring every matched leaf returns a Component.
+// - ✅ Handles modules that do NOT have a default export (e.g. PromoManager named export).
+// - ✅ Fails loudly + visibly in UI if a route module is missing the expected export,
+//      instead of silently rendering a blank page.
+// - ✅ Keeps /menu deterministic (no lazy) per your prior fix.
+//
+// NOTE (from your console):
+//   import("/src/pages/Admin/Marketing/CampaignManager.tsx") only exports ["PromoManager"].
+//   That means CampaignManager.tsx currently does NOT export CampaignManager at all.
+//   This router will now show a clear error page for /admin/marketing/campaigns until that file is corrected.
 // =============================================================================
 
+import React from 'react';
 import { createBrowserRouter } from 'react-router-dom';
+
 import RootLayout from '@/app/RootLayout';
 import { Providers } from '@/app/Providers';
 import { AuthGuard, RoleGuard } from '@/components/auth/AuthGuard';
 
-// Small helpers to avoid repeating wrappers everywhere
+// ✅ /menu deterministic (no lazy)
+import MenuPage from '@/modules/menu/pages/MenuPage';
+
+// ─────────────────────────────────────────────────────────────
+// Wrappers
+// ─────────────────────────────────────────────────────────────
+
 const withAuth = (Cmp: React.ComponentType) => () => (
   <AuthGuard requireAuth>
     <Cmp />
@@ -41,6 +46,77 @@ const withRole = (roles: Array<'admin' | 'staff' | 'customer'>, Cmp: React.Compo
     <Cmp />
   </RoleGuard>
 );
+
+// ─────────────────────────────────────────────────────────────
+// Lazy helpers (NO blank pages)
+// ─────────────────────────────────────────────────────────────
+
+function RouteLoadError({ title, details }: { title: string; details: string }) {
+  return (
+    <div className="flex min-h-[60vh] items-center justify-center px-6">
+      <div className="w-full max-w-xl rounded-2xl border border-red-500/20 bg-[#0d0d10] p-6">
+        <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-600">
+          Route Load Error
+        </p>
+        <h1 className="mt-2 text-lg font-black text-red-300">{title}</h1>
+        <pre className="mt-3 overflow-auto rounded-xl border border-zinc-800 bg-black/40 p-3 text-xs text-zinc-300">
+          {details}
+        </pre>
+      </div>
+    </div>
+  );
+}
+
+type AnyModule = Record<string, unknown>;
+
+function pickExport(
+  mod: AnyModule,
+  prefer: string[],
+): React.ComponentType | null {
+  for (const key of prefer) {
+    const v = (mod as AnyModule)[key];
+    if (typeof v === 'function') return v as React.ComponentType;
+    if (v && typeof v === 'object') {
+      // React.memo / forwardRef components can appear as objects with $$typeof
+      const maybe = v as any;
+      if (maybe?.$$typeof) return v as unknown as React.ComponentType;
+    }
+  }
+  return null;
+}
+
+function lazyPick(
+  importer: () => Promise<AnyModule>,
+  prefer: string[],
+  label: string,
+) {
+  return async () => {
+    try {
+      const mod = await importer();
+      const Cmp = pickExport(mod, prefer);
+      if (!Cmp) {
+        const keys = Object.keys(mod);
+        const msg =
+          `Missing expected export for "${label}".\n` +
+          `Tried: ${prefer.join(', ')}\n` +
+          `Available exports: ${keys.length ? keys.join(', ') : '(none)'}`;
+        return {
+          Component: () => <RouteLoadError title={`Missing export: ${label}`} details={msg} />,
+        };
+      }
+      return { Component: Cmp };
+    } catch (e) {
+      const msg = e instanceof Error ? e.stack || e.message : String(e);
+      return {
+        Component: () => <RouteLoadError title={`Failed to load: ${label}`} details={msg} />,
+      };
+    }
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Router
+// ─────────────────────────────────────────────────────────────
 
 export const router = createBrowserRouter([
   {
@@ -70,13 +146,12 @@ export const router = createBrowserRouter([
           return { Component: m.default };
         },
       },
+
       {
         path: 'menu',
-        lazy: async () => {
-          const m = await import('@/modules/menu/pages/MenuPage');
-          return { Component: m.default };
-        },
+        element: <MenuPage />,
       },
+
       {
         path: 'about',
         lazy: async () => {
@@ -301,43 +376,50 @@ export const router = createBrowserRouter([
           {
             path: 'marketing',
             children: [
+              // /admin/marketing
               {
                 index: true,
-                lazy: async () => {
-                  const m = await import('@/pages/Admin/Marketing/CampaignManager');
-                  return { Component: m.default };
-                },
+                lazy: lazyPick(
+                  () => import('@/pages/Admin/Marketing/CampaignManager'),
+                  ['default', 'CampaignManager'],
+                  'CampaignManager (default|CampaignManager)',
+                ),
               },
+              // /admin/marketing/campaigns
               {
                 path: 'campaigns',
-                lazy: async () => {
-                  const m = await import('@/pages/Admin/Marketing/CampaignManager');
-                  return { Component: m.default };
-                },
+                lazy: lazyPick(
+                  () => import('@/pages/Admin/Marketing/CampaignManager'),
+                  ['default', 'CampaignManager'],
+                  'CampaignManager (default|CampaignManager)',
+                ),
               },
+              // /admin/marketing/promos
               {
                 path: 'promos',
-                lazy: async () => {
-                  const m = await import('@/pages/Admin/Marketing/PromoManager');
-                  // PromoManager file exports `export const PromoManager = memo(...)`
-                  return { Component: m.PromoManager };
-                },
+                lazy: lazyPick(
+                  () => import('@/pages/Admin/Marketing/PromoManager'),
+                  ['PromoManager', 'default'],
+                  'PromoManager (PromoManager|default)',
+                ),
               },
+              // /admin/marketing/abandoned
               {
                 path: 'abandoned',
-                lazy: async () => {
-                  const m = await import('@/pages/Admin/Marketing/AbandonedCartAnalytics');
-                  // AbandonedCartAnalytics file exports `export const AbandonedCartAnalytics = memo(...)`
-                  return { Component: m.AbandonedCartAnalytics };
-                },
+                lazy: lazyPick(
+                  () => import('@/pages/Admin/Marketing/AbandonedCartAnalytics'),
+                  ['AbandonedCartAnalytics', 'default'],
+                  'AbandonedCartAnalytics (AbandonedCartAnalytics|default)',
+                ),
               },
+              // /admin/marketing/optimizer
               {
-                // FIXED: leaf route now has a Component (no element + lazy combo)
                 path: 'optimizer',
-                lazy: async () => {
-                  const m = await import('@/pages/Admin/Marketing/AIOptimizerPanel');
-                  return { Component: m.default };
-                },
+                lazy: lazyPick(
+                  () => import('@/pages/Admin/Marketing/AIOptimizerPanel'),
+                  ['default', 'AIOptimizerPanel'],
+                  'AIOptimizerPanel (default|AIOptimizerPanel)',
+                ),
               },
             ],
           },
@@ -369,7 +451,7 @@ export const router = createBrowserRouter([
             },
           },
 
-          // OPTIONAL (exists in your tree): Admin Kitchen route page (if you use it)
+          // OPTIONAL: Admin Kitchen route page
           {
             path: 'kitchen-page',
             lazy: async () => {
@@ -378,7 +460,7 @@ export const router = createBrowserRouter([
             },
           },
 
-          // OPTIONAL (exists in your tree): Admin Orders page (if you use it)
+          // OPTIONAL: Admin Orders page
           {
             path: 'orders-page',
             lazy: async () => {
@@ -387,7 +469,7 @@ export const router = createBrowserRouter([
             },
           },
 
-          // OPTIONAL (exists in your tree): Admin menu editor alias
+          // OPTIONAL: Admin menu editor alias
           {
             path: 'menu-editor',
             lazy: async () => {

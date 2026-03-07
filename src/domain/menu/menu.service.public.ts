@@ -1,3 +1,5 @@
+// PATH: src/domain/menu/menu.service.public.ts
+
 import { supabase } from '@/lib/supabase/supabaseClient'
 import { MenuPublicMapper } from '@/domain/menu/menu.public.mapper'
 import type { MenuItemPublic } from './menu.types'
@@ -9,7 +11,9 @@ export class MenuPublicService {
       .from('menu_items_public')
       .select('*')
       .eq('available', true)
+      .order('category', { ascending: true })
       .order('sort_order', { ascending: true })
+      .order('name', { ascending: true })
 
     if (error) throw error
     return MenuPublicMapper.mapMany(data ?? [])

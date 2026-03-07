@@ -673,36 +673,108 @@ export type Database = {
         }
         Relationships: []
       }
+      growth_campaign_settings: {
+        Row: {
+          auto_rotate_daily: boolean
+          id: number
+          last_rotation_at: string | null
+        }
+        Insert: {
+          auto_rotate_daily?: boolean
+          id?: number
+          last_rotation_at?: string | null
+        }
+        Update: {
+          auto_rotate_daily?: boolean
+          id?: number
+          last_rotation_at?: string | null
+        }
+        Relationships: []
+      }
       growth_campaigns: {
         Row: {
           active: boolean
+          badge: string | null
           budget_cents: number | null
+          campaign_name: string | null
           channel: string | null
           created_at: string | null
+          cta_label: string | null
+          deep_link: string | null
+          eligible_for_rotation: boolean
+          ends_at: string | null
+          featured_for_date: string | null
+          hero_subtitle: string | null
+          hero_title: string | null
           id: string
+          is_featured: boolean | null
+          menu_item_id: string | null
           name: string | null
+          placement: string | null
+          priority: number | null
+          promo_id: string | null
           revenue_cents: number | null
           spent_cents: number | null
+          starts_at: string | null
+          status: string | null
+          updated_at: string | null
+          weight: number | null
         }
         Insert: {
           active?: boolean
+          badge?: string | null
           budget_cents?: number | null
+          campaign_name?: string | null
           channel?: string | null
           created_at?: string | null
+          cta_label?: string | null
+          deep_link?: string | null
+          eligible_for_rotation?: boolean
+          ends_at?: string | null
+          featured_for_date?: string | null
+          hero_subtitle?: string | null
+          hero_title?: string | null
           id?: string
+          is_featured?: boolean | null
+          menu_item_id?: string | null
           name?: string | null
+          placement?: string | null
+          priority?: number | null
+          promo_id?: string | null
           revenue_cents?: number | null
           spent_cents?: number | null
+          starts_at?: string | null
+          status?: string | null
+          updated_at?: string | null
+          weight?: number | null
         }
         Update: {
           active?: boolean
+          badge?: string | null
           budget_cents?: number | null
+          campaign_name?: string | null
           channel?: string | null
           created_at?: string | null
+          cta_label?: string | null
+          deep_link?: string | null
+          eligible_for_rotation?: boolean
+          ends_at?: string | null
+          featured_for_date?: string | null
+          hero_subtitle?: string | null
+          hero_title?: string | null
           id?: string
+          is_featured?: boolean | null
+          menu_item_id?: string | null
           name?: string | null
+          placement?: string | null
+          priority?: number | null
+          promo_id?: string | null
           revenue_cents?: number | null
           spent_cents?: number | null
+          starts_at?: string | null
+          status?: string | null
+          updated_at?: string | null
+          weight?: number | null
         }
         Relationships: []
       }
@@ -905,6 +977,49 @@ export type Database = {
             columns: ["admin_id"]
             isOneToOne: false
             referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      loyalty_ledger_labels: {
+        Row: {
+          created_at: string
+          id: string
+          label: Json
+          ledger_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          label?: Json
+          ledger_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          label?: Json
+          ledger_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "loyalty_ledger_labels_ledger_id_fkey"
+            columns: ["ledger_id"]
+            isOneToOne: false
+            referencedRelation: "loyalty_ledger"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_ledger_labels_ledger_id_fkey"
+            columns: ["ledger_id"]
+            isOneToOne: false
+            referencedRelation: "v2_loyalty_activity"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_ledger_labels_ledger_id_fkey"
+            columns: ["ledger_id"]
+            isOneToOne: false
+            referencedRelation: "v2_loyalty_ledger_enriched"
             referencedColumns: ["id"]
           },
         ]
@@ -1731,6 +1846,13 @@ export type Database = {
             foreignKeyName: "promotions_campaign_id_fkey"
             columns: ["campaign_id"]
             isOneToOne: false
+            referencedRelation: "active_campaigns_now"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "promotions_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
             referencedRelation: "growth_campaigns"
             referencedColumns: ["id"]
           },
@@ -1923,6 +2045,60 @@ export type Database = {
       }
     }
     Views: {
+      active_campaigns_now: {
+        Row: {
+          badge: string | null
+          campaign_name: string | null
+          cta_label: string | null
+          deep_link: string | null
+          ends_at: string | null
+          hero_subtitle: string | null
+          hero_title: string | null
+          id: string | null
+          is_featured: boolean | null
+          menu_item_id: string | null
+          placement: string | null
+          priority: number | null
+          promo_id: string | null
+          starts_at: string | null
+          weight: number | null
+        }
+        Insert: {
+          badge?: string | null
+          campaign_name?: string | null
+          cta_label?: string | null
+          deep_link?: string | null
+          ends_at?: string | null
+          hero_subtitle?: string | null
+          hero_title?: string | null
+          id?: string | null
+          is_featured?: boolean | null
+          menu_item_id?: string | null
+          placement?: string | null
+          priority?: number | null
+          promo_id?: string | null
+          starts_at?: string | null
+          weight?: number | null
+        }
+        Update: {
+          badge?: string | null
+          campaign_name?: string | null
+          cta_label?: string | null
+          deep_link?: string | null
+          ends_at?: string | null
+          hero_subtitle?: string | null
+          hero_title?: string | null
+          id?: string | null
+          is_featured?: boolean | null
+          menu_item_id?: string | null
+          placement?: string | null
+          priority?: number | null
+          promo_id?: string | null
+          starts_at?: string | null
+          weight?: number | null
+        }
+        Relationships: []
+      }
       admin_executive_snapshot: {
         Row: {
           generated_at: string | null
@@ -2265,6 +2441,80 @@ export type Database = {
           },
         ]
       }
+      v2_loyalty_activity: {
+        Row: {
+          account_id: string | null
+          admin_id: string | null
+          amount: number | null
+          balance_after: number | null
+          created_at: string | null
+          entry_type: string | null
+          id: string | null
+          idempotency_key: string | null
+          metadata_enriched: Json | null
+          reference_id: string | null
+          source: string | null
+          source_label: string | null
+        }
+        Insert: {
+          account_id?: string | null
+          admin_id?: string | null
+          amount?: number | null
+          balance_after?: number | null
+          created_at?: string | null
+          entry_type?: string | null
+          id?: string | null
+          idempotency_key?: string | null
+          metadata_enriched?: never
+          reference_id?: string | null
+          source?: string | null
+          source_label?: never
+        }
+        Update: {
+          account_id?: string | null
+          admin_id?: string | null
+          amount?: number | null
+          balance_after?: number | null
+          created_at?: string | null
+          entry_type?: string | null
+          id?: string | null
+          idempotency_key?: string | null
+          metadata_enriched?: never
+          reference_id?: string | null
+          source?: string | null
+          source_label?: never
+        }
+        Relationships: [
+          {
+            foreignKeyName: "loyalty_ledger_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "loyalty_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_ledger_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v2_account_summary"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_ledger_admin_id_fkey"
+            columns: ["admin_id"]
+            isOneToOne: false
+            referencedRelation: "loyalty_leaderboard"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_ledger_admin_id_fkey"
+            columns: ["admin_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       v2_loyalty_audit: {
         Row: {
           admin_id: string | null
@@ -2290,6 +2540,92 @@ export type Database = {
             columns: ["user_id"]
             isOneToOne: true
             referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_ledger_admin_id_fkey"
+            columns: ["admin_id"]
+            isOneToOne: false
+            referencedRelation: "loyalty_leaderboard"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_ledger_admin_id_fkey"
+            columns: ["admin_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      v2_loyalty_ledger_enriched: {
+        Row: {
+          account_id: string | null
+          admin_id: string | null
+          amount: number | null
+          balance_after: number | null
+          created_at: string | null
+          entry_type: string | null
+          id: string | null
+          idempotency_key: string | null
+          metadata: Json | null
+          metadata_enriched: Json | null
+          prev_hash: string | null
+          reference_id: string | null
+          row_hash: string | null
+          source: string | null
+          streak_at_time: number | null
+          tier_at_time: string | null
+        }
+        Insert: {
+          account_id?: string | null
+          admin_id?: string | null
+          amount?: number | null
+          balance_after?: number | null
+          created_at?: string | null
+          entry_type?: string | null
+          id?: string | null
+          idempotency_key?: string | null
+          metadata?: Json | null
+          metadata_enriched?: never
+          prev_hash?: string | null
+          reference_id?: string | null
+          row_hash?: string | null
+          source?: string | null
+          streak_at_time?: number | null
+          tier_at_time?: string | null
+        }
+        Update: {
+          account_id?: string | null
+          admin_id?: string | null
+          amount?: number | null
+          balance_after?: number | null
+          created_at?: string | null
+          entry_type?: string | null
+          id?: string | null
+          idempotency_key?: string | null
+          metadata?: Json | null
+          metadata_enriched?: never
+          prev_hash?: string | null
+          reference_id?: string | null
+          row_hash?: string | null
+          source?: string | null
+          streak_at_time?: number | null
+          tier_at_time?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "loyalty_ledger_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "loyalty_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_ledger_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v2_account_summary"
             referencedColumns: ["id"]
           },
           {
@@ -2352,27 +2688,16 @@ export type Database = {
       get_loyalty_by_order: {
         Args: { p_order_id: string }
         Returns: {
-          base_points: number
+          account_id: string
+          amount: number
           created_at: string
-          id: string
-          lifetime_balance: number
-          metadata: Json | null
-          order_id: string
-          points_balance: number
-          points_delta: number
-          streak_at_time: number
-          streak_multiplier: number
-          tier_at_time: string
-          tier_multiplier: number
-          transaction_type: string
-          user_id: string
+          entry_type: string
+          idempotency_key: string
+          ledger_id: string
+          metadata: Json
+          reference_id: string
+          source: string
         }[]
-        SetofOptions: {
-          from: "*"
-          to: "loyalty_transactions"
-          isOneToOne: false
-          isSetofReturn: true
-        }
       }
       get_loyalty_for_order: {
         Args: { p_order_id: string }
@@ -2450,8 +2775,18 @@ export type Database = {
         }[]
       }
       redeem_loyalty_points: {
-        Args: { p_order_id?: string; p_points: number; p_user_id: string }
+        Args: { p_admin_id: string; p_points: number; p_user_id: string }
         Returns: Json
+      }
+      rotate_daily_campaigns: { Args: never; Returns: undefined }
+      rotate_featured_growth_campaigns: {
+        Args: { target_placement?: string }
+        Returns: {
+          featured_campaign_id: string
+          placement: string
+          rotated_at: string
+          was_manual_override: boolean
+        }[]
       }
       update_order_status_secure: {
         Args: { new_status: string; order_id: string }
@@ -2489,23 +2824,42 @@ export type Database = {
           isSetofReturn: false
         }
       }
-      v2_award_points: {
-        Args: {
-          p_account_id: string
-          p_admin_id: string
-          p_amount_cents: number
-          p_idempotency_key: string
-        }
-        Returns: {
-          new_balance: number
-          new_lifetime: number
-          new_tier: string
-          points_earned: number
-          streak: number
-          tier_changed: boolean
-          was_duplicate: boolean
-        }[]
-      }
+      v2_award_points:
+        | {
+            Args: {
+              p_account_id: string
+              p_admin_id: string
+              p_amount_cents: number
+              p_idempotency_key: string
+            }
+            Returns: {
+              new_balance: number
+              new_lifetime: number
+              new_tier: string
+              points_earned: number
+              streak: number
+              tier_changed: boolean
+              was_duplicate: boolean
+            }[]
+          }
+        | {
+            Args: {
+              p_account_id: string
+              p_admin_id: string
+              p_amount_cents: number
+              p_idempotency_key: string
+              p_reference_id: string
+            }
+            Returns: {
+              new_balance: number
+              new_lifetime: number
+              new_tier: string
+              points_earned: number
+              streak: number
+              tier_changed: boolean
+              was_duplicate: boolean
+            }[]
+          }
       v2_redeem_points: {
         Args: {
           p_account_id: string

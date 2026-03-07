@@ -1,4 +1,3 @@
-// src/modules/menu/pages/MenuPage.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { MenuPublicService } from '@/domain/menu/menu.service.public';
@@ -18,6 +17,9 @@ import { CategoryTabs } from '@/modules/menu/components/CategoryTabs';
 import { MenuGrid } from '@/modules/menu/components/MenuGrid';
 import MenuFilters from '@/modules/menu/components/MenuFilters';
 import MenuItemModal from '@/modules/menu/components/MenuItemModal';
+
+import { useActiveCampaigns } from '@/modules/menu/hooks/useActiveCampaigns';
+import { campaignsToDeals } from '@/modules/menu/mappers/campaignsToDeals.mapper';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -300,10 +302,9 @@ type FilterState = {
 
 type ModalState = { open: false } | { open: true; item: MenuItemPublic };
 
-// Header (or anywhere) can dispatch this to open filters without prop drilling.
 const MENU_OPEN_FILTERS_EVENT = 'menu:open-filters';
 
-export default function MenuPage() {
+function MenuPage() {
   const [items, setItems] = useState<MenuItemPublic[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -311,7 +312,6 @@ export default function MenuPage() {
   const [selectedCategory, setSelectedCategory] = useState<MenuCategory | 'all'>('all');
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  // Search comes from Header via store
   const searchText = useMenuUi((s) => s.searchText);
   const setSearchText = useMenuUi((s) => s.setSearchText);
 
@@ -356,7 +356,6 @@ export default function MenuPage() {
     void loadMenu();
   }, [loadMenu]);
 
-  // Listen for Header-triggered filter open
   useEffect(() => {
     const onOpen = () => {
       lastFocusForFiltersRef.current =
@@ -384,8 +383,20 @@ export default function MenuPage() {
     if (!categoriesWithItems.has(selectedCategory)) setSelectedCategory('all');
   }, [categoriesWithItems, selectedCategory]);
 
+  // ✅ Campaign-powered deals (Edge Function → campaigns → mapper → DealsRail)
+  const campaigns = useActiveCampaigns('menu_deals_rail');
+
+  const campaignDealItemIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const c of campaigns) {
+      if (c.menu_item_id) s.add(c.menu_item_id);
+    }
+    return s;
+  }, [campaigns]);
+
+  // Legacy fallback deals (from menu items), used if campaigns are empty
   const dealItems = useMemo<MenuItemPublic[]>(() => {
-    const out = items.filter((it) => readIsDeal(it));
+    const out = items.filter((it) => readIsDeal(it) || campaignDealItemIds.has(readId(it)));
     out.sort((a, b) => {
       const ai = readImageUrl(a) ? 1 : 0;
       const bi = readImageUrl(b) ? 1 : 0;
@@ -394,7 +405,40 @@ export default function MenuPage() {
     return out.slice(0, 12);
   }, [items]);
 
-  const deals = useMemo<DealCard[]>(() => dealItems.map(toDealCard), [dealItems]);
+  const deals = useMemo<DealCard[]>(() => {
+    if (Array.isArray(campaigns) && campaigns.length > 0) {
+      // IMPORTANT: DealsRail selection must map to a MenuItem id for applyDeal()
+      // We keep the campaign mapping, but override `id` to `menu_item_id` when present.
+      const mapped = campaignsToDeals(campaigns).map((d) => {
+        const c = campaigns.find((x) => x.id === d.id) ?? null;
+        const menuItemId = c?.menu_item_id ?? null;
+        return { ...d, id: menuItemId ?? d.id };
+      });
+
+      // Keep featured/priority/weight ordering (campaignsToDeals preserves input order)
+      const byKey = new Map<string, (typeof campaigns)[number]>();
+      for (const c of campaigns) byKey.set(c.menu_item_id ?? c.id, c);
+
+      mapped.sort((a, b) => {
+        const ac = byKey.get(a.id) ?? null;
+        const bc = byKey.get(b.id) ?? null;
+        const af = ac?.is_featured ? 1 : 0;
+        const bf = bc?.is_featured ? 1 : 0;
+        if (af !== bf) return bf - af;
+        const ap = ac?.priority ?? 0;
+        const bp = bc?.priority ?? 0;
+        if (ap !== bp) return bp - ap;
+        const aw = ac?.weight ?? 0;
+        const bw = bc?.weight ?? 0;
+        if (aw !== bw) return bw - aw;
+        return a.title.localeCompare(b.title);
+      });
+
+      return mapped.slice(0, 12);
+    }
+
+    return dealItems.map(toDealCard);
+  }, [campaigns, dealItems]);
 
   const popular = useMemo<MenuItemPublic[]>(() => {
     const scored = items
@@ -421,7 +465,7 @@ export default function MenuPage() {
     for (const it of items) {
       if (selectedCategory !== 'all' && readCategory(it) !== selectedCategory) continue;
       if (!matchesSearch(it, q)) continue;
-      if (filters.promoOnly && !readIsDeal(it)) continue;
+      if (filters.promoOnly && !(readIsDeal(it) || campaignDealItemIds.has(readId(it)))) continue;
 
       let ok = true;
       for (const k of selectedTags) {
@@ -452,7 +496,6 @@ export default function MenuPage() {
   const resultsCountText = useMemo(() => {
     const n = filteredSortedItems.length;
 
-    // Only show when it adds value (active search/filters/category)
     const hasSearch = searchText.trim().length > 0;
     const hasCategory = selectedCategory !== 'all';
     const hasFilters =
@@ -461,7 +504,7 @@ export default function MenuPage() {
       filters.promoOnly ||
       String(filters.sort) !== 'recommended';
 
-    if (!hasSearch && !hasCategory && !hasFilters) return ''; // don't clutter
+    if (!hasSearch && !hasCategory && !hasFilters) return '';
 
     if (n === 0) return 'No matches — try clearing filters';
     return `Showing ${n} match${n === 1 ? '' : 'es'}`;
@@ -594,6 +637,7 @@ export default function MenuPage() {
               availableCategories={categoriesWithItems}
             />
           </div>
+
           {filteredSortedItems.length === 0 ? (
             <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
               No matches for your current filters.
@@ -606,6 +650,7 @@ export default function MenuPage() {
               </button>
             </div>
           ) : null}
+
           <div className="mt-5">
             <MenuGrid
               items={filteredSortedItems}
@@ -645,3 +690,6 @@ export default function MenuPage() {
     </main>
   );
 }
+
+export { MenuPage };
+export default MenuPage;

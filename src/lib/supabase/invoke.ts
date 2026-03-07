@@ -8,6 +8,12 @@
 // - On 401/403, attempts a single refreshSession() + retries once
 // - Single-flight refresh (prevents storm when many requests hit at once)
 // - Typed errors, safe JSON parsing, no token logging
+//
+// Hardened:
+// - Accepts both body shapes:
+//     invokeEdge(fn, { action, payload })                ✅ preferred
+//     invokeEdge(fn, { body: { action, payload } })     ✅ tolerated
+//   This prevents "Invalid request" 400s when callers accidentally double-wrap.
 // =============================================================================
 
 import { supabase } from '@/lib/supabase/supabaseClient'
@@ -94,6 +100,22 @@ function makeRequestId(): string {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// Body normalizer (prevents 400 "invalid request")
+// ─────────────────────────────────────────────────────────────
+function normalizeBody(body: unknown): unknown {
+  // Tolerate accidental Supabase-SDK style wrapper:
+  //   { body: { action, payload } }
+  // so the Edge function still receives { action, payload }.
+  if (!isRecord(body)) return body
+  if (!('body' in body)) return body
+
+  const inner = (body as JsonRecord).body
+  // Only unwrap when "body" is the primary container
+  if (isRecord(inner)) return inner
+  return body
+}
+
 async function doFetch(
   url: string,
   method: string,
@@ -104,7 +126,8 @@ async function doFetch(
   const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
   const appName = import.meta.env.VITE_APP_NAME ?? 'sofis-restaurant-v2'
 
-  const hasBody = body !== undefined && body !== null && method !== 'GET'
+  const normalized = normalizeBody(body)
+  const hasBody = normalized !== undefined && normalized !== null && method !== 'GET'
 
   const headers: Record<string, string> = {
     Accept: 'application/json',
@@ -122,7 +145,7 @@ async function doFetch(
   return fetch(url, {
     method,
     headers,
-    body: hasBody ? JSON.stringify(body) : undefined,
+    body: hasBody ? JSON.stringify(normalized) : undefined,
     signal: init?.signal,
   })
 }

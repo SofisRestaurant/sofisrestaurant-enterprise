@@ -61,7 +61,12 @@ type ModifierGroupLike = {
   max_selections: number | null;
   sort_order?: number | null;
   active: boolean;
+
+  // UI expects this:
   modifiers: ModifierLike[];
+
+  // DB may send this instead:
+  selections?: ModifierLike[];
 };
 
 type SelectedModifier = {
@@ -165,16 +170,34 @@ function normalizeModifierLike(v: unknown): ModifierLike | null {
   };
 }
 
+/**
+ * NOTE: FIX APPLIED HERE (and only here):
+ * - DB view may return `selections` instead of `modifiers`
+ * - UI renders `g.modifiers.map(...)`
+ * - We map selections -> modifiers when modifiers is absent/empty
+ *
+ * ALSO fixes TS errors:
+ * - avoid iterating `unknown`
+ * - never call `.map` on `{}` / unknown
+ * - avoid implicit any
+ */
 function normalizeGroupLike(v: unknown): ModifierGroupLike | null {
   if (!isRecord(v)) return null;
+
   const id = safeStr(v.id, '', 128);
   const name = safeStr(v.name, '', 120);
   const type = normalizeGroupType(v.type);
   if (!id || !name || !type) return null;
 
-  const modsRaw = Array.isArray(v.modifiers) ? v.modifiers : [];
+  // Build mods from either `modifiers` OR `selections` (whatever DB sends)
+  const modsSrc: unknown[] = Array.isArray(v.modifiers)
+    ? v.modifiers
+    : Array.isArray(v.selections)
+      ? v.selections
+      : [];
+
   const mods: ModifierLike[] = [];
-  for (const m of modsRaw) {
+  for (const m of modsSrc) {
     const mm = normalizeModifierLike(m);
     if (mm) mods.push(mm);
   }
@@ -184,6 +207,13 @@ function normalizeGroupLike(v: unknown): ModifierGroupLike | null {
     const bo = typeof b.sort_order === 'number' ? b.sort_order : 0;
     return ao - bo || a.name.localeCompare(b.name);
   });
+
+  // Preserve `selections` if DB sent it (optional; does not affect UI)
+  const selections: ModifierLike[] | undefined = Array.isArray(v.selections)
+    ? v.selections
+        .map((x: unknown) => normalizeModifierLike(x))
+        .filter((x): x is ModifierLike => !!x)
+    : undefined;
 
   return {
     id,
@@ -196,6 +226,7 @@ function normalizeGroupLike(v: unknown): ModifierGroupLike | null {
     sort_order: typeof v.sort_order === 'number' ? v.sort_order : null,
     active: safeBool(v.active, true),
     modifiers: mods,
+    selections: selections && selections.length ? selections : undefined,
   };
 }
 

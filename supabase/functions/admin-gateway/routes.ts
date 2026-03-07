@@ -1,5 +1,17 @@
-// supabase/functions/admin-gateway/routes.ts
+// PATH: supabase/functions/admin-gateway/routes.ts
+
 import { service } from "./lib/service.ts";
+
+import {
+  listCampaigns,
+  toggleCampaign,
+  runCampaignRotation,
+} from "./actions/campaigns.ts";
+
+import {
+  listPromos,
+  togglePromo,
+} from "./actions/promos.ts";
 
 /*
 |--------------------------------------------------------------------------
@@ -9,20 +21,61 @@ import { service } from "./lib/service.ts";
 
 export type AdminAction =
   | "metrics"
-  | "orders:list";
+  | "orders:list"
+  | "campaigns:list"
+  | "campaigns:toggle"
+  | "campaigns:run-rotation"
+  | "promos:list"
+  | "promos:toggle";
+
+/*
+|--------------------------------------------------------------------------
+| Payload Types
+|--------------------------------------------------------------------------
+*/
 
 export interface OrdersListPayload {
   page?: number;
 }
 
+export interface ToggleCampaignPayload {
+  id: string;
+  active: boolean;
+}
+
+export interface TogglePromoPayload {
+  id: string;
+  active: boolean;
+}
+
 export type ActionPayloadMap = {
   "metrics": undefined;
   "orders:list": OrdersListPayload;
+
+  "campaigns:list": undefined;
+  "campaigns:toggle": ToggleCampaignPayload;
+  "campaigns:run-rotation": undefined;
+
+  "promos:list": undefined;
+  "promos:toggle": TogglePromoPayload;
 };
 
+/*
+|--------------------------------------------------------------------------
+| Result Types
+|--------------------------------------------------------------------------
+*/
+
 export type ActionResultMap = {
-  "metrics": unknown;       // replace with your ExecutiveSnapshot type if you have it
-  "orders:list": unknown[]; // replace with your Order row type if you have it
+  "metrics": unknown;
+  "orders:list": unknown[];
+
+  "campaigns:list": Awaited<ReturnType<typeof listCampaigns>>;
+  "campaigns:toggle": Awaited<ReturnType<typeof toggleCampaign>>;
+  "campaigns:run-rotation": Awaited<ReturnType<typeof runCampaignRotation>>;
+
+  "promos:list": Awaited<ReturnType<typeof listPromos>>;
+  "promos:toggle": Awaited<ReturnType<typeof togglePromo>>;
 };
 
 /*
@@ -42,8 +95,34 @@ export async function route<T extends AdminAction>(
       return await getMetrics() as ActionResultMap[T];
 
     case "orders:list":
-      // payload is OrdersListPayload for this branch
       return await listOrders(payload as OrdersListPayload) as ActionResultMap[T];
+
+    /*
+    |--------------------------------------------------------------------------
+    | Campaigns
+    |--------------------------------------------------------------------------
+    */
+
+    case "campaigns:list":
+      return await listCampaigns() as ActionResultMap[T];
+
+    case "campaigns:toggle":
+      return await toggleCampaign(payload as ToggleCampaignPayload) as ActionResultMap[T];
+
+    case "campaigns:run-rotation":
+      return await runCampaignRotation() as ActionResultMap[T];
+
+    /*
+    |--------------------------------------------------------------------------
+    | Promos
+    |--------------------------------------------------------------------------
+    */
+
+    case "promos:list":
+      return await listPromos() as ActionResultMap[T];
+
+    case "promos:toggle":
+      return await togglePromo(payload as TogglePromoPayload) as ActionResultMap[T];
 
     default:
       return assertNever(action);
@@ -62,7 +141,10 @@ async function getMetrics(): Promise<unknown> {
     .select("*")
     .maybeSingle();
 
-  if (error) throw new Error(`Failed to load metrics: ${error.message}`);
+  if (error) {
+    throw Object.assign(new Error(error.message), { code: "DB_METRICS" });
+  }
+
   return data;
 }
 
@@ -77,7 +159,10 @@ async function listOrders(payload: OrdersListPayload): Promise<unknown[]> {
     .range(from, to)
     .order("created_at", { ascending: false });
 
-  if (error) throw new Error(`Failed to list orders: ${error.message}`);
+  if (error) {
+    throw Object.assign(new Error(error.message), { code: "DB_ORDERS" });
+  }
+
   return (data ?? []) as unknown[];
 }
 

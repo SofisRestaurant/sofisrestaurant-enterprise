@@ -1,0 +1,12 @@
+-- ============================================================================
+-- 20263405200000_rotate_featured_growth_campaigns.sql
+-- ----------------------------------------------------------------------------
+-- SUPERSEDED / NO-OP
+--
+-- This migration originally defined rotate_featured_growth_campaigns().
+-- It is intentionally kept as a no-op to preserve migration history stability.
+--
+-- Canonical rotation RPC lives in:
+--   20887805200000_active_campaigns_and_rotation.sql
+-- ============================================================================
+select 1;

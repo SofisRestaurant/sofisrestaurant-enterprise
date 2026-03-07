@@ -126,7 +126,7 @@ Allowed origins include:
 - ✅ Session ownership check via Stripe metadata keys:
   - `user_id` OR `customer_uid` OR `uid`
 - ✅ Stripe API version rule:
-  `STRIPE_API_VERSION = env("STRIPE_API_VERSION") || "2024-06-20"`
+  `STRIPE_API_VERSION = env("STRIPE_API_VERSION") || "2026-02-25"`
 - ✅ Stripe client must use fetch httpClient:
   `new Stripe(key,{ apiVersion, httpClient: Stripe.createFetchHttpClient() })`
 - ✅ Never trust client totals; server recomputes from DB truth

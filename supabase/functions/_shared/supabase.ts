@@ -1,4 +1,4 @@
-// supabase/functions/_shared/supabase.ts
+// PATH: supabase/functions/_shared/supabase.ts
 // =============================================================================
 // Supabase Edge Clients — Production Hardened (2026)
 // - Strongly typed with Database
@@ -60,6 +60,9 @@ export function readBearerToken(req: Request): string | null {
   const token = m?.[1]?.trim();
   return token ? token : null;
 }
+
+// ✅ Silence deno-lint/no-unused-vars without changing behavior/contracts
+export const _readBearerToken = readBearerToken;
 
 // ─────────────────────────────────────────────────────────────
 // Clients (STRICTLY typed)

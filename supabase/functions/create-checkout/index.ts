@@ -1,53 +1,46 @@
+// PATH: supabase/functions/create-checkout/index.ts
 // =============================================================================
-// supabase/functions/create-checkout/index.ts
-// CREATE CHECKOUT — Enterprise Edge Function (Production, 2026)
-// =============================================================================
-// Goals:
-// - Strict CORS allowlist (fail-closed; NEVER returns ACAO "null")
-// - Strict request parsing (no `any`, no unsafe casts)
-// - Server-truth rebuild of cart (menu_items + modifiers; ignore client price)
-// - pricingHash enforced + mismatch logged (best-effort)
-// - Option A anti-tamper: accept frontendTotals for mismatch telemetry
-// - Promo (by ID or CODE) + credit validated server-side
-// - Stripe Checkout session created with idempotency
-// - pending_carts persisted (best-effort, Stripe remains source of truth)
-// - Adds stable server cart reference to Stripe metadata:
-//   - metadata.pending_cart_id AND metadata.cart_ref (supports new + old finalize-order)
-// - requestId + structured error codes
+// create-checkout — Production Hardened (2026)
+// - Server authoritative pricing (campaigns/promos/credits)
+// - Canonical cart validation + fraud logging
+// - Stripe Checkout session creation with idempotency
+// - Persists pending_carts with pricing_snapshot + pricing_hash (audit trail)
+// - Browser CORS allowlist (Origin enforced only when present)
 // =============================================================================
 
 import Stripe from "stripe";
-import type { Database } from "../_shared/database.types.ts";
+import type { Database, Json } from "../_shared/database.types.ts";
 import type { DbClient } from "../_shared/supabase.ts";
-import { createServiceClient, createAnonClient, readBearerToken } from "../_shared/supabase.ts";
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────────────────────────
+import { createAnonClient, createServiceClient, readBearerToken } from "../_shared/supabase.ts";
+import {
+  type CanonicalCartItem,
+  type CanonicalModifier,
+  type OrderType,
+  PricingValidationError,
+  buildClientIntegrityHash,
+  buildStripeLineItemsFromPricing,
+  pricingSnapshotToJson,
+  resolvePricingForCheckout,
+} from "../_shared/pricing.ts";
 
 type Db = Database;
-type MenuCategory = Db["public"]["Enums"]["menu_category"];
-type Json = Db["public"]["Tables"]["orders"]["Row"]["cart_items"]; // Json | null
-
-type OrderType = "pickup" | "delivery" | "dine_in";
 
 type IncomingCartModifier = {
   id: string;
   groupId?: string;
-  name?: string;
+  name?: string; // IMPORTANT: keep as string | undefined (NOT null) to match TS strictness
   priceAdjustment?: number;
 };
 
 type IncomingCartItem = {
   menuItemId: string;
   name?: string;
-  unitPriceCents?: number; // untrusted
+  unitPriceCents?: number;
   imageUrl?: string | null;
-  category?: MenuCategory; // untrusted (we validate)
   modifiers: IncomingCartModifier[];
   quantity: number;
   notes?: string | null;
-  pricingHash?: string; // untrusted hint, but REQUIRED for tamper telemetry
+  pricingHash?: string | null;
 };
 
 type FrontendTotals = {
@@ -60,65 +53,36 @@ type FrontendTotals = {
 
 type CreateCheckoutRequest = {
   items: IncomingCartItem[];
-  // ✅ support both
   promoId: string | null;
   promoCode: string | null;
-
   creditId: string | null;
   orderType: OrderType;
   notes: string | null;
-  idempotencyKey?: string | null;
-
-  // ✅ Option A anti-tamper telemetry
+  idempotencyKey: string | null;
   frontendTotals: FrontendTotals | null;
 };
-
-type Totals = FrontendTotals;
 
 type CreateCheckoutResponse =
   | {
       ok: true;
       session_id: string;
       url: string | null;
-      totals: Totals;
+      totals: FrontendTotals;
       pending_cart_id: string;
+      requestId: string;
     }
-  | { ok: false; error: string; code?: string; requestId?: string };
-
-type CanonicalModifier = {
-  id: string;
-  modifier_group_id: string;
-  name: string;
-  price_adjustment: number;
-};
-
-type CanonicalItem = {
-  menuItemId: string;
-  name: string;
-  imageUrl: string | null;
-  category: MenuCategory;
-  quantity: number;
-  notes: string | null;
-
-  unitPriceCents: number;
-  modifiers: Array<{
-    id: string;
-    groupId: string;
-    name: string;
-    priceAdjustment: number;
-  }>;
-
-  lineTotalCents: number;
-  pricingHash: string;
-};
-
-type JsonRecord = Record<string, unknown>;
+  | {
+      ok: false;
+      error: string;
+      code: string;
+      requestId: string;
+    };
 
 type FraudMetadata =
   | {
       kind: "pricing_hash_mismatch";
       menuItemId: string;
-      clientHash: string;
+      clientHash: string | null;
       serverHash: string;
       clientUnitPriceCents: number | null;
       serverUnitPriceCents: number;
@@ -128,21 +92,53 @@ type FraudMetadata =
   | {
       kind: "totals_mismatch";
       frontendTotals: FrontendTotals;
-      serverTotals: Totals;
+      serverTotals: FrontendTotals;
     }
-  | { kind: "menu_item_not_found"; menuItemId: string }
-  | { kind: "pending_cart_upsert_failed"; message: string; session_id: string }
-  | { kind: "request_invalid"; reason: string }
-  | { kind: "checkout_failed"; message: string }
-  | { kind: "promo_invalid"; promo: { promoId: string | null; promoCode: string | null } }
-  | { kind: "credit_invalid"; creditId: string }
-  | { kind: "unknown"; data?: Record<string, unknown> };
+  | {
+      kind: "menu_item_not_found";
+      menuItemId: string;
+    }
+  | {
+      kind: "pending_cart_upsert_failed";
+      message: string;
+      session_id: string;
+    }
+  | {
+      kind: "checkout_failed";
+      message: string;
+    }
+  | {
+      kind: "invalid_request";
+      reason: string;
+    };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Config
-// ─────────────────────────────────────────────────────────────────────────────
+type JsonRecord = Record<string, unknown>;
 
-const ALLOWED_ORIGINS = new Set([
+// IMPORTANT:
+// Supabase Row types represent FULL rows. Our SELECTs return PARTIAL shapes.
+// Use “Lite” types that exactly match our SELECT columns to keep TS honest.
+type MenuItemLite = Pick<
+  Db["public"]["Tables"]["menu_items"]["Row"],
+  "id" | "name" | "category" | "image_url" | "available" | "price" | "inventory_count"
+>;
+
+type ModifierLite = Pick<
+  Db["public"]["Tables"]["modifiers"]["Row"],
+  "id" | "modifier_group_id" | "name" | "price_adjustment" | "available"
+>;
+
+const FUNCTION_NAME = "create-checkout";
+const MAX_BODY_BYTES = 25_000;
+const MAX_CART_ITEMS = 50;
+const MAX_ITEM_QTY = 20;
+const MAX_TOTAL_CENTS = 5_000_000;
+const MAX_IDEMPOTENCY_KEY_LEN = 120;
+
+const RATE_LIMIT_MAX = 12;
+const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
+const RATE_LIMIT_BLOCK_MS = 15 * 60 * 1000;
+
+const ALLOWED_ORIGINS = new Set<string>([
   "http://localhost:3000",
   "http://127.0.0.1:3000",
   "http://localhost:5173",
@@ -152,59 +148,63 @@ const ALLOWED_ORIGINS = new Set([
 ]);
 
 const ALLOWED_HEADERS =
-  "authorization, x-client-info, apikey, content-type, x-application-name, x-idempotency-key, x-request-id, x-requested-with";
+  "authorization, apikey, x-client-info, content-type, x-application-name, x-idempotency-key, x-request-id, x-requested-with";
 
-function mustEnv(name: string): string {
-  const v = Deno.env.get(name)?.trim() ?? "";
-  if (!v) throw new Error(`Missing ${name}`);
-  return v;
+const STRIPE_API_VERSION =
+  (Deno.env.get("STRIPE_API_VERSION")?.trim() || "2026-02-25") as Stripe.LatestApiVersion;
+
+// ─────────────────────────────────────────────────────────────
+// Helpers (runtime-safe)
+// ─────────────────────────────────────────────────────────────
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-const STRIPE_SECRET_KEY = mustEnv("STRIPE_SECRET_KEY");
+function asString(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
 
-const APP_NAME = (Deno.env.get("APP_NAME")?.trim() ?? "sofis-restaurant-v2") as string;
+function asNullableString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
 
-const DEFAULT_TAX_RATE = Number(Deno.env.get("TAX_RATE") ?? "0.0825");
-const TAX_RATE = Number.isFinite(DEFAULT_TAX_RATE) ? DEFAULT_TAX_RATE : 0.0825;
+function asNumber(value: unknown, fallback = 0): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
 
-const CHECKOUT_SUCCESS_URL =
-  (Deno.env.get("CHECKOUT_SUCCESS_URL")?.trim() || "http://localhost:3000/order-success") +
-  "?session_id={CHECKOUT_SESSION_ID}";
+function clampInt(value: unknown, min: number, max: number): number {
+  const parsed = asNumber(value, min);
+  if (!Number.isFinite(parsed)) return min;
+  return Math.max(min, Math.min(max, Math.trunc(parsed)));
+}
 
-const CHECKOUT_CANCEL_URL =
-  (Deno.env.get("CHECKOUT_CANCEL_URL")?.trim() || "http://localhost:3000/order-canceled") +
-  "?session_id={CHECKOUT_SESSION_ID}";
+function cents(value: unknown): number {
+  return Math.max(0, clampInt(value, 0, MAX_TOTAL_CENTS));
+}
 
-// If this apiVersion causes bundling issues, set STRIPE_API_VERSION env and use it.
-const STRIPE_API_VERSION = (Deno.env.get("STRIPE_API_VERSION")?.trim() || "2024-06-20") as Stripe.LatestApiVersion;
+function makeRequestId(req: Request): string {
+  const headerId = (req.headers.get("x-request-id") ?? "").trim();
+  if (headerId) return headerId.slice(0, 128);
+  return crypto.randomUUID().replaceAll("-", "");
+}
 
-const stripe = new Stripe(STRIPE_SECRET_KEY, {
-  apiVersion: STRIPE_API_VERSION,
-  httpClient: Stripe.createFetchHttpClient(),
-});
-
-// If your enum differs, update this list to match your Database enum exactly.
-const MENU_CATEGORIES: ReadonlySet<MenuCategory> = new Set<MenuCategory>([
-  "appetizers",
-  "entrees",
-  "desserts",
-  "drinks",
-  "lunch",
-  "breakfast",
-  "specials",
-]);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// CORS (FIXED): fail-closed + NEVER send ACAO "null"
-// ─────────────────────────────────────────────────────────────────────────────
-
+// CORS:
+// - If Origin is present → MUST be allowlisted
+// - If Origin is missing → allow (server-to-server / CLI), but do NOT set ACAO
 function corsHeadersFor(origin: string | null): HeadersInit | null {
-  const o = (origin ?? "").trim();
-  if (!o || !ALLOWED_ORIGINS.has(o)) return null;
+  const normalizedOrigin = (origin ?? "").trim();
+  if (!normalizedOrigin) return { Vary: "Origin" };
+  if (!ALLOWED_ORIGINS.has(normalizedOrigin)) return null;
 
   return {
-    "Access-Control-Allow-Origin": o,
-    "Vary": "Origin",
+    "Access-Control-Allow-Origin": normalizedOrigin,
+    Vary: "Origin",
     "Access-Control-Allow-Headers": ALLOWED_HEADERS,
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Credentials": "true",
@@ -212,198 +212,205 @@ function corsHeadersFor(origin: string | null): HeadersInit | null {
   };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Utilities
-// ─────────────────────────────────────────────────────────────────────────────
+function withStandardHeaders(headersInit: HeadersInit, requestId: string): Headers {
+  const headers = new Headers(headersInit);
 
-function makeRequestId(): string {
-  try {
-    return crypto.randomUUID();
-  } catch {
-    return `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  if (!headers.has("Vary")) headers.set("Vary", "Origin");
+  headers.set("Content-Type", "application/json; charset=utf-8");
+  headers.set("Cache-Control", "no-store");
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("X-Frame-Options", "DENY");
+  headers.set("Referrer-Policy", "no-referrer");
+  headers.set("X-Request-Id", requestId);
+
+  return headers;
+}
+
+function jsonResponse(
+  body: unknown,
+  status: number,
+  headersInit: HeadersInit,
+  requestId: string,
+): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: withStandardHeaders(headersInit, requestId),
+  });
+}
+
+function errorResponse(
+  status: number,
+  code: string,
+  error: string,
+  headersInit: HeadersInit,
+  requestId: string,
+  extraHeaders?: HeadersInit,
+): Response {
+  const merged = new Headers(headersInit);
+  if (extraHeaders) {
+    const extra = new Headers(extraHeaders);
+    for (const [k, v] of extra.entries()) merged.set(k, v);
   }
+
+  return jsonResponse(
+    { ok: false, code, error, requestId } satisfies CreateCheckoutResponse,
+    status,
+    merged,
+    requestId,
+  );
 }
 
-function json(data: unknown, init: ResponseInit = {}, cors: HeadersInit = {}): Response {
-  const headers = new Headers(init.headers);
-  headers.set("Content-Type", "application/json");
-  for (const [k, v] of Object.entries(cors)) headers.set(k, String(v));
-  return new Response(JSON.stringify(data), { ...init, headers });
+function sanitizePromoCode(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toUpperCase();
+  return normalized.length > 0 ? normalized.slice(0, 32) : null;
 }
 
-function isRecord(v: unknown): v is JsonRecord {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+function sanitizeNotes(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized.slice(0, 1200) : null;
 }
 
-function asString(v: unknown, fallback = ""): string {
-  return typeof v === "string" ? v : fallback;
+function sanitizeId(value: unknown, maxLength = 128): string {
+  const normalized = asString(value).trim();
+  return normalized.slice(0, maxLength);
 }
 
-function asNullableString(v: unknown): string | null {
-  return typeof v === "string" ? v : null;
+function sanitizeImageUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  if (!normalized || normalized.length > 1000) return null;
+  return normalized;
 }
 
-function asNumber(v: unknown, fallback = 0): number {
-  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
-  return Number.isFinite(n) ? n : fallback;
+function sanitizeIdempotencyKey(value: string | null, fallback: string): string {
+  const normalized = (value ?? "").trim();
+  if (!normalized) return fallback;
+  return normalized.slice(0, MAX_IDEMPOTENCY_KEY_LEN);
 }
 
-function clampInt(v: unknown, min: number, max: number): number {
-  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
-  if (!Number.isFinite(n)) return min;
-  return Math.max(min, Math.min(max, Math.trunc(n)));
+function buildDefaultIdempotencyKey(userId: string, payloadHash: string): string {
+  return `checkout:${userId}:${payloadHash}`.slice(0, MAX_IDEMPOTENCY_KEY_LEN);
 }
 
-function safeId(v: unknown, maxLen = 128): string {
-  const s = asString(v, "").trim();
-  if (!s) return "";
-  return s.length > maxLen ? s.slice(0, maxLen) : s;
+function normalizeTaxRate(): number {
+  const envValue = (Deno.env.get("TAX_RATE") ?? "").trim();
+  const parsed = Number(envValue);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0.0825;
+  return parsed;
 }
 
-function safePromoCode(v: unknown): string | null {
-  if (typeof v !== 'string') return null;
-  const s = v.trim().toUpperCase();
-  if (!s) return null;
-  return s.length > 32 ? s.slice(0, 32) : s;
+function getCheckoutSuccessUrl(): string {
+  const configured = (Deno.env.get("CHECKOUT_SUCCESS_URL") ?? "").trim();
+  const base = configured || "http://localhost:3000/order-success";
+  return `${base}?session_id={CHECKOUT_SESSION_ID}`;
 }
 
-function safeNotes(v: unknown, maxLen = 1200): string | null {
-  if (v === null || v === undefined) return null;
-  if (typeof v !== "string") return null;
-  const s = v.trim();
-  if (!s) return null;
-  return s.length > maxLen ? s.slice(0, maxLen) : s;
+function getCheckoutCancelUrl(): string {
+  const configured = (Deno.env.get("CHECKOUT_CANCEL_URL") ?? "").trim();
+  const base = configured || "http://localhost:3000/order-canceled";
+  return `${base}?session_id={CHECKOUT_SESSION_ID}`;
 }
 
-function safeImageUrl(v: unknown): string | null {
-  if (v === null) return null;
-  if (typeof v !== "string") return null;
-  const s = v.trim();
-  if (!s) return null;
-  if (s.length > 1000) return null;
-  return s;
+let stripeSingleton: Stripe | null = null;
+function getStripeOrThrow(): Stripe {
+  const secret = (Deno.env.get("STRIPE_SECRET_KEY") ?? "").trim();
+  if (!secret) throw new Error("MISSING_STRIPE_SECRET_KEY");
+
+  if (stripeSingleton) return stripeSingleton;
+
+  stripeSingleton = new Stripe(secret, {
+    apiVersion: STRIPE_API_VERSION,
+    httpClient: Stripe.createFetchHttpClient(),
+  });
+
+  return stripeSingleton;
 }
 
-function safeCategory(v: unknown): MenuCategory | null {
-  if (typeof v !== "string") return null;
-  return MENU_CATEGORIES.has(v as MenuCategory) ? (v as MenuCategory) : null;
+async function sha256Hex(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((part) => part.toString(16).padStart(2, "0"))
+    .join("");
 }
 
-function safePricingHash(v: unknown): string {
-  const s = asString(v, "").trim();
-  if (!s) return "";
-  return s.length > 256 ? s.slice(0, 256) : s;
+async function readJsonObjectBody(req: Request): Promise<JsonRecord> {
+  const contentType = (req.headers.get("content-type") ?? "").toLowerCase();
+  if (!contentType.includes("application/json")) throw new Error("UNSUPPORTED_CONTENT_TYPE");
+
+  const rawBody = await req.text();
+  if (!rawBody.trim()) throw new Error("EMPTY_BODY");
+
+  const bodyBytes = new TextEncoder().encode(rawBody).length;
+  if (bodyBytes > MAX_BODY_BYTES) throw new Error("BODY_TOO_LARGE");
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody);
+  } catch {
+    throw new Error("INVALID_JSON_BODY");
+  }
+
+  if (!isRecord(parsed)) throw new Error("INVALID_JSON_BODY");
+  return parsed;
 }
 
-function cents(n: unknown): number {
-  const x = asNumber(n, 0);
-  if (!Number.isFinite(x) || x < 0) return 0;
-  return Math.round(x);
+function parseFrontendTotals(value: unknown): FrontendTotals | null {
+  if (!isRecord(value)) return null;
+
+  return {
+    subtotalCents: cents(value.subtotalCents),
+    discountCents: cents(value.discountCents),
+    creditCents: cents(value.creditCents),
+    taxCents: cents(value.taxCents),
+    totalCents: cents(value.totalCents),
+  };
 }
 
-function dollarsToCentsFromDb(price: unknown): number {
-  const d = asNumber(price, 0);
-  if (!Number.isFinite(d) || d < 0) return 0;
-  return Math.round(d * 100);
+function parseOrderType(value: unknown): OrderType | null {
+  if (value === "pickup" || value === "delivery" || value === "dine_in") return value;
+  return null;
 }
 
-function computeLineTotalCents(unitPriceCents: number, modifiers: CanonicalModifier[], qty: number): number {
-  const modifierSum = modifiers.reduce((s, m) => s + cents(m.price_adjustment), 0);
-  return (cents(unitPriceCents) + modifierSum) * clampInt(qty, 1, 20);
-}
+function parseRequestBody(raw: JsonRecord): CreateCheckoutRequest | null {
+  const orderType = parseOrderType(raw.orderType);
+  if (!orderType) return null;
 
-function computeTotals(items: CanonicalItem[], discountCents: number, creditCents: number, taxRate: number): Totals {
-  const subtotalCents = items.reduce((s, i) => s + cents(i.lineTotalCents), 0);
-
-  const discount = Math.max(0, Math.min(subtotalCents, cents(discountCents)));
-  const afterDiscount = Math.max(0, subtotalCents - discount);
-
-  const credit = Math.max(0, Math.min(afterDiscount, cents(creditCents)));
-  const taxable = Math.max(0, afterDiscount - credit);
-
-  const rate = Number.isFinite(taxRate) && taxRate >= 0 ? taxRate : 0;
-  const taxCents = Math.max(0, Math.round(taxable * rate));
-  const totalCents = taxable + taxCents;
-
-  return { subtotalCents, discountCents: discount, creditCents: credit, taxCents, totalCents };
-}
-
-function buildPricingHashV1(menuItemId: string, unitPriceCents: number, qty: number): string {
-  return `v1:preflight:${menuItemId}:${cents(unitPriceCents)}:${clampInt(qty, 1, 20)}`;
-}
-
-function uniq<T>(arr: T[]): T[] {
-  return Array.from(new Set(arr));
-}
-
-function parseFrontendTotals(v: unknown): FrontendTotals | null {
-  if (!isRecord(v)) return null;
-  const subtotalCents = cents(v.subtotalCents);
-  const discountCents = cents(v.discountCents);
-  const creditCents = cents(v.creditCents);
-  const taxCents = cents(v.taxCents);
-  const totalCents = cents(v.totalCents);
-  if (totalCents > 50_000_000) return null;
-  return { subtotalCents, discountCents, creditCents, taxCents, totalCents };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Validation (request) — strict, supports promoId OR promoCode
-// ─────────────────────────────────────────────────────────────────────────────
-
-function parseRequest(raw: unknown): CreateCheckoutRequest | null {
-  if (!isRecord(raw)) return null;
-
-  const itemsRaw = raw.items;
-  if (!Array.isArray(itemsRaw) || itemsRaw.length === 0) return null;
-
-  const orderType = asString(raw.orderType, "");
-  if (orderType !== "pickup" && orderType !== "delivery" && orderType !== "dine_in") return null;
-
-  const promoId = safeId(raw.promoId) || null;
-  const promoCode = safePromoCode(raw.promoCode);
-  const creditId = safeId(raw.creditId) || null;
-  const frontendTotals = parseFrontendTotals(raw.frontendTotals);
+  const rawItems = raw.items;
+  if (!Array.isArray(rawItems) || rawItems.length === 0 || rawItems.length > MAX_CART_ITEMS) return null;
 
   const items: IncomingCartItem[] = [];
+  for (const rawItem of rawItems) {
+    if (!isRecord(rawItem)) continue;
 
-  for (const itUnknown of itemsRaw) {
-    if (!isRecord(itUnknown)) continue;
-
-    const menuItemId = safeId(itUnknown.menuItemId);
+    const menuItemId = sanitizeId(rawItem.menuItemId);
     if (!menuItemId) continue;
 
-    const quantity = clampInt(itUnknown.quantity, 1, 20);
-
-    const modifiersRaw = itUnknown.modifiers;
-    const modifiers: IncomingCartModifier[] = Array.isArray(modifiersRaw)
-      ? modifiersRaw
+    const rawModifiers = rawItem.modifiers;
+    const modifiers: IncomingCartModifier[] = Array.isArray(rawModifiers)
+      ? rawModifiers
           .filter(isRecord)
-          .map((m) => ({
-            id: safeId(m.id),
-            groupId: asString(m.groupId, "").slice(0, 128),
-            name: asString(m.name, "").slice(0, 120),
-            priceAdjustment: asNumber(m.priceAdjustment, 0),
+          .map((modifier) => ({
+            id: sanitizeId(modifier.id),
+            groupId: sanitizeId(modifier.groupId),
+            // IMPORTANT: never return null here; IncomingCartModifier expects string | undefined
+            name: asNullableString(modifier.name) ?? undefined,
+            priceAdjustment: asNumber(modifier.priceAdjustment, 0),
           }))
-          .filter((m) => !!m.id)
+          .filter((modifier) => modifier.id.length > 0)
       : [];
-
-    const category = safeCategory(itUnknown.category);
-    if (!category) continue; // fail-closed
-
-    const pricingHash = safePricingHash(itUnknown.pricingHash);
-    if (!pricingHash) continue; // fail-closed
 
     items.push({
       menuItemId,
-      name: asString(itUnknown.name, "").slice(0, 120),
-      unitPriceCents: asNumber(itUnknown.unitPriceCents, 0),
-      imageUrl: safeImageUrl(itUnknown.imageUrl),
-      category,
+      name: asNullableString(rawItem.name) ?? undefined,
+      unitPriceCents: typeof rawItem.unitPriceCents === "number" ? rawItem.unitPriceCents : undefined,
+      imageUrl: sanitizeImageUrl(rawItem.imageUrl),
       modifiers,
-      quantity,
-      notes: safeNotes(itUnknown.notes),
-      pricingHash,
+      quantity: clampInt(rawItem.quantity, 1, MAX_ITEM_QTY),
+      notes: sanitizeNotes(rawItem.notes),
+      pricingHash: asNullableString(rawItem.pricingHash),
     });
   }
 
@@ -411,64 +418,18 @@ function parseRequest(raw: unknown): CreateCheckoutRequest | null {
 
   return {
     items,
-    promoId,
-    promoCode,
-    creditId,
+    promoId: sanitizeId(raw.promoId) || null,
+    promoCode: sanitizePromoCode(raw.promoCode),
+    creditId: sanitizeId(raw.creditId) || null,
     orderType,
-    notes: safeNotes(raw.notes),
+    notes: sanitizeNotes(raw.notes),
     idempotencyKey: asNullableString(raw.idempotencyKey),
-    frontendTotals,
+    frontendTotals: parseFrontendTotals(raw.frontendTotals),
   };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Server truth rebuild (menu_items + modifiers)
-// ─────────────────────────────────────────────────────────────────────────────
-
-async function fetchMenuItems(db: DbClient, ids: string[]) {
-  const { data, error } = await db
-    .from("menu_items")
-    .select("id, name, category, image_url, available, price, inventory_count, low_stock_threshold")
-    .in("id", ids);
-
-  if (error) throw new Error(error.message);
-
-  const map = new Map<string, NonNullable<typeof data>[number]>();
-  for (const row of data ?? []) map.set(row.id, row);
-  return map;
-}
-
-async function fetchModifiers(db: DbClient, modifierIds: string[]) {
-  if (modifierIds.length === 0) return new Map<string, CanonicalModifier>();
-
-  const { data, error } = await db
-    .from("modifiers")
-    .select("id, modifier_group_id, name, price_adjustment, available")
-    .in("id", modifierIds);
-
-  if (error) throw new Error(error.message);
-
-  const map = new Map<string, CanonicalModifier>();
-  for (const m of data ?? []) {
-    if (m.available !== true) continue;
-    map.set(m.id, {
-      id: m.id,
-      modifier_group_id: m.modifier_group_id,
-      name: m.name,
-      price_adjustment: m.price_adjustment ?? 0,
-    });
-  }
-  return map;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Fraud logging (best-effort, never breaks checkout)
-// ─────────────────────────────────────────────────────────────────────────────
-
-function toFraudMetadataInsert(
-  metadata: FraudMetadata,
-): Db["public"]["Tables"]["fraud_logs"]["Insert"]["metadata"] {
-  return metadata as unknown as Db["public"]["Tables"]["fraud_logs"]["Insert"]["metadata"];
+function toFraudMetadataJson(metadata: FraudMetadata): Json {
+  return metadata;
 }
 
 async function logFraud(
@@ -478,485 +439,578 @@ async function logFraud(
   metadata: FraudMetadata,
   frontendTotal?: number,
   serverTotal?: number,
-) {
-  try {
-    const insertRow: Db["public"]["Tables"]["fraud_logs"]["Insert"] = {
-      user_id: userId,
-      reason,
-      metadata: toFraudMetadataInsert(metadata),
-      frontend_total: typeof frontendTotal === "number" && Number.isFinite(frontendTotal) ? frontendTotal : null,
-      server_total: typeof serverTotal === "number" && Number.isFinite(serverTotal) ? serverTotal : null,
-      stripe_total: typeof serverTotal === "number" && Number.isFinite(serverTotal) ? serverTotal : 0,
-    };
+): Promise<void> {
+  const insertRow: Db["public"]["Tables"]["fraud_logs"]["Insert"] = {
+    user_id: userId,
+    reason,
+    metadata: toFraudMetadataJson(metadata),
+    frontend_total: typeof frontendTotal === "number" ? frontendTotal : null,
+    server_total: typeof serverTotal === "number" ? serverTotal : null,
+    stripe_total: typeof serverTotal === "number" ? serverTotal : 0,
+  };
 
+  // Best-effort (fraud logging should never break checkout)
+  try {
     await db.from("fraud_logs").insert(insertRow);
   } catch {
     // ignore
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Promo resolution (id vs code)
-// ─────────────────────────────────────────────────────────────────────────────
+async function readUserIdFromJwt(req: Request): Promise<string> {
+  const jwt = readBearerToken(req);
+  if (!jwt) throw new Error("UNAUTHORIZED");
 
-type PromoResolution =
-  | { mode: "id"; value: string }
-  | { mode: "code"; value: string }
-  | { mode: "none"; value: "" };
+  const auth = createAnonClient(jwt);
+  const {
+    data: { user },
+    error,
+  } = await auth.auth.getUser();
 
-function resolvePromo(promoId: string | null, promoCode: string | null): PromoResolution {
-  const id = (promoId ?? "").trim();
-  if (id) return { mode: "id", value: id };
-
-  const code = (promoCode ?? "").trim().toUpperCase();
-  if (code) return { mode: "code", value: code };
-
-  return { mode: "none", value: "" };
+  if (error || !user) throw new Error("UNAUTHORIZED");
+  return user.id;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Promo validation (supports promoId OR promoCode)
-// ─────────────────────────────────────────────────────────────────────────────
-
-type PromoValidationResult = { promoId: string | null; discountCents: number };
-
-async function validatePromo(
-  db: DbClient,
-  promoId: string | null,
-  promoCode: string | null,
-  subtotalCents: number,
-): Promise<PromoValidationResult> {
-  const resolved = resolvePromo(promoId, promoCode);
-  if (resolved.mode === "none") return { promoId: null, discountCents: 0 };
-
-  const subtotal = Math.max(0, Math.round(subtotalCents));
-
-  const q = db
-    .from("promotions")
-    .select("id, code, active, type, value, min_order_cents, starts_at, ends_at, expires_at, max_uses, current_uses");
-
-  const { data, error } =
-    resolved.mode === "id"
-      ? await q.eq("id", resolved.value).maybeSingle()
-      : await q.ilike("code", resolved.value).maybeSingle();
-
-  if (error || !data) return { promoId: null, discountCents: 0 };
-
-  const now = Date.now();
-  const startsAt = data.starts_at ? new Date(data.starts_at).getTime() : null;
-  const expiresAt = data.expires_at ? new Date(data.expires_at).getTime() : null;
-  const endsAt = data.ends_at ? new Date(data.ends_at).getTime() : null;
-  const exp = expiresAt ?? endsAt;
-
-  if (data.active !== true) return { promoId: null, discountCents: 0 };
-  if (startsAt !== null && Number.isFinite(startsAt) && startsAt > now) return { promoId: null, discountCents: 0 };
-  if (exp !== null && Number.isFinite(exp) && exp < now) return { promoId: null, discountCents: 0 };
-
-  const minOrder = Math.max(0, Math.round(data.min_order_cents ?? 0));
-  if (subtotal < minOrder) return { promoId: null, discountCents: 0 };
-
-  if (
-    data.max_uses != null &&
-    data.current_uses != null &&
-    Number.isFinite(data.max_uses) &&
-    Number.isFinite(data.current_uses) &&
-    data.current_uses >= data.max_uses
-  ) {
-    return { promoId: null, discountCents: 0 };
-  }
-
-  const type = asString(data.type, "");
-  const value = asNumber(data.value, 0);
-
-  let discountCents = 0;
-
-  if (type === "percent") {
-    const pct = Math.max(0, Math.min(100, value));
-    discountCents = Math.round(subtotal * (pct / 100));
-  } else if (type === "fixed") {
-    discountCents = Math.round(Math.max(0, value));
-  }
-
-  discountCents = Math.max(0, Math.min(subtotal, discountCents));
-  return { promoId: data.id, discountCents };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Credit validation (user-bound, expiry, used flag)
-// ─────────────────────────────────────────────────────────────────────────────
-
-type CreditValidationResult = { creditId: string | null; creditCents: number };
-
-async function validateCredit(
+async function checkRateLimit(
   db: DbClient,
   userId: string,
-  creditId: string | null,
-  maxApplicableCents: number,
-): Promise<CreditValidationResult> {
-  const id = (creditId ?? "").trim();
-  if (!id) return { creditId: null, creditCents: 0 };
-
-  const maxApplicable = Math.max(0, Math.round(maxApplicableCents));
+): Promise<{ blocked: boolean; retryAfterSeconds: number }> {
+  const now = Date.now();
 
   const { data, error } = await db
-    .from("user_credits")
-    .select("id, user_id, amount_cents, used, expires_at")
-    .eq("id", id)
+    .from("checkout_rate_limits")
+    .select("attempts,last_attempt_at,blocked_until")
+    .eq("user_id", userId)
     .maybeSingle();
 
-  if (error || !data) return { creditId: null, creditCents: 0 };
-  if (data.user_id !== userId) return { creditId: null, creditCents: 0 };
-  if (data.used === true) return { creditId: null, creditCents: 0 };
+  if (error) throw new Error("RATE_LIMIT_LOOKUP_FAILED");
 
-  if (data.expires_at) {
-    const exp = new Date(data.expires_at).getTime();
-    if (Number.isFinite(exp) && exp < Date.now()) return { creditId: null, creditCents: 0 };
+  const blockedUntilMs =
+    typeof data?.blocked_until === "string" ? Date.parse(data.blocked_until) : NaN;
+
+  if (Number.isFinite(blockedUntilMs) && blockedUntilMs > now) {
+    return {
+      blocked: true,
+      retryAfterSeconds: Math.max(1, Math.ceil((blockedUntilMs - now) / 1000)),
+    };
   }
 
-  const amt = Math.max(0, Math.round(data.amount_cents ?? 0));
-  const creditCents = Math.max(0, Math.min(maxApplicable, amt));
+  const lastAttemptMs =
+    typeof data?.last_attempt_at === "string" ? Date.parse(data.last_attempt_at) : NaN;
 
-  return { creditId: data.id, creditCents };
+  const currentAttempts = typeof data?.attempts === "number" ? data.attempts : 0;
+  const nextAttempts =
+    Number.isFinite(lastAttemptMs) && now - lastAttemptMs < RATE_LIMIT_WINDOW_MS ? currentAttempts + 1 : 1;
+
+  const blocked = nextAttempts > RATE_LIMIT_MAX;
+  const blockedUntilIso = blocked ? new Date(now + RATE_LIMIT_BLOCK_MS).toISOString() : null;
+
+  const upsertRow: Db["public"]["Tables"]["checkout_rate_limits"]["Insert"] = {
+    user_id: userId,
+    attempts: nextAttempts,
+    last_attempt_at: new Date(now).toISOString(),
+    blocked_until: blockedUntilIso,
+  };
+
+  const { error: upsertError } = await db
+    .from("checkout_rate_limits")
+    .upsert(upsertRow, { onConflict: "user_id" });
+
+  if (upsertError) throw new Error("RATE_LIMIT_WRITE_FAILED");
+
+  return {
+    blocked,
+    retryAfterSeconds: blocked ? Math.max(1, Math.ceil(RATE_LIMIT_BLOCK_MS / 1000)) : 0,
+  };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Canonical cart build (server-truth, pricingHash enforcement + mismatch log)
-// ─────────────────────────────────────────────────────────────────────────────
+async function fetchMenuItems(db: DbClient, ids: string[]): Promise<Map<string, MenuItemLite>> {
+  const unique = [...new Set(ids)].filter((id) => id.length > 0);
 
-async function buildCanonicalCart(db: DbClient, userId: string, incoming: IncomingCartItem[]): Promise<CanonicalItem[]> {
-  const menuIds = uniq(incoming.map((i) => i.menuItemId));
-  const menuMap = await fetchMenuItems(db, menuIds);
+  const { data, error } = await db
+    .from("menu_items")
+    .select("id,name,category,image_url,available,price,inventory_count")
+    .in("id", unique);
 
-  const modifierIds = uniq(incoming.flatMap((i) => i.modifiers.map((m) => m.id)));
-  const modifierMap = await fetchModifiers(db, modifierIds);
+  if (error) throw new Error("MENU_LOOKUP_FAILED");
 
-  const canonical: CanonicalItem[] = [];
+  const out = new Map<string, MenuItemLite>();
+  for (const row of (data ?? []) as MenuItemLite[]) {
+    out.set(row.id, row);
+  }
+  return out;
+}
 
-  for (const line of incoming) {
-    const row = menuMap.get(line.menuItemId);
+async function fetchModifiers(db: DbClient, ids: string[]): Promise<Map<string, ModifierLite>> {
+  const unique = [...new Set(ids)].filter((id) => id.length > 0);
+  if (unique.length === 0) return new Map<string, ModifierLite>();
 
-    if (!row) {
-      await logFraud(db, userId, "menu_item_not_found", { kind: "menu_item_not_found", menuItemId: line.menuItemId });
+  const { data, error } = await db
+    .from("modifiers")
+    .select("id,modifier_group_id,name,price_adjustment,available")
+    .in("id", unique);
+
+  if (error) throw new Error("MODIFIER_LOOKUP_FAILED");
+
+  const out = new Map<string, ModifierLite>();
+  for (const row of (data ?? []) as ModifierLite[]) {
+    if (row.available === true) out.set(row.id, row);
+  }
+  return out;
+}
+
+async function buildCanonicalCart(
+  db: DbClient,
+  userId: string,
+  items: IncomingCartItem[],
+): Promise<CanonicalCartItem[]> {
+  const menuItemMap = await fetchMenuItems(db, items.map((item) => item.menuItemId));
+  const modifierMap = await fetchModifiers(
+    db,
+    items.flatMap((item) => item.modifiers.map((modifier) => modifier.id)),
+  );
+
+  const canonicalItems: CanonicalCartItem[] = [];
+
+  for (const item of items) {
+    const menuItem = menuItemMap.get(item.menuItemId);
+
+    if (!menuItem) {
+      await logFraud(db, userId, "menu_item_not_found", {
+        kind: "menu_item_not_found",
+        menuItemId: item.menuItemId,
+      });
       continue;
     }
 
-    const available = Boolean(row.available);
-    const stockCount =
-      row.inventory_count === null || row.inventory_count === undefined
-        ? null
-        : clampInt(row.inventory_count, 0, 1_000_000);
+    const inventoryCount = typeof menuItem.inventory_count === "number" ? menuItem.inventory_count : null;
+    const effectiveAvailable = menuItem.available === true && (inventoryCount === null || inventoryCount > 0);
 
-    const effectiveAvailable = available && (stockCount == null ? true : stockCount > 0);
-    if (!effectiveAvailable) throw new Error(`Item unavailable: ${row.name}`);
-
-    const qtyHard = clampInt(line.quantity, 1, 20);
-    const qty = stockCount == null ? qtyHard : Math.max(1, Math.min(qtyHard, stockCount));
-
-    const unitPriceCents = dollarsToCentsFromDb(row.price);
-
-    const canonicalMods: CanonicalModifier[] = [];
-    for (const m of line.modifiers) {
-      const cm = modifierMap.get(m.id);
-      if (!cm) continue;
-      canonicalMods.push(cm);
+    if (!effectiveAvailable) {
+      throw new PricingValidationError("ITEM_UNAVAILABLE", `Item unavailable: ${menuItem.name}`, 409);
     }
 
-    const lineTotalCents = computeLineTotalCents(unitPriceCents, canonicalMods, qty);
+    const desiredQty = clampInt(item.quantity, 1, MAX_ITEM_QTY);
+    const quantity =
+      inventoryCount === null ? desiredQty : Math.max(1, Math.min(desiredQty, inventoryCount));
 
-    const serverPricingHash = buildPricingHashV1(row.id, unitPriceCents, qty);
+    const modifiers: CanonicalModifier[] = [];
+    for (const rawModifier of item.modifiers) {
+      const modifier = modifierMap.get(rawModifier.id);
+      if (!modifier) continue;
 
-    const clientHash = safePricingHash(line.pricingHash);
-    if (clientHash && clientHash !== serverPricingHash) {
-      await logFraud(db, userId, "pricing_hash_mismatch", {
-        kind: "pricing_hash_mismatch",
-        menuItemId: row.id,
-        clientHash,
-        serverHash: serverPricingHash,
-        clientUnitPriceCents:
-          typeof line.unitPriceCents === "number" && Number.isFinite(line.unitPriceCents)
-            ? Math.round(line.unitPriceCents)
-            : null,
-        serverUnitPriceCents: unitPriceCents,
-        clientQty: clampInt(line.quantity, 1, 20),
-        serverQty: qty,
+      modifiers.push({
+        id: modifier.id,
+        groupId: modifier.modifier_group_id,
+        name: modifier.name,
+        priceAdjustmentCents: Math.round(modifier.price_adjustment),
       });
     }
 
-    canonical.push({
-      menuItemId: row.id,
-      name: row.name,
-      imageUrl: row.image_url ?? null,
-      category: row.category,
-      quantity: qty,
-      notes: safeNotes(line.notes),
+    const baseUnitPriceCents = Math.round(menuItem.price * 100);
+    const basePricingHash = buildClientIntegrityHash(menuItem.id, baseUnitPriceCents, modifiers, quantity);
 
-      unitPriceCents,
-      modifiers: canonicalMods.map((m) => ({
-        id: m.id,
-        groupId: m.modifier_group_id,
-        name: m.name,
-        priceAdjustment: cents(m.price_adjustment),
-      })),
+    const clientHash = item.pricingHash?.trim() || null;
+    if (clientHash && clientHash !== basePricingHash) {
+      await logFraud(db, userId, "pricing_hash_mismatch", {
+        kind: "pricing_hash_mismatch",
+        menuItemId: menuItem.id,
+        clientHash,
+        serverHash: basePricingHash,
+        clientUnitPriceCents:
+          typeof item.unitPriceCents === "number" && Number.isFinite(item.unitPriceCents)
+            ? Math.round(item.unitPriceCents)
+            : null,
+        serverUnitPriceCents: baseUnitPriceCents,
+        clientQty: desiredQty,
+        serverQty: quantity,
+      });
+    }
 
-      lineTotalCents,
-      pricingHash: serverPricingHash,
+    canonicalItems.push({
+      menuItemId: menuItem.id,
+      name: menuItem.name,
+      imageUrl: menuItem.image_url,
+      category: menuItem.category,
+      quantity,
+      notes: item.notes ?? null,
+      baseUnitPriceCents,
+      modifiers,
+      basePricingHash,
     });
   }
 
-  if (canonical.length === 0) throw new Error("Cart is empty after server validation.");
-  return canonical;
+  if (canonicalItems.length === 0) {
+    throw new PricingValidationError("EMPTY_CART", "Cart is empty after server validation.", 400);
+  }
+
+  return canonicalItems;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Stripe mapping
-// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// Handler
+// ─────────────────────────────────────────────────────────────
 
-function stripeLineItemsFromCart(items: CanonicalItem[]): Stripe.Checkout.SessionCreateParams.LineItem[] {
-  return items.map((i) => {
-    const modSum = i.modifiers.reduce((s, m) => s + cents(m.priceAdjustment), 0);
-    const unit = Math.max(0, cents(i.unitPriceCents) + modSum);
-
-    const modNames = i.modifiers
-      .map((m) => m.name)
-      .filter((x) => typeof x === "string" && x.trim().length > 0);
-
-    const desc = modNames.length ? `Modifiers: ${modNames.join(", ")}` : undefined;
-
-    return {
-      quantity: i.quantity,
-      price_data: {
-        currency: "usd",
-        unit_amount: unit,
-        product_data: {
-          name: i.name,
-          description: desc,
-          ...(i.imageUrl ? { images: [i.imageUrl] } : {}),
-          metadata: {
-            menu_item_id: i.menuItemId,
-            pricing_hash: i.pricingHash,
-          },
-        },
-      },
-    };
-  });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Main handler
-// ─────────────────────────────────────────────────────────────────────────────
-
-Deno.serve(async (req: Request) => {
-  const requestId = makeRequestId();
+Deno.serve(async (req: Request): Promise<Response> => {
+  const requestId = makeRequestId(req);
   const origin = req.headers.get("origin");
   const cors = corsHeadersFor(origin);
 
-  // ✅ Preflight (OPTIONS) must include the correct origin headers.
   if (req.method === "OPTIONS") {
-    if (!cors) return new Response("Origin not allowed", { status: 403 });
-    return new Response(null, { status: 204, headers: cors });
+    // Preflight only makes sense for browsers (Origin must exist and be allowed)
+    if (!origin || !cors || !("Access-Control-Allow-Origin" in cors)) {
+      return errorResponse(
+        403,
+        "ORIGIN_NOT_ALLOWED",
+        "Origin not allowed.",
+        { Vary: "Origin", "Cache-Control": "no-store" },
+        requestId,
+      );
+    }
+
+    return new Response(null, {
+      status: 204,
+      headers: withStandardHeaders(cors, requestId),
+    });
   }
 
-  // ✅ fail closed for non-OPTIONS requests
-  if (!cors) return new Response("Origin not allowed", { status: 403 });
+  // For normal requests: if Origin exists, it must be allowed.
+  if (origin && !cors) {
+    return errorResponse(
+      403,
+      "ORIGIN_NOT_ALLOWED",
+      "Origin not allowed.",
+      { Vary: "Origin", "Cache-Control": "no-store" },
+      requestId,
+    );
+  }
 
   if (req.method !== "POST") {
-    return json(
-      { ok: false, error: "Method not allowed", code: "METHOD_NOT_ALLOWED", requestId } satisfies CreateCheckoutResponse,
-      { status: 405 },
-      cors,
+    return errorResponse(
+      405,
+      "METHOD_NOT_ALLOWED",
+      "Method not allowed.",
+      cors ?? { Vary: "Origin" },
+      requestId,
     );
   }
 
-  const jwt = readBearerToken(req);
-  if (!jwt) {
-    return json(
-      { ok: false, error: "Unauthorized", code: "UNAUTHORIZED", requestId } satisfies CreateCheckoutResponse,
-      { status: 401 },
-      cors,
-    );
-  }
-
-  // Require x-application-name for basic abuse resistance and client identification
   const appHeader = (req.headers.get("x-application-name") ?? "").trim();
   if (!appHeader) {
-    return json(
-      { ok: false, error: "Missing x-application-name", code: "MISSING_APP_HEADER", requestId } satisfies CreateCheckoutResponse,
-      { status: 400 },
-      cors,
+    return errorResponse(
+      400,
+      "MISSING_APP_HEADER",
+      "Missing x-application-name.",
+      cors ?? { Vary: "Origin" },
+      requestId,
     );
   }
 
-  let body: CreateCheckoutRequest | null = null;
+  let rawBody: JsonRecord;
   try {
-    const raw = await req.json().catch(() => null);
-    body = parseRequest(raw);
-    if (!body) {
-      return json(
-        { ok: false, error: "Invalid request payload", code: "BAD_REQUEST", requestId } satisfies CreateCheckoutResponse,
-        { status: 400 },
-        cors,
+    rawBody = await readJsonObjectBody(req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "INVALID_JSON_BODY";
+
+    if (message === "UNSUPPORTED_CONTENT_TYPE") {
+      return errorResponse(
+        415,
+        "UNSUPPORTED_CONTENT_TYPE",
+        "Content-Type must be application/json.",
+        cors ?? { Vary: "Origin" },
+        requestId,
+      );
+    }
+    if (message === "BODY_TOO_LARGE") {
+      return errorResponse(
+        413,
+        "BODY_TOO_LARGE",
+        "Request body is too large.",
+        cors ?? { Vary: "Origin" },
+        requestId,
+      );
+    }
+    if (message === "EMPTY_BODY") {
+      return errorResponse(
+        400,
+        "EMPTY_BODY",
+        "Request body is required.",
+        cors ?? { Vary: "Origin" },
+        requestId,
+      );
+    }
+
+    return errorResponse(
+      400,
+      "INVALID_JSON_BODY",
+      "Request body must be valid JSON.",
+      cors ?? { Vary: "Origin" },
+      requestId,
+    );
+  }
+
+  const body = parseRequestBody(rawBody);
+  if (!body) {
+    return errorResponse(
+      400,
+      "BAD_REQUEST",
+      "Invalid request payload.",
+      cors ?? { Vary: "Origin" },
+      requestId,
+    );
+  }
+
+  let stripe: Stripe;
+  try {
+    stripe = getStripeOrThrow();
+  } catch {
+    return errorResponse(
+      503,
+      "STRIPE_INIT_FAILED",
+      "Stripe is not configured on the server.",
+      cors ?? { Vary: "Origin" },
+      requestId,
+    );
+  }
+
+  let userId: string;
+  try {
+    userId = await readUserIdFromJwt(req);
+  } catch {
+    return errorResponse(
+      401,
+      "UNAUTHORIZED",
+      "Unauthorized.",
+      cors ?? { Vary: "Origin" },
+      requestId,
+    );
+  }
+
+  const db = createServiceClient();
+
+  try {
+    const rateLimit = await checkRateLimit(db, userId);
+    if (rateLimit.blocked) {
+      return errorResponse(
+        429,
+        "RATE_LIMITED",
+        "Too many checkout attempts. Please try again later.",
+        cors ?? { Vary: "Origin" },
+        requestId,
+        { "Retry-After": String(rateLimit.retryAfterSeconds) },
       );
     }
   } catch {
-    return json(
-      { ok: false, error: "Invalid JSON", code: "BAD_JSON", requestId } satisfies CreateCheckoutResponse,
-      { status: 400 },
-      cors,
+    return errorResponse(
+      503,
+      "RATE_LIMIT_LOOKUP_FAILED",
+      "Service unavailable.",
+      cors ?? { Vary: "Origin" },
+      requestId,
     );
   }
-
-  // ✅ 1) Auth client (RLS) ONLY to validate who the caller is
-  const auth = createAnonClient(jwt);
-  const { data: authData, error: authErr } = await auth.auth.getUser();
-  const user = authData?.user ?? null;
-
-  if (authErr || !user) {
-    return json(
-      { ok: false, error: "Unauthorized", code: "UNAUTHORIZED", requestId } satisfies CreateCheckoutResponse,
-      { status: 401 },
-      cors,
-    );
-  }
-
-  const userId = user.id;
-
-  // ✅ 2) Service client for server-truth DB work (bypasses RLS)
-  const db = createServiceClient();
-
-  const idem =
-    (body.idempotencyKey && body.idempotencyKey.trim()) ||
-    req.headers.get("x-idempotency-key")?.trim() ||
-    `auto:${crypto.randomUUID()}`;
 
   try {
-    // 1) Canonical cart
     const canonicalItems = await buildCanonicalCart(db, userId, body.items);
+    const taxRate = normalizeTaxRate();
 
-    // 2) Promo + credit (promoId OR promoCode)
-    const subtotalCents = canonicalItems.reduce((s, i) => s + cents(i.lineTotalCents), 0);
-    const promo = await validatePromo(db, body.promoId, body.promoCode, subtotalCents);
+    const pricing = await resolvePricingForCheckout({
+      svc: db,
+      userId,
+      items: canonicalItems,
+      promoId: body.promoId,
+      promoCode: body.promoCode,
+      creditId: body.creditId,
+      orderType: body.orderType,
+      orderNotes: body.notes,
+      taxRate,
+    });
 
-    const afterDiscount = Math.max(0, subtotalCents - promo.discountCents);
-    const credit = await validateCredit(db, userId, body.creditId, afterDiscount);
+    const totals: FrontendTotals = {
+      subtotalCents: pricing.snapshot.subtotalCents,
+      discountCents: pricing.snapshot.campaignDiscountCents + pricing.snapshot.promoDiscountCents,
+      creditCents: pricing.snapshot.creditCents,
+      taxCents: pricing.snapshot.taxCents,
+      totalCents: pricing.snapshot.totalCents,
+    };
 
-    const totals = computeTotals(canonicalItems, promo.discountCents, credit.creditCents, TAX_RATE);
-
-    // Option A anti-tamper mismatch log
-    if (body.frontendTotals && body.frontendTotals.totalCents > 0) {
+    // Soft mismatch detection (never blocks, logs for review)
+    if (body.frontendTotals) {
       const diff = Math.abs(body.frontendTotals.totalCents - totals.totalCents);
       if (diff >= 50) {
         await logFraud(
           db,
           userId,
           "totals_mismatch",
-          {
-            kind: "totals_mismatch",
-            frontendTotals: body.frontendTotals,
-            serverTotals: totals,
-          },
+          { kind: "totals_mismatch", frontendTotals: body.frontendTotals, serverTotals: totals },
           body.frontendTotals.totalCents,
           totals.totalCents,
         );
       }
     }
 
-    // 3) Stripe session
-    const lineItems = stripeLineItemsFromCart(canonicalItems);
+    // Hard caps
+    if (pricing.snapshot.totalCents > MAX_TOTAL_CENTS) {
+      throw new PricingValidationError("TOTAL_TOO_LARGE", "Total exceeds allowed limit.", 400);
+    }
 
-    // ✅ generate cart id BEFORE Stripe (stable internal ref)
     const pendingCartId = crypto.randomUUID();
+
+    const payloadHash = await sha256Hex(
+      JSON.stringify({
+        fn: FUNCTION_NAME,
+        userId,
+        orderType: body.orderType,
+        promoId: body.promoId,
+        promoCode: body.promoCode,
+        creditId: body.creditId,
+        items: canonicalItems.map((item) => ({
+          menuItemId: item.menuItemId,
+          quantity: item.quantity,
+          basePricingHash: item.basePricingHash,
+        })),
+        pricingHash: pricing.pricingHash,
+      }),
+    );
+
+    const idempotencyKey = sanitizeIdempotencyKey(
+      body.idempotencyKey ?? req.headers.get("x-idempotency-key"),
+      buildDefaultIdempotencyKey(userId, payloadHash.slice(0, 24)),
+    );
+
+    const lineItems = buildStripeLineItemsFromPricing(pricing.snapshot);
+    if (lineItems.length === 0 || pricing.snapshot.totalCents <= 0) {
+      throw new PricingValidationError("NO_CHARGEABLE_AMOUNT", "Cart total must be greater than zero.", 400);
+    }
 
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
       mode: "payment",
-      success_url: CHECKOUT_SUCCESS_URL,
-      cancel_url: CHECKOUT_CANCEL_URL,
+      success_url: getCheckoutSuccessUrl(),
+      cancel_url: getCheckoutCancelUrl(),
       payment_method_types: ["card"],
       line_items: lineItems,
       metadata: {
-        app: APP_NAME,
-
-        // ✅ ownership + cart lookup
+        app: appHeader.slice(0, 64),
         user_id: userId,
         cart_ref: pendingCartId,
         pending_cart_id: pendingCartId,
-
-        // business fields
         order_type: body.orderType,
-        promo_id: promo.promoId ?? "",
-        promo_code: body.promoCode ?? "",
-        credit_id: credit.creditId ?? "",
-        subtotal_cents: String(totals.subtotalCents),
-        discount_cents: String(totals.discountCents),
-        credit_cents: String(totals.creditCents),
-        tax_cents: String(totals.taxCents),
-        total_cents: String(totals.totalCents),
-        idempotency_key: idem,
+        promo_id: pricing.snapshot.promoId ?? "",
+        promo_code: pricing.snapshot.promoCode ?? "",
+        credit_id: pricing.snapshot.creditId ?? "",
+        pricing_hash: pricing.pricingHash,
+        subtotal_cents: String(pricing.snapshot.subtotalCents),
+        campaign_discount_cents: String(pricing.snapshot.campaignDiscountCents),
+        promo_discount_cents: String(pricing.snapshot.promoDiscountCents),
+        credit_cents: String(pricing.snapshot.creditCents),
+        tax_cents: String(pricing.snapshot.taxCents),
+        total_cents: String(pricing.snapshot.totalCents),
+        applied_campaign_ids: pricing.snapshot.appliedCampaignIds.join(",").slice(0, 500),
+        idempotency_key: idempotencyKey,
+        request_id: requestId,
       },
     };
 
-    const session = await stripe.checkout.sessions.create(sessionParams, { idempotencyKey: idem });
+    const session = await stripe.checkout.sessions.create(sessionParams, { idempotencyKey });
 
-    // 4) Persist pending cart (best-effort)
-    const { error: upsertErr } = await db.from("pending_carts").upsert(
-      {
-        id: pendingCartId,
-        user_id: userId,
-        idempotency_key: idem,
-        items: canonicalItems as unknown as Json,
-        promo_id: promo.promoId,
-        credit_id: credit.creditId,
-        subtotal_cents: totals.subtotalCents,
-        discount_cents: totals.discountCents,
-        tax_cents: totals.taxCents,
-        total_cents: totals.totalCents,
-        stripe_session_id: session.id,
-        expires_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
-        created_at: new Date().toISOString(),
-      },
-      { onConflict: "id" },
-    );
+    type PendingCartInsertExtended = Db["public"]["Tables"]["pending_carts"]["Insert"] & JsonRecord;
 
-    if (upsertErr) {
+    const pendingCartInsert: PendingCartInsertExtended = {
+      id: pendingCartId,
+      user_id: userId,
+      idempotency_key: idempotencyKey,
+      items: canonicalItems as Json, // canonical (new)
+      promo_id: pricing.snapshot.promoId,
+      credit_id: pricing.snapshot.creditId,
+      subtotal_cents: pricing.snapshot.subtotalCents,
+      discount_cents: pricing.snapshot.campaignDiscountCents + pricing.snapshot.promoDiscountCents,
+      tax_cents: pricing.snapshot.taxCents,
+      total_cents: pricing.snapshot.totalCents,
+      stripe_session_id: session.id,
+      expires_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+      created_at: new Date().toISOString(),
+      pricing_snapshot: pricingSnapshotToJson(pricing.snapshot),
+      pricing_hash: pricing.pricingHash,
+      currency: pricing.snapshot.currency,
+    };
+
+    const { error: pendingCartError } = await db
+      .from("pending_carts")
+      .upsert(pendingCartInsert, { onConflict: "id" });
+
+    if (pendingCartError) {
       await logFraud(
         db,
         userId,
         "pending_cart_upsert_failed",
-        {
-          kind: "pending_cart_upsert_failed",
-          message: upsertErr.message,
-          session_id: session.id,
-        },
-        body.frontendTotals?.totalCents ?? undefined,
-        totals.totalCents,
+        { kind: "pending_cart_upsert_failed", message: pendingCartError.message, session_id: session.id },
+        body.frontendTotals?.totalCents,
+        pricing.snapshot.totalCents,
+      );
+      // Do NOT fail checkout — Stripe session already exists.
+    }
+
+    return jsonResponse(
+      {
+        ok: true,
+        session_id: session.id,
+        url: session.url ?? null,
+        totals,
+        pending_cart_id: pendingCartId,
+        requestId,
+      } satisfies CreateCheckoutResponse,
+      200,
+      cors ?? { Vary: "Origin" },
+      requestId,
+    );
+  } catch (error) {
+    // Normalize known pricing errors
+    if (error instanceof PricingValidationError) {
+      await logFraud(
+        db,
+        userId,
+        "checkout_failed",
+        { kind: "checkout_failed", message: `${error.code}:${error.message}` },
+        body.frontendTotals?.totalCents,
+        undefined,
+      );
+
+      return errorResponse(
+        clampInt(error.status, 400, 503),
+        error.code,
+        error.message,
+        cors ?? { Vary: "Origin" },
+        requestId,
       );
     }
 
-    const res: CreateCheckoutResponse = {
-      ok: true,
-      session_id: session.id,
-      url: session.url ?? null,
-      totals,
-      pending_cart_id: pendingCartId,
-    };
+    const message = error instanceof Error ? error.message : "Checkout failed";
 
-    return json(res, { status: 200 }, cors);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Checkout failed";
+    // Allow structured errors (code/status) thrown as plain objects
+    const code =
+      isRecord(error) && typeof (error as JsonRecord).code === "string"
+        ? String((error as JsonRecord).code)
+        : "CHECKOUT_FAILED";
+    const status =
+      isRecord(error) && typeof (error as JsonRecord).status === "number"
+        ? clampInt((error as JsonRecord).status, 400, 503)
+        : 400;
 
-    // best-effort fraud log
     await logFraud(
       db,
       userId,
       "checkout_failed",
-      { kind: "checkout_failed", message: msg },
-      body.frontendTotals?.totalCents ?? undefined,
+      { kind: "checkout_failed", message },
+      body.frontendTotals?.totalCents,
       undefined,
     );
 
-    return json(
-      { ok: false, error: msg, code: "CHECKOUT_FAILED", requestId } satisfies CreateCheckoutResponse,
-      { status: 400 },
-      cors,
+    return errorResponse(
+      status,
+      code,
+      message,
+      cors ?? { Vary: "Origin" },
+      requestId,
     );
   }
 });

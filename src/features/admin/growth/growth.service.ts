@@ -1,14 +1,29 @@
 // =============================================================================
 // src/features/admin/growth/growth.service.ts
 // Production-ready Growth / Marketing service (2026 hardened)
-// - Eliminates GenericStringError / unsafe-any by using a typed Supabase client
-// - Uses precise SELECT result types (Pick<...>) instead of casting full rows
-// - No unnecessary type assertions
-// - Maps DB rows → domain models from ./growth.types
+//
+// GOALS
+// - Admin Campaigns/Promos pages must NEVER hit PostgREST directly
+//   (no browser .from('growth_campaigns') / .from('promotions'))
+// - All privileged reads/writes route through the Admin Gateway typed client.
+// - Deterministic, actionable errors (include requestId when available).
+// - Safe runtime guards: tolerate partial/older gateway payloads without crashing.
+// - No "double wrap" payloads: client guarantees canonical { action, payload? }.
+//
+// NOTE
+// - Non-campaign/promo read-only analytics (abandoned carts, ai insights) remain
+//   direct queries unless/until you add gateway actions for them.
 // =============================================================================
-import type { Database } from '@/types/supabase'
+
 import { supabase } from '@/lib/supabase/supabaseClient'
-import type { SupabaseClient } from '@supabase/supabase-js'
+import { callAdminGateway, formatAdminGatewayError } from '@/features/admin/api/adminGateway.client'
+import type {
+  CampaignCreatePayload,
+  CampaignUpdatePayload,
+  CampaignPinFeaturedPayload,
+} from '@/features/admin/api/adminGateway.types'
+
+import type { Database } from '@/types/supabase'
 import type {
   Campaign,
   PromoCode,
@@ -18,13 +33,7 @@ import type {
 } from './growth.types'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Typed Supabase client (prevents GenericStringError + unsafe assignment)
-// ─────────────────────────────────────────────────────────────────────────────
-
-const sb = supabase as unknown as SupabaseClient<Database>
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Raw row aliases
+// DB Row aliases (from generated types)
 // ─────────────────────────────────────────────────────────────────────────────
 
 type GrowthCampaignRow = Database['public']['Tables']['growth_campaigns']['Row']
@@ -34,41 +43,8 @@ type AbandonedSessionRow = Database['public']['Tables']['abandoned_cart_sessions
 type AIInsightRow = Database['public']['Tables']['ai_insights']['Row']
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Narrow SELECT types (match exactly what we select)
-// This avoids unsafe casts like (row as PromotionRow).
+// Narrow SELECT types (for read-only non-gateway queries)
 // ─────────────────────────────────────────────────────────────────────────────
-
-type GrowthCampaignSelect = Pick<
-  GrowthCampaignRow,
-  'id' | 'name' | 'channel' | 'budget_cents' | 'spent_cents' | 'revenue_cents' | 'active' | 'created_at'
->
-
-type PromotionSelect = Pick<
-  PromotionRow,
-  | 'id'
-  | 'code'
-  | 'type'
-  | 'value'
-  | 'active'
-  | 'current_uses'
-  | 'max_uses'
-  | 'min_order_cents'
-  | 'per_user_limit'
-  | 'starts_at'
-  | 'ends_at'
-  | 'expires_at'
-  | 'campaign_id'
-  | 'channel'
-  | 'cost_center'
-  | 'geo_target'
-  | 'created_at'
-  | 'updated_at'
->
-
-type PromoRedemptionSelect = Pick<
-  PromoRedemptionRow,
-  'promotion_id' | 'order_total_cents' | 'discount_cents'
->
 
 type AbandonedSessionSelect = Pick<
   AbandonedSessionRow,
@@ -79,60 +55,230 @@ type AIInsightSelect = Pick<
   AIInsightRow,
   'id' | 'category' | 'title' | 'body' | 'confidence' | 'impact_pct' | 'applied' | 'created_at'
 >
+
+type PromoRedemptionSelect = Pick<
+  PromoRedemptionRow,
+  'promotion_id' | 'order_total_cents' | 'discount_cents'
+>
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Small runtime guards (no any, no unsafe casts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+type UnknownRecord = Record<string, unknown>
+
+function isRecord(v: unknown): v is UnknownRecord {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+function readString(v: unknown): string | null {
+  return typeof v === 'string' ? v : null
+}
+
+function readNumber(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null
+}
+
+function readBool(v: unknown): boolean | null {
+  return typeof v === 'boolean' ? v : null
+}
+
+function readNullableStringField(obj: unknown, key: string): string | null {
+  if (!isRecord(obj)) return null
+  const v = obj[key]
+  return v === null ? null : readString(v)
+}
+
+function readNullableNumberField(obj: unknown, key: string): number | null {
+  if (!isRecord(obj)) return null
+  const v = obj[key]
+  return v === null ? null : readNumber(v)
+}
+
+function readNullableBoolField(obj: unknown, key: string): boolean | null {
+  if (!isRecord(obj)) return null
+  const v = obj[key]
+  return v === null ? null : readBool(v)
+}
+
+function clampInt(v: unknown, min: number, max: number, fallback: number): number {
+  const n = readNumber(v)
+  if (n === null) return fallback
+  const x = Math.trunc(n)
+  return Math.max(min, Math.min(max, x))
+}
+
+function normalizeError(e: unknown, fallback: string): Error {
+  const msg = formatAdminGatewayError(e)
+  return new Error(msg && msg.trim().length > 0 ? msg : fallback)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Domain mappers
+// We return Campaign/PromoCode but include optional "admin fields" as extra keys
+// via intersection types (no unsafe casts; still assignable to Campaign/PromoCode).
+// ─────────────────────────────────────────────────────────────────────────────
+
+type AdminCampaign = Campaign & Partial<Pick<
+  GrowthCampaignRow,
+  | 'campaign_name'
+  | 'placement'
+  | 'menu_item_id'
+  | 'badge'
+  | 'hero_title'
+  | 'hero_subtitle'
+  | 'cta_label'
+  | 'deep_link'
+  | 'starts_at'
+  | 'ends_at'
+  | 'priority'
+  | 'weight'
+  | 'is_featured'
+  | 'eligible_for_rotation'
+  | 'status'
+  | 'updated_at'
+  | 'featured_for_date'
+  | 'promo_id'
+>>
+
+type AdminPromoCode = PromoCode & Partial<Pick<
+  PromotionRow,
+  | 'created_at'
+  | 'updated_at'
+  | 'starts_at'
+  | 'ends_at'
+  | 'expires_at'
+  | 'campaign_id'
+  | 'channel'
+  | 'cost_center'
+  | 'geo_target'
+>>
+
 type PromoType = 'percent' | 'fixed'
 
-function normalizePromoType(dbType: string): PromoType {
+function normalizePromoType(dbType: unknown): PromoType {
   return dbType === 'percent' ? 'percent' : 'fixed'
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Mappers — DB row → domain model
-// ─────────────────────────────────────────────────────────────────────────────
+function mapCampaignFromGatewayRow(row: unknown): AdminCampaign | null {
+  if (!isRecord(row)) return null
 
-function mapCampaign(row: GrowthCampaignSelect): Campaign {
-  return {
-    id: row.id,
-    name: row.name ?? '',
-    channel: row.channel ?? null,
-    budgetCents: row.budget_cents ?? 0,
-    spentCents: row.spent_cents ?? 0,
-    revenueCents: row.revenue_cents ?? 0,
-    active: row.active ?? true,          // 👈 add this to Campaign type too
-    createdAt: row.created_at ?? '',
+  const id = readString(row.id)
+  if (!id || !id.trim()) return null
+
+  const name =
+    readNullableStringField(row, 'name') ??
+    readNullableStringField(row, 'campaign_name') ??
+    ''
+
+  const channel =
+    readNullableStringField(row, 'channel') ??
+    readNullableStringField(row, 'placement') ??
+    null
+
+  const budgetCents = readNullableNumberField(row, 'budget_cents') ?? 0
+  const spentCents = readNullableNumberField(row, 'spent_cents') ?? 0
+  const revenueCents = readNullableNumberField(row, 'revenue_cents') ?? 0
+
+  const active = readNullableBoolField(row, 'active') ?? true
+  const createdAt =
+    readNullableStringField(row, 'created_at') ??
+    readNullableStringField(row, 'updated_at') ??
+    ''
+
+  // Optional admin fields (do not assume presence; read safely)
+  const adminFields: Partial<AdminCampaign> = {
+    campaign_name: readNullableStringField(row, 'campaign_name'),
+    placement: readNullableStringField(row, 'placement'),
+    menu_item_id: readNullableStringField(row, 'menu_item_id'),
+    badge: readNullableStringField(row, 'badge'),
+    hero_title: readNullableStringField(row, 'hero_title'),
+    hero_subtitle: readNullableStringField(row, 'hero_subtitle'),
+    cta_label: readNullableStringField(row, 'cta_label'),
+    deep_link: readNullableStringField(row, 'deep_link'),
+    starts_at: readNullableStringField(row, 'starts_at'),
+    ends_at: readNullableStringField(row, 'ends_at'),
+    priority: readNullableNumberField(row, 'priority'),
+    weight: readNullableNumberField(row, 'weight'),
+    is_featured: readNullableBoolField(row, 'is_featured'),
+    eligible_for_rotation: readNullableBoolField(row, 'eligible_for_rotation') ?? undefined,
+    status: readNullableStringField(row, 'status'),
+    updated_at: readNullableStringField(row, 'updated_at'),
+    featured_for_date: readNullableStringField(row, 'featured_for_date'),
+    promo_id: readNullableStringField(row, 'promo_id'),
   }
-}
-export async function toggleCampaign(id: string, active: boolean): Promise<void> {
-  const res = await sb.from('growth_campaigns').update({ active }).eq('id', id)
-  if (res.error) throw new Error(res.error.message)
-}
-function mapPromotion(row: PromotionSelect, redemptions: PromoRedemptionSelect[]): PromoCode {
-  const promoRedemptions = redemptions.filter((r) => r.promotion_id === row.id)
 
-  const revenueCents = promoRedemptions.reduce((sum, r) => sum + (r.order_total_cents ?? 0), 0)
-
-  return {
-    id: row.id,
-    code: row.code,
-    
-    // Your growth.types.ts should define PromoCode['type'] as 'fixed' | 'percent'
-    // DB has string; we normalize safely:
-    type: normalizePromoType(row.type),
-    value: row.value,
-    active: row.active,
-    currentUses: row.current_uses,
-    maxUses: row.max_uses,
-    minOrderCents: row.min_order_cents,
-    perUserLimit: row.per_user_limit,
-    startsAt: row.starts_at ?? null,
-    endsAt: row.ends_at ?? null,
-    expiresAt: row.expires_at ?? null,
-    campaignId: row.campaign_id ?? null,
-    channel: row.channel ?? null,
-
-    // analytics / rollups
+  // Base Campaign fields (keep existing UX expectations)
+  // If Campaign type evolves, these are still safe primitives.
+  const base: AdminCampaign = {
+    id,
+    name,
+    channel,
+    budgetCents,
+    spentCents,
     revenueCents,
-    redemptionCount: promoRedemptions.length,
+    active,
+    createdAt,
+    ...adminFields,
   }
+
+  return base
+}
+
+function mapPromoFromGatewayRow(row: unknown): AdminPromoCode | null {
+  if (!isRecord(row)) return null
+
+  const id = readString(row.id)
+  const code = readString(row.code)
+  if (!id || !code) return null
+
+  const type = normalizePromoType(row.type)
+  const value = readNumber(row.value) ?? 0
+  const active = readBool(row.active) ?? false
+
+  // If gateway returns more fields, we pass them through for UI
+  const currentUses = readNumber(row.current_uses) ?? 0
+  const maxUses = (row.max_uses === null ? null : readNumber(row.max_uses)) ?? null
+  const minOrderCents = readNumber(row.min_order_cents) ?? 0
+  const perUserLimit = readNumber(row.per_user_limit) ?? 0
+
+  const startsAt = readNullableStringField(row, 'starts_at')
+  const endsAt = readNullableStringField(row, 'ends_at')
+  const expiresAt = readNullableStringField(row, 'expires_at')
+
+  const campaignId = readNullableStringField(row, 'campaign_id')
+  const channel = readNullableStringField(row, 'channel')
+
+  const createdAt = readNullableStringField(row, 'created_at') ?? null
+  const updatedAt = readNullableStringField(row, 'updated_at') ?? null
+
+  // Revenue attribution requires promo_redemptions; if you later add a
+  // gateway endpoint for that, wire it here. For now, keep stable zeros.
+  const revenueCents = 0
+  const redemptionCount = 0
+
+  const base: AdminPromoCode = {
+    id,
+    code,
+    type,
+    value,
+    active,
+    currentUses,
+    maxUses,
+    minOrderCents,
+    perUserLimit,
+    startsAt,
+    endsAt,
+    expiresAt,
+    campaignId,
+    channel,
+    revenueCents,
+    redemptionCount,
+   created_at: createdAt ?? undefined,
+  updated_at: updatedAt ?? undefined,
+  }
+
+  return base
 }
 
 function mapAbandonedSession(row: AbandonedSessionSelect): AbandonedCartSession {
@@ -150,7 +296,6 @@ function mapAbandonedSession(row: AbandonedSessionSelect): AbandonedCartSession 
 function mapAIInsight(row: AIInsightSelect): AIInsight {
   return {
     id: row.id,
-    // DB stores category as string; keep as-is (no unnecessary cast)
     category: row.category,
     title: row.title,
     body: row.body,
@@ -162,86 +307,101 @@ function mapAIInsight(row: AIInsightSelect): AIInsight {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Campaign queries
+// Campaigns (ADMIN GATEWAY) — privileged reads/writes
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function fetchCampaigns(): Promise<Campaign[]> {
-  const res = await sb
-    .from('growth_campaigns')
-    .select('id, name, channel, budget_cents, spent_cents, revenue_cents, active, created_at')
-    .order('created_at', { ascending: false })
-    .returns<GrowthCampaignSelect[]>()
+  try {
+    const rows = await callAdminGateway('campaigns:list')
+    if (!Array.isArray(rows)) return []
 
-  if (res.error) throw new Error(res.error.message)
-  return (res.data ?? []).map(mapCampaign)
+    const out: Campaign[] = []
+    for (const r of rows) {
+      const mapped = mapCampaignFromGatewayRow(r)
+      if (mapped) out.push(mapped)
+    }
+    return out
+  } catch (e) {
+    throw normalizeError(e, 'Failed to load campaigns')
+  }
 }
 
-export async function updateCampaignRevenue(id: string, revenueCents: number): Promise<void> {
-  const res = await sb.from('growth_campaigns').update({ revenue_cents: revenueCents }).eq('id', id)
-  if (res.error) throw new Error(res.error.message)
+export async function toggleCampaign(id: string, active: boolean): Promise<void> {
+  try {
+    await callAdminGateway('campaigns:toggle', { id, active })
+  } catch (e) {
+    throw normalizeError(e, 'Failed to update campaign')
+  }
+}
+
+export async function runCampaignRotation(): Promise<void> {
+  try {
+    await callAdminGateway('campaigns:run-rotation')
+  } catch (e) {
+    throw normalizeError(e, 'Failed to rotate campaigns')
+  }
+}
+
+export async function createCampaign(payload: CampaignCreatePayload): Promise<unknown> {
+  try {
+    return await callAdminGateway('campaigns:create', payload)
+  } catch (e) {
+    throw normalizeError(e, 'Failed to create campaign')
+  }
+}
+
+export async function updateCampaign(payload: CampaignUpdatePayload): Promise<unknown> {
+  try {
+    return await callAdminGateway('campaigns:update', payload)
+  } catch (e) {
+    throw normalizeError(e, 'Failed to update campaign')
+  }
+}
+
+export async function pinFeaturedCampaign(payload: CampaignPinFeaturedPayload): Promise<unknown> {
+  try {
+    return await callAdminGateway('campaigns:pin-featured', payload)
+  } catch (e) {
+    throw normalizeError(e, 'Failed to pin featured campaign')
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Promotions (Promo codes) queries
+// Promos (ADMIN GATEWAY) — privileged reads/writes
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function fetchPromoCodes(): Promise<PromoCode[]> {
-  const [promoRes, redemptionRes] = await Promise.all([
-    sb
-      .from('promotions')
-      .select(
-        [
-          'id',
-          'code',
-          'type',
-          'value',
-          'active',
-          'current_uses',
-          'max_uses',
-          'min_order_cents',
-          'per_user_limit',
-          'starts_at',
-          'ends_at',
-          'expires_at',
-          'campaign_id',
-          'channel',
-          'cost_center',
-          'geo_target',
-          'created_at',
-          'updated_at',
-        ].join(','),
-      )
-      .order('created_at', { ascending: false })
-      .returns<PromotionSelect[]>(),
+  try {
+    const rows = await callAdminGateway('promos:list')
+    if (!Array.isArray(rows)) return []
 
-    sb
-      .from('promo_redemptions')
-      .select('promotion_id, order_total_cents, discount_cents')
-      .returns<PromoRedemptionSelect[]>(),
-  ])
-
-  if (promoRes.error) throw new Error(promoRes.error.message)
-  if (redemptionRes.error) throw new Error(redemptionRes.error.message)
-
-  const promos = promoRes.data ?? []
-  const redemptions = redemptionRes.data ?? []
-
-  return promos.map((p) => mapPromotion(p, redemptions))
+    const out: PromoCode[] = []
+    for (const r of rows) {
+      const mapped = mapPromoFromGatewayRow(r)
+      if (mapped) out.push(mapped)
+    }
+    return out
+  } catch (e) {
+    throw normalizeError(e, 'Failed to load promo codes')
+  }
 }
 
 export async function togglePromoCode(id: string, active: boolean): Promise<void> {
-  const res = await sb.from('promotions').update({ active }).eq('id', id)
-  if (res.error) throw new Error(res.error.message)
+  try {
+    await callAdminGateway('promos:toggle', { id, active })
+  } catch (e) {
+    throw normalizeError(e, 'Failed to update promo code')
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Abandoned carts
+// Abandoned carts (read-only; not routed through gateway yet)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function fetchAbandonedCarts(): Promise<AbandonedCartSession[]> {
-  const res = await sb
+  const res = await supabase
     .from('abandoned_cart_sessions')
-    .select('id, user_id, email, cart_value_cents, last_activity, recovered, created_at')
+    .select('id,user_id,email,cart_value_cents,last_activity,recovered,created_at')
     .order('created_at', { ascending: false })
     .limit(200)
     .returns<AbandonedSessionSelect[]>()
@@ -251,20 +411,17 @@ export async function fetchAbandonedCarts(): Promise<AbandonedCartSession[]> {
 }
 
 export async function fetchAbandonedCartSummary(): Promise<AbandonedCartSummary> {
-  // Minimal select for summary
-  const res = await sb
+  const res = await supabase
     .from('abandoned_cart_sessions')
-    .select('cart_value_cents, recovered')
+    .select('cart_value_cents,recovered')
     .returns<Array<Pick<AbandonedSessionRow, 'cart_value_cents' | 'recovered'>>>()
 
   if (res.error) throw new Error(res.error.message)
 
   const rows = res.data ?? []
   const totalAbandoned = rows.length
-
   const recoveredRows = rows.filter((r) => r.recovered === true)
   const totalRecovered = recoveredRows.length
-
   const recoveryRate = totalAbandoned > 0 ? totalRecovered / totalAbandoned : 0
 
   const lostRevenueCents = rows
@@ -286,18 +443,18 @@ export async function fetchAbandonedCartSummary(): Promise<AbandonedCartSummary>
 }
 
 export async function markCartRecovered(id: string): Promise<void> {
-  const res = await sb.from('abandoned_cart_sessions').update({ recovered: true }).eq('id', id)
+  const res = await supabase.from('abandoned_cart_sessions').update({ recovered: true }).eq('id', id)
   if (res.error) throw new Error(res.error.message)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AI Insights
+// AI Insights (read-only + apply; not routed through gateway yet)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function fetchAIInsights(): Promise<AIInsight[]> {
-  const res = await sb
+  const res = await supabase
     .from('ai_insights')
-    .select('id, category, title, body, confidence, impact_pct, applied, created_at')
+    .select('id,category,title,body,confidence,impact_pct,applied,created_at')
     .order('confidence', { ascending: false })
     .limit(20)
     .returns<AIInsightSelect[]>()
@@ -307,6 +464,22 @@ export async function fetchAIInsights(): Promise<AIInsight[]> {
 }
 
 export async function applyAIInsight(id: string): Promise<void> {
-  const res = await sb.from('ai_insights').update({ applied: true }).eq('id', id)
+  const res = await supabase.from('ai_insights').update({ applied: true }).eq('id', id)
   if (res.error) throw new Error(res.error.message)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Optional: Promo revenue attribution (still direct, non-campaign/promo tables)
+// If you later add a gateway action to return redemptions summary,
+// replace this with a gateway call.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function fetchPromoRedemptions(): Promise<PromoRedemptionSelect[]> {
+  const res = await supabase
+    .from('promo_redemptions')
+    .select('promotion_id,order_total_cents,discount_cents')
+    .returns<PromoRedemptionSelect[]>()
+
+  if (res.error) throw new Error(res.error.message)
+  return res.data ?? []
 }

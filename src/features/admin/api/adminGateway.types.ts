@@ -1,45 +1,52 @@
+// =============================================================================
+// Admin Gateway Types (2026 Enterprise Contract)
 // src/features/admin/api/adminGateway.types.ts
+//
+// Single source of truth for all admin-gateway communication.
+//
+// Goals
+// - Prevent invalid gateway requests
+// - Enforce action/payload contracts at compile time
+// - Normalize Ok/Error envelopes
+// - Provide safe unwrap utilities
+// - Ensure frontend & edge function stay in sync
 // =============================================================================
-// Admin Gateway Types — front-end contract for Edge Function "admin-gateway"
-// Production goals:
-// - Strongly typed Ok/Err envelopes
-// - Discriminated unions + type guards
-// - ResponseMap per action (single source of truth)
-// =============================================================================
 
-export type OrdersListPayload = {
-  page?: number
-}
+/* -------------------------------------------------------------------------- */
+/* Meta + Error                                                               */
+/* -------------------------------------------------------------------------- */
 
-export type AdminAction = 'metrics' | 'orders:list' | 'layout'
-
-export type GatewayMeta = {
+export type GatewayMeta = Readonly<{
   requestedBy: string
   requestId: string
   ts: number
-}
+}>
 
-export type GatewayError = {
+export type GatewayError = Readonly<{
   code: string
   message: string
   details?: unknown
-}
+}>
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Envelopes (Ok / Err)
-// ─────────────────────────────────────────────────────────────────────────────
+/* -------------------------------------------------------------------------- */
+/* Envelopes                                                                  */
+/* -------------------------------------------------------------------------- */
 
 export type GatewayOk<T> = Readonly<{
   data: Readonly<T>
-  meta: Readonly<GatewayMeta>
+  meta: GatewayMeta
 }>
 
 export type GatewayErr = Readonly<{
-  error: Readonly<GatewayError>
-  meta: Readonly<GatewayMeta>
+  error: GatewayError
+  meta: GatewayMeta
 }>
 
 export type GatewayResponse<T> = GatewayOk<T> | GatewayErr
+
+/* -------------------------------------------------------------------------- */
+/* Type Guards                                                                */
+/* -------------------------------------------------------------------------- */
 
 export function isGatewayErr<T>(v: GatewayResponse<T>): v is GatewayErr {
   return typeof v === 'object' && v !== null && 'error' in v
@@ -49,18 +56,76 @@ export function isGatewayOk<T>(v: GatewayResponse<T>): v is GatewayOk<T> {
   return typeof v === 'object' && v !== null && 'data' in v
 }
 
-// Optional helper (safe unwrap)
+/* -------------------------------------------------------------------------- */
+/* Safe Unwrap                                                                */
+/* -------------------------------------------------------------------------- */
+
 export function unwrapGateway<T>(v: GatewayResponse<T>): T {
   if (isGatewayErr(v)) {
     const e = v.error
-    throw new Error(`${e.code}: ${e.message}`)
+    const msg = `${e.code}: ${e.message}`
+    throw new Error(msg)
   }
+
   return v.data as T
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Snapshot payloads (DB views)
-// ─────────────────────────────────────────────────────────────────────────────
+/* -------------------------------------------------------------------------- */
+/* Core Payload Types                                                         */
+/* -------------------------------------------------------------------------- */
+
+export type OrdersListPayload = {
+  page?: number
+}
+
+/* -------------------------------------------------------------------------- */
+/* Campaign Types                                                             */
+/* -------------------------------------------------------------------------- */
+
+export type CampaignTogglePayload = {
+  id: string
+  active: boolean
+}
+
+export type CampaignCreatePayload = {
+  campaign_name: string
+  placement: string
+  menu_item_id?: string | null
+  badge?: string | null
+  hero_title?: string | null
+  hero_subtitle?: string | null
+  cta_label?: string | null
+  deep_link?: string | null
+  starts_at?: string | null
+  ends_at?: string | null
+  active?: boolean
+  is_featured?: boolean
+  eligible_for_rotation?: boolean
+  priority?: number
+  weight?: number
+}
+
+export type CampaignUpdatePayload = {
+  id: string
+} & Partial<CampaignCreatePayload>
+
+export type CampaignPinFeaturedPayload = {
+  id: string
+  placement?: string
+}
+
+/* -------------------------------------------------------------------------- */
+/* Promo Payload Types                                                        */
+/* -------------------------------------------------------------------------- */
+
+export type PromoTogglePayload = {
+  id: string
+  active: boolean
+}
+
+/* -------------------------------------------------------------------------- */
+/* Snapshot Types                                                             */
+/* -------------------------------------------------------------------------- */
 
 export type ExecutiveSnapshot = {
   net_revenue_30d_cents: number
@@ -79,21 +144,114 @@ export type AdminLayoutSnapshot = {
   generated_at: string
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Request contract
-// ─────────────────────────────────────────────────────────────────────────────
+/* -------------------------------------------------------------------------- */
+/* Gateway Action Map                                                         */
+/* -------------------------------------------------------------------------- */
 
-export type GatewayRequest =
-  | { action: 'metrics'; payload?: undefined }
-  | { action: 'layout'; payload?: undefined }
-  | { action: 'orders:list'; payload?: OrdersListPayload }
+export type AdminGatewayActionMap = {
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Response map (per action)
-// ─────────────────────────────────────────────────────────────────────────────
+  /* ───────── Core Admin Metrics ───────── */
+
+  metrics: {
+    payload?: undefined
+    response: ExecutiveSnapshot | null
+  }
+
+  layout: {
+    payload?: undefined
+    response: AdminLayoutSnapshot | null
+  }
+
+  'orders:list': {
+    payload?: OrdersListPayload
+    response: unknown[]
+  }
+  /* ───────── Menu Management ───────── */
+
+  'menu:full': {
+    payload?: undefined
+    response: unknown[]
+  }
+  /* ───────── Campaign Management ───────── */
+
+  'campaigns:list': {
+    payload?: undefined
+    response: unknown[]
+  }
+
+  'campaigns:create': {
+    payload: CampaignCreatePayload
+    response: unknown
+  }
+
+  'campaigns:update': {
+    payload: CampaignUpdatePayload
+    response: unknown
+  }
+
+  'campaigns:toggle': {
+    payload: CampaignTogglePayload
+    response: unknown
+  }
+
+  'campaigns:pin-featured': {
+    payload: CampaignPinFeaturedPayload
+    response: unknown
+  }
+
+  'campaigns:run-rotation': {
+    payload?: undefined
+    response: unknown
+  }
+
+  /* ───────── Promo Management ───────── */
+
+  'promos:list': {
+    payload?: undefined
+    response: unknown[]
+  }
+
+  'promos:toggle': {
+    payload: PromoTogglePayload
+    response: unknown
+  }
+
+}
+
+/* -------------------------------------------------------------------------- */
+/* Derived Action Types                                                       */
+/* -------------------------------------------------------------------------- */
+
+export type AdminAction = keyof AdminGatewayActionMap
+
+export type GatewayRequest<A extends AdminAction = AdminAction> =
+  AdminGatewayActionMap[A]['payload'] extends undefined
+    ? { action: A }
+    : { action: A; payload: AdminGatewayActionMap[A]['payload'] }
 
 export type AdminGatewayResponseMap = {
-  metrics: GatewayResponse<ExecutiveSnapshot | null>
-  layout: GatewayResponse<AdminLayoutSnapshot | null>
-  'orders:list': GatewayResponse<unknown[]>
+  [K in AdminAction]: GatewayResponse<AdminGatewayActionMap[K]['response']>
+}
+
+/* -------------------------------------------------------------------------- */
+/* Utility Types                                                              */
+/* -------------------------------------------------------------------------- */
+
+export type GatewayPayload<A extends AdminAction> =
+  AdminGatewayActionMap[A]['payload']
+
+export type GatewayResult<A extends AdminAction> =
+  AdminGatewayActionMap[A]['response']
+
+/* -------------------------------------------------------------------------- */
+/* Runtime Guards (defensive safety)                                          */
+/* -------------------------------------------------------------------------- */
+
+export function isGatewayResponse(v: unknown): v is GatewayResponse<unknown> {
+  return (
+    typeof v === 'object' &&
+    v !== null &&
+    ('data' in (v as Record<string, unknown>) ||
+      'error' in (v as Record<string, unknown>))
+  )
 }

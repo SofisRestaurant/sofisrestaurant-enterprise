@@ -47,7 +47,7 @@ const CONFIG = {
   ALLOWED_COUNTRIES: ["US"] as const, // ISO-3166-1 alpha-2
 
   // Stripe pinned version (upgrade intentionally)
-  DEFAULT_STRIPE_API_VERSION: "2024-06-20",
+  DEFAULT_STRIPE_API_VERSION: "2026-02-25",
 } as const;
 
 const STRIPE_SESSION_RE = /^cs_(test|live)_[a-zA-Z0-9]+$/;
