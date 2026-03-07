@@ -1,71 +1,201 @@
-// supabase/functions/finalize-order/index.ts
 // =============================================================================
-// FINALIZE ORDER — Enterprise Grade (2026) • Sofi's Restaurant V2
+// PATH: supabase/functions/finalize-order/index.ts
 // =============================================================================
-// Key guarantees:
-// - ✅ NEVER writes legacy loyalty (loyalty_transactions) — V2 only.
-// - ✅ Backfill is best-effort + idempotent.
-// - ✅ HARD FIX: no top-level env throws (prevents opaque 502 on cold start).
-// - ✅ Append-only ledger compatible: NO updates to loyalty_ledger.
-// - ✅ Order-linking happens at INSERT time via v2_award_points(..., p_reference_id).
+// finalize-order — Production Hardened (2026)
+// - CORS allowlist enforcement (Origin strict if present; permissive if missing)
+// - Auth required (customer ownership enforced)
+// - Retrieves Stripe Checkout Session, verifies payment
+// - Locates pending_carts row (from Stripe metadata; fallback by stripe_session_id)
+// - Ensures pending_carts has NON-EMPTY pricing_snapshot + pricing_hash (repairs if needed)
+// - Consumes pending cart safely via consumed_at (atomic conditional update)
+// - Inserts orders with DB uniqueness guard (stripe_session_id unique)
+// - Idempotent under race: insert -> if conflict -> read existing and return
 // =============================================================================
 
 import Stripe from "stripe";
-import { createServiceClient } from "../_shared/supabase.ts";
 import { authenticate, AuthError } from "../_shared/auth.ts";
+import { createServiceClient } from "../_shared/supabase.ts";
 import type { Database, Json } from "../_shared/database.types.ts";
+import {
+  buildLegacyPricingSnapshotFromPendingCart,
+  hashPricingSnapshot,
+  parsePricingSnapshot,
+} from "../_shared/pricing.ts";
 
-// ─────────────────────────────────────────────────────────────
-// Config
-// ─────────────────────────────────────────────────────────────
+type JsonRecord = Record<string, unknown>;
+type Db = Database;
+type OrderEventInsert = Db["public"]["Tables"]["order_events"]["Insert"];
 
-const CONFIG = {
-  MAX_BODY_BYTES: 10_000,
-  MAX_SESSION_ID_LEN: 200,
+// Your generated Database types may lag schema changes.
+// We extend PendingCart Update to include new columns used by this function.
+// (No `any`, and still type-safe enough for our usage.)
+type PendingCartUpdate = Db["public"]["Tables"]["pending_carts"]["Update"] & {
+  pricing_snapshot?: Json;
+  pricing_hash?: string | null;
+  stripe_session_id?: string | null;
+  consumed_at?: string | null;
+};
 
-  RATE_LIMIT_MAX: 30,
-  RATE_LIMIT_WINDOW_MINUTES: 5,
-  RATE_LIMIT_BLOCK_MINUTES: 10,
+const MAX_BODY_BYTES = 10_000;
+const MAX_SESSION_ID_LEN = 200;
 
-  ALLOWED_ORIGINS: [
-    "https://sofislegacy.com",
-    "https://www.sofislegacy.com",
-    "https://sofisrestaurant.netlify.app",
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "http://localhost:5173",
-  ] as const,
+const RATE_LIMIT_MAX = 30;
+const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
+const RATE_LIMIT_BLOCK_MS = 10 * 60 * 1000;
 
-  ENABLE_REVIEW_NUDGE_EVENT: false,
-  ENABLE_RETURN_INCENTIVE_EVENT: false,
+// NOTE: If you want to split rate limits, create finalize_rate_limits
+// and change FINALIZE_RATE_LIMIT_TABLE to "finalize_rate_limits".
+const FINALIZE_RATE_LIMIT_TABLE = "checkout_rate_limits";
 
-  // Backfill (V2 ONLY)
-  ENABLE_LOYALTY_BACKFILL_ON_EXISTING_ORDER: true,
+const LOYALTY_IDEMPOTENCY_PREFIX = "finalize-backfill:";
+const MAX_AWARD_AMOUNT_CENTS = 500_000;
+const MAX_ORDER_TOTAL_CENTS = 500_000;
 
-  // Deterministic idempotency key for finalize backfill
-  LOYALTY_IDEMPOTENCY_PREFIX: "finalize-backfill:",
-
-  MAX_AWARD_AMOUNT_CENTS: 500_000,
-  MAX_ORDER_TOTAL_CENTS: 500_000,
-
-  STRICT_TOTAL_GATES: true,
-  RETURN_REQUEST_ID: true,
-
-  DEFAULT_STRIPE_API_VERSION: "2026-01-28.clover",
-} as const;
+const ALLOWED_ORIGINS = new Set<string>([
+  "https://sofislegacy.com",
+  "https://www.sofislegacy.com",
+  "https://sofisrestaurant.netlify.app",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  "http://localhost:5173",
+]);
 
 const STRIPE_SESSION_RE = /^cs_(test|live)_[a-zA-Z0-9]+$/;
 const DB_PAYMENT_STATUS_PAID = "paid";
 const DB_ORDER_STATUS_CONFIRMED = "confirmed";
 
 // ─────────────────────────────────────────────────────────────
-// CORS
+// Stripe (2026-only versioning; NO fallback to 2024)
 // ─────────────────────────────────────────────────────────────
 
-const ALLOWED_ORIGINS = new Set<string>(CONFIG.ALLOWED_ORIGINS);
+function mustEnv(name: string): string {
+  const v = Deno.env.get(name);
+  if (!v || !v.trim()) throw new Error(`Missing ${name}`);
+  return v.trim();
+}
 
-function corsHeaders(req: Request): Record<string, string> | null {
+// Your project uses a 2026 Stripe API version (including suffix like ".clover").
+const DEFAULT_STRIPE_API_VERSION = "2026-02-25.clover";
+
+function isValidStripeApiVersion(v: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}(\.[a-zA-Z0-9_-]+)?$/.test(v);
+}
+
+const STRIPE_SECRET_KEY = mustEnv("STRIPE_SECRET_KEY");
+
+const ENV_STRIPE_API_VERSION = (Deno.env.get("STRIPE_API_VERSION") ?? "").trim();
+const STRIPE_API_VERSION = (isValidStripeApiVersion(ENV_STRIPE_API_VERSION)
+  ? ENV_STRIPE_API_VERSION
+  : DEFAULT_STRIPE_API_VERSION) as Stripe.LatestApiVersion;
+
+let stripeSingleton: Stripe | null = null;
+function getStripeOrThrow(): { stripe: Stripe; apiVersion: string } {
+  if (stripeSingleton) return { stripe: stripeSingleton, apiVersion: STRIPE_API_VERSION };
+
+  stripeSingleton = new Stripe(STRIPE_SECRET_KEY, {
+    apiVersion: STRIPE_API_VERSION,
+    httpClient: Stripe.createFetchHttpClient(),
+  });
+
+  return { stripe: stripeSingleton, apiVersion: STRIPE_API_VERSION };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function makeRequestId(req: Request): string {
+  const headerId = (req.headers.get("x-request-id") ?? "").trim();
+  if (headerId) return headerId.slice(0, 128);
+  return crypto.randomUUID();
+}
+
+function prefix(value: string | null | undefined, length = 8): string | null {
+  if (!value) return null;
+  return value.slice(0, length);
+}
+
+function asErrorMessage(value: unknown): string {
+  if (value instanceof Error) return value.message;
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function clampAmountCents(value: unknown): number {
+  const parsed = typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return Math.min(MAX_AWARD_AMOUNT_CENTS, Math.max(0, Math.trunc(parsed)));
+}
+
+function clampOrderTotalCents(value: unknown): number {
+  const parsed = typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return Math.min(MAX_ORDER_TOTAL_CENTS, Math.max(0, Math.trunc(parsed)));
+}
+
+function log(
+  level: "info" | "warn" | "error",
+  event: string,
+  meta: Record<string, unknown>,
+): void {
+  console.log(
+    JSON.stringify({
+      level,
+      event,
+      service: "finalize-order",
+      ...meta,
+      ts: nowIso(),
+    }),
+  );
+}
+
+function readString(rec: JsonRecord, key: string): string | null {
+  const v = rec[key];
+  return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+
+function readNumber(rec: JsonRecord, key: string): number | null {
+  const v = rec[key];
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function readJson(rec: JsonRecord, key: string): Json | null {
+  const v = rec[key];
+  // Json in generated types is a union; runtime validation is best-effort.
+  return (v as Json) ?? null;
+}
+
+// Ensure safe string currency (lowercase), default usd.
+function normalizeCurrency(v: unknown): string {
+  const s = typeof v === "string" ? v.trim().toLowerCase() : "";
+  return s || "usd";
+}
+
+// ─────────────────────────────────────────────────────────────
+// CORS (create-checkout style)
+// - If Origin present -> must allowlist, set ACAO
+// - If Origin missing/empty -> allow, but no ACAO (still Vary: Origin)
+// ─────────────────────────────────────────────────────────────
+
+function corsHeadersFor(req: Request): Record<string, string> | null {
   const origin = (req.headers.get("origin") ?? "").trim();
+
+  // No Origin header (or empty) => allow request, do NOT set ACAO
+  if (!origin) {
+    return { Vary: "Origin" };
+  }
+
+  // Origin present => must be allowlisted
   if (!ALLOWED_ORIGINS.has(origin)) return null;
 
   return {
@@ -79,505 +209,950 @@ function corsHeaders(req: Request): Record<string, string> | null {
   };
 }
 
-// ─────────────────────────────────────────────────────────────
-// Small utils
-// ─────────────────────────────────────────────────────────────
-
-type JsonRecord = Record<string, unknown>;
-type OrderEventInsert = Database["public"]["Tables"]["order_events"]["Insert"];
-
-function isRecord(v: unknown): v is JsonRecord {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+function withStandardHeaders(headersInit: HeadersInit, requestId: string): Headers {
+  const headers = new Headers(headersInit);
+  if (!headers.has("Vary")) headers.set("Vary", "Origin");
+  headers.set("Content-Type", "application/json; charset=utf-8");
+  headers.set("Cache-Control", "no-store");
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("X-Request-Id", requestId);
+  return headers;
 }
 
-function nowIso(): string {
-  return new Date().toISOString();
-}
-
-type ErrorWithCode = { code?: unknown; message?: unknown };
-
-function getErrorCode(e: unknown): string | null {
-  if (typeof e !== "object" || e === null) return null;
-  const code = (e as ErrorWithCode).code;
-  return typeof code === "string" ? code : null;
-}
-
-function makeRequestId(req: Request): string {
-  const headerId = (req.headers.get("x-request-id") ?? "").trim();
-  if (headerId) return headerId.slice(0, 128);
-  try {
-    return crypto.randomUUID();
-  } catch {
-    return `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  }
-}
-
-function prefix(id: string | null | undefined, n = 8): string | null {
-  if (!id) return null;
-  return id.slice(0, n);
-}
-
-function log(level: "info" | "warn" | "error", event: string, meta: Record<string, unknown>) {
-  // Never include JWTs, emails, phones, addresses.
-  console.log(JSON.stringify({ level, event, service: "finalize-order", ...meta, ts: nowIso() }));
-}
-
-function json(cors: Record<string, string>, data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
+function jsonResponse(
+  body: unknown,
+  status: number,
+  headersInit: HeadersInit,
+  requestId: string,
+): Response {
+  return new Response(JSON.stringify(body), {
     status,
-    headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "no-store" },
+    headers: withStandardHeaders(headersInit, requestId),
   });
 }
 
-function errorJson(
-  cors: Record<string, string>,
+function errorResponse(
+  cors: HeadersInit,
   requestId: string,
   code: string,
   message: string,
-  status = 400,
+  status: number,
   meta?: Record<string, unknown>,
 ): Response {
-  log(status >= 500 ? "error" : "warn", "error", { requestId, code, message, ...(meta ?? {}) });
-  return json(cors, { ok: false, error: { code, message, requestId } }, status);
+  log(status >= 500 ? "error" : "warn", "error", {
+    requestId,
+    code,
+    message,
+    ...(meta ?? {}),
+  });
+
+  return jsonResponse(
+    { ok: false, error: { code, message, requestId } },
+    status,
+    cors,
+    requestId,
+  );
 }
 
-async function readJsonWithLimit(req: Request, maxBytes: number): Promise<unknown> {
-  const ct = (req.headers.get("content-type") ?? "").toLowerCase();
-  if (!ct.includes("application/json")) throw new Error("UNSUPPORTED_CONTENT_TYPE");
+async function readJsonObjectBody(req: Request): Promise<JsonRecord> {
+  const contentType = (req.headers.get("content-type") ?? "").toLowerCase();
+  if (!contentType.includes("application/json")) throw new Error("UNSUPPORTED_CONTENT_TYPE");
 
-  const ab = await req.arrayBuffer();
-  if (ab.byteLength > maxBytes) throw new Error("PAYLOAD_TOO_LARGE");
+  const rawBody = await req.text();
+  if (!rawBody.trim()) throw new Error("EMPTY_BODY");
 
-  const text = new TextDecoder().decode(ab);
-  if (!text.trim()) throw new Error("EMPTY_BODY");
+  const bodyBytes = new TextEncoder().encode(rawBody).length;
+  if (bodyBytes > MAX_BODY_BYTES) throw new Error("BODY_TOO_LARGE");
 
+  let parsed: unknown;
   try {
-    return JSON.parse(text);
+    parsed = JSON.parse(rawBody);
   } catch {
-    throw new Error("INVALID_JSON");
+    throw new Error("INVALID_JSON_BODY");
   }
+
+  if (!isRecord(parsed)) throw new Error("INVALID_JSON_BODY");
+  return parsed;
 }
 
-function mustStripeSessionId(v: unknown): string {
-  if (typeof v !== "string") throw new Error("INVALID_SESSION_ID");
-  const s = v.trim();
-  if (!s || s.length > CONFIG.MAX_SESSION_ID_LEN || !STRIPE_SESSION_RE.test(s)) {
+function mustStripeSessionId(value: unknown): string {
+  if (typeof value !== "string") throw new Error("INVALID_SESSION_ID");
+  const normalized = value.trim();
+
+  if (!normalized || normalized.length > MAX_SESSION_ID_LEN || !STRIPE_SESSION_RE.test(normalized)) {
     throw new Error("INVALID_SESSION_ID");
   }
-  return s;
+
+  return normalized;
 }
 
 function pickString(meta: Stripe.Metadata | null | undefined, ...keys: string[]): string {
   if (!meta) return "";
-  for (const k of keys) {
-    const v = meta[k];
-    if (typeof v === "string" && v.trim()) return v.trim();
+  for (const key of keys) {
+    const value = meta[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
   }
   return "";
 }
 
-function clampAmountCents(v: unknown): number {
-  const n = typeof v === "number" && Number.isFinite(v) ? v : 0;
-  const c = Math.max(0, Math.trunc(n));
-  return Math.min(c, CONFIG.MAX_AWARD_AMOUNT_CENTS);
+function isNonEmptyJsonObject(v: unknown): boolean {
+  if (!isRecord(v)) return false;
+  return Object.keys(v).length > 0;
 }
 
-function clampOrderTotalCents(v: unknown): number {
-  const n = typeof v === "number" && Number.isFinite(v) ? v : 0;
-  const c = Math.max(0, Math.trunc(n));
-  return Math.min(c, CONFIG.MAX_ORDER_TOTAL_CENTS);
-}
-
-function asErr(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  if (typeof e === "string") return e;
-  try {
-    return JSON.stringify(e);
-  } catch {
-    return String(e);
-  }
+function normalizeStripePaid(session: Stripe.Checkout.Session): boolean {
+  return session.payment_status === "paid" || session.status === "complete";
 }
 
 // ─────────────────────────────────────────────────────────────
-// Stripe (lazy init)
-// ─────────────────────────────────────────────────────────────
-
-function isValidStripeApiVersion(v: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}(\.[a-zA-Z0-9_-]+)?$/.test(v);
-}
-
-let STRIPE_SINGLETON: Stripe | null = null;
-let STRIPE_SINGLETON_VERSION: string | null = null;
-
-function getStripeOrThrow(): { stripe: Stripe; apiVersion: string } {
-  const secret = (Deno.env.get("STRIPE_SECRET_KEY") ?? "").trim();
-  if (!secret) throw new Error("MISSING_STRIPE_SECRET_KEY");
-
-  const envVer = (Deno.env.get("STRIPE_API_VERSION") ?? "").trim();
-  const v = isValidStripeApiVersion(envVer) ? envVer : CONFIG.DEFAULT_STRIPE_API_VERSION;
-
-  if (STRIPE_SINGLETON && STRIPE_SINGLETON_VERSION === v) return { stripe: STRIPE_SINGLETON, apiVersion: v };
-
-  const stripe = new Stripe(secret, {
-    apiVersion: v as unknown as Stripe.LatestApiVersion,
-    httpClient: Stripe.createFetchHttpClient(),
-  });
-
-  STRIPE_SINGLETON = stripe;
-  STRIPE_SINGLETON_VERSION = v;
-  return { stripe, apiVersion: v };
-}
-
-// ─────────────────────────────────────────────────────────────
-// Rate limit (fail-open)
+// Rate limiting
 // ─────────────────────────────────────────────────────────────
 
 async function checkRateLimit(
-  svc: ReturnType<typeof createServiceClient>,
+  db: ReturnType<typeof createServiceClient>,
   userId: string,
-  requestId: string,
-): Promise<{ blocked: boolean }> {
-  const now = new Date();
-  const windowStart = new Date(now.getTime() - CONFIG.RATE_LIMIT_WINDOW_MINUTES * 60_000);
+): Promise<{ blocked: boolean; retryAfterSeconds: number }> {
+  const now = Date.now();
 
-  const { data, error } = await svc
-    .from("checkout_rate_limits")
+  const { data, error } = await db
+    .from(FINALIZE_RATE_LIMIT_TABLE)
     .select("attempts,last_attempt_at,blocked_until")
     .eq("user_id", userId)
     .maybeSingle();
 
-  if (error) {
-    log("warn", "rate_limit_read_failed", { requestId, userId: prefix(userId), err: error.message });
-    return { blocked: false };
+  if (error) throw new Error("RATE_LIMIT_LOOKUP_FAILED");
+
+  const blockedUntilMs = typeof data?.blocked_until === "string" ? Date.parse(data.blocked_until) : NaN;
+  if (Number.isFinite(blockedUntilMs) && blockedUntilMs > now) {
+    return {
+      blocked: true,
+      retryAfterSeconds: Math.max(1, Math.ceil((blockedUntilMs - now) / 1000)),
+    };
   }
 
-  const blockedUntil = data?.blocked_until ? new Date(data.blocked_until) : null;
-  if (blockedUntil && blockedUntil > now) return { blocked: true };
+  const lastAttemptMs = typeof data?.last_attempt_at === "string" ? Date.parse(data.last_attempt_at) : NaN;
 
-  const lastAttemptAt = data?.last_attempt_at ? new Date(data.last_attempt_at) : null;
-  const prevAttempts = typeof data?.attempts === "number" && Number.isFinite(data.attempts) ? data.attempts : 0;
+  const previousAttempts = typeof data?.attempts === "number" ? data.attempts : 0;
+  const nextAttempts =
+    Number.isFinite(lastAttemptMs) && now - lastAttemptMs < RATE_LIMIT_WINDOW_MS
+      ? previousAttempts + 1
+      : 1;
 
-  const attempts = !lastAttemptAt || lastAttemptAt < windowStart ? 1 : prevAttempts + 1;
+  const blocked = nextAttempts > RATE_LIMIT_MAX;
+  const blockedUntilIso = blocked ? new Date(now + RATE_LIMIT_BLOCK_MS).toISOString() : null;
 
-  const blocked = attempts > CONFIG.RATE_LIMIT_MAX;
-  const blockedUntilIso = blocked ? new Date(now.getTime() + CONFIG.RATE_LIMIT_BLOCK_MINUTES * 60_000).toISOString() : null;
+  const upsertRow: Db["public"]["Tables"]["checkout_rate_limits"]["Insert"] = {
+    user_id: userId,
+    attempts: nextAttempts,
+    last_attempt_at: new Date(now).toISOString(),
+    blocked_until: blockedUntilIso,
+  };
 
-  const { error: upErr } = await svc.from("checkout_rate_limits").upsert(
-    { user_id: userId, attempts, last_attempt_at: now.toISOString(), blocked_until: blockedUntilIso },
-    { onConflict: "user_id" },
-  );
+  const { error: upsertError } = await db
+    .from(FINALIZE_RATE_LIMIT_TABLE)
+    .upsert(upsertRow, { onConflict: "user_id" });
 
-  if (upErr) log("warn", "rate_limit_upsert_failed", { requestId, userId: prefix(userId), err: upErr.message });
+  if (upsertError) throw new Error("RATE_LIMIT_WRITE_FAILED");
 
-  return { blocked };
+  return {
+    blocked,
+    retryAfterSeconds: blocked ? Math.max(1, Math.ceil(RATE_LIMIT_BLOCK_MS / 1000)) : 0,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
-// Loyalty V2 backfill (append-only safe)
+// Side effects (best-effort)
 // ─────────────────────────────────────────────────────────────
 
 async function backfillLoyaltyV2IfMissing(args: {
-  svc: ReturnType<typeof createServiceClient>;
+  db: ReturnType<typeof createServiceClient>;
   requestId: string;
   userId: string;
   orderId: string;
   amountCents: number;
-}) {
-  const { svc, requestId, userId, orderId } = args;
+}): Promise<void> {
+  const { db, requestId, userId, orderId } = args;
   const amountCents = clampAmountCents(args.amountCents);
-
-  if (!CONFIG.ENABLE_LOYALTY_BACKFILL_ON_EXISTING_ORDER) return;
-  if (!amountCents || amountCents <= 0) return;
+  if (amountCents <= 0) return;
 
   try {
-    const { data: acct, error: acctErr } = await svc
+    const { data: account, error: accountError } = await db
       .from("loyalty_accounts")
       .select("id")
       .eq("user_id", userId)
       .maybeSingle();
 
-    if (acctErr || !acct?.id) {
-      log("warn", "loyalty_backfill_account_missing", { requestId, userId: prefix(userId), code: acctErr?.code ?? null });
+    if (accountError || !account?.id) {
+      log("warn", "loyalty_backfill_account_missing", {
+        requestId,
+        userId: prefix(userId),
+        code: accountError?.code ?? null,
+      });
       return;
     }
 
-    const accountId = String(acct.id);
-    const idem = `${CONFIG.LOYALTY_IDEMPOTENCY_PREFIX}${orderId}`;
+    const idempotencyKey = `${LOYALTY_IDEMPOTENCY_PREFIX}${orderId}`;
 
-    // If already exists by idempotency or reference_id, skip
-    const { data: exists, error: exErr } = await svc
+    const { data: existingLedger, error: ledgerError } = await db
       .from("loyalty_ledger")
       .select("id")
-      .eq("account_id", accountId)
-      .or(`reference_id.eq.${orderId},idempotency_key.eq.${idem}`)
+      .eq("account_id", account.id)
+      .or(`reference_id.eq.${orderId},idempotency_key.eq.${idempotencyKey}`)
       .limit(1)
       .maybeSingle();
 
-    if (!exErr && exists?.id) return;
+    if (!ledgerError && existingLedger?.id) return;
 
-    // ✅ Call NEW overload with p_reference_id so order link is inserted, no updates required.
-    const { error } = await svc.rpc("v2_award_points", {
-      p_account_id: accountId,
+    const { error } = await db.rpc("v2_award_points", {
+      p_account_id: account.id,
       p_admin_id: userId,
       p_amount_cents: amountCents,
-      p_idempotency_key: idem,
+      p_idempotency_key: idempotencyKey,
       p_reference_id: orderId,
     });
 
     if (error) {
-      log("warn", "loyalty_backfill_award_failed_v2", { requestId, orderId: prefix(orderId), code: error.code ?? null });
+      log("warn", "loyalty_backfill_award_failed_v2", {
+        requestId,
+        orderId: prefix(orderId),
+        code: error.code ?? null,
+      });
       return;
     }
 
-    log("info", "loyalty_backfill_awarded_v2", { requestId, orderId: prefix(orderId), accountId: prefix(accountId) });
-  } catch (e) {
-    log("error", "loyalty_backfill_crash", { requestId, orderId: prefix(orderId), error: asErr(e) });
+    log("info", "loyalty_backfill_awarded_v2", {
+      requestId,
+      orderId: prefix(orderId),
+      accountId: prefix(account.id),
+    });
+  } catch (error) {
+    log("error", "loyalty_backfill_crash", {
+      requestId,
+      orderId: prefix(orderId),
+      error: asErrorMessage(error),
+    });
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Optional growth events (best-effort)
-// ─────────────────────────────────────────────────────────────
-
 async function maybeEmitGrowthEvents(args: {
-  svc: ReturnType<typeof createServiceClient>;
+  db: ReturnType<typeof createServiceClient>;
   requestId: string;
   orderId: string;
   userId: string;
   amountCents: number;
-}) {
-  const { svc, requestId, orderId, userId, amountCents } = args;
-  if (!CONFIG.ENABLE_REVIEW_NUDGE_EVENT && !CONFIG.ENABLE_RETURN_INCENTIVE_EVENT) return;
+}): Promise<void> {
+  const { db, requestId, orderId, userId, amountCents } = args;
+
+  const rows: OrderEventInsert[] = [];
+  const baseData: Json = { user_id: userId, amount_cents: amountCents };
+
+  rows.push({
+    order_id: orderId,
+    user_id: userId,
+    event_type: "REVIEW_NUDGE_READY",
+    event_data: baseData,
+  });
 
   try {
-    const baseData: Json = { user_id: userId, amount_cents: amountCents };
-    const rows: OrderEventInsert[] = [];
-
-    if (CONFIG.ENABLE_REVIEW_NUDGE_EVENT) rows.push({ order_id: orderId, user_id: userId, event_type: "REVIEW_NUDGE_READY", event_data: baseData });
-    if (CONFIG.ENABLE_RETURN_INCENTIVE_EVENT) rows.push({ order_id: orderId, user_id: userId, event_type: "RETURN_INCENTIVE_CANDIDATE", event_data: baseData });
-
-    if (!rows.length) return;
-
-    const { error } = await svc.from("order_events").insert(rows);
-    if (error) log("warn", "growth_events_insert_failed", { requestId, orderId: prefix(orderId), code: error.code ?? null });
+    const { error } = await db.from("order_events").insert(rows);
+    if (error) {
+      log("warn", "growth_events_insert_failed", {
+        requestId,
+        orderId: prefix(orderId),
+        code: error.code ?? null,
+      });
+    }
   } catch {
-    // ignore
+    // best effort only
+  }
+}
+
+async function markCreditUsedBestEffort(args: {
+  db: ReturnType<typeof createServiceClient>;
+  requestId: string;
+  creditId: string | null;
+  userId: string;
+  stripeSessionId: string;
+}): Promise<void> {
+  const { db, requestId, creditId, userId, stripeSessionId } = args;
+  if (!creditId) return;
+
+  try {
+    const { data, error } = await db
+      .from("user_credits")
+      .select("id,user_id,used,checkout_session_id")
+      .eq("id", creditId)
+      .maybeSingle();
+
+    if (error || !data || data.user_id !== userId) {
+      log("warn", "credit_finalize_lookup_failed", {
+        requestId,
+        creditId: prefix(creditId),
+      });
+      return;
+    }
+
+    if (data.used === true) {
+      if (data.checkout_session_id === stripeSessionId) return;
+
+      log("warn", "credit_finalize_already_used_elsewhere", {
+        requestId,
+        creditId: prefix(creditId),
+        stripeSessionId: prefix(stripeSessionId),
+      });
+      return;
+    }
+
+    const { error: updateError } = await db
+      .from("user_credits")
+      .update({
+        used: true,
+        used_at: nowIso(),
+        checkout_session_id: stripeSessionId,
+      })
+      .eq("id", creditId)
+      .eq("user_id", userId)
+      .eq("used", false);
+
+    if (updateError) {
+      log("warn", "credit_finalize_update_failed", {
+        requestId,
+        creditId: prefix(creditId),
+        code: updateError.code ?? null,
+      });
+    }
+  } catch (error) {
+    log("warn", "credit_finalize_exception", {
+      requestId,
+      creditId: prefix(creditId),
+      error: asErrorMessage(error),
+    });
+  }
+}
+
+async function recordPromoRedemptionBestEffort(args: {
+  db: ReturnType<typeof createServiceClient>;
+  requestId: string;
+  promotionId: string | null;
+  userId: string;
+  checkoutSessionId: string;
+  discountCents: number;
+  orderTotalCents: number;
+}): Promise<void> {
+  const { db, requestId, promotionId, userId, checkoutSessionId, discountCents, orderTotalCents } =
+    args;
+
+  if (!promotionId || discountCents <= 0) return;
+
+  try {
+    const { data: existing, error: existingError } = await db
+      .from("promo_redemptions")
+      .select("id")
+      .eq("promotion_id", promotionId)
+      .eq("user_id", userId)
+      .eq("checkout_session_id", checkoutSessionId)
+      .limit(1)
+      .maybeSingle();
+
+    if (!existingError && existing?.id) return;
+
+    const { data: promotion } = await db
+      .from("promotions")
+      .select("channel")
+      .eq("id", promotionId)
+      .maybeSingle();
+
+    const insertRow: Db["public"]["Tables"]["promo_redemptions"]["Insert"] = {
+      promotion_id: promotionId,
+      user_id: userId,
+      checkout_session_id: checkoutSessionId,
+      discount_cents: discountCents,
+      order_total_cents: orderTotalCents,
+      channel: promotion?.channel ?? null,
+    };
+
+    const { error } = await db.from("promo_redemptions").insert(insertRow);
+    if (error) {
+      log("warn", "promo_redemption_insert_failed", {
+        requestId,
+        promotionId: prefix(promotionId),
+        code: error.code ?? null,
+      });
+    }
+  } catch (error) {
+    log("warn", "promo_redemption_exception", {
+      requestId,
+      promotionId: prefix(promotionId),
+      error: asErrorMessage(error),
+    });
   }
 }
 
 // ─────────────────────────────────────────────────────────────
-// Handler
+// Pending cart parsing (matches your schema)
 // ─────────────────────────────────────────────────────────────
 
-Deno.serve(async (req) => {
+function parsePendingCartRecord(value: unknown): {
+  id: string;
+  userId: string;
+  items: Json;
+  promoId: string | null;
+  creditId: string | null;
+  subtotalCents: number;
+  discountCents: number;
+  taxCents: number;
+  totalCents: number;
+  currency: string;
+  pricingHash: string | null;
+  pricingSnapshotRaw: unknown;
+  consumedAt: string | null;
+  stripeSessionId: string | null;
+} | null {
+  if (!isRecord(value)) return null;
+
+  const id = readString(value, "id");
+  const userId = readString(value, "user_id");
+  if (!id || !userId) return null;
+
+  const items = readJson(value, "items");
+  if (items == null) return null;
+
+  return {
+    id,
+    userId,
+    items,
+    promoId: readString(value, "promo_id"),
+    creditId: readString(value, "credit_id"),
+    subtotalCents: clampOrderTotalCents(readNumber(value, "subtotal_cents") ?? 0),
+    discountCents: clampOrderTotalCents(readNumber(value, "discount_cents") ?? 0),
+    taxCents: clampOrderTotalCents(readNumber(value, "tax_cents") ?? 0),
+    totalCents: clampOrderTotalCents(readNumber(value, "total_cents") ?? 0),
+    currency: normalizeCurrency(value["currency"]),
+    pricingHash: readString(value, "pricing_hash"),
+    pricingSnapshotRaw: value["pricing_snapshot"],
+    consumedAt: readString(value, "consumed_at"),
+    stripeSessionId: readString(value, "stripe_session_id"),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Main handler
+// ─────────────────────────────────────────────────────────────
+
+Deno.serve(async (req: Request): Promise<Response> => {
   const requestId = makeRequestId(req);
   const start = Date.now();
 
-  const cors = corsHeaders(req);
-  if (!cors) return new Response("Origin not allowed", { status: 403 });
+  const cors = corsHeadersFor(req);
+  if (!cors) {
+    return new Response("Origin not allowed", {
+      status: 403,
+      headers: withStandardHeaders({ Vary: "Origin" }, requestId),
+    });
+  }
+
+  if (req.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: withStandardHeaders(cors, requestId),
+    });
+  }
+
+  if (req.method !== "POST") {
+    return errorResponse(cors, requestId, "METHOD_NOT_ALLOWED", "Method not allowed.", 405);
+  }
+
+  // Stripe init (2026)
+  let stripe: Stripe;
+  let stripeApiVersion: string;
+  try {
+    const loaded = getStripeOrThrow();
+    stripe = loaded.stripe;
+    stripeApiVersion = loaded.apiVersion;
+  } catch (error) {
+    log("error", "stripe_init_failed", { requestId, error: asErrorMessage(error) });
+    return errorResponse(
+      cors,
+      requestId,
+      "STRIPE_INIT_FAILED",
+      "Stripe is not configured on the server.",
+      503,
+    );
+  }
+
+  // Auth
+  let user: { id: string; email: string | null };
+  try {
+    user = await authenticate(req);
+  } catch (error) {
+    const code = error instanceof AuthError ? error.code : "AUTH_ERROR";
+    const status = error instanceof AuthError ? error.status : 401;
+    return errorResponse(cors, requestId, code, "Unauthorized", status);
+  }
+
+  const db = createServiceClient();
+
+  // Rate limit
+  try {
+    const rl = await checkRateLimit(db, user.id);
+    if (rl.blocked) {
+      const headers = new Headers(withStandardHeaders(cors, requestId));
+      headers.set("Retry-After", String(rl.retryAfterSeconds));
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: { code: "RATE_LIMITED", message: "Too many attempts. Please wait.", requestId },
+        }),
+        { status: 429, headers },
+      );
+    }
+  } catch (error) {
+    return errorResponse(
+      cors,
+      requestId,
+      "RATE_LIMIT_LOOKUP_FAILED",
+      "Service unavailable.",
+      503,
+      { error: asErrorMessage(error) },
+    );
+  }
+
+  // Body
+  let rawBody: JsonRecord;
+  try {
+    rawBody = await readJsonObjectBody(req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "INVALID_JSON_BODY";
+    if (message === "UNSUPPORTED_CONTENT_TYPE") {
+      return errorResponse(
+        cors,
+        requestId,
+        "UNSUPPORTED_CONTENT_TYPE",
+        "Content-Type must be application/json.",
+        415,
+      );
+    }
+    if (message === "BODY_TOO_LARGE") {
+      return errorResponse(cors, requestId, "BODY_TOO_LARGE", "Request body is too large.", 413);
+    }
+    if (message === "EMPTY_BODY") {
+      return errorResponse(cors, requestId, "EMPTY_BODY", "Request body is required.", 400);
+    }
+    return errorResponse(cors, requestId, "INVALID_JSON_BODY", "Request body must be valid JSON.", 400);
+  }
+
+  // Session id
+  let sessionId: string;
+  try {
+    sessionId = mustStripeSessionId(rawBody.sessionId ?? rawBody.session_id);
+  } catch {
+    return errorResponse(cors, requestId, "INVALID_SESSION_ID", "Invalid session id.", 400);
+  }
 
   try {
-    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
-    if (req.method !== "POST") return errorJson(cors, requestId, "METHOD_NOT_ALLOWED", "Method not allowed", 405);
-
-    // Stripe init (lazy)
-    let stripe: Stripe;
-    let stripeApiVersion: string;
-    try {
-      const s = getStripeOrThrow();
-      stripe = s.stripe;
-      stripeApiVersion = s.apiVersion;
-    } catch (e) {
-      log("error", "stripe_init_failed", { requestId, reason: asErr(e) });
-      return errorJson(cors, requestId, "STRIPE_INIT_FAILED", "Stripe is not configured on the server", 500);
-    }
-
-    // Auth
-    let user: { id: string; email: string | null };
-    try {
-      user = await authenticate(req);
-    } catch (e) {
-      const code = e instanceof AuthError ? e.code : "AUTH_ERROR";
-      const status = e instanceof AuthError ? e.status : 401;
-      return errorJson(cors, requestId, code, "Unauthorized", status);
-    }
-
-    const userId = user.id;
-    const svc = createServiceClient();
-
-    // Rate limit (fail-open)
-    const rl = await checkRateLimit(svc, userId, requestId);
-    if (rl.blocked) return errorJson(cors, requestId, "RATE_LIMITED", "Too many attempts. Please wait.", 429);
-
-    // Body parse
-    let raw: unknown;
-    try {
-      raw = await readJsonWithLimit(req, CONFIG.MAX_BODY_BYTES);
-    } catch (e) {
-      const m = e instanceof Error ? e.message : "BAD_REQUEST";
-      if (m === "PAYLOAD_TOO_LARGE") return errorJson(cors, requestId, "PAYLOAD_TOO_LARGE", "Payload too large", 413);
-      if (m === "UNSUPPORTED_CONTENT_TYPE") return errorJson(cors, requestId, "UNSUPPORTED_MEDIA_TYPE", "Content-Type must be application/json", 415);
-      return errorJson(cors, requestId, "INVALID_BODY", "Invalid request body", 400, { reason: m });
-    }
-
-    if (!isRecord(raw)) return errorJson(cors, requestId, "INVALID_BODY", "Request body must be a JSON object", 400);
-
-    const sessionId = mustStripeSessionId(raw.sessionId ?? raw.session_id);
-
-    // 1) Fast idempotent path: order exists
-    {
-      const { data: existing } = await svc
-        .from("orders")
-        .select("id,amount_total,payment_status,status")
-        .eq("stripe_session_id", sessionId)
-        .maybeSingle();
-
-      if (existing?.id) {
-        const amountCents = typeof existing.amount_total === "number" ? existing.amount_total : 0;
-        await backfillLoyaltyV2IfMissing({ svc, requestId, userId, orderId: existing.id, amountCents });
-        await maybeEmitGrowthEvents({ svc, requestId, orderId: existing.id, userId, amountCents });
-
-        log("info", "finalize_idempotent_return", { requestId, ms: Date.now() - start, orderId: prefix(existing.id), sessionId: prefix(sessionId) });
-
-        return json(cors, {
-          ok: true,
-          ...(CONFIG.RETURN_REQUEST_ID ? { requestId } : {}),
-          order_id: existing.id,
-          already_finalized: true,
-          payment_status: existing.payment_status ?? null,
-          status: existing.status ?? null,
-        });
-      }
-    }
-
-    // 2) Retrieve Stripe session
-    let stripeSession: Stripe.Checkout.Session;
-    try {
-      stripeSession = await stripe.checkout.sessions.retrieve(sessionId, { expand: ["payment_intent"] });
-    } catch (e) {
-      log("error", "stripe_retrieve_failed", { requestId, sessionId: prefix(sessionId), err: asErr(e) });
-      return errorJson(cors, requestId, "STRIPE_UNAVAILABLE", "Unable to verify payment session", 502);
-    }
-
-    // 3) Ownership check
-    const meta = stripeSession.metadata ?? {};
-    const owner = pickString(meta, "user_id", "customer_uid", "uid");
-    if (!owner || owner !== userId) {
-      log("warn", "stripe_owner_mismatch", { requestId, sessionId: prefix(sessionId), userId: prefix(userId), owner: owner ? prefix(owner) : null });
-      return errorJson(cors, requestId, "UNAUTHORIZED", "Unauthorized", 401);
-    }
-
-    // 4) Paid gate
-    const paid = stripeSession.payment_status === "paid" || stripeSession.status === "complete";
-    if (!paid) {
-      return json(cors, {
-        ok: true,
-        ...(CONFIG.RETURN_REQUEST_ID ? { requestId } : {}),
-        order_id: null,
-        already_finalized: false,
-        payment_status: stripeSession.payment_status ?? null,
-        status: stripeSession.status ?? null,
-        message: "Payment not confirmed yet",
-      });
-    }
-
-    // 5) Load pending cart
-    const cartRef = pickString(meta, "pending_cart_id", "cart_ref", "cart_id", "pendingCartId");
-    if (!cartRef) return errorJson(cors, requestId, "MISSING_CART_REF", "Missing cart reference (server metadata)", 400);
-
-    const { data: cart, error: cartErr } = await svc
-      .from("pending_carts")
-      .select("id,user_id,items,subtotal_cents,discount_cents,tax_cents,total_cents,promo_id,credit_id")
-      .eq("id", cartRef)
-      .maybeSingle();
-
-    if (cartErr || !cart) return errorJson(cors, requestId, "PENDING_CART_NOT_FOUND", "Pending cart not found", 404);
-    if (String(cart.user_id) !== userId) return errorJson(cors, requestId, "UNAUTHORIZED", "Unauthorized", 401);
-
-    const amountTotal = clampOrderTotalCents(cart.total_cents);
-    if (CONFIG.STRICT_TOTAL_GATES && (!amountTotal || amountTotal <= 0)) {
-      return errorJson(cors, requestId, "INVALID_TOTAL", "Invalid cart total", 400);
-    }
-
-    // 6) Insert order (unique orders.stripe_session_id)
-    const paymentIntentId =
-      typeof stripeSession.payment_intent === "string" ? stripeSession.payment_intent : stripeSession.payment_intent?.id ?? null;
-
-    const orderInsert = {
-      stripe_session_id: sessionId,
-      stripe_payment_intent_id: paymentIntentId,
-      customer_uid: userId,
-      customer_email: stripeSession.customer_details?.email ?? null,
-      customer_name: stripeSession.customer_details?.name ?? null,
-      customer_phone: stripeSession.customer_details?.phone ?? null,
-      amount_subtotal: cart.subtotal_cents ?? 0,
-      amount_tax: cart.tax_cents ?? 0,
-      amount_shipping: 0,
-      amount_total: amountTotal,
-      currency: (stripeSession.currency ?? "usd").toLowerCase(),
-      payment_status: DB_PAYMENT_STATUS_PAID,
-      status: DB_ORDER_STATUS_CONFIRMED,
-      cart_items: cart.items,
-      metadata: {
-        source: "finalize-order",
-        request_id: requestId,
-        cart_ref: cartRef,
-        stripe_session_status: stripeSession.status ?? null,
-        stripe_api_version: stripeApiVersion,
-        promo_id: cart.promo_id ?? null,
-        credit_id: cart.credit_id ?? null,
-      },
-      notes: null,
-    };
-
-    const { data: inserted, error: insErr } = await svc
-      .from("orders")
-      .insert(orderInsert)
-      .select("id,amount_total,payment_status,status")
-      .maybeSingle();
-
-    if (!insErr && inserted?.id) {
-      const amountCents = typeof inserted.amount_total === "number" ? inserted.amount_total : amountTotal;
-      await backfillLoyaltyV2IfMissing({ svc, requestId, userId, orderId: inserted.id, amountCents });
-      await maybeEmitGrowthEvents({ svc, requestId, orderId: inserted.id, userId, amountCents });
-
-      log("info", "finalize_created", { requestId, ms: Date.now() - start, orderId: prefix(inserted.id), sessionId: prefix(sessionId) });
-
-      return json(cors, {
-        ok: true,
-        ...(CONFIG.RETURN_REQUEST_ID ? { requestId } : {}),
-        order_id: inserted.id,
-        already_finalized: false,
-        payment_status: stripeSession.payment_status ?? null,
-        status: stripeSession.status ?? null,
-      });
-    }
-
-    // Insert failed; fetch existing
-    if (insErr) log("warn", "order_insert_failed", { requestId, sessionId: prefix(sessionId), err: insErr.message, code: getErrorCode(insErr) });
-
-    const { data: existing2, error: fetchErr } = await svc
+    // 0) Fast idempotent return (order already exists)
+    const { data: existingOrder } = await db
       .from("orders")
       .select("id,amount_total,payment_status,status")
       .eq("stripe_session_id", sessionId)
       .maybeSingle();
 
-    if (fetchErr || !existing2?.id) return errorJson(cors, requestId, "ORDER_CREATE_FAILED", "Failed to create order", 500);
+    if (existingOrder?.id) {
+      await backfillLoyaltyV2IfMissing({
+        db,
+        requestId,
+        userId: user.id,
+        orderId: existingOrder.id,
+        amountCents: existingOrder.amount_total,
+      });
 
-    const amountCents = typeof existing2.amount_total === "number" ? existing2.amount_total : 0;
-    await backfillLoyaltyV2IfMissing({ svc, requestId, userId, orderId: existing2.id, amountCents });
-    await maybeEmitGrowthEvents({ svc, requestId, orderId: existing2.id, userId, amountCents });
+      log("info", "finalize_idempotent_return", {
+        requestId,
+        orderId: prefix(existingOrder.id),
+        sessionId: prefix(sessionId),
+        ms: Date.now() - start,
+      });
 
-    return json(cors, {
-      ok: true,
-      ...(CONFIG.RETURN_REQUEST_ID ? { requestId } : {}),
-      order_id: existing2.id,
-      already_finalized: true,
-      payment_status: existing2.payment_status ?? null,
-      status: existing2.status ?? null,
+      return jsonResponse(
+        {
+          ok: true,
+          requestId,
+          order_id: existingOrder.id,
+          already_finalized: true,
+          payment_status: existingOrder.payment_status,
+          status: existingOrder.status,
+        },
+        200,
+        cors,
+        requestId,
+      );
+    }
+
+    // 1) Stripe session retrieve
+    const stripeSession = await stripe.checkout.sessions.retrieve(sessionId, {
+      expand: ["payment_intent"],
     });
-  } catch (e) {
-    log("error", "unhandled_exception", { requestId, err: asErr(e) });
-    return errorJson(cors, requestId, "INTERNAL", "Internal server error", 500);
+
+    // Ownership check (metadata-based)
+    const owner = pickString(stripeSession.metadata ?? {}, "user_id", "customer_uid", "uid");
+    if (!owner || owner !== user.id) {
+      log("warn", "stripe_owner_mismatch", {
+        requestId,
+        sessionId: prefix(sessionId),
+        owner: prefix(owner),
+        userId: prefix(user.id),
+      });
+      return errorResponse(cors, requestId, "UNAUTHORIZED", "Unauthorized.", 401);
+    }
+
+    // Payment confirmed?
+    if (!normalizeStripePaid(stripeSession)) {
+      return jsonResponse(
+        {
+          ok: true,
+          requestId,
+          order_id: null,
+          already_finalized: false,
+          payment_status: stripeSession.payment_status ?? null,
+          status: stripeSession.status ?? null,
+          message: "Payment not confirmed yet",
+        },
+        200,
+        cors,
+        requestId,
+      );
+    }
+
+    // 2) Locate pending cart
+    const cartRef = pickString(
+      stripeSession.metadata ?? {},
+      "pending_cart_id",
+      "cart_ref",
+      "cart_id",
+      "pendingCartId",
+    );
+
+    let cartRow: unknown = null;
+
+    if (cartRef) {
+      const { data, error } = await db
+        .from("pending_carts")
+        .select(
+          "id,user_id,items,subtotal_cents,discount_cents,tax_cents,total_cents,promo_id,credit_id,pricing_snapshot,pricing_hash,currency,consumed_at,stripe_session_id",
+        )
+        .eq("id", cartRef)
+        .maybeSingle();
+
+      if (error) {
+        return errorResponse(
+          cors,
+          requestId,
+          "PENDING_CART_LOOKUP_FAILED",
+          "Pending cart lookup failed.",
+          503,
+          { code: error.code ?? null },
+        );
+      }
+      cartRow = data ?? null;
+    }
+
+    if (!cartRow) {
+      const { data, error } = await db
+        .from("pending_carts")
+        .select(
+          "id,user_id,items,subtotal_cents,discount_cents,tax_cents,total_cents,promo_id,credit_id,pricing_snapshot,pricing_hash,currency,consumed_at,stripe_session_id",
+        )
+        .eq("stripe_session_id", sessionId)
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (error) {
+        return errorResponse(
+          cors,
+          requestId,
+          "PENDING_CART_LOOKUP_FAILED",
+          "Pending cart lookup failed.",
+          503,
+          { code: error.code ?? null },
+        );
+      }
+      cartRow = data ?? null;
+    }
+
+    if (!cartRow) {
+      return errorResponse(cors, requestId, "PENDING_CART_NOT_FOUND", "Pending cart not found.", 404);
+    }
+
+    const pendingCart = parsePendingCartRecord(cartRow);
+    if (!pendingCart) {
+      return errorResponse(cors, requestId, "PENDING_CART_INVALID", "Pending cart is invalid.", 500);
+    }
+
+    if (pendingCart.userId !== user.id) {
+      return errorResponse(cors, requestId, "UNAUTHORIZED", "Unauthorized.", 401);
+    }
+
+    // 3) Build authoritative snapshot (never {})
+    const orderTypeMeta = pickString(stripeSession.metadata ?? {}, "order_type");
+    const orderType =
+      orderTypeMeta === "pickup" || orderTypeMeta === "delivery" || orderTypeMeta === "dine_in"
+        ? orderTypeMeta
+        : "pickup";
+
+    const parsed = parsePricingSnapshot(pendingCart.pricingSnapshotRaw);
+    const snapshot =
+      parsed ??
+      buildLegacyPricingSnapshotFromPendingCart({
+        userId: user.id,
+        currency: pendingCart.currency,
+        orderType,
+        orderNotes: null,
+        items: pendingCart.items,
+        subtotalCents: pendingCart.subtotalCents,
+        discountCents: pendingCart.discountCents,
+        taxCents: pendingCart.taxCents,
+        totalCents: pendingCart.totalCents,
+        promoId: pendingCart.promoId,
+        creditId: pendingCart.creditId,
+      });
+
+    if (!isNonEmptyJsonObject(snapshot)) {
+      return errorResponse(cors, requestId, "PRICING_SNAPSHOT_INVALID", "Pricing snapshot is invalid.", 500);
+    }
+
+    const recalculatedHash = await hashPricingSnapshot(snapshot);
+    if (!recalculatedHash || recalculatedHash.trim().length < 16) {
+      return errorResponse(cors, requestId, "PRICING_HASH_INVALID", "Pricing hash is invalid.", 500);
+    }
+
+    // Hash integrity check when present
+    if (pendingCart.pricingHash && pendingCart.pricingHash !== recalculatedHash) {
+      return errorResponse(cors, requestId, "PRICING_HASH_MISMATCH", "Pricing snapshot failed verification.", 409);
+    }
+
+    // Repair snapshot/hash if missing/empty (prevents {} issues under DB constraints)
+    const needsSnapshotRepair =
+      !isNonEmptyJsonObject(pendingCart.pricingSnapshotRaw) ||
+      !pendingCart.pricingHash ||
+      pendingCart.pricingHash.trim().length < 16;
+
+    if (needsSnapshotRepair) {
+      const repairPatch: PendingCartUpdate = {
+        pricing_snapshot: snapshot as unknown as Json,
+        pricing_hash: recalculatedHash,
+      };
+
+      const { error: repairError } = await db
+        .from("pending_carts")
+        .update(repairPatch)
+        .eq("id", pendingCart.id);
+
+      if (repairError) {
+        return errorResponse(
+          cors,
+          requestId,
+          "PENDING_CART_REPAIR_FAILED",
+          "Failed to repair pending cart pricing snapshot.",
+          500,
+          { code: repairError.code ?? null, message: repairError.message },
+        );
+      }
+    }
+
+    // Totals consistency (DB vs snapshot)
+    const expectedDiscountCents = snapshot.campaignDiscountCents + snapshot.promoDiscountCents;
+    if (
+      pendingCart.subtotalCents !== snapshot.subtotalCents ||
+      pendingCart.discountCents !== expectedDiscountCents ||
+      pendingCart.taxCents !== snapshot.taxCents ||
+      pendingCart.totalCents !== snapshot.totalCents
+    ) {
+      return errorResponse(cors, requestId, "PENDING_CART_TOTAL_MISMATCH", "Pending cart totals do not match snapshot.", 409);
+    }
+
+    // Stripe charged amount must match snapshot totals
+    const stripeAmountTotal = typeof stripeSession.amount_total === "number" ? stripeSession.amount_total : null;
+    const stripeCurrency = normalizeCurrency(stripeSession.currency ?? "usd");
+
+    if (stripeAmountTotal === null || stripeAmountTotal !== snapshot.totalCents) {
+      return errorResponse(
+        cors,
+        requestId,
+        "TOTAL_MISMATCH",
+        "Charged total does not match authoritative pricing.",
+        409,
+        { charged: stripeAmountTotal, expected: snapshot.totalCents },
+      );
+    }
+
+    if (stripeCurrency !== snapshot.currency) {
+      return errorResponse(cors, requestId, "CURRENCY_MISMATCH", "Charged currency does not match authoritative pricing.", 409);
+    }
+
+    const paymentIntentId =
+      typeof stripeSession.payment_intent === "string"
+        ? stripeSession.payment_intent
+        : stripeSession.payment_intent?.id ?? null;
+
+    // 4) Atomic consume pending cart + backfill stripe_session_id + snapshot/hash
+    const consumePatch: PendingCartUpdate = {
+      consumed_at: nowIso(),
+      stripe_session_id: sessionId,
+      pricing_snapshot: snapshot as unknown as Json,
+      pricing_hash: recalculatedHash,
+    };
+
+    const { data: consumeRows, error: consumeError } = await db
+      .from("pending_carts")
+      .update(consumePatch)
+      .eq("id", pendingCart.id)
+      .is("consumed_at", null)
+      .select("id");
+
+    if (consumeError) {
+      return errorResponse(
+        cors,
+        requestId,
+        "PENDING_CART_CONSUME_FAILED",
+        "Failed to consume pending cart.",
+        500,
+        { code: consumeError.code ?? null, message: consumeError.message },
+      );
+    }
+
+    const consumedNow = Array.isArray(consumeRows) && consumeRows.length > 0;
+
+    // 5) Insert order (race-safe via UNIQUE(stripe_session_id))
+    const orderMetadata: Json = {
+      source: "finalize-order",
+      request_id: requestId,
+      pending_cart_id: pendingCart.id,
+      stripe_session_status: stripeSession.status ?? null,
+      stripe_payment_status: stripeSession.payment_status ?? null,
+      stripe_api_version: stripeApiVersion,
+      promo_id: snapshot.promoId,
+      credit_id: snapshot.creditId,
+      applied_campaign_ids: snapshot.appliedCampaignIds,
+      pricing_hash: recalculatedHash,
+      pricing_snapshot: snapshot,
+      stripe_amount_total: stripeAmountTotal,
+      stripe_currency: stripeCurrency,
+      pending_cart_consumed_now: consumedNow,
+    };
+
+    const orderInsert: Db["public"]["Tables"]["orders"]["Insert"] = {
+      stripe_session_id: sessionId,
+      stripe_payment_intent_id: paymentIntentId,
+      order_type: "food",
+      customer_uid: user.id,
+      customer_email: stripeSession.customer_details?.email ?? user.email ?? null,
+      customer_name: stripeSession.customer_details?.name ?? null,
+      customer_phone: stripeSession.customer_details?.phone ?? null,
+      amount_subtotal: snapshot.subtotalCents,
+      amount_tax: snapshot.taxCents,
+      amount_shipping: 0,
+      amount_total: snapshot.totalCents,
+      currency: snapshot.currency,
+      payment_status: DB_PAYMENT_STATUS_PAID,
+      status: DB_ORDER_STATUS_CONFIRMED,
+      cart_items: pendingCart.items,
+      metadata: orderMetadata,
+      notes: snapshot.orderNotes,
+    };
+
+    // Try insert first. If conflict (unique), we read and return the existing order.
+    const { data: insertedOrder, error: insertError } = await db
+      .from("orders")
+      .insert(orderInsert)
+      .select("id,amount_total,payment_status,status")
+      .maybeSingle();
+
+    if (insertError) {
+      log("warn", "order_insert_failed", {
+        requestId,
+        sessionId: prefix(sessionId),
+        code: insertError.code ?? null,
+        message: insertError.message,
+      });
+    }
+
+    const { data: finalOrder, error: finalOrderError } = insertedOrder?.id
+      ? { data: insertedOrder, error: null }
+      : await db
+        .from("orders")
+        .select("id,amount_total,payment_status,status")
+        .eq("stripe_session_id", sessionId)
+        .maybeSingle();
+
+    if (finalOrderError || !finalOrder?.id) {
+      return errorResponse(cors, requestId, "ORDER_CREATE_FAILED", "Failed to create order.", 500, {
+        code: finalOrderError?.code ?? null,
+      });
+    }
+
+    // 6) Best-effort side effects
+    await Promise.all([
+      backfillLoyaltyV2IfMissing({
+        db,
+        requestId,
+        userId: user.id,
+        orderId: finalOrder.id,
+        amountCents: finalOrder.amount_total,
+      }),
+      maybeEmitGrowthEvents({
+        db,
+        requestId,
+        orderId: finalOrder.id,
+        userId: user.id,
+        amountCents: finalOrder.amount_total,
+      }),
+      markCreditUsedBestEffort({
+        db,
+        requestId,
+        creditId: snapshot.creditId,
+        userId: user.id,
+        stripeSessionId: sessionId,
+      }),
+      recordPromoRedemptionBestEffort({
+        db,
+        requestId,
+        promotionId: snapshot.promoId,
+        userId: user.id,
+        checkoutSessionId: sessionId,
+        discountCents: snapshot.promoDiscountCents,
+        orderTotalCents: snapshot.totalCents,
+      }),
+    ]);
+
+    log("info", "finalize_ok", {
+      requestId,
+      orderId: prefix(finalOrder.id),
+      sessionId: prefix(sessionId),
+      consumedNow,
+      ms: Date.now() - start,
+    });
+
+    return jsonResponse(
+      {
+        ok: true,
+        requestId,
+        order_id: finalOrder.id,
+        already_finalized: insertedOrder?.id ? false : true,
+        payment_status: finalOrder.payment_status,
+        status: finalOrder.status,
+      },
+      200,
+      cors,
+      requestId,
+    );
+  } catch (error) {
+    log("error", "unhandled_exception", {
+      requestId,
+      error: asErrorMessage(error),
+    });
+
+    return errorResponse(cors, requestId, "INTERNAL", "Internal server error.", 500);
   }
 });
