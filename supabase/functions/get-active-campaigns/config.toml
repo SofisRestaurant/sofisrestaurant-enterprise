@@ -1,0 +1,2 @@
+# PATH: supabase/functions/get-active-campaigns/config.toml
+verify_jwt = false
