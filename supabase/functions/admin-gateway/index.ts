@@ -63,6 +63,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const requestId = crypto.randomUUID();
   const ts = Date.now();
   const start = Date.now();
+  
 
   // ── CORS ──────────────────────────────────────────────────────────────────
   const cors = corsHeadersFor(req);

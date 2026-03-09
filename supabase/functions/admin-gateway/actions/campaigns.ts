@@ -1,6 +1,6 @@
 // PATH: supabase/functions/admin-gateway/actions/campaigns.ts
 
-import { createServiceClient } from "../../_shared/supabase.ts";
+import { createServiceClient } from '../../_shared/supabase.ts';
 
 type CampaignRow = {
   id: string;
@@ -60,14 +60,14 @@ export async function listCampaigns(): Promise<CampaignListResult> {
   const svc = createServiceClient();
 
   const { data, error } = await svc
-    .from("growth_campaigns")
+    .from('growth_campaigns')
     .select(
-      "id,campaign_name,placement,active,priority,weight,starts_at,ends_at,updated_at,badge,hero_title,hero_subtitle,cta_label,deep_link,menu_item_id,is_featured,eligible_for_rotation",
+      'id,campaign_name,placement,active,priority,weight,starts_at,ends_at,updated_at,badge,hero_title,hero_subtitle,cta_label,deep_link,menu_item_id,is_featured,eligible_for_rotation',
     )
-    .order("updated_at", { ascending: false })
+    .order('updated_at', { ascending: false })
     .limit(500);
 
-  if (error) throw Object.assign(new Error(error.message), { code: "DB_CAMPAIGNS_LIST" });
+  if (error) throw Object.assign(new Error(error.message), { code: 'DB_CAMPAIGNS_LIST' });
 
   return (data ?? []) as CampaignRow[];
 }
@@ -76,11 +76,11 @@ export async function toggleCampaign(payload: TogglePayload): Promise<{ ok: true
   const svc = createServiceClient();
 
   const { error } = await svc
-    .from("growth_campaigns")
+    .from('growth_campaigns')
     .update({ active: payload.active })
-    .eq("id", payload.id);
+    .eq('id', payload.id);
 
-  if (error) throw Object.assign(new Error(error.message), { code: "DB_CAMPAIGN_TOGGLE" });
+  if (error) throw Object.assign(new Error(error.message), { code: 'DB_CAMPAIGN_TOGGLE' });
 
   return { ok: true };
 }
@@ -89,7 +89,7 @@ export async function createCampaign(payload: CreatePayload): Promise<{ ok: true
   const svc = createServiceClient();
 
   const { data, error } = await svc
-    .from("growth_campaigns")
+    .from('growth_campaigns')
     .insert({
       campaign_name: payload.campaign_name,
       placement: payload.placement,
@@ -110,11 +110,13 @@ export async function createCampaign(payload: CreatePayload): Promise<{ ok: true
       priority: payload.priority,
       weight: payload.weight,
     })
-    .select("id")
+    .select('id')
     .single();
 
   if (error || !data?.id) {
-    throw Object.assign(new Error(error?.message ?? "Insert failed"), { code: "DB_CAMPAIGN_CREATE" });
+    throw Object.assign(new Error(error?.message ?? 'Insert failed'), {
+      code: 'DB_CAMPAIGN_CREATE',
+    });
   }
 
   return { ok: true, id: data.id as string };
@@ -124,7 +126,7 @@ export async function updateCampaign(payload: UpdatePayload): Promise<{ ok: true
   const svc = createServiceClient();
 
   const { error } = await svc
-    .from("growth_campaigns")
+    .from('growth_campaigns')
     .update({
       campaign_name: payload.campaign_name,
       placement: payload.placement,
@@ -145,9 +147,9 @@ export async function updateCampaign(payload: UpdatePayload): Promise<{ ok: true
       priority: payload.priority,
       weight: payload.weight,
     })
-    .eq("id", payload.id);
+    .eq('id', payload.id);
 
-  if (error) throw Object.assign(new Error(error.message), { code: "DB_CAMPAIGN_UPDATE" });
+  if (error) throw Object.assign(new Error(error.message), { code: 'DB_CAMPAIGN_UPDATE' });
 
   return { ok: true };
 }
@@ -157,19 +159,18 @@ export async function pinFeatured(payload: PinFeaturedPayload): Promise<{ ok: tr
 
   // 1) clear featured for this placement
   const clear = await svc
-    .from("growth_campaigns")
+    .from('growth_campaigns')
     .update({ is_featured: false })
-    .eq("placement", payload.placement);
+    .eq('placement', payload.placement);
 
-  if (clear.error) throw Object.assign(new Error(clear.error.message), { code: "DB_CAMPAIGN_CLEAR_FEATURED" });
+  if (clear.error)
+    throw Object.assign(new Error(clear.error.message), { code: 'DB_CAMPAIGN_CLEAR_FEATURED' });
 
   // 2) set featured for target id
-  const set = await svc
-    .from("growth_campaigns")
-    .update({ is_featured: true })
-    .eq("id", payload.id);
+  const set = await svc.from('growth_campaigns').update({ is_featured: true }).eq('id', payload.id);
 
-  if (set.error) throw Object.assign(new Error(set.error.message), { code: "DB_CAMPAIGN_PIN_FEATURED" });
+  if (set.error)
+    throw Object.assign(new Error(set.error.message), { code: 'DB_CAMPAIGN_PIN_FEATURED' });
 
   return { ok: true };
 }
@@ -177,9 +178,9 @@ export async function pinFeatured(payload: PinFeaturedPayload): Promise<{ ok: tr
 export async function runCampaignRotation(): Promise<{ ok: true }> {
   const svc = createServiceClient();
 
-  const { error } = await svc.rpc("rotate_daily_campaigns");
+  const { error } = await svc.rpc('rotate_daily_campaigns');
 
-  if (error) throw Object.assign(new Error(error.message), { code: "DB_CAMPAIGN_ROTATE" });
+  if (error) throw Object.assign(new Error(error.message), { code: 'DB_CAMPAIGN_ROTATE' });
 
   return { ok: true };
 }
