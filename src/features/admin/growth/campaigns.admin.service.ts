@@ -1,9 +1,5 @@
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY,
-);
+import { supabase } from '@/lib/supabase/supabaseClient';
+import { invokeEdge } from '@/lib/supabase/invoke';
 
 export type CampaignAutomationStatus = {
   autoRotate: boolean;
@@ -37,9 +33,5 @@ export async function setAutoRotateDaily(enabled: boolean): Promise<void> {
 }
 
 export async function runCampaignRotation(): Promise<void> {
-  const { error } = await supabase.functions.invoke('run-campaign-rotation', {
-    method: 'POST',
-  });
-
-  if (error) throw error;
+  await invokeEdge('run-campaign-rotation', {}, { method: 'POST' });
 }

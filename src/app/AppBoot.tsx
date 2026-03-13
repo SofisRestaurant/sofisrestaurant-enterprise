@@ -4,6 +4,7 @@ import { runStartupHealthCheck } from '@/security/StartupHealthCheck';
 import { retryStartup } from '@/lib/resilience/startupRetry';
 import { supabase } from '@/lib/supabase/supabaseClient';
 import BootSplash3D from '@/components/app/BootSplash3D';
+import { useCallback } from 'react';
 
 type BootState = 'loading' | 'ready' | 'fallback' | 'fatal';
 
@@ -40,20 +41,20 @@ export default function AppBoot({ children }: { children: React.ReactNode }) {
     exitTimerRef.current = null;
   };
 
-  const scheduleRefresh = (expiresAtSeconds: number | null | undefined) => {
-    clearRefreshTimer();
-    if (!expiresAtSeconds || !Number.isFinite(expiresAtSeconds)) return;
+ const scheduleRefresh = useCallback((expiresAtSeconds: number | null | undefined) => {
+   clearRefreshTimer();
+   if (!expiresAtSeconds || !Number.isFinite(expiresAtSeconds)) return;
 
-    const expiresAtMs = expiresAtSeconds * 1000;
-    const msUntil = expiresAtMs - safeNowMs() - 60_000;
-    const delay = clampMs(msUntil, 5_000, 24 * 60 * 60 * 1000);
+   const expiresAtMs = expiresAtSeconds * 1000;
+   const msUntil = expiresAtMs - safeNowMs() - 60_000;
+   const delay = clampMs(msUntil, 5_000, 24 * 60 * 60 * 1000);
 
-    refreshTimerRef.current = setTimeout(() => {
-      void supabase.auth.refreshSession().catch(() => {
-        // best effort only
-      });
-    }, delay);
-  };
+   refreshTimerRef.current = setTimeout(() => {
+     void supabase.auth.refreshSession().catch(() => {
+       // best effort only
+     });
+   }, delay);
+ }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -121,7 +122,7 @@ export default function AppBoot({ children }: { children: React.ReactNode }) {
       sub?.subscription?.unsubscribe();
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, []);
+  }, [scheduleRefresh]);
 
   if (state === 'fatal') {
     return (

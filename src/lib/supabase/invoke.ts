@@ -17,7 +17,7 @@
 // - Also accepts primitive / string / unknown bodies for legacy callers
 //   like auth-risk-evaluation and auth-session-validation.
 // =============================================================================
-
+import { env } from '@/lib/config/env';
 import { supabase } from '@/lib/supabase/supabaseClient';
 
 type JsonRecord = Record<string, unknown>;
@@ -56,8 +56,6 @@ export type InvokeInit = Readonly<{
   signal?: AbortSignal;
   skipAuth?: boolean;
 }>;
-
-type ImportMetaEnvLike = Readonly<Record<string, unknown>>;
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -110,18 +108,7 @@ async function safeJson(response: Response): Promise<unknown> {
   }
 }
 
-function getImportMetaEnv(): ImportMetaEnvLike {
-  const meta = import.meta as ImportMeta & {
-    readonly env?: unknown;
-  };
 
-  return isRecord(meta.env) ? meta.env : {};
-}
-
-function getEnvString(name: string): string | null {
-  const value = getImportMetaEnv()[name];
-  return isNonEmptyString(value) ? value.trim() : null;
-}
 
 async function getAccessToken(): Promise<string | null> {
   const { data } = await supabase.auth.getSession();
@@ -286,14 +273,14 @@ export async function invokeEdge<TResponse = unknown, TBody = unknown>(
   const method = init?.method ?? 'POST';
   const requestId = readRequestId(init);
 
-  const baseUrl = getEnvString('VITE_SUPABASE_URL');
-  const anonKey = getEnvString('VITE_SUPABASE_ANON_KEY');
+ const baseUrl = env.supabase.url;
+const anonKey = env.supabase.anonKey;
 
   if (baseUrl === null || anonKey === null) {
     throw createMissingEnvError(functionName, requestId, baseUrl, anonKey);
   }
 
-  const appName = getEnvString('VITE_APP_NAME') ?? 'sofis-restaurant-v2';
+  const appName = 'sofis-restaurant-v2';
   const url = `${baseUrl.replace(/\/+$/, '')}/functions/v1/${functionName}`;
 
   let token = await getAccessToken();
