@@ -3,8 +3,8 @@
 // ORDER STATUS TRACKING — CUSTOMER-FACING (PRODUCTION TAILWIND)
 // ============================================================================
 
-import { useEffect, useState, useCallback } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
+import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   ArrowLeft,
   Package,
@@ -13,26 +13,31 @@ import {
   ChefHat,
   AlertCircle,
   Loader2,
-} from 'lucide-react'
+} from 'lucide-react';
 
-import { supabase } from '@/lib/supabase/supabaseClient'
-import { useAuth } from '@/modules/auth/hooks/useAuth'
-import { OrderStatus as OrderStatusEnum, PaymentStatus } from '@/domain/orders/order.types'
-import type { Order, OrderCartItem } from '@/domain/orders/order.types'
+import { supabase } from '@/lib/supabase/supabaseClient';
+import { useAuth } from '@/modules/auth/hooks/useAuth';
+import { OrderStatus as OrderStatusEnum, PaymentStatus } from '@/domain/orders/order.types';
+import type { Order, OrderCartItem } from '@/domain/orders/order.types';
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
-type LoadState = 'loading' | 'found' | 'not-found' | 'unauthorized' | 'error'
+type LoadState = 'loading' | 'found' | 'not-found' | 'unauthorized' | 'error';
 
 interface StatusStep {
-  key: OrderStatusEnum
-  label: string
-  icon: React.ReactNode
-  color: string
-  bgColor: string
-  borderColor: string
+  key: OrderStatusEnum;
+  label: string;
+  icon: React.ReactNode;
+  color: string;
+  bgColor: string;
+  borderColor: string;
+}
+
+interface CartItemView {
+  key: string;
+  item: OrderCartItem;
 }
 
 // ============================================================================
@@ -65,35 +70,69 @@ const STATUS_STEPS: StatusStep[] = [
     borderColor: 'border-green-200',
   },
   {
-   key: OrderStatusEnum.DELIVERED,
+    key: OrderStatusEnum.DELIVERED,
     label: 'Completed',
     icon: <CheckCircle2 className="h-5 w-5" />,
     color: 'text-emerald-600',
     bgColor: 'bg-emerald-50',
     borderColor: 'border-emerald-200',
   },
-]
+];
 
 function formatCents(cents: number): string {
-  return (cents / 100).toFixed(2)
+  return (cents / 100).toFixed(2);
 }
 
 function formatTime(timestamp: string): string {
-  const date = new Date(timestamp)
+  const date = new Date(timestamp);
+
   return date.toLocaleTimeString('en-US', {
     hour: 'numeric',
     minute: '2-digit',
     hour12: true,
-  })
+  });
 }
 
 function formatDate(timestamp: string): string {
-  const date = new Date(timestamp)
+  const date = new Date(timestamp);
+
   return date.toLocaleDateString('en-US', {
     month: 'long',
     day: 'numeric',
     year: 'numeric',
-  })
+  });
+}
+
+function buildCartItemIdentity(item: OrderCartItem): string {
+  const idPart =
+    typeof item.id === 'string' && item.id.trim().length > 0 ? item.id.trim() : 'no-id';
+  const namePart = item.name.trim().toLowerCase();
+  const quantityPart = String(item.quantity);
+  const pricePart = item.price == null ? 'na' : String(item.price);
+  const notesPart =
+    typeof item.notes === 'string' && item.notes.trim().length > 0
+      ? item.notes.trim().toLowerCase()
+      : 'na';
+
+  return [idPart, namePart, quantityPart, pricePart, notesPart].join(':');
+}
+
+function buildCartItemViews(items: readonly OrderCartItem[]): CartItemView[] {
+  const counts = new Map<string, number>();
+  const views: CartItemView[] = [];
+
+  for (const item of items) {
+    const identity = buildCartItemIdentity(item);
+    const seen = counts.get(identity) ?? 0;
+    counts.set(identity, seen + 1);
+
+    views.push({
+      key: `${identity}:dup-${seen + 1}`,
+      item,
+    });
+  }
+
+  return views;
 }
 
 // ============================================================================
@@ -101,20 +140,17 @@ function formatDate(timestamp: string): string {
 // ============================================================================
 
 export default function OrderStatusPage() {
-  const { orderId } = useParams<{ orderId: string }>()
-  const navigate = useNavigate()
-  const { user } = useAuth()
+  const { orderId } = useParams<{ orderId: string }>();
+  const navigate = useNavigate();
+  const { user } = useAuth();
 
-  const [loadState, setLoadState] = useState<LoadState>('loading')
-  const [order, setOrder] = useState<Order | null>(null)
+  const [loadState, setLoadState] = useState<LoadState>('loading');
+  const [order, setOrder] = useState<Order | null>(null);
 
-  // ========================================
-  // LOAD ORDER
-  // ========================================
-  const loadOrder = useCallback(async () => {
+  const loadOrder = useCallback(async (): Promise<void> => {
     if (!orderId) {
-      setLoadState('not-found')
-      return
+      setLoadState('not-found');
+      return;
     }
 
     try {
@@ -122,55 +158,55 @@ export default function OrderStatusPage() {
         .from('orders')
         .select('*')
         .eq('id', orderId)
-        .eq('payment_status', 'paid')
-        .maybeSingle()
+        .eq('payment_status', PaymentStatus.PAID)
+        .maybeSingle<Order>();
 
       if (error) {
-        console.error('Order fetch error:', error)
-        setLoadState('error')
-        return
+        console.error('Order fetch error:', error);
+        setLoadState('error');
+        return;
       }
 
       if (!data) {
-        setLoadState('not-found')
-        return
+        setLoadState('not-found');
+        return;
       }
 
-      const orderData = data as unknown as Order
-
-      // Authorization check
-      if (user && orderData.customer_uid !== user.id) {
-        setLoadState('unauthorized')
-        return
+      if (user && data.customer_uid !== user.id) {
+        setLoadState('unauthorized');
+        return;
       }
 
-      setOrder(orderData)
-      setLoadState('found')
+      setOrder(data);
+      setLoadState('found');
     } catch (err) {
-      console.error('Failed to load order:', err)
-      setLoadState('error')
+      console.error('Failed to load order:', err);
+      setLoadState('error');
     }
-  }, [orderId, user])
+  }, [orderId, user]);
 
- useEffect(() => {
-  let mounted = true
-
-  const run = async () => {
-    if (!mounted) return
-    await loadOrder()
-  }
-
-  run()
-
-  return () => {
-    mounted = false
-  }
-}, [loadOrder])
-  // ========================================
-  // REALTIME
-  // ========================================
   useEffect(() => {
-    if (!order?.id) return
+    let mounted = true;
+
+    const run = async (): Promise<void> => {
+      if (!mounted) {
+        return;
+      }
+
+      await loadOrder();
+    };
+
+    void run();
+
+    return () => {
+      mounted = false;
+    };
+  }, [loadOrder]);
+
+  useEffect(() => {
+    if (!order?.id) {
+      return;
+    }
 
     const channel = supabase
       .channel(`order-status-${order.id}`)
@@ -184,43 +220,49 @@ export default function OrderStatusPage() {
         },
         (payload: { new: Partial<Order> }) => {
           setOrder((prev) => {
-            if (!prev) return prev
-            return { ...prev, ...payload.new } as Order
-          })
-        }
+            if (!prev) {
+              return prev;
+            }
+
+            return {
+              ...prev,
+              ...payload.new,
+            };
+          });
+        },
       )
-      .subscribe()
+      .subscribe();
 
     return () => {
-      supabase.removeChannel(channel)
-    }
-  }, [order?.id])
+      void supabase.removeChannel(channel);
+    };
+  }, [order?.id]);
 
-  // ========================================
-  // HELPERS
-  // ========================================
-  const getCurrentStepIndex = useCallback(() => {
-    if (!order) return 0
-    const index = STATUS_STEPS.findIndex((step) => step.key === order.status)
-    return index === -1 ? 0 : index
-  }, [order])
+  const getCurrentStepIndex = useCallback((): number => {
+    if (!order) {
+      return 0;
+    }
+
+    const index = STATUS_STEPS.findIndex((step) => step.key === order.status);
+    return index === -1 ? 0 : index;
+  }, [order]);
 
   const isStepComplete = useCallback(
-    (stepIndex: number) => {
-      return stepIndex <= getCurrentStepIndex()
-    },
-    [getCurrentStepIndex]
-  )
+    (stepIndex: number): boolean => stepIndex <= getCurrentStepIndex(),
+    [getCurrentStepIndex],
+  );
 
-  const currentStep = order ? STATUS_STEPS[getCurrentStepIndex()] : STATUS_STEPS[0]
+  const currentStep = order ? STATUS_STEPS[getCurrentStepIndex()] : STATUS_STEPS[0];
 
   const estimatedReadyTime = order?.estimated_ready_time
     ? formatTime(order.estimated_ready_time)
-    : null
+    : null;
 
-  // ========================================
-  // LOADING STATE
-  // ========================================
+  const cartItemViews = useMemo<CartItemView[]>(
+    () => (order?.cart_items ? buildCartItemViews(order.cart_items) : []),
+    [order],
+  );
+
   if (loadState === 'loading') {
     return (
       <div className="min-h-screen bg-neutral-50 px-4 py-12">
@@ -233,12 +275,9 @@ export default function OrderStatusPage() {
           </div>
         </div>
       </div>
-    )
+    );
   }
 
-  // ========================================
-  // ERROR STATES
-  // ========================================
   if (loadState === 'not-found') {
     return (
       <ErrorState
@@ -248,7 +287,7 @@ export default function OrderStatusPage() {
         actionLabel="View Order History"
         actionPath="/account/orders"
       />
-    )
+    );
   }
 
   if (loadState === 'unauthorized') {
@@ -260,7 +299,7 @@ export default function OrderStatusPage() {
         actionLabel="View Your Orders"
         actionPath="/account/orders"
       />
-    )
+    );
   }
 
   if (loadState === 'error') {
@@ -270,24 +309,27 @@ export default function OrderStatusPage() {
         title="Something went wrong"
         message="We couldn't load your order. Please try again."
         actionLabel="Retry"
-        onClick={loadOrder}
+        onClick={() => {
+          void loadOrder();
+        }}
       />
-    )
+    );
   }
 
-  // ========================================
-  // ORDER FOUND
-  // ========================================
-  if (!order) return null
+  if (!order) {
+    return null;
+  }
 
   return (
     <div className="min-h-screen bg-neutral-50 px-4 py-8">
       <div className="mx-auto max-w-2xl">
         <div className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
-          {/* Header */}
           <div className="border-b border-neutral-100 p-6 sm:p-8">
             <button
-              onClick={() => navigate(-1)}
+              type="button"
+              onClick={() => {
+                void navigate(-1);
+              }}
               className="mb-4 inline-flex items-center gap-2 rounded-lg bg-neutral-100 px-3 py-2 text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-200"
             >
               <ArrowLeft className="h-4 w-4" />
@@ -302,15 +344,14 @@ export default function OrderStatusPage() {
                 </p>
               </div>
 
-              {estimatedReadyTime && order.status !== OrderStatusEnum.DELIVERED && (
+              {estimatedReadyTime && order.status !== OrderStatusEnum.DELIVERED ? (
                 <div className="flex items-center gap-2 rounded-lg bg-yellow-50 px-3 py-2 text-sm font-medium text-yellow-800">
                   <Clock className="h-4 w-4" />
                   Ready by {estimatedReadyTime}
                 </div>
-              )}
+              ) : null}
             </div>
 
-            {/* Current status badge */}
             <div
               className={`mt-4 inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold ${currentStep.color} ${currentStep.bgColor} ${currentStep.borderColor}`}
             >
@@ -319,17 +360,15 @@ export default function OrderStatusPage() {
             </div>
           </div>
 
-          {/* Progress tracker */}
           <div className="border-b border-neutral-100 p-6 sm:p-8">
             <div className="relative flex items-start justify-between">
               {STATUS_STEPS.map((step, index) => {
-                const complete = isStepComplete(index)
-                const active = getCurrentStepIndex() === index
-                const isLast = index === STATUS_STEPS.length - 1
+                const complete = isStepComplete(index);
+                const active = getCurrentStepIndex() === index;
+                const isLast = index === STATUS_STEPS.length - 1;
 
                 return (
                   <div key={step.key} className="relative flex flex-1 flex-col items-center">
-                    {/* Dot */}
                     <div
                       className={`relative z-10 flex h-10 w-10 items-center justify-center rounded-full border-2 transition-all ${
                         complete
@@ -344,7 +383,6 @@ export default function OrderStatusPage() {
                       )}
                     </div>
 
-                    {/* Label */}
                     <p
                       className={`mt-2 text-center text-xs font-medium ${
                         complete || active ? 'text-neutral-900' : 'text-neutral-500'
@@ -353,22 +391,20 @@ export default function OrderStatusPage() {
                       {step.label}
                     </p>
 
-                    {/* Connector line */}
-                    {!isLast && (
+                    {!isLast ? (
                       <div
                         className={`absolute left-1/2 top-5 h-0.5 w-full ${
                           isStepComplete(index + 1) ? 'bg-green-500' : 'bg-neutral-200'
                         }`}
                         style={{ transform: 'translateY(-50%)' }}
                       />
-                    )}
+                    ) : null}
                   </div>
-                )
+                );
               })}
             </div>
           </div>
 
-          {/* Order details */}
           <div className="border-b border-neutral-100 p-6 sm:p-8">
             <h3 className="mb-4 text-xs font-semibold uppercase tracking-wider text-neutral-500">
               Order Details
@@ -389,16 +425,16 @@ export default function OrderStatusPage() {
                 </p>
               </div>
 
-              {order.customer_name && (
+              {order.customer_name ? (
                 <div>
                   <p className="text-xs text-neutral-500">Name</p>
                   <p className="mt-1 text-sm font-semibold text-neutral-900">
                     {order.customer_name}
                   </p>
                 </div>
-              )}
+              ) : null}
 
-              {order.payment_status && (
+              {order.payment_status ? (
                 <div>
                   <p className="text-xs text-neutral-500">Payment</p>
                   <span
@@ -411,67 +447,68 @@ export default function OrderStatusPage() {
                     {order.payment_status}
                   </span>
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
 
-          {/* Items */}
-          {order.cart_items && order.cart_items.length > 0 && (
+          {cartItemViews.length > 0 ? (
             <div className="border-b border-neutral-100 p-6 sm:p-8">
               <h3 className="mb-4 text-xs font-semibold uppercase tracking-wider text-neutral-500">
                 Items
               </h3>
 
               <ul className="space-y-3">
-                {order.cart_items.map((item: OrderCartItem, i: number) => (
-                  <li key={item.id ?? i} className="flex items-start justify-between gap-4">
+                {cartItemViews.map(({ key, item }) => (
+                  <li key={key} className="flex items-start justify-between gap-4">
                     <div className="flex gap-3">
                       <span className="font-semibold text-orange-600">{item.quantity}×</span>
                       <div>
                         <p className="font-medium text-neutral-900">{item.name}</p>
-                        {item.notes && (
+                        {item.notes ? (
                           <p className="mt-1 text-sm text-neutral-600">{item.notes}</p>
-                        )}
+                        ) : null}
                       </div>
                     </div>
-                    {item.price != null && (
+
+                    {item.price != null ? (
                       <span className="whitespace-nowrap text-sm text-neutral-700">
                         ${formatCents(item.price * item.quantity)}
                       </span>
-                    )}
+                    ) : null}
                   </li>
                 ))}
               </ul>
 
-              {/* Totals */}
               <div className="mt-6 space-y-2 rounded-xl bg-neutral-50 p-4">
-                {order.amount_subtotal > 0 && (
+                {order.amount_subtotal > 0 ? (
                   <div className="flex justify-between text-sm text-neutral-700">
                     <span>Subtotal</span>
                     <span>${formatCents(order.amount_subtotal)}</span>
                   </div>
-                )}
-                {order.amount_tax > 0 && (
+                ) : null}
+
+                {order.amount_tax > 0 ? (
                   <div className="flex justify-between text-sm text-neutral-700">
                     <span>Tax</span>
                     <span>${formatCents(order.amount_tax)}</span>
                   </div>
-                )}
-                {order.amount_shipping > 0 && (
+                ) : null}
+
+                {order.amount_shipping > 0 ? (
                   <div className="flex justify-between text-sm text-neutral-700">
                     <span>Delivery</span>
                     <span>${formatCents(order.amount_shipping)}</span>
                   </div>
-                )}
+                ) : null}
+
                 <div className="flex justify-between border-t border-neutral-200 pt-2 font-semibold text-neutral-900">
                   <span>Total</span>
                   <span>${formatCents(order.amount_total)}</span>
                 </div>
               </div>
             </div>
-          )}
+          ) : null}
 
-          {/* Actions */}
           <div className="p-6 sm:p-8">
             <div className="space-y-3">
               <Link
@@ -480,21 +517,21 @@ export default function OrderStatusPage() {
               >
                 Order Again
               </Link>
-              {user && (
+
+              {user ? (
                 <Link
                   to="/account/orders"
                   className="block w-full rounded-lg bg-neutral-100 px-4 py-3 text-center font-semibold text-neutral-700 transition-colors hover:bg-neutral-200"
                 >
                   View All Orders
                 </Link>
-              )}
+              ) : null}
             </div>
 
-            {/* Live indicator */}
             <p className="mt-4 flex items-center justify-center gap-2 text-xs text-neutral-500">
               <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75"></span>
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-green-500"></span>
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-green-500" />
               </span>
               Updates automatically
             </p>
@@ -502,7 +539,7 @@ export default function OrderStatusPage() {
         </div>
       </div>
     </div>
-  )
+  );
 }
 
 // ============================================================================
@@ -517,12 +554,12 @@ function ErrorState({
   actionPath,
   onClick,
 }: {
-  icon: React.ReactNode
-  title: string
-  message: string
-  actionLabel: string
-  actionPath?: string
-  onClick?: () => void
+  icon: React.ReactNode;
+  title: string;
+  message: string;
+  actionLabel: string;
+  actionPath?: string;
+  onClick?: () => void;
 }) {
   return (
     <div className="min-h-screen bg-neutral-50 px-4 py-12">
@@ -531,6 +568,7 @@ function ErrorState({
           <div className="mb-4 flex justify-center">{icon}</div>
           <h2 className="mb-2 text-xl font-bold text-neutral-900">{title}</h2>
           <p className="mb-6 text-sm text-neutral-600">{message}</p>
+
           {actionPath ? (
             <Link
               to={actionPath}
@@ -540,6 +578,7 @@ function ErrorState({
             </Link>
           ) : (
             <button
+              type="button"
               onClick={onClick}
               className="inline-block rounded-lg bg-orange-600 px-6 py-3 font-semibold text-white transition-colors hover:bg-orange-700"
             >
@@ -549,5 +588,5 @@ function ErrorState({
         </div>
       </div>
     </div>
-  )
+  );
 }

@@ -9,7 +9,7 @@
 //  - Keeps store as source of truth; hook does not recompute totals
 // =============================================================================
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   useCartStore,
   selectItems,
@@ -18,7 +18,7 @@ import {
   selectCredit,
   selectItemCount,
   selectIsEmpty,
-} from "@/modules/cart/store/cart.store";
+} from '@/modules/cart/store/cart.store';
 
 import {
   cartItemKey,
@@ -35,7 +35,7 @@ import {
   promoSuccessMessage,
   shouldSyncCart,
   orderTypeLabel,
-} from "@/modules/cart/utils/cart.utils";
+} from '@/modules/cart/utils/cart.utils';
 
 import type {
   CartItem,
@@ -44,9 +44,9 @@ import type {
   CartCredit,
   CheckoutPayload,
   PromoValidationResult,
-} from "@/modules/cart/types/cart.types";
+} from '@/modules/cart/types/cart.types';
 
-import { requireSessionId, isUuid } from "@/security/auth/sessionId";
+import { requireSessionId, isUuid } from '@/security/auth/sessionId';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hook params
@@ -75,7 +75,7 @@ export interface UseCartReturn {
   subtotalFormatted: string;
   totalFormatted: string;
 
-  addItem: (item: Omit<CartItem, "lineTotalCents">) => void;
+  addItem: (item: Omit<CartItem, 'lineTotalCents'>) => void;
   removeItem: (menuItemId: string, modifierKey: string) => void;
   updateQuantity: (menuItemId: string, modifierKey: string, qty: number) => void;
   updateNotes: (menuItemId: string, modifierKey: string, notes: string) => void;
@@ -88,9 +88,9 @@ export interface UseCartReturn {
   applyCredit: () => Promise<boolean>;
   removeCredit: () => void;
 
-  getCheckoutPayload: (orderType: CheckoutPayload["orderType"], notes?: string) => CheckoutPayload;
+  getCheckoutPayload: (orderType: CheckoutPayload['orderType'], notes?: string) => CheckoutPayload;
 
-  findItem: (menuItemId: string, modifiers: Pick<CartModifier, "id">[]) => CartItem | undefined;
+  findItem: (menuItemId: string, modifiers: Pick<CartModifier, 'id'>[]) => CartItem | undefined;
   isInCart: (menuItemId: string) => boolean;
   quantityInCart: (menuItemId: string) => number;
   itemLineBreakdown: (item: CartItem) => string;
@@ -122,7 +122,7 @@ function safeRequireSessionId(sessionId: string | null | undefined): string | nu
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function useCart(options: UseCartOptions = {}): UseCartReturn {
-  const { userId = null, sessionId = null, taxRate = 0.0825 } = options;
+  const { userId = null, sessionId = null, taxRate = 0.095 } = options;
 
   // ── Store slices
   const items = useCartStore(selectItems);
@@ -181,7 +181,7 @@ export function useCart(options: UseCartOptions = {}): UseCartReturn {
 
   const applyPromoCode = useCallback(
     async (code: string): Promise<PromoValidationResult> => {
-      if (!userId) return { valid: false, error: "NOT_FOUND" };
+      if (!userId) return { valid: false, error: 'NOT_FOUND' };
       return storeApplyPromo(code, userId);
     },
     [userId, storeApplyPromo],
@@ -215,7 +215,7 @@ export function useCart(options: UseCartOptions = {}): UseCartReturn {
   }, [validatedSessionId, clearSupabaseCart]);
 
   const getCheckoutPayload = useCallback(
-    (orderType: CheckoutPayload["orderType"], notes?: string): CheckoutPayload =>
+    (orderType: CheckoutPayload['orderType'], notes?: string): CheckoutPayload =>
       buildCheckoutPayload(
         { items, promotion, credit, totals: rawTotals },
         orderType,
@@ -227,22 +227,31 @@ export function useCart(options: UseCartOptions = {}): UseCartReturn {
 
   // ── Derived / display values
   const totalsDisplay = useMemo(() => formatCartTotals(rawTotals), [rawTotals]);
-  const subtotalFormatted = useMemo(() => formatCents(rawTotals.subtotalCents), [rawTotals.subtotalCents]);
+  const subtotalFormatted = useMemo(
+    () => formatCents(rawTotals.subtotalCents),
+    [rawTotals.subtotalCents],
+  );
   const totalFormatted = useMemo(() => formatCents(rawTotals.totalCents), [rawTotals.totalCents]);
 
-  const promoMessage = useMemo(() => (promotion ? promoSuccessMessage(promotion) : null), [promotion]);
+  const promoMessage = useMemo(
+    () => (promotion ? promoSuccessMessage(promotion) : null),
+    [promotion],
+  );
 
   const itemsByCategory = useMemo(() => groupCartItemsByCategory(items), [items]);
 
   // ── Query helpers
   const findItem = useCallback(
-    (menuItemId: string, mods: Pick<CartModifier, "id">[]) => findCartItem(items, menuItemId, mods),
+    (menuItemId: string, mods: Pick<CartModifier, 'id'>[]) => findCartItem(items, menuItemId, mods),
     [items],
   );
 
   const isInCart = useCallback((menuItemId: string) => isItemInCart(items, menuItemId), [items]);
 
-  const quantityInCart = useCallback((menuItemId: string) => itemQuantityInCart(items, menuItemId), [items]);
+  const quantityInCart = useCallback(
+    (menuItemId: string) => itemQuantityInCart(items, menuItemId),
+    [items],
+  );
 
   const itemLineBreakdown = useCallback((item: CartItem) => formatLineItemBreakdown(item), []);
 

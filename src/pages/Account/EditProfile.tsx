@@ -1,81 +1,100 @@
-// src/pages/Account/EditProfile.tsx
-import { useEffect, useState, type FormEvent } from 'react'
-import { useUserContext } from '@/contexts/useUserContext'
-import { Button } from '@/components/ui/Button'
-import { Spinner } from '@/components/ui/Spinner'
-import { getMyProfile } from '@/lib/supabase/db/profile.api'
-import type { Profile } from '@/types/profile'
+import { useEffect, useState, type FormEvent } from 'react';
+import { useUserContext } from '@/contexts/useUserContext';
+import { Button } from '@/components/ui/Button';
+import { Spinner } from '@/components/ui/Spinner';
+import { getMyProfile } from '@/lib/supabase/db/profile.api';
+import type { Profile } from '@/types/profile';
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Something went wrong.';
+}
 
 export default function EditProfile() {
-  const { user, updateProfile } = useUserContext()
+  const { user, updateProfile } = useUserContext();
 
-  const userId = user?.id
+  const userId = user?.id;
 
-  const [profile, setProfile] = useState<Profile | null>(null)
-  const [fullName, setFullName] = useState('')
-  const [phone, setPhone] = useState('')
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [saved, setSaved] = useState(false)
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [fullName, setFullName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
 
-  // load profile once
   useEffect(() => {
-    let mounted = true
+    let mounted = true;
 
-    const run = async () => {
-      if (!userId) return
-      setLoading(true)
-      setError(null)
-      setSaved(false)
+    const run = async (): Promise<void> => {
+      if (!userId) {
+        if (mounted) {
+          setLoading(false);
+        }
+        return;
+      }
+
+      setLoading(true);
+      setError(null);
+      setSaved(false);
 
       try {
-        const p = await getMyProfile(userId)
-        if (!mounted) return
-        setProfile(p)
-        setFullName(p.full_name ?? '')
-        setPhone(p.phone ?? '')
-      } catch (e) {
-        if (!mounted) return
-        setError((e as Error).message)
-      } finally {
-        if (mounted) setLoading(false)
-      }
-    }
+        const nextProfile = await getMyProfile(userId);
 
-    run()
+        if (!mounted) {
+          return;
+        }
+
+        setProfile(nextProfile);
+        setFullName(nextProfile.full_name ?? '');
+        setPhone(nextProfile.phone ?? '');
+      } catch (error: unknown) {
+        if (!mounted) {
+          return;
+        }
+
+        setError(getErrorMessage(error));
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void run();
 
     return () => {
-      mounted = false
+      mounted = false;
+    };
+  }, [userId]);
+
+  const onSubmit = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+
+    if (!userId) {
+      return;
     }
-  }, [userId])
 
-  const onSubmit = async (e: FormEvent) => {
-    e.preventDefault()
-    if (!userId) return
-
-    setSaving(true)
-    setError(null)
-    setSaved(false)
+    setSaving(true);
+    setError(null);
+    setSaved(false);
 
     try {
-      // ✅ THIS IS THE MAGIC LINE
       const updated = await updateProfile({
-        full_name: fullName.trim() ? fullName.trim() : null,
-        phone: phone.trim() ? phone.trim() : null,
-      })
+        full_name: fullName.trim().length > 0 ? fullName.trim() : null,
+        phone: phone.trim().length > 0 ? phone.trim() : null,
+      });
 
-      setProfile(updated)
-      setSaved(true)
-    } catch (e) {
-      setError((e as Error).message)
+      setProfile(updated);
+      setSaved(true);
+    } catch (error: unknown) {
+      setError(getErrorMessage(error));
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
-  }
+  };
 
   if (!userId) {
-    return <div className="text-sm text-gray-600">Please sign in to edit your profile.</div>
+    return <div className="text-sm text-gray-600">Please sign in to edit your profile.</div>;
   }
 
   if (loading) {
@@ -83,7 +102,7 @@ export default function EditProfile() {
       <div className="flex min-h-[40vh] items-center justify-center">
         <Spinner />
       </div>
-    )
+    );
   }
 
   return (
@@ -95,27 +114,25 @@ export default function EditProfile() {
         </p>
       </div>
 
-      {error && (
+      {error ? (
         <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           {error}
         </div>
-      )}
+      ) : null}
 
-      {saved && (
+      {saved ? (
         <div className="rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-800">
           Profile updated successfully.
         </div>
-      )}
+      ) : null}
 
-      <form onSubmit={onSubmit} className="space-y-4">
+      <form onSubmit={(event) => void onSubmit(event)} className="space-y-4">
         <div className="grid gap-4 md:grid-cols-2">
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">
-              Full name
-            </label>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Full name</label>
             <input
               value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
+              onChange={(event) => setFullName(event.target.value)}
               className="w-full rounded-xl border border-gray-300 px-4 py-2 outline-none focus:ring-2 focus:ring-primary"
               disabled={saving}
               placeholder="Your name"
@@ -124,12 +141,10 @@ export default function EditProfile() {
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">
-              Phone
-            </label>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Phone</label>
             <input
               value={phone}
-              onChange={(e) => setPhone(e.target.value)}
+              onChange={(event) => setPhone(event.target.value)}
               className="w-full rounded-xl border border-gray-300 px-4 py-2 outline-none focus:ring-2 focus:ring-primary"
               disabled={saving}
               placeholder="(623) 000-0000"
@@ -149,5 +164,5 @@ export default function EditProfile() {
         </Button>
       </form>
     </div>
-  )
+  );
 }

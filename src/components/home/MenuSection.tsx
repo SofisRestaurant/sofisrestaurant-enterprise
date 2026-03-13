@@ -1,6 +1,6 @@
 // src/components/home/MenuSection.tsx
-import { Link } from 'react-router-dom'
-import Button from '@/components/ui/Button'
+import { Link } from 'react-router-dom';
+import Button from '@/components/ui/Button';
 
 export default function MenuSection() {
   const featuredItems = [
@@ -25,13 +25,13 @@ export default function MenuSection() {
       price: 8.99,
       image: null,
     },
-  ]
+  ];
 
   return (
     <section className="py-16 bg-gray-50">
       <div className="container">
         <h2 className="text-3xl font-bold text-center mb-12">Featured Menu Items</h2>
-        
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-8">
           {featuredItems.map((item) => (
             <div key={item.id} className="bg-white rounded-lg shadow-lg overflow-hidden">
@@ -58,5 +58,5 @@ export default function MenuSection() {
         </div>
       </div>
     </section>
-  )
+  );
 }

@@ -106,9 +106,11 @@ export default function AdminMenuEditor() {
     }
   }, []);
 
-  useEffect(() => {
-    fetchItems();
-  }, [fetchItems]);
+useEffect(() => {
+  void fetchItems().catch((error: unknown) => {
+    console.error('Failed to fetch menu items:', error);
+  });
+}, [fetchItems]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Modal helpers
@@ -446,7 +448,7 @@ export default function AdminMenuEditor() {
           <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
             <div className="flex items-center gap-3">
               <h2 className="text-base font-semibold text-gray-900">
-                {isNewItem ? 'New Menu Item' : editingItem!.name}
+                {isNewItem ? 'New Menu Item' : editingItem.name}
               </h2>
               {isDirty && (
                 <span className="text-xs text-amber-600 font-medium px-2 py-0.5 bg-amber-50 rounded-full">

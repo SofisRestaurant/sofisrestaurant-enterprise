@@ -15,13 +15,13 @@
 // =============================================================================
 
 // Default exports (wrap in named re-export for consistent import style)
-export { default as LoginModal }          from './LoginModal'
-export { default as SignupModal }         from './SignupModal'
-export { default as ForgotPasswordModal } from './ForgotPasswordModal'
-export { default as AuthModals }          from './AuthModals'
+export { default as LoginModal } from './LoginModal';
+export { default as SignupModal } from './SignupModal';
+export { default as ForgotPasswordModal } from './ForgotPasswordModal';
+export { default as AuthModals } from './AuthModals';
 
 // Named export
-export { SignupForm } from './SignupForm'
+export { SignupForm } from './SignupForm';
 
 // Type export
-export type { AuthModalKey } from './AuthModals'
+export type { AuthModalKey } from './AuthModals';

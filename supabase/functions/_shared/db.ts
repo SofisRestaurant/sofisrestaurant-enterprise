@@ -4,11 +4,11 @@
 // - Ensures public schema table names are correct at compile-time
 // =============================================================================
 
-import type { SvcClient } from "./supabase.ts";
-import type { Database } from "./database.types.ts";
+import type { SvcClient } from './supabase.ts';
+import type { Database } from './database.types.ts';
 
-type PublicTable = keyof Database["public"]["Tables"];
-type PublicView = keyof Database["public"]["Views"];
+type PublicTable = keyof Database['public']['Tables'];
+type PublicView = keyof Database['public']['Views'];
 
 export function fromPublic<T extends PublicTable>(db: SvcClient, table: T) {
   return db.from(table);

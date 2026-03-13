@@ -36,5 +36,5 @@ export function getRestaurantSchema() {
         closes: '21:00',
       },
     ],
-  }
+  };
 }

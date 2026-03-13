@@ -1,55 +1,120 @@
-// src/services/admin/admin-metrics.service.ts
-// ============================================================================
-// Enterprise-grade admin metrics aggregation (server-driven)
-// ----------------------------------------------------------------------------
-// Upgrade goals (senior-dev hardened):
-// - Keep the entire public API + helper methods (nothing removed)
-// - Prefer Edge Functions as source-of-truth (admin-metrics / admin-gateway)
-// - Defensive parsing (payload drift-safe)
-// - Timeouts, stable errors, and safe fallbacks
-// - Legacy direct-table reads remain as fallback ONLY (temporary safe bridge)
-// ----------------------------------------------------------------------------
-// Notes:
-// - This file intentionally avoids creating new Supabase clients (prevents multiple
-//   GoTrueClient instances + "Cannot redefine property: supabase").
-// - Any view/table not present in generated Database types must NOT be queried
-//   from the browser. Those are routed through Edge Functions instead.
-// ============================================================================
-
-import { supabase } from '@/lib/supabase/supabaseClient'
+import { supabase } from '@/lib/supabase/supabaseClient';
 import type {
   AdminDashboardMetrics,
   RevenueSummary,
   SecurityAlert,
   LoyaltyMetrics,
-} from '@/domain/admin/admin.types'
+} from '@/domain/admin/admin.types';
 
 // ─────────────────────────────────────────────────────────────
 // Internal types / guards
 // ─────────────────────────────────────────────────────────────
 
-type UnknownRecord = Record<string, unknown>
+type UnknownRecord = Record<string, unknown>;
 
-const isRecord = (v: unknown): v is UnknownRecord =>
-  typeof v === 'object' && v !== null && !Array.isArray(v)
-
-function toNum(v: unknown, fallback = 0): number {
-  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN
-  return Number.isFinite(n) ? n : fallback
+interface SectionEnvelope {
+  data?: unknown;
+  error?: unknown;
 }
 
-function toStr(v: unknown, fallback = ''): string {
-  return typeof v === 'string' ? v : fallback
+interface RevenueSummaryRow {
+  total_revenue: number | null;
+  order_count?: number | null;
 }
 
-function nowIso(): string {
-  return new Date().toISOString()
+interface LoyaltyLedgerRow {
+  entry_type: string | null;
+  amount: number | null;
+}
+
+interface MenuInventoryRow {
+  inventory_count: number | null;
+  low_stock_threshold: number | null;
+  available: boolean | null;
+}
+
+interface OrderRevenueRow {
+  amount_subtotal: number | null;
+  amount_tax: number | null;
+  amount_total: number | null;
+}
+
+interface SecurityEventRow {
+  id: string;
+  event_type: string | null;
+  severity: string | null;
+  description: string | null;
+  metadata: UnknownRecord | null;
+  created_at: string | null;
+}
+
+interface FunctionInvokeShape {
+  data: unknown;
+  error: unknown;
+}
+
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isString = (value: unknown): value is string => typeof value === 'string';
+
+function asRecord(value: unknown): UnknownRecord | null {
+  return isRecord(value) ? value : null;
+}
+
+function asSectionEnvelope(value: unknown): SectionEnvelope | null {
+  return isRecord(value) ? value : null;
+}
+
+function asFunctionInvokeShape(value: unknown): FunctionInvokeShape | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  if (!('data' in value) || !('error' in value)) {
+    return null;
+  }
+
+  return {
+    data: value.data,
+    error: value.error,
+  };
+}
+
+function toNum(value: unknown, fallback = 0): number {
+  const parsed =
+    typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
+
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function toStr(value: unknown, fallback = ''): string {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function getRecordNumber(record: UnknownRecord | null, key: string, fallback = 0): number {
+  return record === null ? fallback : toNum(record[key], fallback);
 }
 
 class AdminMetricsServiceError extends Error {
+  public readonly code:
+    | 'UNAUTHORIZED'
+    | 'FORBIDDEN'
+    | 'TIMEOUT'
+    | 'NETWORK'
+    | 'SERVER'
+    | 'INVALID_RESPONSE'
+    | 'FALLBACK_FAILED';
+
+  public readonly cause?: unknown;
+
   constructor(
     message: string,
-    public code:
+    code:
       | 'UNAUTHORIZED'
       | 'FORBIDDEN'
       | 'TIMEOUT'
@@ -57,14 +122,18 @@ class AdminMetricsServiceError extends Error {
       | 'SERVER'
       | 'INVALID_RESPONSE'
       | 'FALLBACK_FAILED' = 'SERVER',
-    public cause?: unknown,
+    cause?: unknown,
   ) {
-    super(message)
-    this.name = 'AdminMetricsServiceError'
+    super(message);
+    this.name = 'AdminMetricsServiceError';
+    this.code = code;
+    this.cause = cause;
   }
 }
 
-function classifyInvokeError(msg: string):
+function classifyInvokeError(
+  message: string,
+):
   | 'UNAUTHORIZED'
   | 'FORBIDDEN'
   | 'TIMEOUT'
@@ -72,518 +141,514 @@ function classifyInvokeError(msg: string):
   | 'SERVER'
   | 'INVALID_RESPONSE'
   | 'FALLBACK_FAILED' {
-  const m = (msg || '').toLowerCase()
+  const normalized = message.toLowerCase();
 
-  if (m.includes('timeout')) return 'TIMEOUT'
-  if (m.includes('unauthorized') || m.includes('jwt') || m.includes('401')) return 'UNAUTHORIZED'
-  if (m.includes('forbidden') || m.includes('permission') || m.includes('insufficient') || m.includes('403'))
-    return 'FORBIDDEN'
-  if (m.includes('network') || m.includes('failed to fetch') || m.includes('fetch'))
-    return 'NETWORK'
-  if (m.includes('invalid') || m.includes('parse')) return 'INVALID_RESPONSE'
-  return 'SERVER'
+  if (normalized.includes('timeout')) {
+    return 'TIMEOUT';
+  }
+
+  if (
+    normalized.includes('unauthorized') ||
+    normalized.includes('jwt') ||
+    normalized.includes('401')
+  ) {
+    return 'UNAUTHORIZED';
+  }
+
+  if (
+    normalized.includes('forbidden') ||
+    normalized.includes('permission') ||
+    normalized.includes('insufficient') ||
+    normalized.includes('403')
+  ) {
+    return 'FORBIDDEN';
+  }
+
+  if (
+    normalized.includes('network') ||
+    normalized.includes('failed to fetch') ||
+    normalized.includes('fetch')
+  ) {
+    return 'NETWORK';
+  }
+
+  if (normalized.includes('invalid') || normalized.includes('parse')) {
+    return 'INVALID_RESPONSE';
+  }
+
+  return 'SERVER';
 }
 
-// Supabase invoke() body types (matches supabase-js FunctionInvokeOptions)
-type InvokeBody =
-  | string
-  | Record<string, any>
-  | File
-  | Blob
-  | ArrayBuffer
-  | FormData
-  | ReadableStream<Uint8Array>
-  | undefined
+function getInvokeErrorMessage(error: unknown, fnName: string): string {
+  const fallback = `Function '${fnName}' failed`;
 
-function coerceInvokeBody(body: unknown): InvokeBody {
-  // supabase-js typing does not allow null → omit body instead
-  if (body === undefined || body === null) return undefined
-  if (typeof body === 'string') return body
+  if (isRecord(error) && typeof error.message === 'string' && error.message.length > 0) {
+    return error.message;
+  }
 
-  // Allow plain JSON objects only (what you actually send)
-  if (isRecord(body)) return body as Record<string, any>
-
-  // If you ever need arrays, wrap: { items: [...] }
-  return undefined
+  return fallback;
 }
 
 async function invokeWithTimeout<T>(
   fnName: string,
-  body: unknown,
+  body: UnknownRecord = {},
   timeoutMs = 12_000,
 ): Promise<T> {
-  let timeoutId: ReturnType<typeof setTimeout> | null = null
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
-  const timeout = new Promise<never>((_, reject) => {
+  const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => {
-      reject(new AdminMetricsServiceError(`Function '${fnName}' timed out`, 'TIMEOUT'))
-    }, timeoutMs)
-  })
+      reject(new AdminMetricsServiceError(`Function '${fnName}' timed out`, 'TIMEOUT'));
+    }, timeoutMs);
+  });
 
-  const work = (async (): Promise<T> => {
+  const workPromise = (async (): Promise<T> => {
     try {
-      const payload = coerceInvokeBody(body)
-
-      const { data, error } = await supabase.functions.invoke(fnName, {
+      const rawResult: unknown = await supabase.functions.invoke(fnName, {
         method: 'POST',
-        ...(payload === undefined ? {} : { body: payload }),
-      })
+        body,
+      });
 
-      if (error) {
-        const msg = error.message || `Function '${fnName}' failed`
-        throw new AdminMetricsServiceError(msg, classifyInvokeError(msg), error)
+      const invokeResult = asFunctionInvokeShape(rawResult);
+
+      if (invokeResult === null) {
+        throw new AdminMetricsServiceError(
+          `Function '${fnName}' returned an invalid response envelope`,
+          'INVALID_RESPONSE',
+        );
       }
 
-      return data as T
-    } catch (e) {
-      if (e instanceof AdminMetricsServiceError) throw e
-      const msg = e instanceof Error ? e.message : String(e)
-      throw new AdminMetricsServiceError(msg || `Function '${fnName}' failed`, classifyInvokeError(msg), e)
-    } finally {
-      if (timeoutId) clearTimeout(timeoutId)
-    }
-  })()
+      const { data, error } = invokeResult;
 
-  return Promise.race([work, timeout])
+      if (error !== null) {
+        const message = getInvokeErrorMessage(error, fnName);
+        throw new AdminMetricsServiceError(message, classifyInvokeError(message), error);
+      }
+
+      return data as T;
+    } catch (error: unknown) {
+      if (error instanceof AdminMetricsServiceError) {
+        throw error;
+      }
+
+      const message = getErrorMessage(error, `Function '${fnName}' failed`);
+      throw new AdminMetricsServiceError(message, classifyInvokeError(message), error);
+    } finally {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+      }
+    }
+  })();
+
+  return Promise.race([workPromise, timeoutPromise]);
 }
 
-/**
- * The Edge Function `admin-metrics` returns sectioned payload:
- * {
- *   meta: {...},
- *   revenue: { data, error, duration_ms } OR revenue: [...],
- *   topItems: { data, error, ... } OR topItems: [...],
- *   loyalty: { data, ... } OR loyalty: {...},
- *   ...
- * }
- *
- * This helper normalizes both variants safely.
- */
-function unwrapSection<T>(section: unknown): { data: T | null; error: string | null } {
-  if (isRecord(section) && ('data' in section || 'error' in section)) {
-    const data = (section as { data?: unknown }).data
-    const error = (section as { error?: unknown }).error
+function unwrapSection(section: unknown): { data: unknown; error: string | null } {
+  const envelope = asSectionEnvelope(section);
+
+  if (envelope !== null && ('data' in envelope || 'error' in envelope)) {
     return {
-      data: (data as T) ?? null,
-      error: typeof error === 'string' ? error : null,
-    }
+      data: envelope.data ?? null,
+      error: isString(envelope.error) ? envelope.error : null,
+    };
   }
 
-  // raw payload: treat undefined as null
-  if (section === undefined) return { data: null, error: null }
-  return { data: section as T, error: null }
+  if (section === undefined) {
+    return { data: null, error: null };
+  }
+
+  return { data: section, error: null };
 }
 
-// ─────────────────────────────────────────────────────────────
-// Service
-// ─────────────────────────────────────────────────────────────
+function toSecurityAlertType(value: unknown): SecurityAlert['type'] {
+  return toStr(value, 'system') as SecurityAlert['type'];
+}
+
+function toSecurityAlertSeverity(value: unknown): SecurityAlert['severity'] {
+  return toStr(value, 'low') as SecurityAlert['severity'];
+}
+
+function toSecurityAlert(record: UnknownRecord): SecurityAlert | null {
+  const id = toStr(record.id);
+
+  if (id.length === 0) {
+    return null;
+  }
+
+  return {
+    id,
+    type: toSecurityAlertType(record.type ?? record.event_type),
+    severity: toSecurityAlertSeverity(record.severity),
+    message: toStr(record.message ?? record.description, 'Security event detected'),
+    metadata: asRecord(record.metadata) ?? {},
+    createdAt: toStr(record.createdAt ?? record.created_at),
+  };
+}
 
 export class AdminMetricsService {
-  /**
-   * Get all dashboard metrics in one call (Edge Function: admin-metrics)
-   * Server is source of truth.
-   */
   static async fetchDashboard(): Promise<AdminDashboardMetrics> {
     try {
-      // ✅ Primary path: single server call
-      const payload = await invokeWithTimeout<unknown>('admin-metrics', {}, 12_000)
+      const payload = await invokeWithTimeout<unknown>('admin-metrics', {}, 12_000);
 
-      // If payload isn't sectioned for any reason, fallback to legacy logic.
       if (!isRecord(payload)) {
-        return await this.fetchDashboardLegacyFallback()
+        return this.fetchDashboardLegacyFallback();
       }
 
-      const rev = unwrapSection<unknown>(payload.revenue)
-      const exec = unwrapSection<unknown>(payload.executive)
-      const loyalty = unwrapSection<unknown>(payload.loyalty)
-      const liability = unwrapSection<unknown>(payload.liability)
-      const risk = unwrapSection<unknown>(payload.risk)
-      const fraud = unwrapSection<unknown>(payload.fraud)
-      const heatmap = unwrapSection<unknown>(payload.heatmap)
-      const topItems = unwrapSection<unknown>(payload.topItems)
+      const executiveSection = unwrapSection(payload.executive);
+      const loyaltySection = unwrapSection(payload.loyalty);
+      const liabilitySection = unwrapSection(payload.liability);
+      const riskSection = unwrapSection(payload.risk);
+      const fraudSection = unwrapSection(payload.fraud);
 
-      // Build a stable output with defensive fallbacks.
-      // If your function later returns revenue day/week, map them here.
-      const todayRevenue = 0
-      const weekRevenue = 0
+      const executiveRow = asRecord(executiveSection.data);
+      const loyaltyRow = asRecord(loyaltySection.data);
+      const liabilityRow = asRecord(liabilitySection.data);
+      const riskRow = asRecord(riskSection.data);
+      const fraudRow = asRecord(fraudSection.data);
 
-      // executive snapshot is typically 30d totals; use it for month-like metrics.
-      const execRow = isRecord(exec.data) ? (exec.data as UnknownRecord) : null
-      const monthRevenueCents = execRow ? toNum(execRow.revenue_total_cents_30d, 0) : 0
-      const monthOrders = execRow ? toNum(execRow.orders_count_30d, 0) : 0
-      const avgOrderValueCents =
-        execRow?.avg_order_value_cents != null
-          ? toNum(execRow.avg_order_value_cents, 0)
-          : monthOrders > 0
-            ? Math.round(monthRevenueCents / monthOrders)
-            : 0
+      const monthRevenue = getRecordNumber(executiveRow, 'revenue_total_cents_30d', 0);
+      const monthOrders = getRecordNumber(executiveRow, 'orders_count_30d', 0);
+      const avgOrderValue = getRecordNumber(
+        executiveRow,
+        'avg_order_value_cents',
+        monthOrders > 0 ? monthRevenue / monthOrders : 0,
+      );
 
-      // loyalty + liability snapshot
-      const loyaltyRow = isRecord(loyalty.data) ? (loyalty.data as UnknownRecord) : null
-      const liabilityRow = isRecord(liability.data) ? (liability.data as UnknownRecord) : null
-      const pointsIssued = loyaltyRow ? toNum(loyaltyRow.points_earned_30d, 0) : 0
-      const pointsRedeemed = loyaltyRow ? toNum(loyaltyRow.points_redeemed_30d, 0) : 0
-      const outstandingLiability = liabilityRow ? toNum(liabilityRow.points_outstanding, 0) : 0
+      const pointsIssued = getRecordNumber(loyaltyRow, 'points_earned_30d', 0);
+      const pointsRedeemed = getRecordNumber(loyaltyRow, 'points_redeemed_30d', 0);
+      const outstandingLiability = getRecordNumber(liabilityRow, 'points_outstanding', 0);
+      const failedPayments = getRecordNumber(riskRow, 'failed_payments', 0);
+      const fraudAlerts = getRecordNumber(fraudRow, 'total_events_24h', 0);
 
-      // risk + fraud snapshots
-      const riskRow = isRecord(risk.data) ? (risk.data as UnknownRecord) : null
-      const fraudRow = isRecord(fraud.data) ? (fraud.data as UnknownRecord) : null
-      const failedPayments = riskRow ? toNum(riskRow.failed_payments, 0) : 0
-      const fraudAlerts = fraudRow ? toNum(fraudRow.total_events_24h, 0) : 0
-      const blockedIPs = 0 // add to function payload later if needed
-
-      // Not included in your admin-metrics function payload (yet) -> safe defaults
-      const pendingOrders = 0
-      const lowStockItems = 0
-      const outOfStockItems = 0
-      const activeCampaigns = 0
-      const abandonedCarts = 0
-      const recoveryRate = 0
-
-      // Return the core metrics object.
-      // We do NOT use @ts-expect-error; we include extra fields via a typed merge.
-      const base: AdminDashboardMetrics = {
-        // Revenue
-        todayRevenue,
-        weekRevenue,
-        monthRevenue: monthRevenueCents,
-        avgOrderValue: avgOrderValueCents,
-
-        // Orders
+      return {
+        todayRevenue: 0,
+        weekRevenue: 0,
+        monthRevenue,
+        avgOrderValue,
         todayOrders: 0,
         weekOrders: 0,
-        pendingOrders,
-
-        // Loyalty
+        pendingOrders: 0,
         pointsIssued,
         pointsRedeemed,
         outstandingLiability,
-
-        // Security
         failedPayments,
         fraudAlerts,
-        blockedIPs,
-
-        // Inventory
-        lowStockItems,
-        outOfStockItems,
-
-        // Marketing
-        activeCampaigns,
-        abandonedCarts,
-        recoveryRate,
-      }
-
-      const extras = {
-        _sections: {
-          revenue: rev,
-          executive: exec,
-          loyalty,
-          liability,
-          risk,
-          fraud,
-          heatmap,
-          topItems,
-        },
-      }
-
-      return Object.assign(base, extras) as AdminDashboardMetrics
-    } catch (error) {
-      // If the function path fails, fall back to legacy reads (temporary).
-      console.error('Error fetching dashboard metrics (function):', error)
-      return await this.fetchDashboardLegacyFallback(error)
+        blockedIPs: 0,
+        lowStockItems: 0,
+        outOfStockItems: 0,
+        activeCampaigns: 0,
+        abandonedCarts: 0,
+        recoveryRate: 0,
+      };
+    } catch (error: unknown) {
+      console.error('Error fetching dashboard metrics (function):', error);
+      return this.fetchDashboardLegacyFallback(error);
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Legacy fallback (keeps old behavior to avoid breaking UI)
-  // ─────────────────────────────────────────────────────────────
-
-  private static async fetchDashboardLegacyFallback(cause?: unknown): Promise<AdminDashboardMetrics> {
+  private static async fetchDashboardLegacyFallback(
+    cause?: unknown,
+  ): Promise<AdminDashboardMetrics> {
     try {
-      // Parallel queries for performance (legacy)
-      const [
-        revenueData,
-        orderData,
-        loyaltyData,
-        securityData,
-        inventoryData,
-        marketingData,
-      ] = await Promise.all([
-        this.getRevenueMetrics(),
-        this.getOrderMetrics(),
-        this.getLoyaltyMetrics(),
-        this.getSecurityMetrics(),
-        this.getInventoryMetrics(),
-        this.getMarketingMetrics(),
-      ])
+      const [revenueData, orderData, loyaltyData, securityData, inventoryData, marketingData] =
+        await Promise.all([
+          this.getRevenueMetrics(),
+          this.getOrderMetrics(),
+          this.getLoyaltyMetrics(),
+          this.getSecurityMetrics(),
+          this.getInventoryMetrics(),
+          this.getMarketingMetrics(),
+        ]);
 
-      const base: AdminDashboardMetrics = {
-        // Revenue
+      return {
         todayRevenue: revenueData.today,
         weekRevenue: revenueData.week,
         monthRevenue: revenueData.month,
         avgOrderValue: revenueData.avgOrderValue,
-
-        // Orders
         todayOrders: orderData.today,
         weekOrders: orderData.week,
         pendingOrders: orderData.pending,
-
-        // Loyalty
         pointsIssued: loyaltyData.issued,
         pointsRedeemed: loyaltyData.redeemed,
         outstandingLiability: loyaltyData.liability,
-
-        // Security
         failedPayments: securityData.failedPayments,
         fraudAlerts: securityData.fraudAlerts,
         blockedIPs: securityData.blockedIPs,
-
-        // Inventory
         lowStockItems: inventoryData.lowStock,
         outOfStockItems: inventoryData.outOfStock,
-
-        // Marketing
         activeCampaigns: marketingData.active,
         abandonedCarts: marketingData.abandoned,
         recoveryRate: marketingData.recoveryRate,
-      }
-
-      const extras = {
-        _fallback: {
-          used: true,
-          at: nowIso(),
-          cause: cause ? String((cause as any)?.message ?? cause) : null,
-        },
-      }
-
-      return Object.assign(base, extras) as AdminDashboardMetrics
-    } catch (e) {
-      console.error('Error fetching dashboard metrics (legacy fallback):', e)
-      throw new AdminMetricsServiceError('Failed to load dashboard metrics', 'FALLBACK_FAILED', e)
+      };
+    } catch (error: unknown) {
+      throw new AdminMetricsServiceError(
+        getErrorMessage(cause ?? error, 'Failed to load dashboard metrics'),
+        'FALLBACK_FAILED',
+        error,
+      );
     }
   }
 
-  /**
-   * Get revenue metrics from materialized view
-   * (Upgraded: fail-open, never crashes UI)
-   */
-  private static async getRevenueMetrics() {
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
+  private static async getRevenueMetrics(): Promise<{
+    today: number;
+    week: number;
+    month: number;
+    avgOrderValue: number;
+  }> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-    const weekAgo = new Date(today)
-    weekAgo.setDate(weekAgo.getDate() - 7)
+    const weekAgo = new Date(today);
+    weekAgo.setDate(weekAgo.getDate() - 7);
 
-    const monthAgo = new Date(today)
-    monthAgo.setMonth(monthAgo.getMonth() - 1)
+    const monthAgo = new Date(today);
+    monthAgo.setMonth(monthAgo.getMonth() - 1);
 
     const { data: todayData, error: todayErr } = await supabase
       .from('revenue_summary')
       .select('total_revenue, order_count')
       .gte('period_start', today.toISOString())
-      .maybeSingle()
+      .maybeSingle<RevenueSummaryRow>();
 
     const { data: weekData, error: weekErr } = await supabase
       .from('revenue_summary')
       .select('total_revenue')
       .gte('period_start', weekAgo.toISOString())
-      .maybeSingle()
+      .maybeSingle<RevenueSummaryRow>();
 
     const { data: monthData, error: monthErr } = await supabase
       .from('revenue_summary')
       .select('total_revenue')
       .gte('period_start', monthAgo.toISOString())
-      .maybeSingle()
+      .maybeSingle<RevenueSummaryRow>();
 
-    if (todayErr) console.warn('[admin-metrics] revenue today error:', todayErr.message)
-    if (weekErr) console.warn('[admin-metrics] revenue week error:', weekErr.message)
-    if (monthErr) console.warn('[admin-metrics] revenue month error:', monthErr.message)
+    if (todayErr !== null) {
+      console.warn('[admin-metrics] revenue today error:', todayErr.message);
+    }
 
-    const totalToday = toNum((todayData as any)?.total_revenue, 0)
-    const orderCount = toNum((todayData as any)?.order_count, 0)
+    if (weekErr !== null) {
+      console.warn('[admin-metrics] revenue week error:', weekErr.message);
+    }
+
+    if (monthErr !== null) {
+      console.warn('[admin-metrics] revenue month error:', monthErr.message);
+    }
+
+    const totalToday = toNum(todayData?.total_revenue, 0);
+    const orderCount = toNum(todayData?.order_count, 0);
 
     return {
       today: totalToday,
-      week: toNum((weekData as any)?.total_revenue, 0),
-      month: toNum((monthData as any)?.total_revenue, 0),
+      week: toNum(weekData?.total_revenue, 0),
+      month: toNum(monthData?.total_revenue, 0),
       avgOrderValue: orderCount > 0 ? totalToday / orderCount : 0,
-    }
+    };
   }
 
-  /**
-   * Get order counts and status
-   */
-  private static async getOrderMetrics() {
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
+  private static async getOrderMetrics(): Promise<{
+    today: number;
+    week: number;
+    pending: number;
+  }> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-    const weekAgo = new Date(today)
-    weekAgo.setDate(weekAgo.getDate() - 7)
+    const weekAgo = new Date(today);
+    weekAgo.setDate(weekAgo.getDate() - 7);
 
     const [todayResult, weekResult, pendingResult] = await Promise.all([
-      supabase.from('orders').select('*', { count: 'exact', head: true }).gte('created_at', today.toISOString()),
-      supabase.from('orders').select('*', { count: 'exact', head: true }).gte('created_at', weekAgo.toISOString()),
-      supabase.from('orders').select('*', { count: 'exact', head: true }).in('status', ['pending', 'confirmed', 'preparing']),
-    ])
+      supabase
+        .from('orders')
+        .select('*', { count: 'exact', head: true })
+        .gte('created_at', today.toISOString()),
+      supabase
+        .from('orders')
+        .select('*', { count: 'exact', head: true })
+        .gte('created_at', weekAgo.toISOString()),
+      supabase
+        .from('orders')
+        .select('*', { count: 'exact', head: true })
+        .in('status', ['pending', 'confirmed', 'preparing']),
+    ]);
 
     return {
-      today: todayResult.count || 0,
-      week: weekResult.count || 0,
-      pending: pendingResult.count || 0,
-    }
+      today: todayResult.count ?? 0,
+      week: weekResult.count ?? 0,
+      pending: pendingResult.count ?? 0,
+    };
   }
 
-  /**
-   * Get loyalty metrics from ledger
-   */
   private static async getLoyaltyMetrics(): Promise<LoyaltyMetrics> {
-    const { data: ledgerData, error } = await supabase
+    const { data, error } = await supabase
       .from('loyalty_ledger')
       .select('entry_type, amount')
       .in('entry_type', ['earned', 'redeemed'])
+      .returns<LoyaltyLedgerRow[]>();
 
-    if (error) {
-      console.warn('[admin-metrics] loyalty_ledger error:', error.message)
-      return { issued: 0, redeemed: 0, liability: 0 }
+    if (error !== null) {
+      console.warn('[admin-metrics] loyalty_ledger error:', error.message);
+      return { issued: 0, redeemed: 0, liability: 0 };
     }
 
-    const issued =
-      ledgerData
-        ?.filter((e: any) => e.entry_type === 'earned')
-        .reduce((sum: number, e: any) => sum + toNum(e.amount, 0), 0) || 0
+    const ledger = data ?? [];
 
-    const redeemed =
-      ledgerData
-        ?.filter((e: any) => e.entry_type === 'redeemed')
-        .reduce((sum: number, e: any) => sum + Math.abs(toNum(e.amount, 0)), 0) || 0
+    const issued = ledger
+      .filter((entry) => entry.entry_type === 'earned')
+      .reduce((sum, entry) => sum + toNum(entry.amount, 0), 0);
+
+    const redeemed = ledger
+      .filter((entry) => entry.entry_type === 'redeemed')
+      .reduce((sum, entry) => sum + Math.abs(toNum(entry.amount, 0)), 0);
 
     return {
       issued,
       redeemed,
       liability: issued - redeemed,
-    }
+    };
   }
 
-  /**
-   * Get security and fraud metrics
-   */
-  private static async getSecurityMetrics() {
-    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  private static async getSecurityMetrics(): Promise<{
+    failedPayments: number;
+    fraudAlerts: number;
+    blockedIPs: number;
+  }> {
+    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
     const [failedPayments, fraudAlerts, blockedIPs] = await Promise.all([
-      supabase.from('orders').select('*', { count: 'exact', head: true }).eq('payment_status', 'failed').gte('created_at', since24h),
-      supabase.from('fraud_logs').select('*', { count: 'exact', head: true }).gte('created_at', since24h),
-      supabase.from('ip_blocks').select('*', { count: 'exact', head: true }).gt('blocked_until', new Date().toISOString()),
-    ])
+      supabase
+        .from('orders')
+        .select('*', { count: 'exact', head: true })
+        .eq('payment_status', 'failed')
+        .gte('created_at', since24h),
+      supabase
+        .from('fraud_logs')
+        .select('*', { count: 'exact', head: true })
+        .gte('created_at', since24h),
+      supabase
+        .from('ip_blocks')
+        .select('*', { count: 'exact', head: true })
+        .gt('blocked_until', new Date().toISOString()),
+    ]);
 
     return {
-      failedPayments: failedPayments.count || 0,
-      fraudAlerts: fraudAlerts.count || 0,
-      blockedIPs: blockedIPs.count || 0,
-    }
+      failedPayments: failedPayments.count ?? 0,
+      fraudAlerts: fraudAlerts.count ?? 0,
+      blockedIPs: blockedIPs.count ?? 0,
+    };
   }
 
-  /**
-   * Get inventory status
-   */
-  private static async getInventoryMetrics() {
-    const { data: items, error } = await supabase
+  private static async getInventoryMetrics(): Promise<{
+    lowStock: number;
+    outOfStock: number;
+  }> {
+    const { data, error } = await supabase
       .from('menu_items')
       .select('inventory_count, low_stock_threshold, available')
+      .returns<MenuInventoryRow[]>();
 
-    if (error) {
-      console.warn('[admin-metrics] menu_items inventory error:', error.message)
-      return { lowStock: 0, outOfStock: 0 }
+    if (error !== null) {
+      console.warn('[admin-metrics] menu_items inventory error:', error.message);
+      return { lowStock: 0, outOfStock: 0 };
     }
 
-    const lowStock =
-      items?.filter((i: any) => {
-        const inv = toNum(i.inventory_count, 0)
-        const thr = toNum(i.low_stock_threshold, 0)
-        return inv > 0 && thr > 0 && inv <= thr
-      }).length || 0
+    const items = data ?? [];
 
-    const outOfStock = items?.filter((i: any) => i.available === false).length || 0
+    const lowStock = items.filter((item) => {
+      const inventoryCount = toNum(item.inventory_count, 0);
+      const lowStockThreshold = toNum(item.low_stock_threshold, 0);
 
-    return { lowStock, outOfStock }
+      return inventoryCount > 0 && lowStockThreshold > 0 && inventoryCount <= lowStockThreshold;
+    }).length;
+
+    const outOfStock = items.filter((item) => item.available === false).length;
+
+    return { lowStock, outOfStock };
   }
 
-  /**
-   * Get marketing metrics
-   *
-   * IMPORTANT:
-   * - If admin_abandoned_cart_metrics is NOT in generated Database types,
-   *   querying it from the browser will fail TS compile.
-   * - Therefore we first try Edge (admin-gateway). If not available, we fail-open to zeros.
-   */
-  private static async getMarketingMetrics() {
-    // Preferred: server-driven gateway action
+  private static async getMarketingMetrics(): Promise<{
+    active: number;
+    abandoned: number;
+    recoveryRate: number;
+  }> {
     try {
-      const data = await invokeWithTimeout<unknown>('admin-gateway', { action: 'marketing_metrics' }, 12_000)
-      if (isRecord(data)) {
+      const data = await invokeWithTimeout<unknown>(
+        'admin-gateway',
+        { action: 'marketing_metrics' },
+        12_000,
+      );
+
+      const record = asRecord(data);
+
+      if (record !== null) {
         return {
-          active: toNum((data as any).activeCampaigns ?? (data as any).active, 0),
-          abandoned: toNum((data as any).abandonedCarts ?? (data as any).abandoned, 0),
-          recoveryRate: toNum((data as any).recoveryRate ?? (data as any).recovery_rate, 0),
-        }
+          active: toNum(record.activeCampaigns ?? record.active, 0),
+          abandoned: toNum(record.abandonedCarts ?? record.abandoned, 0),
+          recoveryRate: toNum(record.recoveryRate ?? record.recovery_rate, 0),
+        };
       }
-    } catch (e) {
-      console.warn('[admin-metrics] marketing_metrics function fallback:', (e as any)?.message ?? e)
+    } catch (error: unknown) {
+      console.warn(
+        '[admin-metrics] marketing_metrics function fallback:',
+        getErrorMessage(error, 'Unknown error'),
+      );
     }
 
-    // Fallback: keep method, but do NOT query unknown views from frontend
-    return { active: 0, abandoned: 0, recoveryRate: 0 }
+    return { active: 0, abandoned: 0, recoveryRate: 0 };
   }
 
-  /**
-   * Get detailed revenue summary for a period
-   */
   static async getRevenueSummary(period: 'day' | 'week' | 'month'): Promise<RevenueSummary> {
-    // Preferred: server-driven gateway action
     try {
-      const data = await invokeWithTimeout<unknown>('admin-gateway', { action: 'revenue_summary', period }, 12_000)
-      if (isRecord(data)) {
+      const data = await invokeWithTimeout<unknown>(
+        'admin-gateway',
+        { action: 'revenue_summary', period },
+        12_000,
+      );
+
+      const record = asRecord(data);
+
+      if (record !== null) {
         return {
           period,
-          totalRevenue: toNum((data as any).totalRevenue, 0),
-          orderCount: toNum((data as any).orderCount, 0),
-          avgOrderValue: toNum((data as any).avgOrderValue, 0),
-          taxCollected: toNum((data as any).taxCollected, 0),
-          grossProfit: toNum((data as any).grossProfit, 0),
-          netProfit: toNum((data as any).netProfit, 0),
-        }
+          totalRevenue: toNum(record.totalRevenue, 0),
+          orderCount: toNum(record.orderCount, 0),
+          avgOrderValue: toNum(record.avgOrderValue, 0),
+          taxCollected: toNum(record.taxCollected, 0),
+          grossProfit: toNum(record.grossProfit, 0),
+          netProfit: toNum(record.netProfit, 0),
+        };
       }
-      // if payload isn't what we expect, fall through to legacy
-    } catch (e) {
-      console.warn('[admin-metrics] revenue_summary function fallback:', (e as any)?.message ?? e)
+    } catch (error: unknown) {
+      console.warn(
+        '[admin-metrics] revenue_summary function fallback:',
+        getErrorMessage(error, 'Unknown error'),
+      );
     }
 
-    // Legacy behavior (kept)
-    const now = new Date()
-    const startDate = new Date()
+    const now = new Date();
+    const startDate = new Date();
 
     switch (period) {
       case 'day':
-        startDate.setHours(0, 0, 0, 0)
-        break
+        startDate.setHours(0, 0, 0, 0);
+        break;
       case 'week':
-        startDate.setDate(now.getDate() - 7)
-        break
+        startDate.setDate(now.getDate() - 7);
+        break;
       case 'month':
-        startDate.setMonth(now.getMonth() - 1)
-        break
+        startDate.setMonth(now.getMonth() - 1);
+        break;
     }
 
-    const { data: orders, error } = await supabase
+    const { data, error } = await supabase
       .from('orders')
       .select('amount_subtotal, amount_tax, amount_total')
       .gte('created_at', startDate.toISOString())
       .eq('payment_status', 'paid')
+      .returns<OrderRevenueRow[]>();
 
-    if (error) {
-      console.warn('[admin-metrics] getRevenueSummary legacy error:', error.message)
+    if (error !== null) {
+      console.warn('[admin-metrics] getRevenueSummary legacy error:', error.message);
+
       return {
         period,
         totalRevenue: 0,
@@ -592,12 +657,13 @@ export class AdminMetricsService {
         taxCollected: 0,
         grossProfit: 0,
         netProfit: 0,
-      }
+      };
     }
 
-    const totalRevenue = orders?.reduce((sum: number, o: any) => sum + toNum(o.amount_total, 0), 0) || 0
-    const taxCollected = orders?.reduce((sum: number, o: any) => sum + toNum(o.amount_tax, 0), 0) || 0
-    const orderCount = orders?.length || 0
+    const orders = data ?? [];
+    const totalRevenue = orders.reduce((sum, order) => sum + toNum(order.amount_total, 0), 0);
+    const taxCollected = orders.reduce((sum, order) => sum + toNum(order.amount_tax, 0), 0);
+    const orderCount = orders.length;
 
     return {
       period,
@@ -605,60 +671,60 @@ export class AdminMetricsService {
       orderCount,
       avgOrderValue: orderCount > 0 ? totalRevenue / orderCount : 0,
       taxCollected,
-      grossProfit: totalRevenue * 0.65, // legacy estimate
-      netProfit: totalRevenue * 0.25, // legacy estimate
-    }
+      grossProfit: totalRevenue * 0.65,
+      netProfit: totalRevenue * 0.25,
+    };
   }
 
-  /**
-   * Get recent security alerts
-   */
   static async getSecurityAlerts(limit = 10): Promise<SecurityAlert[]> {
-    // Preferred: server-driven gateway action
     try {
-      const data = await invokeWithTimeout<unknown>('admin-gateway', { action: 'security_alerts', limit }, 12_000)
-      const raw = isRecord(data) && Array.isArray((data as any).alerts) ? (data as any).alerts : data
+      const data = await invokeWithTimeout<unknown>(
+        'admin-gateway',
+        { action: 'security_alerts', limit },
+        12_000,
+      );
 
-      if (Array.isArray(raw)) {
-        return raw
+      const record = asRecord(data);
+      const rawAlerts = record !== null && Array.isArray(record.alerts) ? record.alerts : data;
+
+      if (Array.isArray(rawAlerts)) {
+        return rawAlerts
           .filter(isRecord)
-          .map((event) => ({
-            id: toStr(event.id),
-            type: (toStr(event.type ?? event.event_type) as SecurityAlert['type']),
-            severity: (toStr(event.severity) as SecurityAlert['severity']),
-            message: toStr(event.message ?? event.description, 'Security event detected'),
-            metadata: (isRecord(event.metadata) ? event.metadata : {}) as Record<string, unknown>,
-            createdAt: toStr(event.createdAt ?? event.created_at),
-          }))
-          .filter((x) => x.id.length > 0)
+          .map(toSecurityAlert)
+          .filter((alert): alert is SecurityAlert => alert !== null);
       }
-    } catch (e) {
-      console.warn('[admin-metrics] security_alerts function fallback:', (e as any)?.message ?? e)
+    } catch (error: unknown) {
+      console.warn(
+        '[admin-metrics] security_alerts function fallback:',
+        getErrorMessage(error, 'Unknown error'),
+      );
     }
 
-    // Legacy behavior (kept)
     const { data, error } = await supabase
       .from('security_events')
       .select('*')
       .order('created_at', { ascending: false })
       .limit(limit)
+      .returns<SecurityEventRow[]>();
 
-    if (error) {
-      console.warn('[admin-metrics] getSecurityAlerts legacy error:', error.message)
-      return []
+    if (error !== null) {
+      console.warn('[admin-metrics] getSecurityAlerts legacy error:', error.message);
+      return [];
     }
 
-    return (
-      data?.map((event: any) => ({
-        id: event.id,
-        type: event.event_type as SecurityAlert['type'],
-        severity: event.severity as SecurityAlert['severity'],
-        message: event.description || 'Security event detected',
-        metadata: event.metadata || {},
-        createdAt: event.created_at,
-      })) || []
-    )
+    return (data ?? [])
+      .map((event) =>
+        toSecurityAlert({
+          id: event.id,
+          event_type: event.event_type,
+          severity: event.severity,
+          description: event.description,
+          metadata: event.metadata,
+          created_at: event.created_at,
+        }),
+      )
+      .filter((alert): alert is SecurityAlert => alert !== null);
   }
 }
 
-export const adminMetricsService = AdminMetricsService
+export const adminMetricsService = AdminMetricsService;

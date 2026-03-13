@@ -1,379 +1,358 @@
-// =============================================================================
-// src/pages/Admin/Marketing/PromoManager.tsx
-// =============================================================================
-// Admin UI for promo codes (2026 hardened)
-// - List promo codes
-// - Activate/Deactivate (privileged mutation via admin-gateway through growth.service)
-// - Display schedule (starts/ends), usage, min order
-//
-// SECURITY + CONTRACT
-// - This page must NOT call supabase.functions.invoke('admin-gateway') directly.
-// - All privileged reads/writes must route through growth.service.ts, which
-//   uses the SINGLE typed gateway client.
-// =============================================================================
-
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ComponentProps } from 'react';
-import { fetchPromoCodes, togglePromoCode } from '@/features/admin/growth/growth.service';
-import type { PromoCode } from '@/features/admin/growth/growth.types';
+import type { ReactElement } from 'react';
+
+import { Panel, KPICard, EmptyState } from '@/features/admin/ui/AdminPrimitives';
+import { callAdminGateway } from '@/features/admin/api/adminGateway.client';
+import { listAdminPromos, formatAdminMarketingError } from '@/modules/admin/api/adminMarketing.api';
+import type { AdminPromo } from '@/modules/admin/types/admin-common.types';
+
+import { buildPromoCsv, downloadCsv } from './promo-manager/promoManager.csv';
 import {
-  Panel,
-  KPICard,
-  SectionHeader,
-  ActionButton,
-  TableWrapper,
-  Th,
-  Td,
-  Badge,
-  EmptyState,
-  HealthBar,
-  SkeletonGrid,
-} from '@/features/admin/ui';
+  buildQuickCounts,
+  buildTotals,
+  enrichPromo,
+  filterAndSortPromos,
+} from './promo-manager/promoManager.derived';
+import { formatMoney } from './promo-manager/promoManager.formatters';
+import {
+  DEFAULT_PROMO_FILTERS,
+  type EnrichedPromo,
+  type Filters,
+} from './promo-manager/promoManager.types';
+import { HeaderButton, SectionHeader } from './promo-manager/promoManager.ui';
+import {
+  INITIAL_PROMO_FORM,
+  type PromoCreateFormState,
+  validatePromoForm,
+  buildCreatePromoPayload,
+} from './promo-manager/promoManager.form';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
+import { FilterBar } from './components/FilterBar';
+import { PromoCard } from './components/PromoCard';
+import { PromoCreateModal } from './components/PromoCreateModal';
+import { PromoDetailPanel } from './components/PromoDetailPanel';
+import { PromoSkeleton } from './components/PromoSkeleton';
+import { PromoTable } from './components/PromoTable';
 
-type BadgeTone = NonNullable<ComponentProps<typeof Badge>['tone']>;
-type HealthVariant = NonNullable<ComponentProps<typeof HealthBar>['variant']>;
-
-function promoTone(type: string): BadgeTone {
-  // Keep tolerant: backend may introduce more promo types over time.
-  if (type === 'percent' || type === 'fixed' || type === 'amount') return 'info';
-  if (type === 'bogo' || type === 'free_item') return 'warning';
-  return 'neutral';
-}
-
-function statusTone(active: boolean): BadgeTone {
-  return active ? 'success' : 'neutral';
-}
-
-function usageVariant(pct: number): HealthVariant {
-  // pct 0–100
-  if (pct >= 90) return 'bad';
-  if (pct >= 70) return 'warn';
-  return 'good';
-}
-
-const fmt$ = (cents: number) =>
-  (cents / 100).toLocaleString('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: 0,
-  });
-
-const fmtDate = (iso: string | null) => {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
-
-function discountLabel(p: PromoCode): string {
-  if (p.type === 'percent') return `${p.value}%`;
-  if (p.type === 'fixed') return fmt$(Math.round(p.value * 100));
-  // Future types (bogo/free_item) show placeholder until UI implements details.
-  return '—';
-}
-
-function isScheduledNow(p: PromoCode, now: number): boolean {
-  const s = p.startsAt ? new Date(p.startsAt).getTime() : null;
-  const e = p.endsAt ? new Date(p.endsAt).getTime() : null;
-  if (s !== null && Number.isFinite(s) && now < s) return false;
-  if (e !== null && Number.isFinite(e) && now > e) return false;
-  return true;
-}
-
-type Filters = {
-  q: string;
-  onlyActive: boolean;
-  type: string;
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Component
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const PromoManager = memo(function PromoManager() {
-  const [promos, setPromos] = useState<PromoCode[]>([]);
+export const PromoManager = memo(function PromoManager(): ReactElement {
+  const [promos, setPromos] = useState<AdminPromo[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-
-  const [filters, setFilters] = useState<Filters>({
-    q: '',
-    onlyActive: false,
-    type: '',
-  });
+  const [selectedPromoId, setSelectedPromoId] = useState<string | null>(null);
+  const [lastCopiedCode, setLastCopiedCode] = useState<string | null>(null);
+  const [filters, setFilters] = useState<Filters>(DEFAULT_PROMO_FILTERS);
+  const [createOpen, setCreateOpen] = useState<boolean>(false);
+  const [createSaving, setCreateSaving] = useState<boolean>(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createForm, setCreateForm] = useState<PromoCreateFormState>(INITIAL_PROMO_FORM);
 
   const errorRef = useRef<HTMLDivElement | null>(null);
+  const announceTimerRef = useRef<number | null>(null);
+
+  const focusError = useCallback((): void => {
+    window.setTimeout(() => {
+      errorRef.current?.focus();
+    }, 50);
+  }, []);
+
+  const announceCopy = useCallback((code: string): void => {
+    setLastCopiedCode(code);
+
+    if (announceTimerRef.current !== null) {
+      window.clearTimeout(announceTimerRef.current);
+    }
+
+    announceTimerRef.current = window.setTimeout(() => {
+      setLastCopiedCode(null);
+      announceTimerRef.current = null;
+    }, 1800);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (announceTimerRef.current !== null) {
+        window.clearTimeout(announceTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleCopyCode = useCallback(
+    async (code: string): Promise<void> => {
+      try {
+        await navigator.clipboard.writeText(code);
+        announceCopy(code);
+      } catch {
+        setError('Unable to copy promo code to clipboard.');
+        focusError();
+      }
+    },
+    [announceCopy, focusError],
+  );
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true);
     setError(null);
 
     try {
-      const data = await fetchPromoCodes();
+      const data = await listAdminPromos();
       setPromos(Array.isArray(data) ? data : []);
-    } catch (e) {
+    } catch (err: unknown) {
       setPromos([]);
-      setError(e instanceof Error ? e.message : 'Failed to load promo codes');
-      // focus the error for screen readers / keyboard users
-      window.setTimeout(() => errorRef.current?.focus(), 0);
+      setError(formatAdminMarketingError(err));
+      focusError();
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [focusError]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const handleToggle = useCallback(async (p: PromoCode): Promise<void> => {
-    const next = !p.active;
-
-    setBusyId(p.id);
-    setError(null);
-
-    // optimistic update
-    setPromos((prev) => prev.map((x) => (x.id === p.id ? { ...x, active: next } : x)));
-
-    try {
-      await togglePromoCode(p.id, next);
-    } catch (e) {
-      // revert
-      setPromos((prev) => prev.map((x) => (x.id === p.id ? { ...x, active: p.active } : x)));
-      setError(e instanceof Error ? e.message : 'Failed to update promo code');
-      window.setTimeout(() => errorRef.current?.focus(), 0);
-    } finally {
-      setBusyId(null);
-    }
+  const openCreateModal = useCallback((): void => {
+    setCreateError(null);
+    setCreateForm(INITIAL_PROMO_FORM);
+    setCreateOpen(true);
   }, []);
 
-  const totals = useMemo(() => {
-    const now = Date.now();
-    const activeCount = promos.filter((p) => p.active).length;
-    const totalUses = promos.reduce((s, p) => s + (p.currentUses ?? 0), 0);
+  const closeCreateModal = useCallback((): void => {
+    if (createSaving) {
+      return;
+    }
 
-    // If your PromoCode model later adds revenueCents, wire it here.
-    const totalRevenueCents = promos.reduce((s, p) => s + (p.revenueCents ?? 0), 0);
+    setCreateOpen(false);
+    setCreateError(null);
+  }, [createSaving]);
 
-    const scheduledAndActive = promos.filter((p) => p.active && isScheduledNow(p, now)).length;
-    const scheduledFuture = promos.filter((p) => {
-      if (!p.startsAt) return false;
-      const t = new Date(p.startsAt).getTime();
-      return Number.isFinite(t) && t > now;
-    }).length;
+  const handleCreateSubmit = useCallback(async (): Promise<void> => {
+    const validationError = validatePromoForm(createForm);
+    if (validationError !== null) {
+      setCreateError(validationError);
+      return;
+    }
 
-    return { totalRevenueCents, activeCount, scheduledAndActive, scheduledFuture, totalUses };
-  }, [promos]);
+    setCreateSaving(true);
+    setCreateError(null);
 
-  const filtered = useMemo(() => {
-    const q = filters.q.trim().toLowerCase();
-    const onlyActive = filters.onlyActive;
-    const type = filters.type.trim().toLowerCase();
+    try {
+      const payload = buildCreatePromoPayload(createForm);
+      await callAdminGateway('promos:create', payload);
+      setCreateOpen(false);
+      setCreateForm(INITIAL_PROMO_FORM);
+      await load();
+    } catch (err: unknown) {
+      setCreateError(formatAdminMarketingError(err));
+    } finally {
+      setCreateSaving(false);
+    }
+  }, [createForm, load]);
 
-    return promos.filter((p) => {
-      if (onlyActive && !p.active) return false;
-      if (type && String(p.type).toLowerCase() !== type) return false;
-      if (!q) return true;
+  const nowMs = Date.now();
 
-      const code = String(p.code ?? '').toLowerCase();
-      const t = String(p.type ?? '').toLowerCase();
-      return code.includes(q) || t.includes(q);
-    });
-  }, [promos, filters]);
+  const enriched = useMemo<EnrichedPromo[]>(() => {
+    return promos.map((promo) => enrichPromo(promo, nowMs));
+  }, [promos, nowMs]);
+
+  const selectedPromo = useMemo<EnrichedPromo | null>(() => {
+    if (selectedPromoId === null) {
+      return null;
+    }
+
+    return enriched.find((promo) => promo.id === selectedPromoId) ?? null;
+  }, [enriched, selectedPromoId]);
+
+  const handleToggle = useCallback(
+    async (promo: EnrichedPromo): Promise<void> => {
+      const nextActive = !promo.isActive;
+      const nextStatus = nextActive ? 'active' : 'inactive';
+
+      setBusyId(promo.id);
+      setError(null);
+
+      setPromos((prev) =>
+        prev.map((entry) => (entry.id === promo.id ? { ...entry, status: nextStatus } : entry)),
+      );
+
+      try {
+        await callAdminGateway('promos:toggle', {
+          id: promo.id,
+          active: nextActive,
+        });
+      } catch (err: unknown) {
+        setPromos((prev) =>
+          prev.map((entry) => (entry.id === promo.id ? { ...entry, status: promo.status } : entry)),
+        );
+        setError(formatAdminMarketingError(err));
+        focusError();
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [focusError],
+  );
+
+  const totals = useMemo(() => buildTotals(enriched), [enriched]);
+  const quickCounts = useMemo(() => buildQuickCounts(enriched), [enriched]);
+
+  const filtered = useMemo<EnrichedPromo[]>(() => {
+    return filterAndSortPromos(enriched, filters);
+  }, [enriched, filters]);
 
   return (
     <div className="space-y-6">
       <SectionHeader
         title="Promo Codes"
-        subtitle="List, schedule visibility, and activate/deactivate — admin-only writes via gateway"
+        subtitle="List, monitor, filter, export, inspect, create, and activate/deactivate promo codes through the admin gateway."
         right={
-          <div className="flex items-center gap-2">
-            <ActionButton
-              size="sm"
+          <div className="flex flex-wrap gap-2">
+            <HeaderButton onClick={openCreateModal} disabled={loading}>
+              Create Promo
+            </HeaderButton>
+
+            <HeaderButton
+              onClick={() => {
+                if (filtered.length === 0) {
+                  return;
+                }
+
+                downloadCsv(
+                  `promo-codes-${new Date().toISOString().slice(0, 10)}.csv`,
+                  buildPromoCsv(filtered),
+                );
+              }}
+              disabled={loading || filtered.length === 0}
+            >
+              Export CSV
+            </HeaderButton>
+
+            <HeaderButton
               onClick={() => {
                 void load();
               }}
               disabled={loading}
             >
-              Refresh
-            </ActionButton>
+              {loading ? 'Refreshing…' : 'Refresh'}
+            </HeaderButton>
           </div>
         }
       />
 
-      {error && (
+      <PromoCreateModal
+        open={createOpen}
+        form={createForm}
+        saving={createSaving}
+        submitError={createError}
+        onClose={closeCreateModal}
+        onChange={setCreateForm}
+        onSubmit={() => {
+          void handleCreateSubmit();
+        }}
+      />
+
+      {error !== null ? (
         <div
           ref={errorRef}
           tabIndex={-1}
           role="alert"
           aria-live="assertive"
-          className="rounded-xl bg-red-500/10 border border-red-500/20 p-4 text-sm text-red-400 outline-none"
+          aria-atomic="true"
+          className="flex items-start justify-between gap-4 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400 outline-none focus-visible:ring-2 focus-visible:ring-red-500/30"
         >
-          {error}
+          <span className="flex-1">{error}</span>
+          <button
+            type="button"
+            onClick={() => {
+              void load();
+            }}
+            className="shrink-0 rounded font-semibold underline underline-offset-2 hover:text-red-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40"
+          >
+            Retry
+          </button>
         </div>
-      )}
+      ) : null}
 
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <KPICard label="Active Codes" value={String(totals.activeCount)} accent="emerald" />
-        <KPICard
-          label="Active (in window)"
-          value={String(totals.scheduledAndActive)}
-          accent="sky"
-        />
-        <KPICard label="Scheduled (future)" value={String(totals.scheduledFuture)} accent="slate" />
-        <KPICard label="Total Uses" value={String(totals.totalUses)} accent="amber" />
-        <KPICard label="Revenue" value={fmt$(totals.totalRevenueCents)} accent="amber" />
+      <div aria-live="polite" className="sr-only">
+        {lastCopiedCode !== null ? `Copied promo code ${lastCopiedCode}` : ''}
       </div>
 
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+        <KPICard label="Active Codes" value={String(totals.activeCount)} accent="emerald" />
+        <KPICard label="Live Now" value={String(totals.liveCount)} accent="sky" />
+        <KPICard label="Scheduled" value={String(totals.scheduledCount)} accent="violet" />
+        <KPICard label="Usage Capped" value={String(totals.cappedCount)} accent="rose" />
+        <KPICard label="Total Uses" value={totals.totalUses.toLocaleString()} accent="amber" />
+        <KPICard label="Revenue" value={formatMoney(totals.totalRevenueCents)} accent="amber" />
+      </div>
+
+      <PromoDetailPanel
+        promo={selectedPromo}
+        onClose={() => setSelectedPromoId(null)}
+        onCopy={(code) => {
+          void handleCopyCode(code);
+        }}
+      />
+
       <Panel noPad>
-        <div className="px-5 py-4 border-b border-zinc-800 space-y-3">
-          <div>
-            <p className="text-sm font-bold text-zinc-200">All Promo Codes</p>
-            <p className="text-xs text-zinc-600 mt-0.5">{filtered.length} records</p>
-          </div>
+        <FilterBar
+          filters={filters}
+          onChange={setFilters}
+          visibleCount={filtered.length}
+          totalCount={enriched.length}
+          quickCounts={quickCounts}
+        />
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-            <input
-              value={filters.q}
-              onChange={(e) => setFilters((p) => ({ ...p, q: e.target.value }))}
-              placeholder="Search code / type…"
-              className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500/50"
+        {loading ? <PromoSkeleton /> : null}
+
+        {!loading && filtered.length === 0 ? (
+          <div className="px-6 py-14">
+            <EmptyState
+              title={enriched.length === 0 ? 'No promo codes found' : 'No codes match your filters'}
+              description={
+                enriched.length === 0
+                  ? 'Promo codes available to your admin account will appear here once the backend returns records.'
+                  : 'Try clearing the search or changing the lifecycle and type filters.'
+              }
+              icon="🏷️"
             />
+          </div>
+        ) : null}
 
-            <input
-              value={filters.type}
-              onChange={(e) => setFilters((p) => ({ ...p, type: e.target.value }))}
-              placeholder="Filter type (percent/fixed)…"
-              className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500/50"
+        {!loading && filtered.length > 0 ? (
+          <>
+            <div className="space-y-3 p-4 sm:hidden">
+              {filtered.map((promo) => (
+                <PromoCard
+                  key={promo.id}
+                  promo={promo}
+                  isBusy={busyId === promo.id}
+                  onToggle={(nextPromo) => {
+                    void handleToggle(nextPromo);
+                  }}
+                  onView={(nextPromo) => setSelectedPromoId(nextPromo.id)}
+                  onCopy={(code) => {
+                    void handleCopyCode(code);
+                  }}
+                />
+              ))}
+            </div>
+
+            <PromoTable
+              promos={filtered}
+              busyId={busyId}
+              onView={(promo) => setSelectedPromoId(promo.id)}
+              onCopy={(code) => {
+                void handleCopyCode(code);
+              }}
+              onToggle={(promo) => {
+                void handleToggle(promo);
+              }}
             />
-
-            <button
-              type="button"
-              onClick={() => setFilters((p) => ({ ...p, onlyActive: !p.onlyActive }))}
-              className={`w-full rounded-xl border px-3 py-2 text-sm font-semibold transition ${
-                filters.onlyActive
-                  ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'
-                  : 'border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900/60'
-              }`}
-            >
-              {filters.onlyActive ? 'Showing active only' : 'Include inactive'}
-            </button>
-          </div>
-        </div>
-
-        {loading ? (
-          <div className="p-5">
-            <SkeletonGrid rows={5} columns={1} />
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="p-8">
-            <EmptyState title="No promo codes" description="No promo codes match your filters." />
-          </div>
-        ) : (
-          <TableWrapper>
-            <thead>
-              <tr>
-                <Th>Code</Th>
-                <Th>Type</Th>
-                <Th>Discount</Th>
-                <Th>Uses</Th>
-                <Th>Usage</Th>
-                <Th>Min Order</Th>
-                <Th>Starts</Th>
-                <Th>Ends</Th>
-                <Th>Status</Th>
-                <Th>Action</Th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {filtered.map((p) => {
-                const used = p.currentUses ?? 0;
-                const max = p.maxUses;
-                const usageRate = max ? clamp((used / Math.max(1, max)) * 100, 0, 100) : null;
-                const isBusy = busyId === p.id;
-
-                const now = Date.now();
-                const inWindow = isScheduledNow(p, now);
-                const scheduledBadge =
-                  p.startsAt || p.endsAt
-                    ? inWindow
-                      ? { tone: 'success' as const, label: 'In window' }
-                      : { tone: 'warning' as const, label: 'Out of window' }
-                    : null;
-
-                return (
-                  <tr key={p.id} className="hover:bg-zinc-800/30 transition-colors">
-                    <Td>
-                      <div className="flex flex-col gap-1">
-                        <span className="font-mono font-bold text-amber-400">{p.code}</span>
-                        {scheduledBadge ? (
-                          <span className="inline-flex">
-                            <Badge tone={scheduledBadge.tone}>{scheduledBadge.label}</Badge>
-                          </span>
-                        ) : null}
-                      </div>
-                    </Td>
-
-                    <Td>
-                      <Badge tone={promoTone(String(p.type))}>{String(p.type)}</Badge>
-                    </Td>
-
-                    <Td className="font-mono text-xs text-zinc-300">{discountLabel(p)}</Td>
-
-                    <Td className="font-mono text-xs text-zinc-400">
-                      {used.toLocaleString()}
-                      {max !== null && (
-                        <span className="text-zinc-600"> / {max.toLocaleString()}</span>
-                      )}
-                    </Td>
-
-                    <Td>
-                      {usageRate !== null ? (
-                        <HealthBar
-                          label="Usage"
-                          value={usageRate}
-                          variant={usageVariant(usageRate)}
-                        />
-                      ) : (
-                        <span className="text-zinc-600 text-xs">Unlimited</span>
-                      )}
-                    </Td>
-
-                    <Td className="font-mono text-xs text-zinc-400">
-                      {fmt$(p.minOrderCents ?? 0)}
-                    </Td>
-                    <Td className="font-mono text-xs text-zinc-500">{fmtDate(p.startsAt)}</Td>
-                    <Td className="font-mono text-xs text-zinc-500">{fmtDate(p.endsAt)}</Td>
-
-                    <Td>
-                      <Badge tone={statusTone(p.active)}>{p.active ? 'Active' : 'Inactive'}</Badge>
-                    </Td>
-
-                    <Td>
-                      <ActionButton
-                        size="sm"
-                        disabled={isBusy}
-                        onClick={() => {
-                          void handleToggle(p);
-                        }}
-                        aria-label={p.active ? `Deactivate ${p.code}` : `Activate ${p.code}`}
-                      >
-                        {isBusy ? 'Saving…' : p.active ? 'Deactivate' : 'Activate'}
-                      </ActionButton>
-                    </Td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </TableWrapper>
-        )}
+          </>
+        ) : null}
       </Panel>
     </div>
   );
 });
+
+export default PromoManager;

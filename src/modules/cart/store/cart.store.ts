@@ -1,5 +1,5 @@
 // =============================================================================
-// src/features/cart/cart.store.ts
+// src/modules/cart/store/cart.store.ts
 // Cart store — Zustand + persist middleware (production-ready, type-safe)
 // Security upgrades:
 //  - Enforces UUID sessionId via requireSessionId() (safe wrapper prevents UI crashes)
@@ -9,77 +9,104 @@
 //  - Defensive recompute of totals + line totals (never trust stored totals)
 // =============================================================================
 
-import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { create } from 'zustand';
+import { createJSONStorage, persist } from 'zustand/middleware';
 
-import { supabase } from "@/lib/supabase/supabaseClient";
-import type { Database, Json } from "@/types/supabase";
-import { requireSessionId } from "@/security/auth/sessionId";
+import { supabase } from '@/lib/supabase/supabaseClient';
+import { requireSessionId } from '@/security/auth/sessionId';
+import type { Database, Json } from '@/types/supabase';
 
 import {
+  cartItemKey,
+  computeCartTotals,
+  computeLineTotalCents,
+  type CartCredit,
   type CartItem,
   type CartPromotion,
-  type CartCredit,
   type CartState,
   type CartTotals,
   type PromoValidationResult,
   type PromotionRow,
-  cartItemKey,
-  computeLineTotalCents,
-  computeCartTotals,
-} from "../types/cart.types";
+} from '../types/cart.types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-const TAX_RATE = 0.0825;
-const PERSIST_KEY = "sofis-cart-v1";
-const SYNC_DEBOUNCE = 600; // ms
-const PENDING_CART_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Typed Supabase client
-// ─────────────────────────────────────────────────────────────────────────────
-
-const sb = supabase as unknown as SupabaseClient<Database>;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Runtime helpers (no `any`, no unsafe member access)
-// ─────────────────────────────────────────────────────────────────────────────
+const TAX_RATE = 0.095;
+const PERSIST_KEY = 'sofis-cart-v1';
+const SYNC_DEBOUNCE = 600;
+const PENDING_CART_TTL_MS = 2 * 60 * 60 * 1000;
+const DEFAULT_CURRENCY = 'USD';
+const MAX_ITEM_QUANTITY = 20;
+const MAX_NOTES_LENGTH = 1200;
 
 type UnknownRecord = Record<string, unknown>;
+type PendingCartInsert = Database['public']['Tables']['pending_carts']['Insert'];
+type AbandonedCartSessionInsert =
+  Database['public']['Tables']['abandoned_cart_sessions']['Insert'];
 
-function isRecord(v: unknown): v is UnknownRecord {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+// ─────────────────────────────────────────────────────────────────────────────
+// Runtime helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function str(v: unknown, fallback = ""): string {
-  return typeof v === "string" ? v : fallback;
+function str(value: unknown, fallback = ''): string {
+  return typeof value === 'string' ? value : fallback;
 }
 
-function nullableStr(v: unknown): string | null {
-  return typeof v === "string" ? v : null;
+function nullableStr(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
 }
 
-function num(v: unknown, fallback = 0): number {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string") {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : fallback;
+function num(value: unknown, fallback = 0): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
   }
+
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
   return fallback;
 }
 
-function dateMs(v: unknown): number | null {
-  if (typeof v !== "string") return null;
-  const t = new Date(v).getTime();
-  return Number.isFinite(t) ? t : null;
+function dateMs(value: unknown): number | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
-function normalizePromoType(v: unknown): CartPromotion["type"] | null {
-  return v === "percent" || v === "fixed" ? v : null;
+function normalizePromoType(value: unknown): CartPromotion['type'] | null {
+  return value === 'percent' || value === 'fixed' ? value : null;
+}
+
+function coerceCurrencyCode(value: unknown): string {
+  if (typeof value !== 'string') {
+    return DEFAULT_CURRENCY;
+  }
+
+  const normalized = value.trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(normalized) ? normalized : DEFAULT_CURRENCY;
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function computeItemCount(items: readonly CartItem[]): number {
+  return items.reduce((count, item) => count + Math.max(0, Math.trunc(item.quantity)), 0);
+}
+
+function clampQuantity(quantity: number): number {
+  return Math.min(MAX_ITEM_QUANTITY, Math.max(1, Math.trunc(quantity)));
 }
 
 // Never allow sessionId exceptions to crash the UI.
@@ -88,18 +115,103 @@ function safeSessionId(sessionId: string): string | null {
   try {
     return requireSessionId(sessionId);
   } catch {
-    console.warn("[cart.store] invalid sessionId; skipping remote sync");
+    console.warn('[cart.store] invalid sessionId; skipping remote sync');
     return null;
   }
 }
 
-// Fire-and-forget helper (never blocks UI; never throws)
 function fireAndForget(task: () => Promise<unknown>): void {
   void task().catch(() => {});
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Promotion builder (defensive)
+// JSON serialization helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function serializeCartModifier(modifier: CartItem['modifiers'][number]): Json {
+  return {
+    id: modifier.id,
+    groupId: modifier.groupId,
+    name: modifier.name,
+    priceAdjustment: modifier.priceAdjustment,
+  };
+}
+
+function serializeCartItem(item: CartItem): Json {
+  return {
+    menuItemId: item.menuItemId,
+    name: item.name,
+    unitPriceCents: item.unitPriceCents,
+    quantity: item.quantity,
+    imageUrl: item.imageUrl,
+    category: item.category,
+    notes: item.notes,
+    lineTotalCents: item.lineTotalCents,
+    modifiers: item.modifiers.map(serializeCartModifier),
+  };
+}
+
+function serializeCartItems(items: readonly CartItem[]): Json {
+  return items.map(serializeCartItem);
+}
+
+function buildPricingSnapshot(
+  items: readonly CartItem[],
+  promotion: CartPromotion | null,
+  credit: CartCredit | null,
+  totals: CartTotals,
+  currency: string,
+): Json {
+  return {
+    taxRate: TAX_RATE,
+    currency,
+    itemCount: computeItemCount(items),
+    promotion:
+      promotion === null
+        ? null
+        : {
+            id: promotion.id,
+            code: promotion.code,
+            type: promotion.type,
+            value: promotion.value,
+            minOrderCents: promotion.minOrderCents,
+            expiresAt: promotion.expiresAt,
+            discountCents: promotion.discountCents,
+          },
+    credit:
+      credit === null
+        ? null
+        : {
+            id: credit.id,
+            amountCents: credit.amountCents,
+            source: credit.source,
+            expiresAt: credit.expiresAt,
+          },
+    totals: {
+      subtotalCents: totals.subtotalCents,
+      discountCents: totals.discountCents,
+      creditCents: totals.creditCents,
+      taxCents: totals.taxCents,
+      totalCents: totals.totalCents,
+    },
+    items: items.map((item) => ({
+      menuItemId: item.menuItemId,
+      name: item.name,
+      quantity: item.quantity,
+      unitPriceCents: item.unitPriceCents,
+      lineTotalCents: item.lineTotalCents,
+      modifiers: item.modifiers.map((modifier) => ({
+        id: modifier.id,
+        groupId: modifier.groupId,
+        name: modifier.name,
+        priceAdjustment: modifier.priceAdjustment,
+      })),
+    })),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Promotion builder
 // ─────────────────────────────────────────────────────────────────────────────
 
 function buildCartPromotionFromRow(
@@ -110,13 +222,16 @@ function buildCartPromotionFromRow(
   const id = str(row.id).trim();
   const code = str(row.code).trim();
   const type = normalizePromoType(row.type);
-  if (!id || !code || !type) throw new Error("Invalid promo configuration");
+
+  if (!id || !code || !type) {
+    throw new Error('Invalid promo configuration');
+  }
 
   const value = num(row.value, 0);
   const minOrderCents = num(row.min_order_cents, 0);
 
   const discountCents =
-    type === "percent"
+    type === 'percent'
       ? Math.min(subtotalCents, Math.round(subtotalCents * (value / 100)))
       : Math.min(subtotalCents, Math.round(value));
 
@@ -132,44 +247,57 @@ function buildCartPromotionFromRow(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Pending carts JSON parsing (avoid unsafe casts from Json)
+// Pending carts JSON parsing
 // ─────────────────────────────────────────────────────────────────────────────
 
-function isCartModifierLike(v: unknown): v is CartItem["modifiers"][number] {
-  if (!isRecord(v)) return false;
+function isCartModifierLike(value: unknown): value is CartItem['modifiers'][number] {
+  if (!isRecord(value)) {
+    return false;
+  }
+
   return (
-    typeof v.id === "string" &&
-    typeof v.groupId === "string" &&
-    typeof v.name === "string" &&
-    typeof v.priceAdjustment === "number"
+    typeof value.id === 'string' &&
+    typeof value.groupId === 'string' &&
+    typeof value.name === 'string' &&
+    typeof value.priceAdjustment === 'number'
   );
 }
 
-function isCartItemLike(v: unknown): v is CartItem {
-  if (!isRecord(v)) return false;
+function isCartItemLike(value: unknown): value is CartItem {
+  if (!isRecord(value)) {
+    return false;
+  }
 
-  const mods = v.modifiers;
+  const modifiers = value.modifiers;
+
   return (
-    typeof v.menuItemId === "string" &&
-    typeof v.name === "string" &&
-    typeof v.unitPriceCents === "number" &&
-    typeof v.quantity === "number" &&
-    (v.imageUrl === null || typeof v.imageUrl === "string") &&
-    typeof v.category === "string" &&
-    (v.notes === null || typeof v.notes === "string") &&
-    typeof v.lineTotalCents === "number" &&
-    Array.isArray(mods) &&
-    mods.every(isCartModifierLike)
+    typeof value.menuItemId === 'string' &&
+    typeof value.name === 'string' &&
+    typeof value.unitPriceCents === 'number' &&
+    typeof value.quantity === 'number' &&
+    (value.imageUrl === null || typeof value.imageUrl === 'string') &&
+    typeof value.category === 'string' &&
+    (value.notes === null || typeof value.notes === 'string') &&
+    typeof value.lineTotalCents === 'number' &&
+    Array.isArray(modifiers) &&
+    modifiers.every(isCartModifierLike)
   );
 }
 
 function parseCartItemsFromJson(raw: unknown): CartItem[] {
-  if (!Array.isArray(raw)) return [];
-  const out: CartItem[] = [];
-  for (const it of raw) {
-    if (isCartItemLike(it)) out.push(it);
+  if (!Array.isArray(raw)) {
+    return [];
   }
-  return out;
+
+  const items: CartItem[] = [];
+
+  for (const item of raw) {
+    if (isCartItemLike(item)) {
+      items.push(item);
+    }
+  }
+
+  return items;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -180,7 +308,7 @@ export interface CartStore extends CartState {
   itemCount: number;
   isEmpty: boolean;
 
-  addItem: (item: Omit<CartItem, "lineTotalCents">) => void;
+  addItem: (item: Omit<CartItem, 'lineTotalCents'>) => void;
   removeItem: (menuItemId: string, itemKey: string) => void;
   updateQuantity: (menuItemId: string, itemKey: string, quantity: number) => void;
   updateNotes: (menuItemId: string, itemKey: string, notes: string) => void;
@@ -194,7 +322,6 @@ export interface CartStore extends CartState {
 
   hydrateFromSupabase: (userId: string) => Promise<void>;
 
-  // IMPORTANT: caller must pass the session UUID (from JWT payload session_id)
   syncToSupabase: (userId: string, sessionId: string) => void;
   clearSupabaseCart: (sessionId: string) => Promise<void>;
 }
@@ -219,11 +346,30 @@ const INITIAL_STATE: CartState = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Totals helper
+// Totals / state helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function recompute(items: CartItem[], promotion: CartPromotion | null, credit: CartCredit | null): CartTotals {
+function recompute(
+  items: CartItem[],
+  promotion: CartPromotion | null,
+  credit: CartCredit | null,
+): CartTotals {
   return computeCartTotals(items, promotion, credit, TAX_RATE);
+}
+
+function buildDerivedState(
+  items: CartItem[],
+  promotion: CartPromotion | null,
+  credit: CartCredit | null,
+): Pick<CartStore, 'items' | 'promotion' | 'credit' | 'totals' | 'itemCount' | 'isEmpty'> {
+  return {
+    items,
+    promotion,
+    credit,
+    totals: recompute(items, promotion, credit),
+    itemCount: computeItemCount(items),
+    isEmpty: items.length === 0,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -232,64 +378,91 @@ function recompute(items: CartItem[], promotion: CartPromotion | null, credit: C
 
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 
-function scheduleSyncToSupabase(userId: string, sessionId: string, getState: () => CartStore) {
+function scheduleSyncToSupabase(
+  userId: string,
+  sessionId: string,
+  getState: () => CartStore,
+): void {
   const sid = safeSessionId(sessionId);
-  if (!sid) return;
-
-  if (syncTimer) clearTimeout(syncTimer);
-  syncTimer = setTimeout(() => {
-    void flushSyncToSupabase(userId, sid, getState());
-  }, SYNC_DEBOUNCE);
-}
-
-async function flushSyncToSupabase(userId: string, sessionId: string, state: CartStore) {
-  const sid = safeSessionId(sessionId);
-  if (!sid) return;
-
-  const { items, promotion, credit, totals } = state;
-
-  // If cart empty: delete pending cart record (best-effort)
-  if (items.length === 0) {
-    const del = await sb.from("pending_carts").delete().eq("id", sid);
-    if (del.error) console.warn("[cart.store] pending_carts delete failed:", del.error.message);
+  if (!sid) {
     return;
   }
 
-  // Upsert pending cart (recovery)
-  const { error } = await sb
-    .from("pending_carts")
-    .upsert(
-      {
-        id: sid,
-        user_id: userId,
-        items: items as unknown as Json,
-        subtotal_cents: totals.subtotalCents,
-        discount_cents: totals.discountCents,
-        tax_cents: totals.taxCents,
-        total_cents: totals.totalCents,
-        promo_id: promotion?.id ?? null,
-        credit_id: credit?.id ?? null,
-        expires_at: new Date(Date.now() + PENDING_CART_TTL_MS).toISOString(),
-      },
-      { onConflict: "id" },
-    );
-
-  if (error) {
-    console.error("[cart.store] pending_carts upsert failed:", error.message);
+  if (syncTimer !== null) {
+    clearTimeout(syncTimer);
   }
 
-  // Fire-and-forget abandoned cart tracking (best-effort)
+  syncTimer = setTimeout(() => {
+    void flushSyncToSupabase(userId, sid, getState);
+  }, SYNC_DEBOUNCE);
+}
+
+async function flushSyncToSupabase(
+  userId: string,
+  sessionId: string,
+  getState: () => CartStore,
+): Promise<void> {
+  const sid = safeSessionId(sessionId);
+  if (!sid) {
+    return;
+  }
+
+  const { items, promotion, credit, totals } = getState();
+
+  if (items.length === 0) {
+    const deleteResult = await supabase.from('pending_carts').delete().eq('id', sid);
+
+    if (deleteResult.error) {
+      console.warn('[cart.store] pending_carts delete failed:', deleteResult.error.message);
+    }
+
+    return;
+  }
+
+  const currency = coerceCurrencyCode(DEFAULT_CURRENCY);
+
+  const pendingCartPayload: PendingCartInsert = {
+    id: sid,
+    user_id: userId,
+    currency,
+    items: serializeCartItems(items),
+    pricing_snapshot: buildPricingSnapshot(items, promotion, credit, totals, currency),
+    subtotal_cents: totals.subtotalCents,
+    discount_cents: totals.discountCents,
+    tax_cents: totals.taxCents,
+    total_cents: totals.totalCents,
+    promo_id: promotion?.id ?? null,
+    credit_id: credit?.id ?? null,
+    expires_at: new Date(Date.now() + PENDING_CART_TTL_MS).toISOString(),
+  };
+
+  const upsertResult = await supabase
+    .from('pending_carts')
+    .upsert(pendingCartPayload, { onConflict: 'id' });
+
+  if (upsertResult.error) {
+    console.error('[cart.store] pending_carts upsert failed:', upsertResult.error.message);
+  }
+
   fireAndForget(async () => {
-    await sb.from("abandoned_cart_sessions").upsert(
-      {
-        id: sid,
-        user_id: userId,
-        cart_value_cents: totals.subtotalCents,
-        last_activity: new Date().toISOString(),
-        recovered: false,
-      },
-      { onConflict: "id" },
-    );
+    const abandonedPayload: AbandonedCartSessionInsert = {
+      id: sid,
+      user_id: userId,
+      cart_value_cents: totals.subtotalCents,
+      last_activity: nowIso(),
+      recovered: false,
+    };
+
+    const abandonedResult = await supabase
+      .from('abandoned_cart_sessions')
+      .upsert(abandonedPayload, { onConflict: 'id' });
+
+    if (abandonedResult.error) {
+      console.warn(
+        '[cart.store] abandoned_cart_sessions upsert failed:',
+        abandonedResult.error.message,
+      );
+    }
   });
 }
 
@@ -307,93 +480,119 @@ export const useCartStore = create<CartStore>()(
       addItem: (item) => {
         const key = cartItemKey(item.menuItemId, item.modifiers);
 
-        set((s) => {
-          const existing = s.items.find((i) => cartItemKey(i.menuItemId, i.modifiers) === key);
+        set((state) => {
+          const existing = state.items.find(
+            (entry) => cartItemKey(entry.menuItemId, entry.modifiers) === key,
+          );
 
           let nextItems: CartItem[];
 
           if (existing) {
-            nextItems = s.items.map((i) => {
-              if (cartItemKey(i.menuItemId, i.modifiers) !== key) return i;
-              const quantity = Math.min(20, Math.max(1, i.quantity + item.quantity));
-              const lineTotalCents = computeLineTotalCents({ ...i, quantity });
-              return { ...i, quantity, lineTotalCents };
+            nextItems = state.items.map((entry) => {
+              if (cartItemKey(entry.menuItemId, entry.modifiers) !== key) {
+                return entry;
+              }
+
+              const quantity = clampQuantity(entry.quantity + item.quantity);
+              return {
+                ...entry,
+                quantity,
+                lineTotalCents: computeLineTotalCents({
+                  ...entry,
+                  quantity,
+                }),
+              };
             });
           } else {
-            const quantity = Math.min(20, Math.max(1, item.quantity));
-            const lineTotalCents = computeLineTotalCents({ ...item, quantity });
-            nextItems = [...s.items, { ...item, quantity, lineTotalCents }];
+            const quantity = clampQuantity(item.quantity);
+
+            nextItems = [
+              ...state.items,
+              {
+                ...item,
+                quantity,
+                lineTotalCents: computeLineTotalCents({
+                  ...item,
+                  quantity,
+                }),
+              },
+            ];
           }
 
-          const totals = recompute(nextItems, s.promotion, s.credit);
-
           return {
-            items: nextItems,
-            totals,
-            itemCount: nextItems.reduce((n, i) => n + i.quantity, 0),
-            isEmpty: nextItems.length === 0,
+            ...buildDerivedState(nextItems, state.promotion, state.credit),
           };
         });
       },
 
       removeItem: (menuItemId, itemKey) => {
-        set((s) => {
-          const nextItems = s.items.filter((i) => {
-            const k = cartItemKey(i.menuItemId, i.modifiers);
-            if (i.menuItemId !== menuItemId) return true;
-            return k !== itemKey;
+        set((state) => {
+          const nextItems = state.items.filter((entry) => {
+            if (entry.menuItemId !== menuItemId) {
+              return true;
+            }
+
+            return cartItemKey(entry.menuItemId, entry.modifiers) !== itemKey;
           });
 
-          const promotion = nextItems.length > 0 ? s.promotion : null;
-          const credit = nextItems.length > 0 ? s.credit : null;
-          const totals = recompute(nextItems, promotion, credit);
+          const nextPromotion = nextItems.length > 0 ? state.promotion : null;
+          const nextCredit = nextItems.length > 0 ? state.credit : null;
 
           return {
-            items: nextItems,
-            promotion,
-            credit,
-            totals,
-            itemCount: nextItems.reduce((n, i) => n + i.quantity, 0),
-            isEmpty: nextItems.length === 0,
+            ...buildDerivedState(nextItems, nextPromotion, nextCredit),
           };
         });
       },
 
       updateQuantity: (menuItemId, itemKey, quantity) => {
-        const q = Math.trunc(quantity);
-        if (q <= 0) {
+        const normalizedQuantity = Math.trunc(quantity);
+
+        if (normalizedQuantity <= 0) {
           get().removeItem(menuItemId, itemKey);
           return;
         }
 
-        const clamped = Math.min(20, Math.max(1, q));
+        const clampedQuantity = clampQuantity(normalizedQuantity);
 
-        set((s) => {
-          const nextItems = s.items.map((i) => {
-            const k = cartItemKey(i.menuItemId, i.modifiers);
-            if (!(i.menuItemId === menuItemId && k === itemKey)) return i;
-            const lineTotalCents = computeLineTotalCents({ ...i, quantity: clamped });
-            return { ...i, quantity: clamped, lineTotalCents };
+        set((state) => {
+          const nextItems = state.items.map((entry) => {
+            const key = cartItemKey(entry.menuItemId, entry.modifiers);
+
+            if (!(entry.menuItemId === menuItemId && key === itemKey)) {
+              return entry;
+            }
+
+            return {
+              ...entry,
+              quantity: clampedQuantity,
+              lineTotalCents: computeLineTotalCents({
+                ...entry,
+                quantity: clampedQuantity,
+              }),
+            };
           });
 
-          const totals = recompute(nextItems, s.promotion, s.credit);
-
           return {
-            items: nextItems,
-            totals,
-            itemCount: nextItems.reduce((n, i) => n + i.quantity, 0),
-            isEmpty: nextItems.length === 0,
+            ...buildDerivedState(nextItems, state.promotion, state.credit),
           };
         });
       },
 
       updateNotes: (menuItemId, itemKey, notes) => {
-        const safeNotes = String(notes ?? "").slice(0, 1200);
-        set((s) => ({
-          items: s.items.map((i) => {
-            const k = cartItemKey(i.menuItemId, i.modifiers);
-            if (!(i.menuItemId === menuItemId && k === itemKey)) return i;
-            return { ...i, notes: safeNotes };
+        const safeNotes = String(notes ?? '').slice(0, MAX_NOTES_LENGTH);
+
+        set((state) => ({
+          items: state.items.map((entry) => {
+            const key = cartItemKey(entry.menuItemId, entry.modifiers);
+
+            if (!(entry.menuItemId === menuItemId && key === itemKey)) {
+              return entry;
+            }
+
+            return {
+              ...entry,
+              notes: safeNotes,
+            };
           }),
         }));
       },
@@ -407,239 +606,279 @@ export const useCartStore = create<CartStore>()(
       },
 
       applyPromoCode: async (code, userId) => {
-        const { items, promotion: existingPromo } = get();
+        const { items, promotion: existingPromotion } = get();
 
-        const normalized = code.trim();
-        if (!normalized) return { valid: false, error: "NOT_FOUND" };
-
-        if (existingPromo?.code.toLowerCase() === normalized.toLowerCase()) {
-          return { valid: false, error: "ALREADY_APPLIED" };
+        const normalizedCode = code.trim();
+        if (normalizedCode.length === 0) {
+          return { valid: false, error: 'NOT_FOUND' };
         }
 
-        // UI pre-check only; server is authority in create-checkout
-        const promoRes = await sb
-          .from("promotions")
+        if (existingPromotion?.code.toLowerCase() === normalizedCode.toLowerCase()) {
+          return { valid: false, error: 'ALREADY_APPLIED' };
+        }
+
+        const promotionResult = await supabase
+          .from('promotions')
           .select(
-            "id, code, type, value, active, min_order_cents, max_uses, current_uses, per_user_limit, starts_at, ends_at, expires_at",
+            'id, code, type, value, active, min_order_cents, max_uses, current_uses, per_user_limit, starts_at, ends_at, expires_at',
           )
-          .eq("code", normalized)
+          .eq('code', normalizedCode)
           .limit(1)
           .returns<PromotionRow[]>();
 
-        if (promoRes.error) return { valid: false, error: "NOT_FOUND" };
+        if (promotionResult.error) {
+          return { valid: false, error: 'NOT_FOUND' };
+        }
 
-        const promo = promoRes.data?.[0];
-        if (!promo) return { valid: false, error: "NOT_FOUND" };
-        if (promo.active !== true) return { valid: false, error: "INACTIVE" };
+        const promotionRow = promotionResult.data?.[0];
+        if (!promotionRow) {
+          return { valid: false, error: 'NOT_FOUND' };
+        }
+
+        if (promotionRow.active !== true) {
+          return { valid: false, error: 'INACTIVE' };
+        }
 
         const now = Date.now();
-        const startsAtMs = dateMs(promo.starts_at);
-        if (startsAtMs !== null && startsAtMs > now) return { valid: false, error: "INACTIVE" };
 
-        const expiry = nullableStr(promo.expires_at) ?? nullableStr(promo.ends_at);
+        const startsAtMs = dateMs(promotionRow.starts_at);
+        if (startsAtMs !== null && startsAtMs > now) {
+          return { valid: false, error: 'INACTIVE' };
+        }
+
+        const expiry = nullableStr(promotionRow.expires_at) ?? nullableStr(promotionRow.ends_at);
         const expiryMs = dateMs(expiry);
-        if (expiryMs !== null && expiryMs < now) return { valid: false, error: "EXPIRED" };
+        if (expiryMs !== null && expiryMs < now) {
+          return { valid: false, error: 'EXPIRED' };
+        }
 
-        const maxUses = promo.max_uses == null ? null : num(promo.max_uses);
-        const currentUses = num(promo.current_uses);
+        const maxUses = promotionRow.max_uses == null ? null : num(promotionRow.max_uses);
+        const currentUses = num(promotionRow.current_uses);
         if (maxUses !== null && currentUses >= maxUses) {
-          return { valid: false, error: "LIMIT_REACHED" };
+          return { valid: false, error: 'LIMIT_REACHED' };
         }
 
-        const subtotalCents = items.reduce((s, i) => s + i.lineTotalCents, 0);
-        const minOrderCents = num(promo.min_order_cents, 0);
+        const subtotalCents = items.reduce((sum, entry) => sum + entry.lineTotalCents, 0);
+        const minOrderCents = num(promotionRow.min_order_cents, 0);
         if (subtotalCents < minOrderCents) {
-          return { valid: false, error: "MIN_ORDER_NOT_MET" };
+          return { valid: false, error: 'MIN_ORDER_NOT_MET' };
         }
 
-        const perUserLimit = num(promo.per_user_limit, 0);
+        const perUserLimit = num(promotionRow.per_user_limit, 0);
         if (perUserLimit > 0) {
-          const redemptionRes = await sb
-            .from("promo_redemptions")
-            .select("id", { count: "exact", head: true })
-            .eq("promotion_id", promo.id)
-            .eq("user_id", userId);
+          const redemptionResult = await supabase
+            .from('promo_redemptions')
+            .select('id', { count: 'exact', head: true })
+            .eq('promotion_id', promotionRow.id)
+            .eq('user_id', userId);
 
-          if (redemptionRes.error) return { valid: false, error: "NOT_FOUND" };
-          if ((redemptionRes.count ?? 0) >= perUserLimit) {
-            return { valid: false, error: "USER_LIMIT_REACHED" };
+          if (redemptionResult.error) {
+            return { valid: false, error: 'NOT_FOUND' };
+          }
+
+          if ((redemptionResult.count ?? 0) >= perUserLimit) {
+            return { valid: false, error: 'USER_LIMIT_REACHED' };
           }
         }
 
         let cartPromotion: CartPromotion;
         try {
-          cartPromotion = buildCartPromotionFromRow(promo, subtotalCents, expiry ?? null);
+          cartPromotion = buildCartPromotionFromRow(promotionRow, subtotalCents, expiry ?? null);
         } catch {
-          return { valid: false, error: "NOT_FOUND" };
+          return { valid: false, error: 'NOT_FOUND' };
         }
 
-        set((s) => ({ promotion: cartPromotion, totals: recompute(s.items, cartPromotion, s.credit) }));
+        set((state) => ({
+          ...buildDerivedState(state.items, cartPromotion, state.credit),
+        }));
+
         return { valid: true, promo: cartPromotion };
       },
 
       removePromo: () => {
-        set((s) => ({ promotion: null, totals: recompute(s.items, null, s.credit) }));
+        set((state) => ({
+          ...buildDerivedState(state.items, null, state.credit),
+        }));
       },
 
       applyCredit: async (userId) => {
-        const { data, error } = await sb
-          .from("user_credits")
-          .select("id, amount_cents, source, expires_at")
-          .eq("user_id", userId)
-          .eq("used", false)
-          .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
-          .order("created_at", { ascending: true })
+        const creditResult = await supabase
+          .from('user_credits')
+          .select('id, amount_cents, source, expires_at')
+          .eq('user_id', userId)
+          .eq('used', false)
+          .or(`expires_at.is.null,expires_at.gt.${nowIso()}`)
+          .order('created_at', { ascending: true })
           .limit(1);
 
-        if (error || !data?.length) return false;
+        if (creditResult.error || !creditResult.data?.length) {
+          return false;
+        }
 
-        const row = data[0];
+        const row = creditResult.data[0];
 
         const credit: CartCredit = {
           id: row.id,
           amountCents: row.amount_cents ?? 0,
-          source: row.source ?? "",
+          source: row.source ?? '',
           expiresAt: row.expires_at ?? null,
         };
 
-        set((s) => ({ credit, totals: recompute(s.items, s.promotion, credit) }));
+        set((state) => ({
+          ...buildDerivedState(state.items, state.promotion, credit),
+        }));
+
         return true;
       },
 
       removeCredit: () => {
-        set((s) => ({ credit: null, totals: recompute(s.items, s.promotion, null) }));
-      },
-
-      syncToSupabase: (userId, sessionId) => {
-        scheduleSyncToSupabase(userId, sessionId, get);
+        set((state) => ({
+          ...buildDerivedState(state.items, state.promotion, null),
+        }));
       },
 
       hydrateFromSupabase: async (userId) => {
-        const res = await sb
-          .from("pending_carts")
-          .select("id, items, promo_id, credit_id, expires_at")
-          .eq("user_id", userId)
-          .gt("expires_at", new Date().toISOString())
-          .order("created_at", { ascending: false })
+        const result = await supabase
+          .from('pending_carts')
+          .select('id, items, promo_id, credit_id, expires_at, currency')
+          .eq('user_id', userId)
+          .gt('expires_at', nowIso())
+          .order('created_at', { ascending: false })
           .limit(1);
 
-        if (res.error || !res.data?.length) return;
+        if (result.error || !result.data?.length) {
+          return;
+        }
 
-        const row = res.data[0];
-        const parsedItems = parseCartItemsFromJson(row.items as unknown);
-        if (!parsedItems.length) return;
+        const row = result.data[0];
+        const restoredCurrency = coerceCurrencyCode(row.currency);
 
-        const hydratedItems: CartItem[] = parsedItems.map((i) => ({
-          ...i,
-          lineTotalCents: computeLineTotalCents(i),
+        const parsedItems = parseCartItemsFromJson(row.items);
+        if (parsedItems.length === 0) {
+          return;
+        }
+
+        const hydratedItems: CartItem[] = parsedItems.map((entry) => ({
+          ...entry,
+          lineTotalCents: computeLineTotalCents(entry),
         }));
 
-        // Restore promo if possible
         let promotion: CartPromotion | null = null;
         if (row.promo_id) {
-          const promoRes = await sb
-            .from("promotions")
-            .select("id, code, type, value, min_order_cents, expires_at, ends_at, active")
-            .eq("id", row.promo_id)
+          const promotionResult = await supabase
+            .from('promotions')
+            .select('id, code, type, value, min_order_cents, expires_at, ends_at, active')
+            .eq('id', row.promo_id)
             .limit(1)
             .returns<PromotionRow[]>();
 
-          const p = promoRes.data?.[0];
-          if (p && p.active === true) {
-            const subtotalCents = hydratedItems.reduce((s, i) => s + i.lineTotalCents, 0);
-            const expiry = nullableStr(p.expires_at) ?? nullableStr(p.ends_at);
+          const promotionRow = promotionResult.data?.[0];
+          if (promotionRow?.active === true) {
+            const subtotalCents = hydratedItems.reduce(
+              (sum, entry) => sum + entry.lineTotalCents,
+              0,
+            );
+            const expiry =
+              nullableStr(promotionRow.expires_at) ?? nullableStr(promotionRow.ends_at);
+
             try {
-              promotion = buildCartPromotionFromRow(p, subtotalCents, expiry ?? null);
+              promotion = buildCartPromotionFromRow(promotionRow, subtotalCents, expiry ?? null);
             } catch {
               promotion = null;
             }
           }
         }
 
-        // Restore credit if possible
         let credit: CartCredit | null = null;
         if (row.credit_id) {
-          const creditRes = await sb
-            .from("user_credits")
-            .select("id, amount_cents, source, expires_at")
-            .eq("id", row.credit_id)
-            .eq("used", false)
+          const creditResult = await supabase
+            .from('user_credits')
+            .select('id, amount_cents, source, expires_at')
+            .eq('id', row.credit_id)
+            .eq('used', false)
             .limit(1);
 
-          const c = creditRes.data?.[0];
-          if (c) {
+          const restoredCredit = creditResult.data?.[0];
+          if (restoredCredit) {
             credit = {
-              id: c.id,
-              amountCents: c.amount_cents ?? 0,
-              source: c.source ?? "",
-              expiresAt: c.expires_at ?? null,
+              id: restoredCredit.id,
+              amountCents: restoredCredit.amount_cents ?? 0,
+              source: restoredCredit.source ?? restoredCurrency,
+              expiresAt: restoredCredit.expires_at ?? null,
             };
           }
         }
 
-        const totals = recompute(hydratedItems, promotion, credit);
-
         set({
-          items: hydratedItems,
-          promotion,
-          credit,
-          totals,
-          itemCount: hydratedItems.reduce((n, i) => n + i.quantity, 0),
-          isEmpty: hydratedItems.length === 0,
+          ...buildDerivedState(hydratedItems, promotion, credit),
         });
+      },
+
+      syncToSupabase: (userId, sessionId) => {
+        scheduleSyncToSupabase(userId, sessionId, get);
       },
 
       clearSupabaseCart: async (sessionId) => {
         const sid = safeSessionId(sessionId);
-        if (!sid) return;
+        if (!sid) {
+          return;
+        }
 
-        const del = await sb.from("pending_carts").delete().eq("id", sid);
-        if (del.error) console.warn("[cart.store] pending_carts delete failed:", del.error.message);
+        const deleteResult = await supabase.from('pending_carts').delete().eq('id', sid);
+        if (deleteResult.error) {
+          console.warn('[cart.store] pending_carts delete failed:', deleteResult.error.message);
+        }
       },
     }),
     {
       name: PERSIST_KEY,
       storage: createJSONStorage(() => localStorage),
 
-      partialize: (s) => ({
-        items: s.items,
-        promotion: s.promotion,
-        credit: s.credit,
-        totals: s.totals,
+      partialize: (state) => ({
+        items: state.items,
+        promotion: state.promotion,
+        credit: state.credit,
+        totals: state.totals,
       }),
 
       onRehydrateStorage: () => (state) => {
-        if (!state) return;
+        if (!state) {
+          return;
+        }
 
-        const hydratedItems = (state.items ?? []).map((i) => ({
-          ...i,
-          lineTotalCents: computeLineTotalCents(i),
+        const hydratedItems = (state.items ?? []).map((entry) => ({
+          ...entry,
+          lineTotalCents: computeLineTotalCents(entry),
         }));
 
-        const totals = recompute(hydratedItems, state.promotion ?? null, state.credit ?? null);
+        const nextPromotion = state.promotion ?? null;
+        const nextCredit = state.credit ?? null;
+        const nextState = buildDerivedState(hydratedItems, nextPromotion, nextCredit);
 
-        state.items = hydratedItems;
-        state.totals = totals;
-        state.itemCount = hydratedItems.reduce((n, i) => n + i.quantity, 0);
-        state.isEmpty = hydratedItems.length === 0;
+        state.items = nextState.items;
+        state.promotion = nextState.promotion;
+        state.credit = nextState.credit;
+        state.totals = nextState.totals;
+        state.itemCount = nextState.itemCount;
+        state.isEmpty = nextState.isEmpty;
       },
     },
   ),
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Selectors — use these in components to avoid full-store subscriptions
+// Selectors
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const selectItems = (s: CartStore) => s.items;
-export const selectTotals = (s: CartStore) => s.totals;
-export const selectPromotion = (s: CartStore) => s.promotion;
-export const selectCredit = (s: CartStore) => s.credit;
-export const selectItemCount = (s: CartStore) => s.itemCount;
-export const selectIsEmpty = (s: CartStore) => s.isEmpty;
+export const selectItems = (state: CartStore) => state.items;
+export const selectTotals = (state: CartStore) => state.totals;
+export const selectPromotion = (state: CartStore) => state.promotion;
+export const selectCredit = (state: CartStore) => state.credit;
+export const selectItemCount = (state: CartStore) => state.itemCount;
+export const selectIsEmpty = (state: CartStore) => state.isEmpty;
 
-export const selectItemByKey = (key: string) => (s: CartStore) =>
-  s.items.find((i) => cartItemKey(i.menuItemId, i.modifiers) === key) ?? null;
+export const selectItemByKey = (key: string) => (state: CartStore) =>
+  state.items.find((entry) => cartItemKey(entry.menuItemId, entry.modifiers) === key) ?? null;
 
-export const selectItemsByCategory = (category: string) => (s: CartStore) =>
-  s.items.filter((i) => i.category === category);
+export const selectItemsByCategory = (category: string) => (state: CartStore) =>
+  state.items.filter((entry) => entry.category === category);

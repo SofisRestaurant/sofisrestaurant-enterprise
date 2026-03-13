@@ -4,20 +4,20 @@
 // =============================================================================
 
 export type LiveMetrics = {
-  todayRevenueCents: number
-  todayOrders: number
-  unreadNotifs: number
-  abandonedCarts: number
-  pendingOrders: number
-  fraudEvents: number
-}
+  todayRevenueCents: number;
+  todayOrders: number;
+  unreadNotifs: number;
+  abandonedCarts: number;
+  pendingOrders: number;
+  fraudEvents: number;
+};
 
 export type DashboardState = {
-  isLoading: boolean
-  error: string | null
-  lastUpdatedAt: string | null
-  metrics: LiveMetrics | null
-}
+  isLoading: boolean;
+  error: string | null;
+  lastUpdatedAt: string | null;
+  metrics: LiveMetrics | null;
+};
 
 export const DEFAULT_METRICS: LiveMetrics = {
   todayRevenueCents: 0,
@@ -26,4 +26,4 @@ export const DEFAULT_METRICS: LiveMetrics = {
   abandonedCarts: 0,
   pendingOrders: 0,
   fraudEvents: 0,
-}
+};

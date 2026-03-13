@@ -29,7 +29,7 @@
 // - Do NOT log JWTs, emails, phones, addresses.
 // =============================================================================
 
-import { createAnonClient, createServiceClient, type SvcClient } from "../_shared/supabase.ts";
+import { createAnonClient, createServiceClient, type SvcClient } from '../_shared/supabase.ts';
 
 // ─────────────────────────────────────────────────────────────
 // Config
@@ -42,24 +42,24 @@ const CONFIG = {
 
   // Fail-closed CORS allowlist
   ALLOWED_ORIGINS: [
-    "https://sofislegacy.com",
-    "https://www.sofislegacy.com",
-    "https://sofisrestaurant.netlify.app",
-    "http://localhost:3000",
-    "http://localhost:5173",
+    'https://sofislegacy.com',
+    'https://www.sofislegacy.com',
+    'https://sofisrestaurant.netlify.app',
+    'http://localhost:3000',
+    'http://localhost:5173',
   ] as const,
 
   // ✅ Recommended: set true in production so every award is traceable + truly idempotent
   REQUIRE_SCAN_ID: false,
 
   // Defense-in-depth: basic method allowlist
-  ALLOWED_METHODS: "POST, OPTIONS",
+  ALLOWED_METHODS: 'POST, OPTIONS',
 
   // Optional (soft) geo: only works if your edge/CDN forwards a country header.
   // Real geo enforcement should be done at Cloudflare/WAF for reliability.
   ENABLE_GEO_GUARD: false,
-  ALLOWED_COUNTRIES: ["US"] as const,
-  GEO_COUNTRY_HEADERS: ["cf-ipcountry", "x-vercel-ip-country", "x-country"] as const,
+  ALLOWED_COUNTRIES: ['US'] as const,
+  GEO_COUNTRY_HEADERS: ['cf-ipcountry', 'x-vercel-ip-country', 'x-country'] as const,
 
   // Observability: return requestId always
   RETURN_REQUEST_ID: true,
@@ -67,9 +67,8 @@ const CONFIG = {
 
 const ORIGINS = new Set<string>(CONFIG.ALLOWED_ORIGINS);
 const ALLOWED_HEADERS =
-  "authorization, apikey, content-type, x-client-info, x-application-name, x-request-id, x-idempotency-key";
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  'authorization, apikey, content-type, x-client-info, x-application-name, x-request-id, x-idempotency-key';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 // ─────────────────────────────────────────────────────────────
 // Types
@@ -98,7 +97,7 @@ type Fail = {
 
 type AdminAuth =
   | { ok: true; adminId: string }
-  | { ok: false; status: 401 | 403; code: "AUTH_MISSING" | "AUTH_INVALID" | "AUTH_FORBIDDEN" };
+  | { ok: false; status: 401 | 403; code: 'AUTH_MISSING' | 'AUTH_INVALID' | 'AUTH_FORBIDDEN' };
 
 // ─────────────────────────────────────────────────────────────
 // Utils
@@ -109,7 +108,7 @@ function nowIso(): string {
 }
 
 function isRecord(v: unknown): v is JsonRecord {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 function isUuid(v: string): boolean {
@@ -117,7 +116,7 @@ function isUuid(v: string): boolean {
 }
 
 function makeRequestId(req: Request): string {
-  const h = (req.headers.get("x-request-id") ?? "").trim();
+  const h = (req.headers.get('x-request-id') ?? '').trim();
   if (h) return h.slice(0, 128);
   try {
     return crypto.randomUUID();
@@ -132,13 +131,14 @@ function prefix(id: string | null | undefined, n = 8): string | null {
 }
 
 function clampAmountCents(v: unknown): number {
-  const n = typeof v === "number" && Number.isFinite(v) ? v : typeof v === "string" ? Number(v) : NaN;
+  const n =
+    typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' ? Number(v) : NaN;
   const c = Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
   return Math.min(c, CONFIG.MAX_AWARD_AMOUNT_CENTS);
 }
 
 function readBearer(req: Request): string | null {
-  const raw = req.headers.get("authorization") ?? req.headers.get("Authorization");
+  const raw = req.headers.get('authorization') ?? req.headers.get('Authorization');
   if (!raw) return null;
   const m = raw.trim().match(/^bearer\s+(.+)$/i);
   const token = m?.[1]?.trim();
@@ -146,60 +146,60 @@ function readBearer(req: Request): string | null {
 }
 
 function corsHeaders(req: Request): Record<string, string> | null {
-  const origin = (req.headers.get("origin") ?? "").trim();
+  const origin = (req.headers.get('origin') ?? '').trim();
   if (!origin || !ORIGINS.has(origin)) return null;
 
   return {
-    "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Headers": ALLOWED_HEADERS,
-    "Access-Control-Allow-Methods": CONFIG.ALLOWED_METHODS,
-    "Access-Control-Allow-Credentials": "true",
-    "Access-Control-Max-Age": "86400",
-    Vary: "Origin",
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Headers': ALLOWED_HEADERS,
+    'Access-Control-Allow-Methods': CONFIG.ALLOWED_METHODS,
+    'Access-Control-Allow-Credentials': 'true',
+    'Access-Control-Max-Age': '86400',
+    Vary: 'Origin',
   };
 }
 
 function respond(headers: Record<string, string>, body: Ok | Fail, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...headers, "Content-Type": "application/json", "Cache-Control": "no-store" },
+    headers: { ...headers, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
   });
 }
 
-function log(level: "info" | "warn" | "error", event: string, data?: Record<string, unknown>) {
+function log(level: 'info' | 'warn' | 'error', event: string, data?: Record<string, unknown>) {
   // Never include JWTs, emails, phones, addresses.
   const line = JSON.stringify({
     level,
     event,
-    service: "award-loyalty-qr",
+    service: 'award-loyalty-qr',
     ts: nowIso(),
     ...(data ?? {}),
   });
-  if (level === "error") console.error(line);
-  else if (level === "warn") console.warn(line);
+  if (level === 'error') console.error(line);
+  else if (level === 'warn') console.warn(line);
   else console.log(line);
 }
 
 async function readJsonWithLimit(req: Request, maxBytes: number): Promise<unknown> {
-  const ct = (req.headers.get("content-type") ?? "").toLowerCase();
-  if (!ct.includes("application/json")) throw new Error("UNSUPPORTED_CONTENT_TYPE");
+  const ct = (req.headers.get('content-type') ?? '').toLowerCase();
+  if (!ct.includes('application/json')) throw new Error('UNSUPPORTED_CONTENT_TYPE');
 
   const ab = await req.arrayBuffer();
-  if (ab.byteLength > maxBytes) throw new Error("PAYLOAD_TOO_LARGE");
+  if (ab.byteLength > maxBytes) throw new Error('PAYLOAD_TOO_LARGE');
 
   const text = new TextDecoder().decode(ab);
-  if (!text.trim()) throw new Error("EMPTY_BODY");
+  if (!text.trim()) throw new Error('EMPTY_BODY');
 
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error("INVALID_JSON");
+    throw new Error('INVALID_JSON');
   }
 }
 
 function getCountry(req: Request): string | null {
   for (const h of CONFIG.GEO_COUNTRY_HEADERS) {
-    const v = (req.headers.get(h) ?? "").trim();
+    const v = (req.headers.get(h) ?? '').trim();
     if (v) return v.toUpperCase();
   }
   return null;
@@ -218,24 +218,25 @@ function geoAllowed(req: Request): boolean {
 
 async function requireAdmin(req: Request, svc: SvcClient): Promise<AdminAuth> {
   const token = readBearer(req);
-  if (!token) return { ok: false, status: 401, code: "AUTH_MISSING" };
+  if (!token) return { ok: false, status: 401, code: 'AUTH_MISSING' };
 
   // 1) Validate JWT + get userId (server-validated via Supabase)
   const anon = createAnonClient(token);
   const { data, error } = await anon.auth.getUser();
   const userId = data?.user?.id ?? null;
 
-  if (error || !userId) return { ok: false, status: 401, code: "AUTH_INVALID" };
+  if (error || !userId) return { ok: false, status: 401, code: 'AUTH_INVALID' };
 
   // 2) Verify admin role (service role, bypasses RLS)
   const { data: profile, error: profErr } = await svc
-    .from("profiles")
-    .select("role")
-    .eq("id", userId)
+    .from('profiles')
+    .select('role')
+    .eq('id', userId)
     .maybeSingle();
 
-  const role = typeof profile?.role === "string" ? profile.role.toLowerCase() : "";
-  if (profErr || !profile || role !== "admin") return { ok: false, status: 403, code: "AUTH_FORBIDDEN" };
+  const role = typeof profile?.role === 'string' ? profile.role.toLowerCase() : '';
+  if (profErr || !profile || role !== 'admin')
+    return { ok: false, status: 403, code: 'AUTH_FORBIDDEN' };
 
   return { ok: true, adminId: userId };
 }
@@ -249,26 +250,30 @@ Deno.serve(async (req: Request) => {
   const metaBase = { requestId, ts: nowIso() };
 
   const cors = corsHeaders(req);
-  if (!cors) return new Response("Origin not allowed", { status: 403 });
+  if (!cors) return new Response('Origin not allowed', { status: 403 });
 
   // Preflight
-  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+  if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
 
   // Method gate
-  if (req.method !== "POST") {
+  if (req.method !== 'POST') {
     return respond(
       cors,
-      { ok: false, error: { code: "METHOD_NOT_ALLOWED", message: "Method not allowed" }, meta: metaBase },
+      {
+        ok: false,
+        error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' },
+        meta: metaBase,
+      },
       405,
     );
   }
 
   // Optional geo guard (defense in depth)
   if (!geoAllowed(req)) {
-    log("warn", "geo_blocked", { requestId, country: getCountry(req) });
+    log('warn', 'geo_blocked', { requestId, country: getCountry(req) });
     return respond(
       cors,
-      { ok: false, error: { code: "GEO_BLOCKED", message: "Not allowed" }, meta: metaBase },
+      { ok: false, error: { code: 'GEO_BLOCKED', message: 'Not allowed' }, meta: metaBase },
       403,
     );
   }
@@ -278,39 +283,80 @@ Deno.serve(async (req: Request) => {
   try {
     body = await readJsonWithLimit(req, CONFIG.MAX_BODY_BYTES);
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "BAD_REQUEST";
+    const msg = e instanceof Error ? e.message : 'BAD_REQUEST';
     const code =
-      msg === "PAYLOAD_TOO_LARGE"
-        ? "PAYLOAD_TOO_LARGE"
-        : msg === "UNSUPPORTED_CONTENT_TYPE"
-          ? "UNSUPPORTED_CONTENT_TYPE"
-          : msg === "EMPTY_BODY"
-            ? "EMPTY_BODY"
-            : "INVALID_JSON";
+      msg === 'PAYLOAD_TOO_LARGE'
+        ? 'PAYLOAD_TOO_LARGE'
+        : msg === 'UNSUPPORTED_CONTENT_TYPE'
+          ? 'UNSUPPORTED_CONTENT_TYPE'
+          : msg === 'EMPTY_BODY'
+            ? 'EMPTY_BODY'
+            : 'INVALID_JSON';
 
-    const status = code === "PAYLOAD_TOO_LARGE" ? 413 : code === "UNSUPPORTED_CONTENT_TYPE" ? 415 : 400;
-    return respond(cors, { ok: false, error: { code, message: "Invalid request payload" }, meta: metaBase }, status);
+    const status =
+      code === 'PAYLOAD_TOO_LARGE' ? 413 : code === 'UNSUPPORTED_CONTENT_TYPE' ? 415 : 400;
+    return respond(
+      cors,
+      { ok: false, error: { code, message: 'Invalid request payload' }, meta: metaBase },
+      status,
+    );
   }
 
   if (!isRecord(body)) {
-    return respond(cors, { ok: false, error: { code: "BAD_BODY", message: "Body must be a JSON object" }, meta: metaBase }, 400);
+    return respond(
+      cors,
+      {
+        ok: false,
+        error: { code: 'BAD_BODY', message: 'Body must be a JSON object' },
+        meta: metaBase,
+      },
+      400,
+    );
   }
 
-  const accountId = typeof body.account_id === "string" ? body.account_id.trim() : "";
-  const scanId = typeof body.scan_id === "string" ? body.scan_id.trim() : null;
+  const accountId = typeof body.account_id === 'string' ? body.account_id.trim() : '';
+  const scanId = typeof body.scan_id === 'string' ? body.scan_id.trim() : null;
   const amountCents = clampAmountCents(body.amount_cents);
 
   if (!accountId || !isUuid(accountId)) {
-    return respond(cors, { ok: false, error: { code: "INVALID_ACCOUNT_ID", message: "Invalid account_id" }, meta: metaBase }, 400);
+    return respond(
+      cors,
+      {
+        ok: false,
+        error: { code: 'INVALID_ACCOUNT_ID', message: 'Invalid account_id' },
+        meta: metaBase,
+      },
+      400,
+    );
   }
   if (scanId && !isUuid(scanId)) {
-    return respond(cors, { ok: false, error: { code: "INVALID_SCAN_ID", message: "Invalid scan_id" }, meta: metaBase }, 400);
+    return respond(
+      cors,
+      { ok: false, error: { code: 'INVALID_SCAN_ID', message: 'Invalid scan_id' }, meta: metaBase },
+      400,
+    );
   }
   if (CONFIG.REQUIRE_SCAN_ID && !scanId) {
-    return respond(cors, { ok: false, error: { code: "SCAN_ID_REQUIRED", message: "scan_id is required" }, meta: metaBase }, 400);
+    return respond(
+      cors,
+      {
+        ok: false,
+        error: { code: 'SCAN_ID_REQUIRED', message: 'scan_id is required' },
+        meta: metaBase,
+      },
+      400,
+    );
   }
   if (amountCents < CONFIG.MIN_AWARD_AMOUNT_CENTS) {
-    return respond(cors, { ok: false, error: { code: "AMOUNT_TOO_SMALL", message: "Amount too small" }, meta: metaBase }, 400);
+    return respond(
+      cors,
+      {
+        ok: false,
+        error: { code: 'AMOUNT_TOO_SMALL', message: 'Amount too small' },
+        meta: metaBase,
+      },
+      400,
+    );
   }
 
   // Service role client (single instance per request)
@@ -319,26 +365,50 @@ Deno.serve(async (req: Request) => {
   // Admin auth
   const auth = await requireAdmin(req, svc);
   if (!auth.ok) {
-    const msg = auth.code === "AUTH_FORBIDDEN" ? "Forbidden" : "Unauthorized";
-    log("warn", "auth_failed", { requestId, code: auth.code });
-    return respond(cors, { ok: false, error: { code: auth.code, message: msg }, meta: metaBase }, auth.status);
+    const msg = auth.code === 'AUTH_FORBIDDEN' ? 'Forbidden' : 'Unauthorized';
+    log('warn', 'auth_failed', { requestId, code: auth.code });
+    return respond(
+      cors,
+      { ok: false, error: { code: auth.code, message: msg }, meta: metaBase },
+      auth.status,
+    );
   }
 
   const adminId = auth.adminId;
 
   // Ensure account exists (clean errors)
   const { data: acct, error: acctErr } = await svc
-    .from("loyalty_accounts")
-    .select("id")
-    .eq("id", accountId)
+    .from('loyalty_accounts')
+    .select('id')
+    .eq('id', accountId)
     .maybeSingle();
 
   if (acctErr) {
-    log("error", "account_lookup_failed", { requestId, accountId: prefix(accountId), code: acctErr.code ?? null });
-    return respond(cors, { ok: false, error: { code: "DB_ACCOUNT_LOOKUP", message: "Failed to verify account" }, meta: metaBase }, 500);
+    log('error', 'account_lookup_failed', {
+      requestId,
+      accountId: prefix(accountId),
+      code: acctErr.code ?? null,
+    });
+    return respond(
+      cors,
+      {
+        ok: false,
+        error: { code: 'DB_ACCOUNT_LOOKUP', message: 'Failed to verify account' },
+        meta: metaBase,
+      },
+      500,
+    );
   }
   if (!acct?.id) {
-    return respond(cors, { ok: false, error: { code: "ACCOUNT_NOT_FOUND", message: "Account not found" }, meta: metaBase }, 404);
+    return respond(
+      cors,
+      {
+        ok: false,
+        error: { code: 'ACCOUNT_NOT_FOUND', message: 'Account not found' },
+        meta: metaBase,
+      },
+      404,
+    );
   }
 
   // Deterministic idempotency:
@@ -360,12 +430,12 @@ Deno.serve(async (req: Request) => {
     // ✅ Append-only safe:
     // If scanId exists, call 5-arg overload to set reference_id=scanId at INSERT time.
     const { data: awardRaw, error: awardErr } = scanId
-      ? await svc.rpc("v2_award_points", { ...rpcArgsBase, p_reference_id: scanId })
-      : await svc.rpc("v2_award_points", rpcArgsBase);
+      ? await svc.rpc('v2_award_points', { ...rpcArgsBase, p_reference_id: scanId })
+      : await svc.rpc('v2_award_points', rpcArgsBase);
 
     if (awardErr) {
       // Don't leak internals to client
-      log("warn", "v2_award_points_failed", {
+      log('warn', 'v2_award_points_failed', {
         requestId,
         adminId: prefix(adminId),
         accountId: prefix(accountId),
@@ -373,12 +443,16 @@ Deno.serve(async (req: Request) => {
         code: awardErr.code ?? null,
       });
 
-      return respond(cors, { ok: false, error: { code: "AWARD_FAILED", message: "Award failed" }, meta: metaBase }, 500);
+      return respond(
+        cors,
+        { ok: false, error: { code: 'AWARD_FAILED', message: 'Award failed' }, meta: metaBase },
+        500,
+      );
     }
 
-    const result = Array.isArray(awardRaw) ? awardRaw[0] ?? null : awardRaw ?? null;
+    const result = Array.isArray(awardRaw) ? (awardRaw[0] ?? null) : (awardRaw ?? null);
 
-    log("info", "award_ok", {
+    log('info', 'award_ok', {
       requestId,
       adminId: prefix(adminId),
       accountId: prefix(accountId),
@@ -401,7 +475,7 @@ Deno.serve(async (req: Request) => {
 
     return respond(cors, out, 200);
   } catch (e) {
-    log("error", "award_crash", {
+    log('error', 'award_crash', {
       requestId,
       adminId: prefix(adminId),
       accountId: prefix(accountId),
@@ -409,6 +483,10 @@ Deno.serve(async (req: Request) => {
       error: e instanceof Error ? e.message : String(e),
     });
 
-    return respond(cors, { ok: false, error: { code: "INTERNAL", message: "Internal server error" }, meta: metaBase }, 500);
+    return respond(
+      cors,
+      { ok: false, error: { code: 'INTERNAL', message: 'Internal server error' }, meta: metaBase },
+      500,
+    );
   }
 });

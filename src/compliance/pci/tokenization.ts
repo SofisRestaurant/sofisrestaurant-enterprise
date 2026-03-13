@@ -1,10 +1,10 @@
 // src/compliance/pci/tokenization.ts
 export interface TokenizedPayment {
-  token: string
-  last4: string
-  brand: string
-  expiryMonth: number
-  expiryYear: number
+  token: string;
+  last4: string;
+  brand: string;
+  expiryMonth: number;
+  expiryYear: number;
 }
 
 export function createPaymentToken(
@@ -20,5 +20,5 @@ export function createPaymentToken(
     brand: 'visa', // Would be determined by Stripe
     expiryMonth,
     expiryYear,
-  })
+  });
 }

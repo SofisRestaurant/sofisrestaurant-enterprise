@@ -16,29 +16,29 @@
 
 export interface Campaign {
   /** growth_campaigns.id */
-  id:           string
+  id: string;
   /** growth_campaigns.name */
-  name:         string
+  name: string;
   /** growth_campaigns.channel — e.g. "email" | "sms" | "in_app" | null */
-  channel:      string | null
+  channel: string | null;
   /** growth_campaigns.budget_cents */
-  budgetCents:  number
+  budgetCents: number;
   /** growth_campaigns.spent_cents */
-  spentCents:   number
+  spentCents: number;
   /** growth_campaigns.revenue_cents */
-  revenueCents: number
+  revenueCents: number;
   /** growth_campaigns.created_at */
-  active: boolean         // 👈 add
+  active: boolean; // 👈 add
 
-  createdAt:    string
+  createdAt: string;
 }
 
 /** Computed ROI for a campaign — derived, never stored */
 export interface CampaignROI {
-  campaignId: string
-  roi:        number   // (revenueCents - spentCents) / spentCents, 0 if spentCents = 0
-  roas:       number   // revenueCents / spentCents, 0 if spentCents = 0
-  margin:     number   // revenueCents - spentCents
+  campaignId: string;
+  roi: number; // (revenueCents - spentCents) / spentCents, 0 if spentCents = 0
+  roas: number; // revenueCents / spentCents, 0 if spentCents = 0
+  margin: number; // revenueCents - spentCents
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -48,47 +48,47 @@ export interface CampaignROI {
 
 export interface PromoCode {
   /** promotions.id */
-  id:              string
+  id: string;
   /** promotions.code */
-  code:            string
+  code: string;
   /** promotions.type — "percent" | "fixed" */
-  type:            'percent' | 'fixed'
+  type: 'percent' | 'fixed';
   /** promotions.value — percent: 0–100 | fixed: cents */
-  value:           number
+  value: number;
   /** promotions.active */
-  active:          boolean
+  active: boolean;
   /** promotions.current_uses */
-  currentUses:     number
+  currentUses: number;
   /** promotions.max_uses */
-  maxUses:         number | null
+  maxUses: number | null;
   /** promotions.min_order_cents */
-  minOrderCents:   number
+  minOrderCents: number;
   /** promotions.per_user_limit */
-  perUserLimit:    number
+  perUserLimit: number;
   /** promotions.starts_at */
-  startsAt:        string | null
+  startsAt: string | null;
   /** promotions.ends_at */
-  endsAt:          string | null
+  endsAt: string | null;
   /** promotions.expires_at */
-  expiresAt:       string | null
+  expiresAt: string | null;
   /** promotions.campaign_id */
-  campaignId:      string | null
+  campaignId: string | null;
   /** promotions.channel */
-  channel:         string | null
+  channel: string | null;
   /** Aggregated from promo_redemptions.order_total_cents */
-  revenueCents:    number
+  revenueCents: number;
   /** Count of rows in promo_redemptions for this promo */
-  redemptionCount: number
+  redemptionCount: number;
 }
 export interface AIInsight {
-  id: string
-  category: AIInsightCategory
-  title: string
-  body: string
-  confidence: number
-  impactPct: number
-  applied: boolean
-  createdAt: string
+  id: string;
+  category: AIInsightCategory;
+  title: string;
+  body: string;
+  confidence: number;
+  impactPct: number;
+  applied: boolean;
+  createdAt: string;
 }
 export const AI_INSIGHT_CATEGORIES = [
   'pricing',
@@ -98,18 +98,17 @@ export const AI_INSIGHT_CATEGORIES = [
   'fraud',
   'inventory',
   'growth',
-] as const
-
+] as const;
 
 export interface AIInsight {
-  id: string
-  category: AIInsightCategory
-  title: string
-  body: string
-  confidence: number
-  impactPct: number
-  applied: boolean
-  createdAt: string
+  id: string;
+  category: AIInsightCategory;
+  title: string;
+  body: string;
+  confidence: number;
+  impactPct: number;
+  applied: boolean;
+  createdAt: string;
 }
 // ─────────────────────────────────────────────────────────────────────────────
 // Abandoned Cart Session
@@ -120,28 +119,28 @@ export interface AIInsight {
 
 export interface AbandonedCartSession {
   /** abandoned_cart_sessions.id */
-  id:             string
+  id: string;
   /** abandoned_cart_sessions.user_id */
-  userId:         string | null
+  userId: string | null;
   /** abandoned_cart_sessions.email */
-  email:          string | null
+  email: string | null;
   /** abandoned_cart_sessions.cart_value_cents */
-  cartValueCents: number
+  cartValueCents: number;
   /** abandoned_cart_sessions.last_activity */
-  lastActivity:   string | null
+  lastActivity: string | null;
   /** abandoned_cart_sessions.recovered */
-  recovered:      boolean
+  recovered: boolean;
   /** abandoned_cart_sessions.created_at */
-  createdAt:      string
+  createdAt: string;
 }
 
 export interface AbandonedCartSummary {
-  totalAbandoned:        number
-  totalRecovered:        number
+  totalAbandoned: number;
+  totalRecovered: number;
   /** 0–1 ratio */
-  recoveryRate:          number
-  lostRevenueCents:      number
-  recoveredRevenueCents: number
+  recoveryRate: number;
+  lostRevenueCents: number;
+  recoveredRevenueCents: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -149,9 +148,6 @@ export interface AbandonedCartSummary {
 // Maps to: ai_insights table
 // ─────────────────────────────────────────────────────────────────────────────
 
+export type AIInsightCategory = (typeof AI_INSIGHT_CATEGORIES)[number] | (string & {});
 
-export type AIInsightCategory =
-  (typeof AI_INSIGHT_CATEGORIES)[number] | (string & {})
-  
-
-  export type PromoType = 'percent' | 'fixed' | 'amount' | 'bogo' | 'free_item'
+export type PromoType = 'percent' | 'fixed' | 'amount' | 'bogo' | 'free_item';

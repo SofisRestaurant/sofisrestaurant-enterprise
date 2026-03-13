@@ -1,15 +1,14 @@
 // src/components/ui/Button.tsx
-import { ButtonHTMLAttributes, ReactNode } from 'react'
+import { ButtonHTMLAttributes, ReactNode } from 'react';
 
-export interface ButtonProps
-  extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary' | 'outline' | 'danger' | 'glass'
-  size?: 'sm' | 'md' | 'lg' | 'xl'
-  children: ReactNode
-  isLoading?: boolean
-  icon?: ReactNode
-  iconPosition?: 'left' | 'right'
-  className?: string
+export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: 'primary' | 'secondary' | 'outline' | 'danger' | 'glass';
+  size?: 'sm' | 'md' | 'lg' | 'xl';
+  children: ReactNode;
+  isLoading?: boolean;
+  icon?: ReactNode;
+  iconPosition?: 'left' | 'right';
+  className?: string;
 }
 
 export function Button({
@@ -23,7 +22,7 @@ export function Button({
   disabled,
   ...props
 }: ButtonProps) {
- const baseStyles = `
+  const baseStyles = `
   inline-flex items-center justify-center gap-2
   font-semibold tracking-tight
   transition-all duration-200
@@ -33,10 +32,10 @@ export function Button({
   focus-visible:ring-brand/30
   disabled:opacity-50 disabled:cursor-not-allowed
   relative
-`
+`;
 
   const variants: Record<string, string> = {
-  primary: `
+    primary: `
     bg-brand
     text-white
     shadow-brand
@@ -45,7 +44,7 @@ export function Button({
     active:scale-[0.98]
   `,
 
-  secondary: `
+    secondary: `
     bg-surface
     text-ink-700
     border border-border
@@ -55,7 +54,7 @@ export function Button({
     active:scale-[0.98]
   `,
 
-  outline: `
+    outline: `
     border border-brand
     text-brand
     bg-transparent
@@ -63,7 +62,7 @@ export function Button({
     active:scale-[0.98]
   `,
 
-  danger: `
+    danger: `
     bg-error
     text-white
     shadow-md
@@ -71,7 +70,7 @@ export function Button({
     active:scale-[0.98]
   `,
 
-  glass: `
+    glass: `
     bg-glass-bg
     backdrop-blur
     border border-glass-border
@@ -80,14 +79,14 @@ export function Button({
     hover:shadow-md
     active:scale-[0.98]
   `,
-}
+  };
 
   const sizes: Record<string, string> = {
     sm: 'px-3 py-1.5 text-sm rounded-md',
     md: 'px-5 py-2.5 text-base rounded-lg',
     lg: 'px-7 py-3.5 text-lg rounded-xl',
     xl: 'px-9 py-4 text-xl rounded-2xl',
-  }
+  };
 
   return (
     <button
@@ -98,11 +97,7 @@ export function Button({
     >
       {isLoading ? (
         <div className="flex items-center gap-2">
-          <svg
-            className="animate-spin h-5 w-5"
-            fill="none"
-            viewBox="0 0 24 24"
-          >
+          <svg className="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
             <circle
               className="opacity-25"
               cx="12"
@@ -127,7 +122,7 @@ export function Button({
         </>
       )}
     </button>
-  )
+  );
 }
 
-export default Button
+export default Button;

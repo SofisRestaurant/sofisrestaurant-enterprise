@@ -4,16 +4,16 @@
 
 interface Props {
   amountDollars: string;
-  errorMsg:      string | null;
-  onChange:      (val: string) => void;
-  onAward:       () => void;
-  onCancel:      () => void;
+  errorMsg: string | null;
+  onChange: (val: string) => void;
+  onAward: () => void;
+  onCancel: () => void;
 }
 
 export function AwardSection({ amountDollars, errorMsg, onChange, onAward, onCancel }: Props) {
-  const parsed      = parseFloat(amountDollars);
+  const parsed = parseFloat(amountDollars);
   const hasValidAmt = !isNaN(parsed) && parsed > 0;
-  const basePoints  = hasValidAmt ? Math.floor(parsed) : null;
+  const basePoints = hasValidAmt ? Math.floor(parsed) : null;
 
   return (
     <div className="rounded-2xl border border-white/8 bg-gray-900 p-5">
@@ -39,14 +39,12 @@ export function AwardSection({ amountDollars, errorMsg, onChange, onAward, onCan
 
       {basePoints !== null && (
         <p className="mt-2 text-center text-xs text-gray-500">
-          ≈ <span className="font-semibold text-amber-400">{basePoints} base pts</span>
-          {' '}before tier &amp; streak multipliers
+          ≈ <span className="font-semibold text-amber-400">{basePoints} base pts</span> before tier
+          &amp; streak multipliers
         </p>
       )}
 
-      {errorMsg && (
-        <p className="mt-2 text-center text-xs font-medium text-red-400">{errorMsg}</p>
-      )}
+      {errorMsg && <p className="mt-2 text-center text-xs font-medium text-red-400">{errorMsg}</p>}
 
       <div className="mt-4 flex gap-2">
         <button

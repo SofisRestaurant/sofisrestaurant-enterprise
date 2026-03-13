@@ -17,20 +17,20 @@ export const AUTH_RATE_WINDOW_MS = 15 * 60 * 1000;
  * Index 0 is unused — tiers are 1-based.
  */
 export const AUTH_LOCKOUT_DURATIONS_MS: readonly number[] = [
-  0,               // [0] unused
-  30_000,          // [1] 30 seconds
-  2 * 60_000,      // [2] 2 minutes
-  10 * 60_000,     // [3] 10 minutes
-  30 * 60_000,     // [4] 30 minutes (max — not "permanent" to avoid harming legit users)
+  0, // [0] unused
+  30_000, // [1] 30 seconds
+  2 * 60_000, // [2] 2 minutes
+  10 * 60_000, // [3] 10 minutes
+  30 * 60_000, // [4] 30 minutes (max — not "permanent" to avoid harming legit users)
 ] as const;
 
 /** How many failures trigger each lockout tier */
 export const AUTH_LOCKOUT_THRESHOLDS: readonly number[] = [
-  0,   // [0] unused
-  5,   // [1] 5 failures
-  8,   // [2] 8 failures
-  12,  // [3] 12 failures
-  20,  // [4] 20 failures
+  0, // [0] unused
+  5, // [1] 5 failures
+  8, // [2] 8 failures
+  12, // [3] 12 failures
+  20, // [4] 20 failures
 ] as const;
 
 /** Show a "N attempts remaining" warning when this many failures remain before lock */

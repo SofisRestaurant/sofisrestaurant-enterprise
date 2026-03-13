@@ -1,19 +1,144 @@
-// ============================================================================
-// SHARED ORDERS REALTIME LAYER — PRODUCTION SAFE
-// ============================================================================
+import { useEffect, useRef } from 'react';
+import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 
-import { useEffect, useRef } from 'react'
-import { supabase } from '@/lib/supabase/supabaseClient'
-import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js'
-import type { Database } from '@/types/supabase'
+import {
+  REALTIME_SUBSCRIBE_STATES,
+  isRealtimeSubscribeState,
+  supabase,
+  type RealtimeSubscribeState,
+} from '@/lib/supabase/supabaseClient';
+import type { Tables } from '@/types/supabase';
 
-type OrderRow = Database['public']['Tables']['orders']['Row']
+type OrderRow = Tables<'orders'>;
+export type OrdersRealtimePayload = RealtimePostgresChangesPayload<OrderRow>;
 
-interface UseOrdersRealtimeOptions {
-  channelName: string
-  onInsert?: (row: OrderRow) => void
-  onUpdate?: (row: OrderRow) => void
-  onDelete?: (row: OrderRow) => void
+export interface UseOrdersRealtimeOptions {
+  channelName: string;
+  onInsert?: (row: OrderRow) => void;
+  onUpdate?: (row: OrderRow) => void;
+  onDelete?: (row: OrderRow) => void;
+  onStatusChange?: (status: RealtimeSubscribeState) => void;
+}
+
+export interface UseOrdersRealtimeResult {
+  readonly channelName: string | null;
+  readonly isSubscribed: boolean;
+}
+
+type OrdersRealtimeHandlers = Pick<
+  UseOrdersRealtimeOptions,
+  'onDelete' | 'onInsert' | 'onStatusChange' | 'onUpdate'
+>;
+
+const ORDERS_REALTIME_CONFIG = {
+  event: '*',
+  schema: 'public',
+  table: 'orders',
+} as const;
+
+const MAX_CHANNEL_NAME_LENGTH = 120;
+const CHANNEL_NAME_PATTERN = /^[a-z0-9:_-]+$/i;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
+
+function isNullableBoolean(value: unknown): value is boolean | null {
+  return value === null || typeof value === 'boolean';
+}
+
+function normalizeChannelName(value: string): string | null {
+  const trimmed = value.trim();
+
+  if (trimmed.length === 0) return null;
+  if (trimmed.length > MAX_CHANNEL_NAME_LENGTH) return null;
+  if (!CHANNEL_NAME_PATTERN.test(trimmed)) return null;
+
+  return trimmed;
+}
+
+function isOrderRow(value: unknown): value is OrderRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.id === 'string' &&
+    typeof value.created_at === 'string' &&
+    typeof value.updated_at === 'string' &&
+    typeof value.currency === 'string' &&
+    typeof value.order_type === 'string' &&
+    typeof value.payment_status === 'string' &&
+    typeof value.status === 'string' &&
+    typeof value.stripe_session_id === 'string' &&
+    isFiniteNumber(value.amount_shipping) &&
+    isFiniteNumber(value.amount_subtotal) &&
+    isFiniteNumber(value.amount_tax) &&
+    isFiniteNumber(value.amount_total) &&
+    isNullableString(value.assigned_to) &&
+    isNullableString(value.customer_email) &&
+    isNullableString(value.customer_name) &&
+    isNullableString(value.customer_phone) &&
+    isNullableString(value.customer_uid) &&
+    isNullableString(value.notes) &&
+    isNullableString(value.shipping_name) &&
+    isNullableString(value.shipping_phone) &&
+    isNullableString(value.stripe_payment_intent_id) &&
+    isNullableBoolean(value.is_deleted ?? null)
+  );
+}
+
+function removeChannelSafely(channel: RealtimeChannel): void {
+  void supabase.removeChannel(channel).catch(() => {
+    // Swallow realtime teardown failures so React unmounts remain deterministic.
+  });
+}
+
+function safeInvokeRowHandler(handler: ((row: OrderRow) => void) | undefined, row: OrderRow): void {
+  if (!handler) return;
+
+  try {
+    handler(row);
+  } catch (error) {
+    if (import.meta.env.DEV) {
+      console.error('[orders-realtime] handler failed', error);
+    }
+  }
+}
+
+function safeInvokeStatusHandler(
+  handler: ((status: RealtimeSubscribeState) => void) | undefined,
+  status: RealtimeSubscribeState,
+): void {
+  if (!handler) return;
+
+  try {
+    handler(status);
+  } catch (error) {
+    if (import.meta.env.DEV) {
+      console.error('[orders-realtime] status handler failed', error);
+    }
+  }
+}
+
+function isSubscribedState(status: RealtimeSubscribeState): boolean {
+  return status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED;
+}
+
+function isTerminalRealtimeState(status: RealtimeSubscribeState): boolean {
+  return (
+    status === REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR ||
+    status === REALTIME_SUBSCRIBE_STATES.TIMED_OUT ||
+    status === REALTIME_SUBSCRIBE_STATES.CLOSED
+  );
 }
 
 export function useOrdersRealtime({
@@ -21,54 +146,143 @@ export function useOrdersRealtime({
   onInsert,
   onUpdate,
   onDelete,
-}: UseOrdersRealtimeOptions) {
-  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
+  onStatusChange,
+}: UseOrdersRealtimeOptions): UseOrdersRealtimeResult {
+  const channelRef = useRef<RealtimeChannel | null>(null);
+  const currentChannelNameRef = useRef<string | null>(null);
+  const subscribedRef = useRef<boolean>(false);
+
+  const handlersRef = useRef<OrdersRealtimeHandlers>({
+    onDelete,
+    onInsert,
+    onStatusChange,
+    onUpdate,
+  });
 
   useEffect(() => {
-    if (channelRef.current) {
-      supabase.removeChannel(channelRef.current)
-      channelRef.current = null
+    handlersRef.current = {
+      onDelete,
+      onInsert,
+      onStatusChange,
+      onUpdate,
+    };
+  }, [onDelete, onInsert, onStatusChange, onUpdate]);
+
+  useEffect(() => {
+    const normalizedChannelName = normalizeChannelName(channelName);
+
+    if (normalizedChannelName === null) {
+      if (channelRef.current !== null) {
+        removeChannelSafely(channelRef.current);
+        channelRef.current = null;
+      }
+
+      currentChannelNameRef.current = null;
+      subscribedRef.current = false;
+
+      if (import.meta.env.DEV) {
+        console.warn(
+          '[orders-realtime] Skipping subscription because channelName is empty or invalid.',
+        );
+      }
+
+      return undefined;
     }
 
-    const handleChange = (
-      payload: RealtimePostgresChangesPayload<OrderRow>
-    ) => {
-      const row = payload.new as OrderRow | null
-      if (!row) return
-
-      if (payload.eventType === 'INSERT' && onInsert) {
-        onInsert(row)
-      }
-
-      if (payload.eventType === 'UPDATE' && onUpdate) {
-        onUpdate(row)
-      }
-
-      if (payload.eventType === 'DELETE' && onDelete) {
-        onDelete(row)
-      }
+    if (channelRef.current !== null) {
+      removeChannelSafely(channelRef.current);
+      channelRef.current = null;
     }
 
-    const channel = supabase
-      .channel(channelName)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'orders' },
-        handleChange
-      )
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log(`🟢 ${channelName} realtime connected`)
-        }
-      })
+    let isActive = true;
+    subscribedRef.current = false;
+    currentChannelNameRef.current = normalizedChannelName;
 
-    channelRef.current = channel
+    const handleChange = (payload: OrdersRealtimePayload): void => {
+      if (!isActive) {
+        return;
+      }
+
+      const nextRow = isOrderRow(payload.new) ? payload.new : null;
+      const oldRow = isOrderRow(payload.old) ? payload.old : null;
+      const handlers = handlersRef.current;
+
+      switch (payload.eventType) {
+        case 'INSERT':
+          if (nextRow !== null) {
+            safeInvokeRowHandler(handlers.onInsert, nextRow);
+          }
+          return;
+
+        case 'UPDATE':
+          if (nextRow !== null) {
+            safeInvokeRowHandler(handlers.onUpdate, nextRow);
+          }
+          return;
+
+        case 'DELETE':
+          if (oldRow !== null) {
+            safeInvokeRowHandler(handlers.onDelete, oldRow);
+          }
+          return;
+
+        default:
+          return;
+      }
+    };
+
+    const channel = supabase.channel(normalizedChannelName);
+
+    channel.on('postgres_changes', ORDERS_REALTIME_CONFIG, handleChange);
+
+    void channel.subscribe((status) => {
+      if (!isActive) {
+        return;
+      }
+
+      if (!isRealtimeSubscribeState(status)) {
+        return;
+      }
+
+      const safeStatus: RealtimeSubscribeState = status;
+
+      subscribedRef.current = isSubscribedState(safeStatus);
+      safeInvokeStatusHandler(handlersRef.current.onStatusChange, safeStatus);
+
+      if (!import.meta.env.DEV) {
+        return;
+      }
+
+      if (isSubscribedState(safeStatus)) {
+        console.info(`[orders-realtime] ${normalizedChannelName} subscribed`);
+        return;
+      }
+
+      if (isTerminalRealtimeState(safeStatus)) {
+        console.warn(`[orders-realtime] ${normalizedChannelName} status: ${safeStatus}`);
+      }
+    });
+
+    channelRef.current = channel;
 
     return () => {
-      if (channelRef.current) {
-        supabase.removeChannel(channelRef.current)
-        channelRef.current = null
+      isActive = false;
+      subscribedRef.current = false;
+
+      if (channelRef.current === channel) {
+        channelRef.current = null;
       }
-    }
-  }, [channelName, onInsert, onUpdate, onDelete])
+
+      if (currentChannelNameRef.current === normalizedChannelName) {
+        currentChannelNameRef.current = null;
+      }
+
+      removeChannelSafely(channel);
+    };
+  }, [channelName]);
+
+  return {
+    channelName: currentChannelNameRef.current,
+    isSubscribed: subscribedRef.current,
+  };
 }

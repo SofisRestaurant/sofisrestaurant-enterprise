@@ -1,4 +1,3 @@
-
 // src/pages/About/About.tsx
 export default function About() {
   return (
@@ -11,7 +10,8 @@ export default function About() {
 
         {/* Intro paragraph */}
         <p className="text-lg md:text-xl text-gray-700 text-center max-w-3xl mx-auto mb-16">
-          Welcome to Sofi's Restaurant — where passion meets flavor. Since 2020, we've been serving our community with authentic, mouthwatering cuisine crafted from the freshest ingredients.
+          Welcome to Sofi's Restaurant — where passion meets flavor. Since 2020, we've been serving
+          our community with authentic, mouthwatering cuisine crafted from the freshest ingredients.
         </p>
 
         {/* Feature cards */}
@@ -20,7 +20,8 @@ export default function About() {
             <div className="text-6xl mb-4 text-primary text-center">🍴</div>
             <h3 className="text-2xl font-semibold mb-2 text-center">Fresh Ingredients</h3>
             <p className="text-gray-700 text-center">
-              Every dish is crafted using locally sourced, high-quality ingredients for maximum flavor.
+              Every dish is crafted using locally sourced, high-quality ingredients for maximum
+              flavor.
             </p>
           </div>
 
@@ -36,16 +37,18 @@ export default function About() {
             <div className="text-6xl mb-4 text-error text-center">❤️</div>
             <h3 className="text-2xl font-semibold mb-2 text-center">Community Focused</h3>
             <p className="text-gray-700 text-center">
-              Sofi's is more than a restaurant — it's a gathering place for memories and connections.
+              Sofi's is more than a restaurant — it's a gathering place for memories and
+              connections.
             </p>
           </div>
         </div>
 
         {/* Closing paragraph */}
         <p className="mt-16 text-lg md:text-xl text-gray-700 text-center max-w-3xl mx-auto">
-          From the first bite to the last, we aim to delight every sense and leave you craving your next visit. Sofi's Restaurant isn’t just about food — it’s about experiences.
+          From the first bite to the last, we aim to delight every sense and leave you craving your
+          next visit. Sofi's Restaurant isn’t just about food — it’s about experiences.
         </p>
       </div>
     </section>
-  )
+  );
 }

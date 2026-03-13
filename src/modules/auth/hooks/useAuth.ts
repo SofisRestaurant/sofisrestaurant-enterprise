@@ -1,4 +1,4 @@
- import { useUserContext } from '@/contexts/useUserContext'
+import { useUserContext } from '@/contexts/useUserContext';
 export function useAuth() {
-  return useUserContext()
+  return useUserContext();
 }

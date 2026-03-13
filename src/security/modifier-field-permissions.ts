@@ -16,4 +16,4 @@ export {
   getWritableModifierFields,
   sanitizeGroupPayload,
   sanitizeModifierPayload,
-} from '@/domain/menu/modifier.permissions'
+} from '@/domain/menu/modifier.permissions';

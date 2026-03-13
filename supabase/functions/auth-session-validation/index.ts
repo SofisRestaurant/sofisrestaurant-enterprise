@@ -19,11 +19,11 @@
 //   - ✅ No `any`
 // =============================================================================
 
-import { requireAuth, serviceClient, AuthError } from "../_shared/auth.ts";
-import { handlePreflight, ok, err, clientIp } from "../_shared/http.ts";
-import type { SvcClient } from "../_shared/supabase.ts";
-import type { Database, Json } from "../_shared/database.types.ts";
-import { toJson } from "../_shared/json.ts";
+import { requireAuth, serviceClient, AuthError } from '../_shared/auth.ts';
+import { handlePreflight, ok, err, clientIp } from '../_shared/http.ts';
+import type { SvcClient } from '../_shared/supabase.ts';
+import type { Database, Json } from '../_shared/database.types.ts';
+import { toJson } from '../_shared/json.ts';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
@@ -45,25 +45,25 @@ const CONFIG = {
 
 // Strict allowlist of actions (keep in sync with frontend)
 const ACTIONS = [
-  "checkout",
-  "redeem_loyalty",
-  "change_password",
-  "change_email",
-  "delete_account",
-  "place_order",
-  "finalize_order",
-  "profile_update",
+  'checkout',
+  'redeem_loyalty',
+  'change_password',
+  'change_email',
+  'delete_account',
+  'place_order',
+  'finalize_order',
+  'profile_update',
 ] as const;
 
 type Action = (typeof ACTIONS)[number];
 
 // Actions that require a *fresh* risk evaluation (not just cached score)
 const HIGH_SENSITIVITY_ACTIONS: ReadonlySet<Action> = new Set([
-  "checkout",
-  "redeem_loyalty",
-  "change_password",
-  "change_email",
-  "delete_account",
+  'checkout',
+  'redeem_loyalty',
+  'change_password',
+  'change_email',
+  'delete_account',
 ]);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -73,40 +73,40 @@ const HIGH_SENSITIVITY_ACTIONS: ReadonlySet<Action> = new Set([
 type JsonRecord = Record<string, unknown>;
 
 function isRecord(v: unknown): v is JsonRecord {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 function isProd(): boolean {
-  const a = (Deno.env.get("APP_ENV") ?? "").trim().toLowerCase();
-  const n = (Deno.env.get("NODE_ENV") ?? "").trim().toLowerCase();
-  return a === "production" || n === "production";
+  const a = (Deno.env.get('APP_ENV') ?? '').trim().toLowerCase();
+  const n = (Deno.env.get('NODE_ENV') ?? '').trim().toLowerCase();
+  return a === 'production' || n === 'production';
 }
 
 function readBodySize(req: Request): number {
-  const raw = req.headers.get("content-length");
+  const raw = req.headers.get('content-length');
   const n = raw ? Number(raw) : 0;
   return Number.isFinite(n) ? n : 0;
 }
 
 function asString(v: unknown, max = 256): string {
-  if (typeof v !== "string") return "";
+  if (typeof v !== 'string') return '';
   const s = v.trim();
-  if (!s) return "";
+  if (!s) return '';
   return s.length > max ? s.slice(0, max) : s;
 }
 
 function isAction(v: unknown): v is Action {
-  return typeof v === "string" && (ACTIONS as readonly string[]).includes(v);
+  return typeof v === 'string' && (ACTIONS as readonly string[]).includes(v);
 }
 
 function safeDateMs(v: unknown): number | null {
-  if (typeof v !== "string" || !v) return null;
+  if (typeof v !== 'string' || !v) return null;
   const t = new Date(v).getTime();
   return Number.isFinite(t) ? t : null;
 }
 
 function getFreshWindowMs(): number {
-  const raw = (Deno.env.get("RISK_FRESH_MS") ?? "").trim();
+  const raw = (Deno.env.get('RISK_FRESH_MS') ?? '').trim();
   const n = raw ? Number(raw) : NaN;
   return Number.isFinite(n) && n > 0 ? n : CONFIG.RISK_FRESH_MS_DEFAULT;
 }
@@ -127,7 +127,7 @@ function parseBody(raw: unknown): { sessionId: string; action: Action } | null {
 // Audit (best effort — never throws, fully typed)
 // ─────────────────────────────────────────────────────────────────────────────
 
-type AuditInsert = Database["public"]["Tables"]["auth_audit_log"]["Insert"];
+type AuditInsert = Database['public']['Tables']['auth_audit_log']['Insert'];
 
 async function audit(
   db: SvcClient,
@@ -152,7 +152,7 @@ async function audit(
   };
 
   try {
-    await db.from("auth_audit_log").insert(row);
+    await db.from('auth_audit_log').insert(row);
   } catch {
     // best-effort only
   }
@@ -173,11 +173,11 @@ async function enforceCooldown(
   const nowIso = new Date(now).toISOString();
 
   const { data, error } = await db
-    .from("auth_session_validation_cooldowns")
-    .select("last_seen_at")
-    .eq("user_id", userId)
-    .eq("session_id", sessionId)
-    .eq("action", action)
+    .from('auth_session_validation_cooldowns')
+    .select('last_seen_at')
+    .eq('user_id', userId)
+    .eq('session_id', sessionId)
+    .eq('action', action)
     .maybeSingle();
 
   if (error) {
@@ -191,10 +191,10 @@ async function enforceCooldown(
   }
 
   const { error: upErr } = await db
-    .from("auth_session_validation_cooldowns")
+    .from('auth_session_validation_cooldowns')
     .upsert(
       { user_id: userId, session_id: sessionId, action, last_seen_at: nowIso },
-      { onConflict: "user_id,session_id,action" },
+      { onConflict: 'user_id,session_id,action' },
     );
 
   if (upErr) {
@@ -212,14 +212,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
 
-  if (req.method !== "POST") {
-    return err(req, "METHOD_NOT_ALLOWED", "Method not allowed", 405);
+  if (req.method !== 'POST') {
+    return err(req, 'METHOD_NOT_ALLOWED', 'Method not allowed', 405);
   }
 
   // Body size guard (best-effort, Content-Length may be missing/incorrect)
   const len = readBodySize(req);
   if (len > CONFIG.MAX_BODY_BYTES) {
-    return err(req, "PAYLOAD_TOO_LARGE", "Payload too large", 413);
+    return err(req, 'PAYLOAD_TOO_LARGE', 'Payload too large', 413);
   }
 
   // Auth
@@ -228,14 +228,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
     user = await requireAuth(req);
   } catch (e) {
     if (e instanceof AuthError) return err(req, e.code, e.message, e.status);
-    return err(req, "AUTH_ERROR", "Authentication failed", 401);
+    return err(req, 'AUTH_ERROR', 'Authentication failed', 401);
   }
 
   // Prod-only: require Cloudflare country header
   if (isProd()) {
-    const cf = req.headers.get("CF-IPCountry");
+    const cf = req.headers.get('CF-IPCountry');
     if (!cf || !cf.trim()) {
-      return err(req, "MISSING_CF_COUNTRY", "Missing CF-IPCountry header", 400);
+      return err(req, 'MISSING_CF_COUNTRY', 'Missing CF-IPCountry header', 400);
     }
   }
 
@@ -244,12 +244,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
   try {
     raw = await req.json();
   } catch {
-    return err(req, "INVALID_BODY", "Request body must be valid JSON", 400);
+    return err(req, 'INVALID_BODY', 'Request body must be valid JSON', 400);
   }
 
   const body = parseBody(raw);
   if (!body) {
-    return err(req, "BAD_REQUEST", "Invalid request payload", 400);
+    return err(req, 'BAD_REQUEST', 'Invalid request payload', 400);
   }
 
   const db: SvcClient = serviceClient();
@@ -261,43 +261,43 @@ Deno.serve(async (req: Request): Promise<Response> => {
     if (!cool.allowed) {
       return ok(req, {
         valid: false,
-        reason: "COOLDOWN",
+        reason: 'COOLDOWN',
         retryAfterMs: cool.retryAfterMs,
         riskScore: 0,
       });
     }
   } catch (e) {
     // Fail closed (security gate)
-    return err(req, "COOLDOWN_ERROR", e instanceof Error ? e.message : "Cooldown error", 503);
+    return err(req, 'COOLDOWN_ERROR', e instanceof Error ? e.message : 'Cooldown error', 503);
   }
 
   // Load session meta (fail-closed if missing)
   const { data: sessionMeta, error: metaErr } = await db
-    .from("auth_sessions_meta")
-    .select("invalidated_at, invalidation_reason, is_trusted_device")
-    .eq("session_id", body.sessionId)
-    .eq("user_id", user.id)
+    .from('auth_sessions_meta')
+    .select('invalidated_at, invalidation_reason, is_trusted_device')
+    .eq('session_id', body.sessionId)
+    .eq('user_id', user.id)
     .maybeSingle();
 
   if (metaErr) {
-    return err(req, "DB_ERROR", "Failed to load session meta", 500);
+    return err(req, 'DB_ERROR', 'Failed to load session meta', 500);
   }
 
   if (!sessionMeta) {
     await audit(db, {
       userId: user.id,
-      eventType: "suspicious_activity",
+      eventType: 'suspicious_activity',
       ipAddress: ip,
       riskScore: 100,
       eventData: toJson(
-        { reason: "session_meta_missing", action: body.action, sessionId: body.sessionId },
+        { reason: 'session_meta_missing', action: body.action, sessionId: body.sessionId },
         {},
       ),
     });
 
     return ok(req, {
       valid: false,
-      reason: "SESSION_UNKNOWN",
+      reason: 'SESSION_UNKNOWN',
       riskScore: 100,
     });
   }
@@ -306,12 +306,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (sessionMeta.invalidated_at) {
     await audit(db, {
       userId: user.id,
-      eventType: "suspicious_activity",
+      eventType: 'suspicious_activity',
       ipAddress: ip,
       riskScore: 100,
       eventData: toJson(
         {
-          reason: "invalidated_session_used",
+          reason: 'invalidated_session_used',
           action: body.action,
           sessionId: body.sessionId,
           invalidation_reason: sessionMeta.invalidation_reason ?? null,
@@ -322,21 +322,21 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     return ok(req, {
       valid: false,
-      reason: "SESSION_INVALIDATED",
+      reason: 'SESSION_INVALIDATED',
       riskScore: 100,
     });
   }
 
   // Fetch current risk score row
   const { data: riskRow, error: riskErr } = await db
-    .from("auth_risk_scores")
-    .select("risk_score, requires_step_up, requires_mfa, expires_at, evaluated_at")
-    .eq("session_id", body.sessionId)
-    .eq("user_id", user.id)
+    .from('auth_risk_scores')
+    .select('risk_score, requires_step_up, requires_mfa, expires_at, evaluated_at')
+    .eq('session_id', body.sessionId)
+    .eq('user_id', user.id)
     .maybeSingle();
 
   if (riskErr) {
-    return err(req, "DB_ERROR", "Failed to load risk score", 500);
+    return err(req, 'DB_ERROR', 'Failed to load risk score', 500);
   }
 
   const currentScore = Number(riskRow?.risk_score ?? 0);
@@ -348,17 +348,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const freshWindowMs = getFreshWindowMs();
 
   const isFresh =
-    evalMs !== null
-      ? nowMs - evalMs <= freshWindowMs
-      : expMs !== null
-        ? expMs > nowMs
-        : false;
+    evalMs !== null ? nowMs - evalMs <= freshWindowMs : expMs !== null ? expMs > nowMs : false;
 
   // High-sensitivity actions require a fresh risk evaluation
   if (HIGH_SENSITIVITY_ACTIONS.has(body.action) && !isFresh) {
     return ok(req, {
       valid: false,
-      reason: "RISK_EVALUATION_REQUIRED",
+      reason: 'RISK_EVALUATION_REQUIRED',
       riskScore: currentScore,
       requiresDeviceTrust: !sessionMeta.is_trusted_device,
     });
@@ -368,7 +364,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (riskRow?.requires_step_up) {
     return ok(req, {
       valid: false,
-      reason: "STEP_UP_REQUIRED",
+      reason: 'STEP_UP_REQUIRED',
       riskScore: currentScore,
       requiresMfa: !!riskRow.requires_mfa,
     });
@@ -377,7 +373,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // Update last_active_at (best-effort)
   await audit(db, {
     userId: user.id,
-    eventType: "session_validated",
+    eventType: 'session_validated',
     ipAddress: ip,
     riskScore: currentScore,
     eventData: toJson({ action: body.action, sessionId: body.sessionId }, {}),
@@ -385,10 +381,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   try {
     await db
-      .from("auth_sessions_meta")
+      .from('auth_sessions_meta')
       .update({ last_active_at: new Date().toISOString() })
-      .eq("session_id", body.sessionId)
-      .eq("user_id", user.id);
+      .eq('session_id', body.sessionId)
+      .eq('user_id', user.id);
   } catch {
     // ignore
   }

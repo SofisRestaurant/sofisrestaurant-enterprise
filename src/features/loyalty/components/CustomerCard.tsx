@@ -6,7 +6,7 @@ import { LOYALTY_TIERS, asTier } from '@/domain/loyalty/tiers';
 import type { CustomerProfile } from '@/domain/loyalty/loyalty.types';
 
 interface Props {
-  customer:  CustomerProfile;
+  customer: CustomerProfile;
   loyaltyId: string;
 }
 
@@ -15,9 +15,9 @@ export function CustomerCard({ customer, loyaltyId }: Props) {
   const tierCfg = LOYALTY_TIERS[asTier(customer.tier)];
 
   const stats = [
-    { label: 'Balance',  value: Number(customer?.balance          ?? 0).toLocaleString() },
-    { label: 'Lifetime', value: Number(customer?.lifetime_earned  ?? 0).toLocaleString() },
-    { label: 'Streak',   value: `${Number(customer?.streak        ?? 0)}d`               },
+    { label: 'Balance', value: Number(customer?.balance ?? 0).toLocaleString() },
+    { label: 'Lifetime', value: Number(customer?.lifetime_earned ?? 0).toLocaleString() },
+    { label: 'Streak', value: `${Number(customer?.streak ?? 0)}d` },
   ];
 
   async function handleCopy() {
@@ -25,7 +25,9 @@ export function CustomerCard({ customer, loyaltyId }: Props) {
       await navigator.clipboard.writeText(loyaltyId);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   return (
@@ -40,8 +42,10 @@ export function CustomerCard({ customer, loyaltyId }: Props) {
             {customer.full_name ?? 'Anonymous Member'}
           </p>
         </div>
-        <span className={`rounded-full border px-2.5 py-1 text-xs font-bold
-          ${tierCfg.colors.text} ${tierCfg.colors.bg} ${tierCfg.colors.border}`}>
+        <span
+          className={`rounded-full border px-2.5 py-1 text-xs font-bold
+          ${tierCfg.colors.text} ${tierCfg.colors.bg} ${tierCfg.colors.border}`}
+        >
           {tierCfg.icon} {tierCfg.label}
         </span>
       </div>
@@ -70,8 +74,8 @@ export function CustomerCard({ customer, loyaltyId }: Props) {
           Last activity:{' '}
           {new Date(customer.last_activity).toLocaleDateString('en-US', {
             month: 'short',
-            day:   'numeric',
-            year:  'numeric',
+            day: 'numeric',
+            year: 'numeric',
           })}
         </p>
       )}

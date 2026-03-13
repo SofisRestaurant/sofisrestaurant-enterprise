@@ -12,31 +12,31 @@
 //   - Visual badge for type (radio/checkbox/quantity) and required flag
 // ============================================================================
 
-import { useState }                 from 'react'
-import type { AdminModifierGroup, AdminModifier } from '@/types/admin-menu'
-import { ModifierCard }             from './ModifierCard'
-import { InlineToggle }             from '@/components/ui/InlineToggle'
-import { DragHandle }               from '@/components/ui/DragHandle'
+import { useState } from 'react';
+import type { AdminModifierGroup, AdminModifier } from '@/types/admin-menu';
+import { ModifierCard } from './ModifierCard';
+import { InlineToggle } from '@/components/ui/InlineToggle';
+import { DragHandle } from '@/components/ui/DragHandle';
 
 interface ModifierGroupCardProps {
-  group:              AdminModifierGroup
-  modifiers:          AdminModifier[]
-  onEditGroup:        (group: AdminModifierGroup) => void
-  onDeleteGroup:      (group: AdminModifierGroup) => void
-  onToggleActive:     (group: AdminModifierGroup, active: boolean) => void
-  onAddModifier:      (groupId: string) => void
-  onEditModifier:     (modifier: AdminModifier) => void
-  onDeleteModifier:   (modifier: AdminModifier) => void
-  onToggleModifier:   (modifier: AdminModifier, available: boolean) => void
-  draggable?:         boolean
-  saving?:            boolean
+  group: AdminModifierGroup;
+  modifiers: AdminModifier[];
+  onEditGroup: (group: AdminModifierGroup) => void;
+  onDeleteGroup: (group: AdminModifierGroup) => void;
+  onToggleActive: (group: AdminModifierGroup, active: boolean) => void;
+  onAddModifier: (groupId: string) => void;
+  onEditModifier: (modifier: AdminModifier) => void;
+  onDeleteModifier: (modifier: AdminModifier) => void;
+  onToggleModifier: (modifier: AdminModifier, available: boolean) => void;
+  draggable?: boolean;
+  saving?: boolean;
 }
 
 const typeBadge: Record<string, string> = {
-  radio:    'bg-blue-50 text-blue-700',
+  radio: 'bg-blue-50 text-blue-700',
   checkbox: 'bg-purple-50 text-purple-700',
   quantity: 'bg-orange-50 text-orange-700',
-}
+};
 
 export function ModifierGroupCard({
   group,
@@ -49,16 +49,20 @@ export function ModifierGroupCard({
   onDeleteModifier,
   onToggleModifier,
   draggable = false,
-  saving    = false,
+  saving = false,
 }: ModifierGroupCardProps) {
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(true);
 
-  const availableCount   = modifiers.filter((m) => m.available).length
-  const unavailableCount = modifiers.length - availableCount
+  const availableCount = modifiers.filter((m) => m.available).length;
+  const unavailableCount = modifiers.length - availableCount;
 
   return (
-    <div className={['rounded-xl border bg-white shadow-sm overflow-hidden', group.active ? 'border-gray-200' : 'border-gray-100 opacity-60'].join(' ')}>
-
+    <div
+      className={[
+        'rounded-xl border bg-white shadow-sm overflow-hidden',
+        group.active ? 'border-gray-200' : 'border-gray-100 opacity-60',
+      ].join(' ')}
+    >
       {/* ── Group header ──────────────────────────────────────────────────── */}
       <div className="flex items-center gap-3 px-4 py-3 bg-gray-50 border-b border-gray-100">
         {draggable && <DragHandle />}
@@ -69,7 +73,15 @@ export function ModifierGroupCard({
           className="text-gray-400 hover:text-gray-600 transition"
           aria-label={expanded ? 'Collapse group' : 'Expand group'}
         >
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 14 14"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          >
             <polyline points={expanded ? '2,4 7,9 12,4' : '4,2 9,7 4,12'} />
           </svg>
         </button>
@@ -77,7 +89,12 @@ export function ModifierGroupCard({
         {/* Name + badges */}
         <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
           <span className="text-sm font-semibold text-gray-900 truncate">{group.name}</span>
-          <span className={['text-xs px-2 py-0.5 rounded-full font-medium capitalize', typeBadge[group.type] ?? 'bg-gray-100 text-gray-600'].join(' ')}>
+          <span
+            className={[
+              'text-xs px-2 py-0.5 rounded-full font-medium capitalize',
+              typeBadge[group.type] ?? 'bg-gray-100 text-gray-600',
+            ].join(' ')}
+          >
             {group.type}
           </span>
           {group.required && (
@@ -95,9 +112,7 @@ export function ModifierGroupCard({
         {/* Modifier count */}
         <span className="text-xs text-gray-400 tabular-nums">
           {modifiers.length} option{modifiers.length !== 1 ? 's' : ''}
-          {unavailableCount > 0 && (
-            <span className="text-red-400"> · {unavailableCount} off</span>
-          )}
+          {unavailableCount > 0 && <span className="text-red-400"> · {unavailableCount} off</span>}
         </span>
 
         {/* Active toggle */}
@@ -160,5 +175,5 @@ export function ModifierGroupCard({
         </div>
       )}
     </div>
-  )
+  );
 }

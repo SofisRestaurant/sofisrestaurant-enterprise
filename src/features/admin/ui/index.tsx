@@ -1,5 +1,3 @@
-/* eslint-disable react-refresh/only-export-components */
-
 // =============================================================================
 // src/features/admin/ui/index.tsx
 // =============================================================================
@@ -7,11 +5,11 @@
 // Public barrel for "@/features/admin/ui".
 // =============================================================================
 
-import type { ReactNode, HTMLAttributes, ButtonHTMLAttributes } from 'react'
-import clsx from 'clsx'
+import type { ReactNode, HTMLAttributes, ButtonHTMLAttributes } from 'react';
+import clsx from 'clsx';
 
 // Re-export all primitives from AdminPrimitives (Panel, KPICard, Badge, EmptyState, etc.)
-export * from './AdminPrimitives'
+export * from './AdminPrimitives';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SectionHeader
@@ -23,23 +21,21 @@ export function SectionHeader({
   right,
   className,
 }: {
-  title: ReactNode
-  subtitle?: ReactNode
-  right?: ReactNode
-  className?: string
+  title: ReactNode;
+  subtitle?: ReactNode;
+  right?: ReactNode;
+  className?: string;
 }) {
   return (
     <div className={clsx('flex items-start justify-between gap-4', className)}>
       <div>
-        <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-600">
-          {title}
-        </p>
+        <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-600">{title}</p>
         {subtitle ? <p className="mt-1 text-sm text-zinc-400">{subtitle}</p> : null}
       </div>
 
       {right ? <div className="shrink-0">{right}</div> : null}
     </div>
-  )
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -47,8 +43,8 @@ export function SectionHeader({
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface ActionButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  tone?: 'neutral' | 'primary' | 'danger'
-  size?: 'sm' | 'md'
+  tone?: 'neutral' | 'primary' | 'danger';
+  size?: 'sm' | 'md';
 }
 
 export function ActionButton({
@@ -62,9 +58,9 @@ export function ActionButton({
       ? 'border-amber-500/25 bg-amber-500/10 text-amber-200 hover:bg-amber-500/15 hover:text-amber-100'
       : tone === 'danger'
         ? 'border-red-500/25 bg-red-500/10 text-red-200 hover:bg-red-500/15 hover:text-red-100'
-        : 'border-zinc-700/60 bg-zinc-900/60 text-zinc-200 hover:bg-zinc-900/80'
+        : 'border-zinc-700/60 bg-zinc-900/60 text-zinc-200 hover:bg-zinc-900/80';
 
-  const sizeCls = size === 'sm' ? 'px-3 py-1.5 text-[11px]' : 'px-4 py-2 text-xs'
+  const sizeCls = size === 'sm' ? 'px-3 py-1.5 text-[11px]' : 'px-4 py-2 text-xs';
 
   return (
     <button
@@ -77,7 +73,7 @@ export function ActionButton({
       )}
       {...props}
     />
-  )
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,7 +94,7 @@ export function TableWrapper({
         <table className="min-w-full text-left text-sm">{children}</table>
       </div>
     </div>
-  )
+  );
 }
 
 export function Th({ children, className }: { children: ReactNode; className?: string }) {
@@ -112,7 +108,7 @@ export function Th({ children, className }: { children: ReactNode; className?: s
     >
       {children}
     </th>
-  )
+  );
 }
 
 export function Td({ children, className }: { children: ReactNode; className?: string }) {
@@ -120,7 +116,7 @@ export function Td({ children, className }: { children: ReactNode; className?: s
     <td className={clsx('border-b border-zinc-900 px-4 py-3 text-zinc-300', className)}>
       {children}
     </td>
-  )
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -128,5 +124,5 @@ export function Td({ children, className }: { children: ReactNode; className?: s
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function Skeleton({ className }: { className?: string }) {
-  return <div className={clsx('animate-pulse rounded-lg bg-zinc-800/60', className)} />
+  return <div className={clsx('animate-pulse rounded-lg bg-zinc-800/60', className)} />;
 }

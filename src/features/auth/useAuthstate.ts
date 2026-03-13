@@ -3,13 +3,13 @@
 // AUTH STATE — READS FROM USER PROVIDER (NO DIRECT SUPABASE CALLS)
 // ============================================================================
 
-import { useUserContext } from '@/contexts/useUserContext'
+import { useUserContext } from '@/contexts/useUserContext';
 
 interface AuthState {
-  user: ReturnType<typeof useUserContext>['supabaseUser']
-  session: ReturnType<typeof useUserContext>['session']
-  loading: boolean
-  isAuthenticated: boolean
+  user: ReturnType<typeof useUserContext>['supabaseUser'];
+  session: ReturnType<typeof useUserContext>['session'];
+  loading: boolean;
+  isAuthenticated: boolean;
 }
 
 /**
@@ -17,21 +17,20 @@ interface AuthState {
  * UserProvider is the single source of truth.
  */
 export function useAuthState(): AuthState {
-  const { supabaseUser, session, loading, isAuthenticated } =
-    useUserContext()
+  const { supabaseUser, session, loading, isAuthenticated } = useUserContext();
 
   return {
     user: supabaseUser,
     session,
     loading,
     isAuthenticated,
-  }
+  };
 }
 
 /**
  * Compatibility helper
  */
 export function useUser() {
-  const { supabaseUser, loading } = useUserContext()
-  return { user: supabaseUser, loading }
+  const { supabaseUser, loading } = useUserContext();
+  return { user: supabaseUser, loading };
 }

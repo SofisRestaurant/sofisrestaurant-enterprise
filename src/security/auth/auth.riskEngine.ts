@@ -8,15 +8,15 @@
 // - Fail-open design (network issues never block legitimate users)
 // =============================================================================
 
-import { supabase } from "@/lib/supabase/supabaseClient";
-import { getDeviceFingerprint } from "./auth.deviceFingerprint";
-import { requireSessionIdFromAccessToken } from "@/security/auth/sessionId";
+import { supabase } from '@/lib/supabase/supabaseClient';
+import { getDeviceFingerprint } from './auth.deviceFingerprint';
+import { requireSessionIdFromAccessToken } from '@/security/auth/sessionId';
 
 // ----------------------------------------------------------------------------
 // Types
 // ----------------------------------------------------------------------------
 
-export type RiskTier = "low" | "medium" | "high" | "critical";
+export type RiskTier = 'low' | 'medium' | 'high' | 'critical';
 
 export interface RiskEvaluation {
   riskScore: number;
@@ -42,7 +42,7 @@ export interface SessionValidationResult {
 
 const DEFAULT_EVALUATION: RiskEvaluation = {
   riskScore: 0,
-  tier: "low",
+  tier: 'low',
   requiresDeviceTrust: false,
   requiresMfa: false,
   requiresStepUp: false,
@@ -64,7 +64,7 @@ let _lastEvalTime = 0;
 let _inflightEval: Promise<RiskEvaluation> | null = null;
 let _inflightValidation: Promise<SessionValidationResult> | null = null;
 
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL_MS = 5 * 60 * 1000;
 
 // ----------------------------------------------------------------------------
 // Runtime helpers (safe parsing)
@@ -72,44 +72,101 @@ const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 type UnknownRecord = Record<string, unknown>;
 
-function isRecord(v: unknown): v is UnknownRecord {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+interface FunctionInvokeEnvelope {
+  data: unknown;
+  error: unknown;
 }
 
-function asNumber(v: unknown, fallback = 0): number {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string") {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : fallback;
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
   }
+
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
   return fallback;
 }
 
-function asBool(v: unknown): boolean {
-  return v === true;
+function asBool(value: unknown): boolean {
+  return value === true;
 }
 
-function asTier(v: unknown): RiskTier {
-  return v === "low" || v === "medium" || v === "high" || v === "critical" ? v : "low";
+function asTier(value: unknown): RiskTier {
+  return value === 'low' || value === 'medium' || value === 'high' || value === 'critical'
+    ? value
+    : 'low';
 }
 
 function safeAction(action: string): string {
-  // Keep it bounded; server has allowlist anyway
-  return String(action ?? "").slice(0, 64).trim() || "unknown";
+  const normalized = action.slice(0, 64).trim();
+  return normalized.length > 0 ? normalized : 'unknown';
+}
+
+function asFunctionInvokeEnvelope(value: unknown): FunctionInvokeEnvelope | null {
+  if (!isRecord(value) || !('data' in value) || !('error' in value)) {
+    return null;
+  }
+
+  return {
+    data: value.data,
+    error: value.error,
+  };
+}
+
+async function invokeEdge(
+  functionName: string,
+  accessToken: string,
+  body: UnknownRecord,
+): Promise<{ data: unknown; error: unknown }> {
+  const rawResult: unknown = await supabase.functions.invoke(functionName, {
+    body,
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  const envelope = asFunctionInvokeEnvelope(rawResult);
+
+  if (envelope === null) {
+    return {
+      data: null,
+      error: new Error(`Invalid response envelope from ${functionName}`),
+    };
+  }
+
+  return envelope;
 }
 
 async function getAccessSession(): Promise<{ accessToken: string; userId: string } | null> {
-  const { data, error } = await supabase.auth.getSession();
-  if (error) return null;
+  const result = await supabase.auth.getSession();
+  const data = result.data;
+  const error = result.error;
+
+  if (error !== null) {
+    return null;
+  }
 
   const session = data.session;
-  if (!session?.access_token || !session.user?.id) return null;
 
-  return { accessToken: session.access_token, userId: session.user.id };
+  if (session?.access_token === undefined || session.user?.id === undefined) {
+    return null;
+  }
+
+  return {
+    accessToken: session.access_token,
+    userId: session.user.id,
+  };
 }
 
 function parseRiskEvaluationResponse(raw: unknown): RiskEvaluation {
-  if (!isRecord(raw)) return DEFAULT_EVALUATION;
+  if (!isRecord(raw)) {
+    return DEFAULT_EVALUATION;
+  }
 
   return {
     riskScore: asNumber(raw.riskScore, 0),
@@ -122,13 +179,18 @@ function parseRiskEvaluationResponse(raw: unknown): RiskEvaluation {
 }
 
 function parseSessionValidationResponse(raw: unknown): SessionValidationResult {
-  if (!isRecord(raw)) return DEFAULT_VALIDATION;
+  if (!isRecord(raw)) {
+    return DEFAULT_VALIDATION;
+  }
 
   return {
     valid: raw.valid === true,
-    reason: typeof raw.reason === "string" ? raw.reason : undefined,
+    reason: typeof raw.reason === 'string' ? raw.reason : undefined,
     riskScore: asNumber(raw.riskScore, 0),
-    retryAfterMs: typeof raw.retryAfterMs === "number" && Number.isFinite(raw.retryAfterMs) ? raw.retryAfterMs : undefined,
+    retryAfterMs:
+      typeof raw.retryAfterMs === 'number' && Number.isFinite(raw.retryAfterMs)
+        ? raw.retryAfterMs
+        : undefined,
     requiresDeviceTrust: raw.requiresDeviceTrust === true ? true : undefined,
     requiresMfa: raw.requiresMfa === true ? true : undefined,
   };
@@ -147,33 +209,36 @@ function parseSessionValidationResponse(raw: unknown): SessionValidationResult {
 export async function evaluateRisk(opts?: { force?: boolean }): Promise<RiskEvaluation> {
   const force = opts?.force === true;
 
-  if (!force && _lastEvaluation && Date.now() - _lastEvalTime < CACHE_TTL_MS) {
+  if (!force && _lastEvaluation !== null && Date.now() - _lastEvalTime < CACHE_TTL_MS) {
     return _lastEvaluation;
   }
 
-  if (_inflightEval) return _inflightEval;
+  if (_inflightEval !== null) {
+    return _inflightEval;
+  }
 
-  _inflightEval = (async () => {
+  _inflightEval = (async (): Promise<RiskEvaluation> => {
     try {
       const auth = await getAccessSession();
-      if (!auth) return DEFAULT_EVALUATION;
 
-      const sessionId = requireSessionIdFromAccessToken(auth.accessToken); // ✅ real UUID from JWT claim
+      if (auth === null) {
+        return DEFAULT_EVALUATION;
+      }
+
+      const sessionId = requireSessionIdFromAccessToken(auth.accessToken);
       const fingerprintHash = await getDeviceFingerprint();
 
-      const { data, error } = await supabase.functions.invoke("auth-risk-evaluation", {
-        body: {
-          fingerprintHash,
-          sessionId,
-          // In prod, server should require CF-IPCountry; client doesn't send it.
-          countryCode: null,
-        },
-        headers: { Authorization: `Bearer ${auth.accessToken}` },
+      const result = await invokeEdge('auth-risk-evaluation', auth.accessToken, {
+        fingerprintHash,
+        sessionId,
+        countryCode: null,
       });
 
-      if (error) return DEFAULT_EVALUATION;
+      if (result.error !== null) {
+        return DEFAULT_EVALUATION;
+      }
 
-      const evaluation = parseRiskEvaluationResponse(data);
+      const evaluation = parseRiskEvaluationResponse(result.data);
 
       _lastEvaluation = evaluation;
       _lastEvalTime = Date.now();
@@ -196,28 +261,30 @@ export async function evaluateRisk(opts?: { force?: boolean }): Promise<RiskEval
  * Fail-open: if network fails, returns valid:true (but riskScore=0).
  */
 export async function validateSession(action: string): Promise<SessionValidationResult> {
-  // Dedupe simultaneous validations (e.g., multiple components firing)
-  if (_inflightValidation) return _inflightValidation;
+  if (_inflightValidation !== null) {
+    return _inflightValidation;
+  }
 
-  _inflightValidation = (async () => {
+  _inflightValidation = (async (): Promise<SessionValidationResult> => {
     try {
       const auth = await getAccessSession();
-      if (!auth) return { valid: false, reason: "NO_SESSION", riskScore: 0 };
+
+      if (auth === null) {
+        return { valid: false, reason: 'NO_SESSION', riskScore: 0 };
+      }
 
       const sessionId = requireSessionIdFromAccessToken(auth.accessToken);
 
-      const { data, error } = await supabase.functions.invoke("auth-session-validation", {
-        body: {
-          sessionId,
-          action: safeAction(action),
-        },
-        headers: { Authorization: `Bearer ${auth.accessToken}` },
+      const result = await invokeEdge('auth-session-validation', auth.accessToken, {
+        sessionId,
+        action: safeAction(action),
       });
 
-      // Fail-open on network failures
-      if (error) return DEFAULT_VALIDATION;
+      if (result.error !== null) {
+        return DEFAULT_VALIDATION;
+      }
 
-      return parseSessionValidationResponse(data);
+      return parseSessionValidationResponse(result.data);
     } catch {
       return DEFAULT_VALIDATION;
     } finally {

@@ -16,10 +16,7 @@ export type {
   SupabaseAuthErrorCode,
 } from './auth.types';
 
-export {
-  LOCKOUT_NONE,
-  parseSupabaseAuthError,
-} from './auth.types';
+export { LOCKOUT_NONE, parseSupabaseAuthError } from './auth.types';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 export {
@@ -59,17 +56,9 @@ export {
 } from './auth.lockout';
 
 // ── Device fingerprint ────────────────────────────────────────────────────────
-export {
-  getDeviceFingerprint,
-  getDeviceLabel,
-  getUserAgentHash,
-} from './auth.deviceFingerprint';
+export { getDeviceFingerprint, getDeviceLabel, getUserAgentHash } from './auth.deviceFingerprint';
 
 // ── Risk engine ───────────────────────────────────────────────────────────────
-export {
-  evaluateRisk,
-  validateSession,
-  clearRiskCache,
-} from './auth.riskEngine';
+export { evaluateRisk, validateSession, clearRiskCache } from './auth.riskEngine';
 
 // ── Audit logger ──────────────────────────────────────────────────────────────

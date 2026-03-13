@@ -9,89 +9,72 @@
 // ============================================================================
 // DOMAIN TYPES
 // ============================================================================
-export type { CartItem } from '@/modules/cart/types/cart.types'
+export type { CartItem } from '@/modules/cart/types/cart.types';
 // Menu — source of truth is src/types/menu.ts
-export type { 
-  MenuItem, 
-  MenuCategory, 
-  ModifierGroup, 
-  Modifier 
-} from '@/domain/menu/menu.types'
+export type { MenuItem, MenuCategory, ModifierGroup, Modifier } from '@/domain/menu/menu.types';
 
 // Cart store interface
-export type { CartStore, AddToCartPayload } from '@/modules/cart/types/cart.types'
+export type { CartStore, AddToCartPayload } from '@/modules/cart/types/cart.types';
 
 // ============================================================================
 // USER / AUTH
 // ============================================================================
 
-export type {
-  AppUser,
-  UserRole,
-  UserContextValue,
-} from '@/contexts/userTypes'
+export type { AppUser, UserRole, UserContextValue } from '@/contexts/userTypes';
 
 // Compatibility alias — existing code that imports `User` keeps working
-export type { AppUser as User } from '@/contexts/userTypes'
+export type { AppUser as User } from '@/contexts/userTypes';
 
 // ============================================================================
 // SECURITY
 // ============================================================================
 
-export type { Permission } from '@/security/permissions'
+export type { Permission } from '@/security/permissions';
 
 // ============================================================================
 // COMMON QUERY / PAGINATION
 // ============================================================================
 
 export interface ApiResponse<T = unknown> {
-  ok:       boolean
-  data?:    T
-  error?:   string
-  message?: string
+  ok: boolean;
+  data?: T;
+  error?: string;
+  message?: string;
 }
 
 export interface PaginationMeta {
-  page:       number
-  perPage:    number
-  total:      number
-  totalPages: number
+  page: number;
+  perPage: number;
+  total: number;
+  totalPages: number;
 }
 
 export interface PaginatedResponse<T> {
-  data: T[]
-  meta: PaginationMeta
+  data: T[];
+  meta: PaginationMeta;
 }
 
-export type SortDirection = 'asc' | 'desc'
+export type SortDirection = 'asc' | 'desc';
 
 export interface SortConfig {
-  field:     string
-  direction: SortDirection
+  field: string;
+  direction: SortDirection;
 }
 
-export type FilterOperator =
-  | 'eq'
-  | 'ne'
-  | 'gt'
-  | 'gte'
-  | 'lt'
-  | 'lte'
-  | 'like'
-  | 'in'
+export type FilterOperator = 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'like' | 'in';
 
 export interface FilterConfig {
-  field:    string
-  operator: FilterOperator
-  value:    unknown
+  field: string;
+  operator: FilterOperator;
+  value: unknown;
 }
 
 export interface QueryParams {
-  page?:     number
-  perPage?:  number
-  sort?:     SortConfig
-  filters?:  FilterConfig[]
-  search?:   string
+  page?: number;
+  perPage?: number;
+  sort?: SortConfig;
+  filters?: FilterConfig[];
+  search?: string;
 }
 
 // ============================================================================
@@ -99,50 +82,50 @@ export interface QueryParams {
 // ============================================================================
 
 export interface FieldError {
-  field:   string
-  message: string
+  field: string;
+  message: string;
 }
 
 export interface FormState<T> {
-  data:         T
-  errors:       FieldError[]
-  isSubmitting: boolean
-  isValid:      boolean
+  data: T;
+  errors: FieldError[];
+  isSubmitting: boolean;
+  isValid: boolean;
 }
 
 // ============================================================================
 // ASYNC
 // ============================================================================
 
-export type LoadingState = 'idle' | 'loading' | 'success' | 'error'
+export type LoadingState = 'idle' | 'loading' | 'success' | 'error';
 
 export interface AsyncState<T = unknown> {
-  status: LoadingState
-  data:   T | null
-  error:  string | null
+  status: LoadingState;
+  data: T | null;
+  error: string | null;
 }
 
 // ============================================================================
 // SCALARS
 // ============================================================================
 
-export type DateString = string
-export type TimeString = string
+export type DateString = string;
+export type TimeString = string;
 
 // ============================================================================
 // CONTACT
 // ============================================================================
 
 export interface Address {
-  street:   string
-  city:     string
-  state:    string
-  zipCode:  string
-  country?: string
+  street: string;
+  city: string;
+  state: string;
+  zipCode: string;
+  country?: string;
 }
 
 export interface ContactInfo {
-  email:    string
-  phone?:   string
-  address?: Address
+  email: string;
+  phone?: string;
+  address?: Address;
 }

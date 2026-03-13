@@ -20,35 +20,35 @@ export type MenuCategory =
   | 'drinks'
   | 'lunch'
   | 'breakfast'
-  | 'specials'
+  | 'specials';
 
-export type ModifierGroupType = 'radio' | 'checkbox' | 'quantity'
+export type ModifierGroupType = 'radio' | 'checkbox' | 'quantity';
 
 /* ─────────────────────────────────────────────────────────────
    Modifier Layer
 ──────────────────────────────────────────────────────────── */
 
 export interface Modifier {
-  id: string
-  modifier_group_id: string
-  name: string
+  id: string;
+  modifier_group_id: string;
+  name: string;
   /** cents */
-  price_adjustment: number
-  available: boolean
-  sort_order: number
+  price_adjustment: number;
+  available: boolean;
+  sort_order: number;
 }
 
 export interface ModifierGroup {
-  id: string
-  name: string
-  description: string | null
-  type: ModifierGroupType
-  required: boolean
-  min_selections: number
-  max_selections: number | null
-  sort_order: number
-  active: boolean
-  modifiers: Modifier[]
+  id: string;
+  name: string;
+  description: string | null;
+  type: ModifierGroupType;
+  required: boolean;
+  min_selections: number;
+  max_selections: number | null;
+  sort_order: number;
+  active: boolean;
+  modifiers: Modifier[];
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -56,50 +56,50 @@ export interface ModifierGroup {
 ──────────────────────────────────────────────────────────── */
 
 export interface MenuItemBase {
-  id: string
-  name: string
-  inventory_count?: number | null
-  price: number
-  category: MenuCategory
-  featured: boolean
-  available: boolean
-  sort_order: number
+  id: string;
+  name: string;
+  inventory_count?: number | null;
+  price: number;
+  category: MenuCategory;
+  featured: boolean;
+  available: boolean;
+  sort_order: number;
 
-  description: string | null
+  description: string | null;
   /** IMPORTANT: always string | null (not undefined, not {}) */
-  image_url: string | null
+  image_url: string | null;
 
-  spicy_level: number | null
-  is_vegetarian: boolean
-  is_vegan: boolean
-  is_gluten_free: boolean
-  allergens: string[]
-  pairs_with: string[]
+  spicy_level: number | null;
+  is_vegetarian: boolean;
+  is_vegan: boolean;
+  is_gluten_free: boolean;
+  allergens: string[];
+  pairs_with: string[];
 
   /** IMPORTANT: ALWAYS an array */
-  modifier_groups: ModifierGroup[]
+  modifier_groups: ModifierGroup[];
 
-  created_at: string
-  updated_at: string | null
+  created_at: string;
+  updated_at: string | null;
 }
 
 /* ─────────────────────────────────────────────────────────────
    Public + Admin Models
 ──────────────────────────────────────────────────────────── */
 
-export type MenuItemPublic = MenuItemBase
+export type MenuItemPublic = MenuItemBase;
 
 export interface InventoryFields {
-  low_stock_threshold: number
+  low_stock_threshold: number;
   inventory_count?: number | null;
 }
 
 export interface MenuItemAdmin extends MenuItemBase, InventoryFields {
-  popularity_score: number | null
+  popularity_score: number | null;
 }
 
 /** Back-compat alias used across repo */
-export type MenuItem = MenuItemPublic
+export type MenuItem = MenuItemPublic;
 
 /* ─────────────────────────────────────────────────────────────
    Selection + Cart Modifier Shapes (PricingEngine / Checkout)
@@ -107,15 +107,15 @@ export type MenuItem = MenuItemPublic
 
 /** What a single selected modifier looks like in the cart. */
 export interface SelectedModifier {
-  id: string
-  name: string
-  price_adjustment: number
+  id: string;
+  name: string;
+  price_adjustment: number;
 }
 
 /** What a modifier group looks like inside a cart item. */
 export interface CartItemModifier {
-  modifier_group_id: string
-  selections: SelectedModifier[]
+  modifier_group_id: string;
+  selections: SelectedModifier[];
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -123,18 +123,22 @@ export interface CartItemModifier {
 ──────────────────────────────────────────────────────────── */
 
 export interface PricingBreakdown {
-  base_price: number
-  modifier_total: number
-  unit_price: number
-  quantity: number
-  subtotal: number
-  tax: number
-  total: number
-  pricing_hash: string
+  base_price: number;
+  modifier_total: number;
+  unit_price: number;
+  quantity: number;
+  subtotal: number;
+  tax: number;
+  total: number;
+  pricing_hash: string;
 }
 
 export interface ConfigurationValidation {
-  valid: boolean
-  errors: Record<string, string>
+  valid: boolean;
+  errors: Record<string, string>;
 }
-export interface ModifierValidationResult { ok: boolean; code?: string; message?: string }
+export interface ModifierValidationResult {
+  ok: boolean;
+  code?: string;
+  message?: string;
+}

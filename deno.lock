@@ -23,7 +23,6 @@
     "npm:eslint-plugin-react-hooks@^7.0.1": "7.0.1_eslint@9.39.3_zod@4.3.6",
     "npm:eslint-plugin-react-refresh@~0.5.2": "0.5.2_eslint@9.39.3",
     "npm:eslint-plugin-react@^7.37.5": "7.37.5_eslint@9.39.3",
-    "npm:eslint@^9.39.2": "9.39.3",
     "npm:framer-motion@^12.34.2": "12.34.3_react@19.2.4_react-dom@19.2.4__react@19.2.4",
     "npm:globals@^17.3.0": "17.3.0",
     "npm:html5-qrcode@^2.3.8": "2.3.8",
@@ -4139,6 +4138,7 @@
     "packageJson": {
       "dependencies": [
         "npm:@eslint/js@^9.39.2",
+        "npm:@google/model-viewer@^4.1.0",
         "npm:@headlessui/react@^2.2.9",
         "npm:@sentry/react@^10.39.0",
         "npm:@stripe/stripe-js@^8.7.0",
@@ -4160,7 +4160,7 @@
         "npm:eslint-plugin-react-hooks@^7.0.1",
         "npm:eslint-plugin-react-refresh@~0.5.2",
         "npm:eslint-plugin-react@^7.37.5",
-        "npm:eslint@^9.39.2",
+        "npm:eslint@^9.39.4",
         "npm:framer-motion@^12.34.2",
         "npm:globals@^17.3.0",
         "npm:html5-qrcode@^2.3.8",

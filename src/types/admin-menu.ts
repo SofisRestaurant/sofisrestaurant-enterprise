@@ -18,41 +18,41 @@
 //   id, menu_item_id, modifier_group_id, sort_order
 // ============================================================================
 
-import type { ModifierGroup, Modifier, ModifierGroupType } from '@/domain/menu/menu.types'
+import type { ModifierGroup, Modifier, ModifierGroupType } from '@/domain/menu/menu.types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Re-exports for convenience
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type { ModifierGroup, Modifier, ModifierGroupType }
+export type { ModifierGroup, Modifier, ModifierGroupType };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Admin write payloads — match DB Insert/Update shapes exactly
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface ModifierGroupWritePayload {
-  name:           string
-  description?:   string
-  type:           ModifierGroupType
-  required:       boolean
-  min_selections: number
-  max_selections: number | null
-  sort_order:     number
-  active:         boolean
+  name: string;
+  description?: string;
+  type: ModifierGroupType;
+  required: boolean;
+  min_selections: number;
+  max_selections: number | null;
+  sort_order: number;
+  active: boolean;
 }
 
 export interface ModifierWritePayload {
-  modifier_group_id: string
-  name:              string
-  price_adjustment:  number
-  available:         boolean
-  sort_order:        number
+  modifier_group_id: string;
+  name: string;
+  price_adjustment: number;
+  available: boolean;
+  sort_order: number;
 }
 
 export interface MenuItemModifierGroupWritePayload {
-  menu_item_id:      string
-  modifier_group_id: string
-  sort_order:        number
+  menu_item_id: string;
+  modifier_group_id: string;
+  sort_order: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -61,15 +61,15 @@ export interface MenuItemModifierGroupWritePayload {
 
 /** A modifier group as seen in the admin editor — includes linked item count */
 export interface AdminModifierGroup extends ModifierGroup {
-  item_count:   number    // how many menu items reference this group
-  created_at:   string
-  updated_at:   string
+  item_count: number; // how many menu items reference this group
+  created_at: string;
+  updated_at: string;
 }
 
 /** A modifier as seen in the admin editor */
 export interface AdminModifier extends Modifier {
-  created_at: string
-  updated_at: string
+  created_at: string;
+  updated_at: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -77,8 +77,8 @@ export interface AdminModifier extends Modifier {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface ReorderPayload {
-  id:         string
-  sort_order: number
+  id: string;
+  sort_order: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -87,13 +87,13 @@ export interface ReorderPayload {
 
 /** A named template representing a reusable modifier group with its modifiers */
 export interface ModifierTemplate {
-  id:          string
-  name:        string
-  description: string
-  category:    string
-  icon?:       string        // ✅ ADD HERE
-  group:       ModifierGroupWritePayload
-  modifiers:   Omit<ModifierWritePayload, 'modifier_group_id'>[]
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  icon?: string; // ✅ ADD HERE
+  group: ModifierGroupWritePayload;
+  modifiers: Omit<ModifierWritePayload, 'modifier_group_id'>[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -101,30 +101,30 @@ export interface ModifierTemplate {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface ModifierGroupValidationResult {
-  valid:  boolean
-  errors: Partial<Record<keyof ModifierGroupWritePayload, string>>
+  valid: boolean;
+  errors: Partial<Record<keyof ModifierGroupWritePayload, string>>;
 }
 
 export interface ModifierValidationResult {
-  valid:  boolean
-  errors: Partial<Record<keyof Omit<ModifierWritePayload, 'modifier_group_id'>, string>>
+  valid: boolean;
+  errors: Partial<Record<keyof Omit<ModifierWritePayload, 'modifier_group_id'>, string>>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Audit / history
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type ModifierChangeType = 'created' | 'updated' | 'deleted' | 'reordered' | 'toggled'
+export type ModifierChangeType = 'created' | 'updated' | 'deleted' | 'reordered' | 'toggled';
 
 export interface ModifierAuditEntry {
-  id:           string
-  entity_type:  'modifier_group' | 'modifier' | 'menu_item_modifier_groups'
-  entity_id:    string
-  change_type:  ModifierChangeType
-  old_value:    Record<string, unknown> | null
-  new_value:    Record<string, unknown> | null
-  changed_by:   string
-  changed_at:   string
+  id: string;
+  entity_type: 'modifier_group' | 'modifier' | 'menu_item_modifier_groups';
+  entity_id: string;
+  change_type: ModifierChangeType;
+  old_value: Record<string, unknown> | null;
+  new_value: Record<string, unknown> | null;
+  changed_by: string;
+  changed_at: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -132,9 +132,9 @@ export interface ModifierAuditEntry {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type DirtyState = {
-  isDirty:   boolean
-  fields:    Set<string>
-  lastSaved: string | null
-}
+  isDirty: boolean;
+  fields: Set<string>;
+  lastSaved: string | null;
+};
 
-export type AsyncStatus = 'idle' | 'loading' | 'saving' | 'success' | 'error'
+export type AsyncStatus = 'idle' | 'loading' | 'saving' | 'success' | 'error';

@@ -75,6 +75,13 @@ interface MetricsState {
   lastRefreshedAt: Date | null;
 }
 
+interface MetricsCache {
+  snapshot: AdminLayoutSnapshot;
+  ts: number;
+}
+
+type LiveDotColor = 'amber' | 'red' | 'green';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
@@ -83,18 +90,13 @@ const POLL_MS = 30_000;
 const CACHE_TTL_MS = 25_000;
 const COUNTDOWN_S = POLL_MS / 1000;
 const RETRY_MAX = 3;
-const RETRY_BASE_MS = 1_000; // exponential: 1s → 2s → 4s
+const RETRY_BASE_MS = 1_000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Module-level cache — survives re-renders, lost on hard reload
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface MetricsCache {
-  snapshot: AdminLayoutSnapshot;
-  ts: number;
-}
-
-let _cache: MetricsCache | null = null;
+let metricsCache: MetricsCache | null = null;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Runtime validation
@@ -102,7 +104,7 @@ let _cache: MetricsCache | null = null;
 // ─────────────────────────────────────────────────────────────────────────────
 
 function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null;
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 function asInt(v: unknown, fallback = 0): number {
@@ -118,6 +120,7 @@ function parseSnapshot(raw: unknown): AdminLayoutSnapshot {
   if (!isRecord(raw)) {
     throw new Error('admin_layout_snapshot: unexpected response shape');
   }
+
   return {
     today_revenue_cents: asInt(raw['today_revenue_cents']),
     today_orders: asInt(raw['today_orders']),
@@ -128,6 +131,20 @@ function parseSnapshot(raw: unknown): AdminLayoutSnapshot {
     pending_carts: asInt(raw['pending_carts']),
     generated_at: asISOString(raw['generated_at']),
   };
+}
+
+function readFreshCache(): AdminLayoutSnapshot | null {
+  if (!metricsCache) return null;
+  if (Date.now() - metricsCache.ts >= CACHE_TTL_MS) return null;
+  return metricsCache.snapshot;
+}
+
+function writeCache(snapshot: AdminLayoutSnapshot): void {
+  metricsCache = { snapshot, ts: Date.now() };
+}
+
+function clearCache(): void {
+  metricsCache = null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -155,22 +172,27 @@ function isAuthError(err: unknown): boolean {
 
 async function withRetry<T>(fn: () => Promise<T>, maxAttempts = RETRY_MAX): Promise<T> {
   let lastErr: unknown;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       return await fn();
     } catch (err) {
-      if (isAuthError(err)) throw err; // never retry auth failures
+      if (isAuthError(err)) throw err;
       lastErr = err;
+
       if (attempt < maxAttempts - 1) {
-        await new Promise<void>((r) => setTimeout(r, RETRY_BASE_MS * Math.pow(2, attempt)));
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, RETRY_BASE_MS * 2 ** attempt);
+        });
       }
     }
   }
+
   throw lastErr;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Inline SVGs (sidebar chrome only — page-level icons live in nav.config)
+// Small UI primitives (local to this file)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const IconBell = () => (
@@ -182,11 +204,14 @@ const IconBell = () => (
     stroke="currentColor"
     strokeWidth="1.6"
     strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
   >
-    <path d="M5.5 11.5a1.5 1.5 0 003 0" />
-    <path d="M7 2a3.5 3.5 0 013.5 3.5c0 2.5 1 3.5 1 3.5H2.5s1-1 1-3.5A3.5 3.5 0 017 2z" />
+    <path d="M5.5 11.5a1.5 1.5 0 0 0 3 0" />
+    <path d="M7 2a3.5 3.5 0 0 1 3.5 3.5c0 2.5 1 3.5 1 3.5H2.5s1-1 1-3.5A3.5 3.5 0 0 1 7 2Z" />
   </svg>
 );
+
 const IconLogout = () => (
   <svg
     width="14"
@@ -196,10 +221,15 @@ const IconLogout = () => (
     stroke="currentColor"
     strokeWidth="1.6"
     strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
   >
-    <path d="M8.5 2H3a1 1 0 00-1 1v8a1 1 0 001 1h5.5M9.5 9.5l3-3-3-3M5.5 6.5h7" />
+    <path d="M8.5 2H3a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h5.5" />
+    <path d="M9.5 9.5l3-3-3-3" />
+    <path d="M5.5 6.5h7" />
   </svg>
 );
+
 const IconBurger = () => (
   <svg
     width="18"
@@ -209,10 +239,15 @@ const IconBurger = () => (
     stroke="currentColor"
     strokeWidth="1.6"
     strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
   >
-    <path d="M2 4h14M2 9h14M2 14h14" />
+    <path d="M2 4h14" />
+    <path d="M2 9h14" />
+    <path d="M2 14h14" />
   </svg>
 );
+
 const IconClose = () => (
   <svg
     width="14"
@@ -222,10 +257,14 @@ const IconClose = () => (
     stroke="currentColor"
     strokeWidth="1.6"
     strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
   >
-    <path d="M2 2l10 10M12 2L2 12" />
+    <path d="M2 2l10 10" />
+    <path d="M12 2L2 12" />
   </svg>
 );
+
 const IconFraud = () => (
   <svg
     width="14"
@@ -235,11 +274,15 @@ const IconFraud = () => (
     stroke="currentColor"
     strokeWidth="1.6"
     strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
   >
-    <path d="M7 1L1 13h12L7 1z" />
-    <path d="M7 5.5v3M7 10.5v.5" />
+    <path d="M7 1 1 13h12L7 1Z" />
+    <path d="M7 5.5v3" />
+    <path d="M7 10.5v.5" />
   </svg>
 );
+
 const IconRefresh = ({ spinning }: { spinning: boolean }) => (
   <svg
     width="12"
@@ -249,12 +292,15 @@ const IconRefresh = ({ spinning }: { spinning: boolean }) => (
     stroke="currentColor"
     strokeWidth="1.6"
     strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
     style={{ animation: spinning ? 'spin 1s linear infinite' : 'none' }}
   >
-    <path d="M10 6A4 4 0 112 4.2" />
+    <path d="M10 6A4 4 0 1 1 2 4.2" />
     <path d="M2 1.5v2.8h2.8" />
   </svg>
 );
+
 const IconCart = () => (
   <svg
     width="12"
@@ -264,6 +310,8 @@ const IconCart = () => (
     stroke="currentColor"
     strokeWidth="1.6"
     strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
   >
     <path d="M1 1h1.5l1.3 5.5h5.5l.9-3.5H3.5" />
     <circle cx="5" cy="10" r=".9" />
@@ -271,30 +319,23 @@ const IconCart = () => (
   </svg>
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// KPI Skeleton — holds layout height during initial data load
-// ─────────────────────────────────────────────────────────────────────────────
-
 function KpiSkeleton() {
   return (
     <div className="animate-pulse space-y-1.5 px-1 pt-1">
-      <div className="h-7 w-28 bg-zinc-800 rounded-md" />
-      <div className="h-3 w-20 bg-zinc-800/60 rounded" />
+      <div className="h-7 w-28 rounded-md bg-zinc-800" />
+      <div className="h-3 w-20 rounded bg-zinc-800/60" />
     </div>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Pulsing live dot
-// ─────────────────────────────────────────────────────────────────────────────
-
-function LiveDot({ color = 'amber' }: { color?: 'amber' | 'red' | 'green' }) {
+function LiveDot({ color = 'amber' }: { color?: LiveDotColor }) {
   const ring = color === 'red' ? 'bg-red-400' : color === 'green' ? 'bg-green-400' : 'bg-amber-400';
   const fill = color === 'red' ? 'bg-red-500' : color === 'green' ? 'bg-green-500' : 'bg-amber-500';
+
   return (
-    <span className="relative flex h-2 w-2 shrink-0">
+    <span className="relative flex h-2 w-2 shrink-0" aria-hidden="true">
       <span
-        className={`animate-ping absolute inline-flex h-full w-full rounded-full ${ring} opacity-75`}
+        className={`absolute inline-flex h-full w-full animate-ping rounded-full ${ring} opacity-75`}
       />
       <span className={`relative inline-flex h-2 w-2 rounded-full ${fill}`} />
     </span>
@@ -310,30 +351,24 @@ export default function AdminLayout() {
   const location = useLocation();
   const navGroups = buildNavGroups();
 
-  // ── State ──────────────────────────────────────────────────────────────────
-
   const [authStatus, setAuthStatus] = useState<AuthStatus>('checking');
   const [adminName, setAdminName] = useState('Admin');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [countdown, setCountdown] = useState(COUNTDOWN_S);
 
+  const initialCache = readFreshCache();
   const [metricsState, setMetricsState] = useState<MetricsState>({
-    snapshot: _cache?.snapshot ?? null,
-    phase: _cache ? 'idle' : 'loading',
+    snapshot: initialCache,
+    phase: initialCache ? 'idle' : 'loading',
     errorMsg: null,
-    lastRefreshedAt: _cache ? new Date(_cache.ts) : null,
+    lastRefreshedAt: initialCache && metricsCache ? new Date(metricsCache.ts) : null,
   });
 
-  const snapshot = metricsState.snapshot;
-
-  // ── Refs ───────────────────────────────────────────────────────────────────
-
   const mountedRef = useRef(true);
-  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-  const countTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof window.setInterval> | null>(null);
+  const countTimerRef = useRef<ReturnType<typeof window.setInterval> | null>(null);
 
-  // ── Derived ────────────────────────────────────────────────────────────────
-
+  const snapshot = metricsState.snapshot;
   const isAuthorized = authStatus === 'authorized';
   const isLoading = metricsState.phase === 'loading';
   const isRefreshing = metricsState.phase === 'refreshing';
@@ -345,62 +380,19 @@ export default function AdminLayout() {
       .filter(Boolean)
       .slice(-1)[0]
       ?.replace(/-/g, ' ')
-      ?.toLowerCase() || '';
-
-  // ── Auth check on mount ────────────────────────────────────────────────────
-
-  useEffect(() => {
-    let alive = true;
-
-    async function verify() {
-      const result = await verifyAdminAccess();
-      if (!alive) return;
-
-      if (!result.ok) {
-        setAuthStatus('denied');
-        navigate(result.redirectTo, { replace: true });
-        return;
-      }
-
-      setAdminName(result.firstName);
-      setAuthStatus('authorized');
-    }
-
-    verify();
-    return () => {
-      alive = false;
-    };
-  }, [navigate]);
-
-  // ── Auth state change — handles token expiry mid-session ───────────────────
-
-  useEffect(() => {
-    return subscribeToAdminSession(() => {
-      setAuthStatus('denied');
-      navigate('/login', { replace: true });
-    });
-  }, [navigate]);
-
-  // ── Metrics fetch ──────────────────────────────────────────────────────────
-  //
-  // background=false → first load (skeleton visible, no prior data)
-  // background=true  → polling / manual refresh (spinner, keep existing data)
-  //
-  // Auth errors redirect immediately.
-  // Transient errors (network / 5xx) retry with backoff then show error banner.
-  // Error banner is non-fatal — layout and nav remain fully functional.
+      .toLowerCase() || '';
 
   const fetchMetrics = useCallback(
     async (background = false): Promise<void> => {
       if (!mountedRef.current) return;
 
-      // Serve from cache if still fresh (not forced background refresh)
-      if (_cache && Date.now() - _cache.ts < CACHE_TTL_MS && !background) {
+      const cached = readFreshCache();
+      if (cached && !background) {
         setMetricsState((prev) => ({
           ...prev,
-          snapshot: _cache!.snapshot,
+          snapshot: cached,
           phase: 'idle',
-          lastRefreshedAt: new Date(_cache!.ts),
+          lastRefreshedAt: metricsCache ? new Date(metricsCache.ts) : prev.lastRefreshedAt,
         }));
         return;
       }
@@ -412,15 +404,12 @@ export default function AdminLayout() {
       }));
 
       try {
-        // invokeFn attaches Authorization: Bearer <token> internally
         const envelope = await withRetry(() =>
           invokeEdge<LayoutMetricsPayload>('admin-gateway', { action: 'layout' }),
         );
 
-        // Runtime-validate shape — never trust unknown gateway response
         const parsed = parseSnapshot(envelope?.data);
-
-        _cache = { snapshot: parsed, ts: Date.now() };
+        writeCache(parsed);
 
         if (!mountedRef.current) return;
 
@@ -434,14 +423,12 @@ export default function AdminLayout() {
       } catch (err: unknown) {
         if (!mountedRef.current) return;
 
-        // Auth failure → redirect, no error banner needed
         if (isAuthError(err)) {
           setAuthStatus('denied');
-          navigate('/login', { replace: true });
+          void navigate('/login', { replace: true });
           return;
         }
 
-        // Non-fatal — keep existing snapshot if we have it, show banner
         const msg = err instanceof Error ? err.message : 'Metrics unavailable';
         setMetricsState((prev) => ({
           ...prev,
@@ -453,150 +440,178 @@ export default function AdminLayout() {
     [navigate],
   );
 
-  // ── Polling + countdown — only when authorized ─────────────────────────────
-  //
-  // Page Visibility API: pause poll while hidden, refetch immediately on return.
-  // This prevents unnecessary Edge Function calls for background tabs.
-
   const startPollTimer = useCallback(() => {
-    if (pollTimer.current) clearInterval(pollTimer.current);
-    pollTimer.current = setInterval(() => {
+    if (pollTimerRef.current !== null) {
+      window.clearInterval(pollTimerRef.current);
+    }
+
+    pollTimerRef.current = window.setInterval(() => {
       if (mountedRef.current && document.visibilityState === 'visible') {
-        fetchMetrics(true);
+        void fetchMetrics(true);
       }
     }, POLL_MS);
   }, [fetchMetrics]);
 
+  const handleManualRefresh = useCallback(() => {
+    clearCache();
+    setCountdown(COUNTDOWN_S);
+    startPollTimer();
+    void fetchMetrics(true);
+  }, [fetchMetrics, startPollTimer]);
+
+  const handleSignOut = useCallback(async () => {
+    clearCache();
+    await supabase.auth.signOut();
+    void navigate('/login');
+  }, [navigate]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+
+    async function verify(): Promise<void> {
+      const result = await verifyAdminAccess();
+      if (!alive) return;
+
+      if (!result.ok) {
+        setAuthStatus('denied');
+        void navigate(result.redirectTo, { replace: true });
+        return;
+      }
+
+      setAdminName(result.firstName);
+      setAuthStatus('authorized');
+    }
+
+    void verify();
+
+    return () => {
+      alive = false;
+    };
+  }, [navigate]);
+
+  useEffect(() => {
+    return subscribeToAdminSession(() => {
+      setAuthStatus('denied');
+      void navigate('/login', { replace: true });
+    });
+  }, [navigate]);
+
   useEffect(() => {
     if (!isAuthorized) return;
 
-    mountedRef.current = true;
-
-    // Fire immediately on authorization
     queueMicrotask(() => {
-      fetchMetrics(true);
+      void fetchMetrics(true);
     });
+
     startPollTimer();
 
-    // Resume on tab focus
-    function onVisibilityChange() {
+    const onVisibilityChange = () => {
       if (document.visibilityState === 'visible' && mountedRef.current) {
-        fetchMetrics(true);
+        void fetchMetrics(true);
       }
-    }
+    };
+
     document.addEventListener('visibilitychange', onVisibilityChange);
 
-    // Countdown ticker — cosmetic, shows seconds to next auto-refresh
-    countTimer.current = setInterval(() => {
+    countTimerRef.current = window.setInterval(() => {
       if (mountedRef.current) {
         setCountdown((c) => (c <= 1 ? COUNTDOWN_S : c - 1));
       }
     }, 1_000);
 
     return () => {
-      mountedRef.current = false;
       document.removeEventListener('visibilitychange', onVisibilityChange);
-      if (pollTimer.current) clearInterval(pollTimer.current);
-      if (countTimer.current) clearInterval(countTimer.current);
+
+      if (pollTimerRef.current !== null) {
+        window.clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+
+      if (countTimerRef.current !== null) {
+        window.clearInterval(countTimerRef.current);
+        countTimerRef.current = null;
+      }
     };
-  }, [isAuthorized, fetchMetrics, startPollTimer]);
-
-  // ── Manual refresh ─────────────────────────────────────────────────────────
-  //
-  // Busts cache + resets poll timer so the next auto-fetch is 30s from NOW,
-  // not from whenever the previous interval was scheduled.
-
-  const handleManualRefresh = useCallback(() => {
-    _cache = null;
-    setCountdown(COUNTDOWN_S);
-    startPollTimer();
-    fetchMetrics(true);
-  }, [fetchMetrics, startPollTimer]);
-
-  // ── Sign out ───────────────────────────────────────────────────────────────
-
-  const handleSignOut = async () => {
-    _cache = null;
-    await supabase.auth.signOut();
-    navigate('/login');
-  };
-
-  // ── Auth guards ────────────────────────────────────────────────────────────
+  }, [fetchMetrics, isAuthorized, startPollTimer]);
 
   if (authStatus === 'checking') {
     return (
-      <div className="h-screen flex flex-col items-center justify-center bg-zinc-950 gap-3">
+      <div className="flex h-screen flex-col items-center justify-center gap-3 bg-zinc-950">
         <span className="text-2xl animate-bounce">🌮</span>
-        <div className="h-4 w-4 border-2 border-zinc-700 border-t-amber-500 rounded-full animate-spin" />
+        <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-700 border-t-amber-500" />
         <p className="text-[10px] uppercase tracking-widest text-zinc-600">Verifying access…</p>
       </div>
     );
   }
 
-  if (authStatus === 'denied') return null;
-
-  // ── Render ─────────────────────────────────────────────────────────────────
+  if (authStatus === 'denied') {
+    return null;
+  }
 
   return (
-    <div className="flex h-screen bg-zinc-950 text-zinc-200 overflow-hidden">
-      {/* Mobile backdrop */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black/70 z-20 lg:hidden"
+    <div className="flex h-screen overflow-hidden bg-zinc-950 text-zinc-200">
+      {sidebarOpen ? (
+        <button
+          type="button"
+          aria-label="Close sidebar overlay"
+          className="fixed inset-0 z-20 bg-black/70 lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
-      )}
+      ) : null}
 
-      {/* ── SIDEBAR ──────────────────────────────────────────────────────── */}
       <aside
         className={[
-          'fixed lg:relative inset-y-0 left-0 z-30 w-64 flex flex-col',
-          'bg-zinc-900 border-r border-zinc-800',
-          'transition-transform duration-300 ease-out',
+          'fixed inset-y-0 left-0 z-30 flex w-64 flex-col border-r border-zinc-800 bg-zinc-900 transition-transform duration-300 ease-out',
+          'lg:relative',
           sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
         ].join(' ')}
       >
-        {/* ── KPI header ───────────────────────────────────────────────── */}
-        <div className="p-5 border-b border-zinc-800">
-          <div className="flex items-center justify-between mb-3">
+        <div className="border-b border-zinc-800 p-5">
+          <div className="mb-3 flex items-center justify-between">
             <p className="text-[9px] font-bold uppercase tracking-widest text-amber-500">
-              Sofi's Command Center
+              Sofi&apos;s Command Center
             </p>
             <button
+              type="button"
               onClick={() => setSidebarOpen(false)}
-              className="lg:hidden text-zinc-600 hover:text-zinc-300 transition-colors"
+              className="text-zinc-600 transition-colors hover:text-zinc-300 lg:hidden"
               aria-label="Close sidebar"
             >
               <IconClose />
             </button>
           </div>
 
-          {/* Revenue / orders — skeleton during first load */}
           {isLoading ? (
             <KpiSkeleton />
           ) : (
             <>
-              <div className="flex items-center gap-2 mb-0.5">
+              <div className="mb-0.5 flex items-center gap-2">
                 <LiveDot color={metricsState.phase === 'error' ? 'red' : 'amber'} />
-                <span className="text-2xl font-black text-white tracking-tight">
+                <span className="text-2xl font-black tracking-tight text-white">
                   {snapshot ? fmt$(snapshot.today_revenue_cents) : '—'}
                 </span>
               </div>
-              <p className="text-xs text-zinc-500 pl-4">
+              <p className="pl-4 text-xs text-zinc-500">
                 {snapshot ? fmtCount(snapshot.today_orders) : '—'} orders today
               </p>
             </>
           )}
 
-          {/* Non-fatal error banner — keeps layout usable */}
-          {metricsState.phase === 'error' && metricsState.errorMsg && (
-            <div className="mt-2 flex items-center gap-1.5 text-[10px] text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-2.5 py-1.5">
-              <span aria-hidden>⚠</span>
+          {metricsState.phase === 'error' && metricsState.errorMsg ? (
+            <div className="mt-2 flex items-center gap-1.5 rounded-lg border border-red-500/20 bg-red-500/10 px-2.5 py-1.5 text-[10px] text-red-400">
+              <span aria-hidden="true">⚠</span>
               <span className="truncate">{metricsState.errorMsg}</span>
             </div>
-          )}
+          ) : null}
 
-          {/* Last refreshed + manual refresh control */}
           <div className="mt-2 flex items-center justify-between pl-4">
             <p className="text-[9px] text-zinc-700">
               {metricsState.lastRefreshedAt
@@ -607,10 +622,12 @@ export default function AdminLayout() {
                   })
                 : '—'}
             </p>
+
             <button
+              type="button"
               onClick={handleManualRefresh}
               disabled={isRefreshing}
-              className="flex items-center gap-1 text-[9px] text-zinc-600 hover:text-zinc-400 transition-colors disabled:opacity-40"
+              className="flex items-center gap-1 text-[9px] text-zinc-600 transition-colors hover:text-zinc-400 disabled:opacity-40"
               title={`Auto-refresh in ${countdown}s`}
               aria-label="Refresh metrics"
             >
@@ -620,11 +637,11 @@ export default function AdminLayout() {
           </div>
         </div>
 
-        {/* ── Fraud alert banner ───────────────────────────────────────── */}
-        {snapshot && snapshot.fraud_events_7d > 0 && (
+        {snapshot && snapshot.fraud_events_7d > 0 ? (
           <button
-            onClick={() => navigate('/admin/fraud')}
-            className="mx-3 mt-3 flex items-center gap-2 rounded-xl bg-red-500/10 border border-red-500/20 px-3 py-2 hover:bg-red-500/15 transition-colors text-left"
+            type="button"
+            onClick={() => void navigate('/admin/fraud')}
+            className="mx-3 mt-3 flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-left transition-colors hover:bg-red-500/15"
           >
             <IconFraud />
             <p className="text-xs font-bold text-red-400">
@@ -632,23 +649,26 @@ export default function AdminLayout() {
               {snapshot.fraud_events_7d !== 1 ? 's' : ''} (7d) — Review
             </p>
           </button>
-        )}
+        ) : null}
 
-        {/* ── Nav — driven entirely by nav.config.tsx ──────────────────── */}
-        <nav className="flex-1 p-3 space-y-5 overflow-y-auto" aria-label="Admin navigation">
+        <nav className="flex-1 space-y-5 overflow-y-auto p-3" aria-label="Admin navigation">
           {navGroups.map((group) => (
             <div key={group.title}>
-              <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-600 mb-1.5 px-2">
+              <p className="mb-1.5 px-2 text-[9px] font-bold uppercase tracking-widest text-zinc-600">
                 {group.title}
               </p>
+
               <div className="space-y-0.5">
                 {group.items.map((item) => {
-                  // badgeKey maps nav item → snapshot field name
                   const badgeVal =
                     item.badgeKey && snapshot
-                      ? ((snapshot[item.badgeKey as keyof AdminLayoutSnapshot] as number) ?? 0)
+                      ? snapshot[item.badgeKey as keyof AdminLayoutSnapshot]
                       : 0;
-                  const badge = badgeVal > 0 ? badgeVal : null;
+
+                  const badge =
+                    typeof badgeVal === 'number' && Number.isFinite(badgeVal) && badgeVal > 0
+                      ? badgeVal
+                      : null;
 
                   return (
                     <NavLink
@@ -658,9 +678,9 @@ export default function AdminLayout() {
                       onClick={() => setSidebarOpen(false)}
                       className={({ isActive }) =>
                         [
-                          'flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-all',
+                          'flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-all',
                           isActive
-                            ? 'bg-amber-500/15 text-amber-400 font-medium'
+                            ? 'bg-amber-500/15 font-medium text-amber-400'
                             : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200',
                         ].join(' ')
                       }
@@ -669,10 +689,11 @@ export default function AdminLayout() {
                         <span className="shrink-0">{item.icon}</span>
                         {item.label}
                       </span>
-                      {badge !== null && (
+
+                      {badge !== null ? (
                         <span
                           className={[
-                            'text-[10px] font-black px-2 py-0.5 rounded-full min-w-[20px] text-center',
+                            'min-w-[20px] rounded-full px-2 py-0.5 text-center text-[10px] font-black',
                             item.badgeWarn
                               ? 'bg-red-500/20 text-red-400'
                               : 'bg-amber-500/20 text-amber-400',
@@ -680,7 +701,7 @@ export default function AdminLayout() {
                         >
                           {badge > 99 ? '99+' : fmtCount(badge)}
                         </span>
-                      )}
+                      ) : null}
                     </NavLink>
                   );
                 })}
@@ -689,15 +710,16 @@ export default function AdminLayout() {
           ))}
         </nav>
 
-        {/* ── Footer ───────────────────────────────────────────────────── */}
-        <div className="p-4 border-t border-zinc-800 flex items-center justify-between">
+        <div className="flex items-center justify-between border-t border-zinc-800 p-4">
           <div>
             <p className="text-xs font-semibold text-zinc-300">{adminName}</p>
-            <p className="text-[9px] text-zinc-600 uppercase tracking-wider">Administrator</p>
+            <p className="text-[9px] uppercase tracking-wider text-zinc-600">Administrator</p>
           </div>
+
           <button
-            onClick={handleSignOut}
-            className="p-2 text-zinc-600 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
+            type="button"
+            onClick={() => void handleSignOut()}
+            className="rounded-lg p-2 text-zinc-600 transition-colors hover:bg-red-500/10 hover:text-red-400"
             title="Sign out"
             aria-label="Sign out"
           >
@@ -706,75 +728,74 @@ export default function AdminLayout() {
         </div>
       </aside>
 
-      {/* ── MAIN CONTENT ─────────────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* ── Top bar ──────────────────────────────────────────────────── */}
-        <header className="h-14 shrink-0 border-b border-zinc-800 bg-zinc-900/40 flex items-center justify-between px-5">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex h-14 shrink-0 items-center justify-between border-b border-zinc-800 bg-zinc-900/40 px-5">
           <div className="flex items-center gap-3">
             <button
+              type="button"
               onClick={() => setSidebarOpen(true)}
-              className="lg:hidden text-zinc-400 hover:text-white transition-colors"
+              className="text-zinc-400 transition-colors hover:text-white lg:hidden"
               aria-label="Open sidebar"
             >
               <IconBurger />
             </button>
+
             <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs">
               <span className="text-zinc-600">Admin</span>
-              {pageTitle && (
+              {pageTitle ? (
                 <>
-                  <span className="text-zinc-700" aria-hidden>
+                  <span className="text-zinc-700" aria-hidden="true">
                     /
                   </span>
-                  <span className="text-zinc-300 font-semibold capitalize">{pageTitle}</span>
+                  <span className="font-semibold capitalize text-zinc-300">{pageTitle}</span>
                 </>
-              )}
+              ) : null}
             </nav>
           </div>
 
-          {/* ── Header KPI action chips ───────────────────────────────── */}
           <div className="flex items-center gap-2">
-            {/* Pending orders — links to orders queue */}
-            {!isLoading && snapshot && snapshot.pending_orders > 0 && (
+            {!isLoading && snapshot && snapshot.pending_orders > 0 ? (
               <button
-                onClick={() => navigate('/admin/orders')}
-                className="hidden sm:flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 hover:bg-amber-500/20 transition-colors"
+                type="button"
+                onClick={() => void navigate('/admin/orders')}
+                className="hidden items-center gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-[10px] font-bold text-amber-400 transition-colors hover:bg-amber-500/20 sm:flex"
                 aria-label={`${snapshot.pending_orders} pending orders`}
               >
                 <span className="relative flex h-1.5 w-1.5">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
                   <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-500" />
                 </span>
                 {fmtCount(snapshot.pending_orders)} pending
               </button>
-            )}
+            ) : null}
 
-            {/* Abandoned carts */}
-            {!isLoading && snapshot && snapshot.abandoned_carts > 0 && (
+            {!isLoading && snapshot && snapshot.abandoned_carts > 0 ? (
               <button
-                onClick={() => navigate('/admin/marketing/abandoned')}
-                className="hidden sm:flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1.5 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-400 hover:bg-orange-500/20 transition-colors"
+                type="button"
+                onClick={() => void navigate('/admin/marketing/abandoned')}
+                className="hidden items-center gap-1.5 rounded-lg border border-orange-500/20 bg-orange-500/10 px-2.5 py-1.5 text-[10px] font-bold text-orange-400 transition-colors hover:bg-orange-500/20 sm:flex"
                 aria-label={`${snapshot.abandoned_carts} abandoned carts`}
               >
                 <IconCart />
                 {fmtCount(snapshot.abandoned_carts)} abandoned
               </button>
-            )}
+            ) : null}
 
-            {/* Pending carts — softer signal */}
-            {!isLoading && snapshot && snapshot.pending_carts > 0 && (
+            {!isLoading && snapshot && snapshot.pending_carts > 0 ? (
               <button
-                onClick={() => navigate('/admin/marketing/abandoned')}
-                className="hidden md:flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1.5 rounded-lg bg-zinc-700/40 border border-zinc-700 text-zinc-400 hover:bg-zinc-700/60 transition-colors"
+                type="button"
+                onClick={() => void navigate('/admin/marketing/abandoned')}
+                className="hidden items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-700/40 px-2.5 py-1.5 text-[10px] font-bold text-zinc-400 transition-colors hover:bg-zinc-700/60 md:flex"
                 aria-label={`${snapshot.pending_carts} carts in progress`}
               >
                 {fmtCount(snapshot.pending_carts)} in cart
               </button>
-            )}
+            ) : null}
 
-            {/* Notification bell */}
             <button
-              onClick={() => navigate('/admin/notifications')}
-              className="relative p-2 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 transition-colors"
+              type="button"
+              onClick={() => void navigate('/admin/notifications')}
+              className="relative rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
               title="Notifications"
               aria-label={
                 snapshot && snapshot.unread_notifications > 0
@@ -783,21 +804,20 @@ export default function AdminLayout() {
               }
             >
               <IconBell />
-              {!isLoading && snapshot && snapshot.unread_notifications > 0 && (
+              {!isLoading && snapshot && snapshot.unread_notifications > 0 ? (
                 <span
-                  className="absolute top-1 right-1 h-3.5 w-3.5 flex items-center justify-center bg-amber-500 text-black text-[8px] font-black rounded-full leading-none"
-                  aria-hidden
+                  className="absolute right-1 top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-amber-500 text-[8px] font-black leading-none text-black"
+                  aria-hidden="true"
                 >
                   {snapshot.unread_notifications > 9
                     ? '9+'
                     : fmtCount(snapshot.unread_notifications)}
                 </span>
-              )}
+              ) : null}
             </button>
           </div>
         </header>
 
-        {/* ── Page outlet ──────────────────────────────────────────────── */}
         <main className="flex-1 overflow-y-auto p-6">
           <Outlet />
         </main>

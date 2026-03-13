@@ -1,186 +1,231 @@
 // ============================================================================
-// src/components/checkout/CheckoutButton.tsx
+// src/modules/checkout/components/CheckoutButton.tsx
 // CheckoutButton — Enterprise UX (2026) + Review Order Modal (Production Ready)
 // ----------------------------------------------------------------------------
-// Keeps security guarantees intact:
-// - useCheckout() remains the ONLY executor for create-checkout + redirect
-// - Strict runtime guards for cart shape + safe totals
-// - Idempotent click handling + cooldown-safe retry UX
+// Security / behavior guarantees:
+// - useCheckout() remains the only checkout executor + redirect source
+// - Strict runtime guards for cart shape + resilient totals display
+// - Double-submit protection + cooldown-safe retry behavior
 // - No token/session logging
-// - Accessible modal (ESC, outside click, focus trap-lite, scroll lock)
+// - Accessible modal: ESC, outside click, focus restore, focus trap-lite
+// - Scroll lock handled centrally through useScrollLock
 // ----------------------------------------------------------------------------
-// Major upgrades (2026):
-// - Stronger a11y: focus restore, focus trap-lite, aria-describedby/id wiring
-// - Better idempotency: double-click lock + queued checkout avoidance
-// - Safer timers: interval cleanup + visibility-aware tick
-// - Better UX: empty cart state, line-item sorting stability, notes preview,
-//   keyboard activation, and reduced motion safety
-// - More defensive runtime guards for CartModifier
+// Upgrades:
+// - Fully wired redirectToCheckout() success path
+// - Stronger runtime guards + safer formatting fallbacks
+// - Safer timer and animation behavior
+// - More defensive auth/cart/credit/promo handling
+// - Better modal UX and keyboard handling
+// - Production-safe callbacks, cleanup, and state transitions
 // ============================================================================
 
 import React, { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { AlertCircle, CreditCard, Loader2, RefreshCw, ShieldCheck, X } from 'lucide-react'
+import {
+  AlertCircle,
+  CreditCard,
+  Loader2,
+  RefreshCw,
+  ShieldCheck,
+  ShoppingBag,
+  X,
+} from 'lucide-react';
 
-import { env } from '@/lib/config/env'
-import { useCheckout } from '@/modules/checkout/hooks/useCheckout'
-import { useUserContext } from '@/contexts/useUserContext'
-import { useCart } from '@/modules/cart/hooks/useCart'
-
-import type { CartItem, CartModifier } from '@/modules/cart/types/cart.types'
-import { cartItemKey } from '@/modules/cart/types/cart.types'
-
+import { env } from '@/lib/config/env';
+import { useCheckout } from '@/modules/checkout/hooks/useCheckout';
+import { useUserContext } from '@/contexts/useUserContext';
+import { useCart } from '@/modules/cart/hooks/useCart';
 import { useScrollLock } from '@/lib/ui/useScrollLock';
+
+import type { CartItem, CartModifier } from '@/modules/cart/types/cart.types';
+import { cartItemKey } from '@/modules/cart/types/cart.types';
+
 // ============================================================================
 // Types
 // ============================================================================
 
-type OrderType = 'pickup' | 'delivery' | 'dine_in'
+type OrderType = 'pickup' | 'delivery' | 'dine_in';
 
 type CheckoutButtonProps = {
-  promoCode?: string
-  creditId?: string
-  orderType?: OrderType
-  notes?: string | null
-
-  /** If true: click opens a review modal first. If false: goes straight to Stripe. */
-  reviewFirst?: boolean
-
-  onPromoError?: (msg: string) => void
-  className?: string
-  disabled?: boolean
-}
+  promoCode?: string;
+  creditId?: string;
+  orderType?: OrderType;
+  notes?: string | null;
+  reviewFirst?: boolean;
+  onPromoError?: (msg: string) => void;
+  className?: string;
+  disabled?: boolean;
+};
 
 type CountdownState = {
-  secondsLeft: number
-  untilMs: number
-} | null
+  secondsLeft: number;
+  untilMs: number;
+} | null;
 
-type UnknownRecord = Record<string, unknown>
+type UnknownRecord = Record<string, unknown>;
 
 // ============================================================================
 // Helpers
 // ============================================================================
 
-function cx(...classes: Array<string | false | null | undefined>) {
-  return classes.filter(Boolean).join(' ')
+function cx(...classes: Array<string | false | null | undefined>): string {
+  return classes.filter(Boolean).join(' ');
 }
 
-function isRecord(v: unknown): v is UnknownRecord {
-  return typeof v === 'object' && v !== null && !Array.isArray(v)
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function normalizePromo(code?: string): string | undefined {
-  const v = (code ?? '').trim().toUpperCase()
-  return v ? v : undefined
+function asTrimmedString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
-function normalizeCreditId(id?: string): string | undefined {
-  const v = (id ?? '').trim()
-  return v ? v : undefined
+function normalizePromo(code?: string | null): string | undefined {
+  const normalized = asTrimmedString(code).toUpperCase();
+  return normalized || undefined;
 }
 
-function isPromoRelatedMessage(msg: string): boolean {
-  return /(promo|coupon|code|discount)/i.test(msg)
+function normalizeCreditId(id?: string | null): string | undefined {
+  const normalized = asTrimmedString(id);
+  return normalized || undefined;
+}
+
+function normalizeOrderType(value: unknown): OrderType {
+  return value === 'delivery' || value === 'dine_in' || value === 'pickup' ? value : 'pickup';
+}
+
+function isPromoRelatedMessage(message: string): boolean {
+  return /(promo|coupon|code|discount)/i.test(message);
+}
+
+function isCreditRelatedMessage(message: string): boolean {
+  return /(credit|balance|voucher)/i.test(message);
 }
 
 function safeSecondsLeft(untilMs: number): number {
-  const diff = Math.ceil((untilMs - Date.now()) / 1000)
-  return Math.max(0, diff)
+  return Math.max(0, Math.ceil((untilMs - Date.now()) / 1000));
 }
 
 function formatCents(cents: number): string {
-  const safe = Number.isFinite(cents) ? cents : 0
-  return (safe / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+  const safeValue = Number.isFinite(cents) ? cents : 0;
+  return (safeValue / 100).toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+  });
 }
 
-function clampInt(n: number, min: number, max: number): number {
-  if (!Number.isFinite(n)) return min
-  return Math.max(min, Math.min(max, Math.trunc(n)))
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, Math.trunc(value)));
 }
 
-function modifierLabel(mods: CartModifier[]): string {
-  if (!Array.isArray(mods) || mods.length === 0) return ''
-  const names = mods
-    .map((m) => (m && typeof m.name === 'string' ? m.name : ''))
-    .map((s) => s.trim())
-    .filter(Boolean)
-  return names.length ? names.join(', ') : ''
-}
-
-function isCartModifier(v: unknown): v is CartModifier {
-  if (!isRecord(v)) return false
-  const idOk = typeof v.id === 'string' && v.id.trim().length > 0
-  // groupId/name are optional in some carts, but if present, ensure string
-  const groupOk = v.groupId === undefined || typeof v.groupId === 'string'
-  const nameOk = v.name === undefined || typeof v.name === 'string'
-  const priceOk =
-    v.priceAdjustment === undefined ||
-    (typeof v.priceAdjustment === 'number' && Number.isFinite(v.priceAdjustment))
-  return idOk && groupOk && nameOk && priceOk
-}
-
-/** Runtime guard so this component never receives unknown cart shapes. */
-function isCartItem(v: unknown): v is CartItem {
-  if (!isRecord(v)) return false
-
-  const okId = typeof v.menuItemId === 'string' && v.menuItemId.trim().length > 0
-  const okName = typeof v.name === 'string'
-  const okQty = typeof v.quantity === 'number' && Number.isFinite(v.quantity)
-  const okUnit = typeof v.unitPriceCents === 'number' && Number.isFinite(v.unitPriceCents)
-  const okMods = Array.isArray(v.modifiers) && v.modifiers.every(isCartModifier)
-  const okLine = typeof v.lineTotalCents === 'number' && Number.isFinite(v.lineTotalCents)
-
-  // lineTotalCents may be missing in older carts, so allow it to be absent.
-  return okId && okName && okQty && okUnit && okMods && (okLine || v.lineTotalCents === undefined)
-}
-
-function safeLineTotalCents(item: CartItem): number {
-  if (typeof item.lineTotalCents === 'number' && Number.isFinite(item.lineTotalCents)) {
-    return Math.max(0, Math.round(item.lineTotalCents))
-  }
-
-  const qty = clampInt(item.quantity, 1, 100)
-  const unit = Math.max(0, Math.round(item.unitPriceCents ?? 0))
-  const modSum = Array.isArray(item.modifiers)
-    ? item.modifiers.reduce((s, m) => s + Math.max(0, Math.round(m.priceAdjustment ?? 0)), 0)
-    : 0
-  return (unit + modSum) * qty
-}
-
-function sumCartSubtotalCents(items: CartItem[]): number {
-  let sum = 0
-  for (const it of items) sum += safeLineTotalCents(it)
-  return Math.max(0, sum)
+function safeTrim(value: unknown, max = 600): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
 }
 
 function prefersReducedMotion(): boolean {
   try {
-    return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   } catch {
-    return false
+    return false;
   }
 }
 
-function safeTrim(v: unknown, max = 600): string | null {
-  if (typeof v !== 'string') return null
-  const s = v.trim()
-  if (!s) return null
-  return s.length > max ? s.slice(0, max) : s
+function isCartModifier(value: unknown): value is CartModifier {
+  if (!isRecord(value)) return false;
+
+  const idOk = typeof value.id === 'string' && value.id.trim().length > 0;
+  const groupOk = value.groupId === undefined || typeof value.groupId === 'string';
+  const nameOk = value.name === undefined || typeof value.name === 'string';
+  const priceOk =
+    value.priceAdjustment === undefined ||
+    (typeof value.priceAdjustment === 'number' && Number.isFinite(value.priceAdjustment));
+
+  return idOk && groupOk && nameOk && priceOk;
+}
+
+function isCartItem(value: unknown): value is CartItem {
+  if (!isRecord(value)) return false;
+
+  const okId = typeof value.menuItemId === 'string' && value.menuItemId.trim().length > 0;
+  const okName = typeof value.name === 'string';
+  const okQty = typeof value.quantity === 'number' && Number.isFinite(value.quantity);
+  const okUnit = typeof value.unitPriceCents === 'number' && Number.isFinite(value.unitPriceCents);
+  const okMods = Array.isArray(value.modifiers) && value.modifiers.every(isCartModifier);
+  const okLine =
+    value.lineTotalCents === undefined ||
+    (typeof value.lineTotalCents === 'number' && Number.isFinite(value.lineTotalCents));
+
+  return okId && okName && okQty && okUnit && okMods && okLine;
+}
+
+function safeModifierPriceAdjustment(modifier: CartModifier): number {
+  return typeof modifier.priceAdjustment === 'number' && Number.isFinite(modifier.priceAdjustment)
+    ? Math.round(modifier.priceAdjustment)
+    : 0;
+}
+
+function safeLineTotalCents(item: CartItem): number {
+  if (typeof item.lineTotalCents === 'number' && Number.isFinite(item.lineTotalCents)) {
+    return Math.max(0, Math.round(item.lineTotalCents));
+  }
+
+  const quantity = clampInt(item.quantity, 1, 100);
+  const unitPrice = Math.max(0, Math.round(item.unitPriceCents));
+  const modifierTotal = Array.isArray(item.modifiers)
+    ? item.modifiers.reduce(
+        (sum, modifier) => sum + Math.max(0, safeModifierPriceAdjustment(modifier)),
+        0,
+      )
+    : 0;
+
+  return (unitPrice + modifierTotal) * quantity;
+}
+
+function sumCartSubtotalCents(items: CartItem[]): number {
+  return items.reduce((sum, item) => sum + safeLineTotalCents(item), 0);
+}
+
+function modifierLabel(modifiers: CartModifier[]): string {
+  if (!Array.isArray(modifiers) || modifiers.length === 0) return '';
+
+  const names = modifiers
+    .map((modifier) => (typeof modifier.name === 'string' ? modifier.name.trim() : ''))
+    .filter(Boolean);
+
+  return names.join(', ');
+}
+
+function formatOrderTypeLabel(orderType: OrderType): string {
+  switch (orderType) {
+    case 'delivery':
+      return 'Delivery';
+    case 'dine_in':
+      return 'Dine in';
+    case 'pickup':
+    default:
+      return 'Pickup';
+  }
 }
 
 // ============================================================================
-// Focus trap-lite + scroll lock (modal safety, no external deps)
+// Focus trap-lite
 // ============================================================================
 
 const FOCUSABLE_SELECTOR =
-  'a[href],button:not([disabled]),textarea,input,select,[tabindex]:not([tabindex="-1"])'
+  'a[href],button:not([disabled]),textarea,input,select,[tabindex]:not([tabindex="-1"])';
 
 function getFocusable(root: HTMLElement | null): HTMLElement[] {
-  if (!root) return []
-  const nodes = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
-  return nodes.filter((el) => !el.hasAttribute('disabled') && !el.getAttribute('aria-hidden'))
-}
+  if (!root) return [];
 
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter((element) => {
+    if (element.hasAttribute('disabled')) return false;
+    if (element.getAttribute('aria-hidden') === 'true') return false;
+    return true;
+  });
+}
 
 // ============================================================================
 // Component
@@ -196,59 +241,69 @@ function CheckoutButton({
   className,
   disabled: disabledProp = false,
 }: CheckoutButtonProps) {
-  const { user, loading: authLoading, isAuthenticated } = useUserContext();
-  const { checkout, isLoading, error, errorCode, canRetry, retryAfter, reset, canCheckout } =
-    useCheckout();
+  const normalizedOrderType = normalizeOrderType(orderType);
 
-  // Pull cart for review UI (does NOT execute checkout)
+  const { user, loading: authLoading, isAuthenticated } = useUserContext();
   const cart = useCart();
 
-  const safeItems: CartItem[] = useMemo(() => {
-    const raw = cart.items;
-    if (!Array.isArray(raw)) return [];
-    return raw.filter(isCartItem);
-  }, [cart.items]);
+  const {
+    redirectToCheckout,
+    isLoading,
+    error,
+    errorCode,
+    canRetry,
+    retryAfter,
+    reset,
+    canCheckout,
+  } = useCheckout();
 
-  // Stripe gate
-  const stripeEnabled = Boolean(env?.stripe?.enabled);
-
-  // Refs: mount safety, click dedupe, timers, focus restore
   const mountedRef = useRef(true);
   const inflightRef = useRef(false);
   const retryTimerRef = useRef<number | null>(null);
+  const lastActiveElRef = useRef<HTMLElement | null>(null);
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  const closeBtnRef = useRef<HTMLButtonElement | null>(null);
 
   const [countdown, setCountdown] = useState<CountdownState>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
 
-  // ✅ Centralized scroll lock (prevents stuck scroll across the app)
   useScrollLock({ enabled: reviewOpen, token: 'checkout-review-modal' });
 
-  const modalRef = useRef<HTMLDivElement | null>(null);
-  const closeBtnRef = useRef<HTMLButtonElement | null>(null);
-  const lastActiveElRef = useRef<HTMLElement | null>(null);
+  const modalTitleId = useId();
+  const modalDescId = useId();
 
   useEffect(() => {
     mountedRef.current = true;
+
     return () => {
       mountedRef.current = false;
-      if (retryTimerRef.current) window.clearInterval(retryTimerRef.current);
-      retryTimerRef.current = null;
+      if (retryTimerRef.current !== null) {
+        window.clearInterval(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
     };
   }, []);
 
-  // Normalize inputs
+  const safeItems = useMemo<CartItem[]>(() => {
+    const rawItems = cart.items;
+    if (!Array.isArray(rawItems)) return [];
+    return rawItems.filter(isCartItem);
+  }, [cart.items]);
+
   const normalizedPromo = useMemo(() => normalizePromo(promoCode), [promoCode]);
   const normalizedCreditId = useMemo(() => normalizeCreditId(creditId), [creditId]);
   const safeNotesPreview = useMemo(() => safeTrim(notes, 400), [notes]);
 
-  // Reset hook error state when promo/credit changes
+  const stripeEnabled = Boolean(env?.stripe?.enabled);
+  const isAuthed = Boolean(isAuthenticated && user?.id);
+  const hasItems = safeItems.length > 0;
+
   useEffect(() => {
     reset();
   }, [normalizedPromo, normalizedCreditId, reset]);
 
-  // Retry countdown (visibility-aware)
   useEffect(() => {
-    if (retryTimerRef.current) {
+    if (retryTimerRef.current !== null) {
       window.clearInterval(retryTimerRef.current);
       retryTimerRef.current = null;
     }
@@ -262,36 +317,106 @@ function CheckoutButton({
 
     const tick = () => {
       if (!mountedRef.current) return;
-      // If tab is hidden, do less work; just compute once when visible
+
       const secondsLeft = safeSecondsLeft(untilMs);
       if (secondsLeft <= 0) {
         setCountdown(null);
         reset();
-        if (retryTimerRef.current) window.clearInterval(retryTimerRef.current);
-        retryTimerRef.current = null;
+
+        if (retryTimerRef.current !== null) {
+          window.clearInterval(retryTimerRef.current);
+          retryTimerRef.current = null;
+        }
         return;
       }
+
       setCountdown({ secondsLeft, untilMs });
     };
 
     tick();
+
     retryTimerRef.current = window.setInterval(() => {
-      if (document.visibilityState !== 'visible') return;
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        return;
+      }
       tick();
     }, 250);
 
     return () => {
-      if (retryTimerRef.current) window.clearInterval(retryTimerRef.current);
-      retryTimerRef.current = null;
+      if (retryTimerRef.current !== null) {
+        window.clearInterval(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
     };
   }, [retryAfter, reset]);
 
-  // Derived UI state
-  const isAuthed = Boolean(isAuthenticated && user?.id);
+  useEffect(() => {
+    if (!reviewOpen) return;
+
+    lastActiveElRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    const focusTimeout = window.setTimeout(() => {
+      closeBtnRef.current?.focus();
+    }, 0);
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setReviewOpen(false);
+        return;
+      }
+
+      if (event.key !== 'Tab') return;
+
+      const root = modalRef.current;
+      const focusable = getFocusable(root);
+
+      if (focusable.length === 0) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+      if (event.shiftKey) {
+        if (!active || active === first || !root?.contains(active)) {
+          event.preventDefault();
+          last.focus();
+        }
+        return;
+      }
+
+      if (!active || active === last || !root?.contains(active)) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      window.clearTimeout(focusTimeout);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [reviewOpen]);
+
+  useEffect(() => {
+    if (reviewOpen) return;
+
+    const previous = lastActiveElRef.current;
+    if (!previous || typeof previous.focus !== 'function') return;
+
+    const timeout = window.setTimeout(() => {
+      previous.focus();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [reviewOpen]);
+
   const cooldownSeconds = countdown?.secondsLeft ?? 0;
   const disabledBecauseCooldown = cooldownSeconds > 0;
-
-  const hasItems = safeItems.length > 0;
 
   const disabled =
     disabledProp ||
@@ -323,75 +448,24 @@ function CheckoutButton({
     reviewFirst,
   ]);
 
-  // Review data
   const reviewSubtotalCents = useMemo(() => sumCartSubtotalCents(safeItems), [safeItems]);
 
   const reviewSubtotalLabel = useMemo(() => {
-    const s = typeof cart.subtotalFormatted === 'string' ? cart.subtotalFormatted.trim() : '';
-    return s ? s : formatCents(reviewSubtotalCents);
+    const formatted =
+      typeof cart.subtotalFormatted === 'string' ? cart.subtotalFormatted.trim() : '';
+    return formatted || formatCents(reviewSubtotalCents);
   }, [cart.subtotalFormatted, reviewSubtotalCents]);
 
   const reviewTotalLabel = useMemo(() => {
-    const s = typeof cart.totalFormatted === 'string' ? cart.totalFormatted.trim() : '';
-    return s ? s : formatCents(reviewSubtotalCents);
+    const formatted = typeof cart.totalFormatted === 'string' ? cart.totalFormatted.trim() : '';
+    return formatted || formatCents(reviewSubtotalCents);
   }, [cart.totalFormatted, reviewSubtotalCents]);
 
-  // Modal: open/close focus management + ESC + focus trap-lite
-  useEffect(() => {
-    if (!reviewOpen) return;
+  const handleRetry = useCallback(() => {
+    if (disabledBecauseCooldown) return;
+    reset();
+  }, [disabledBecauseCooldown, reset]);
 
-    // store last active element so we can restore focus on close
-    lastActiveElRef.current = (document.activeElement as HTMLElement) ?? null;
-
-    // focus close button
-    window.setTimeout(() => closeBtnRef.current?.focus(), 0);
-
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        setReviewOpen(false);
-        return;
-      }
-
-      if (e.key === 'Tab') {
-        const root = modalRef.current;
-        const focusables = getFocusable(root);
-        if (!focusables.length) return;
-
-        const first = focusables[0];
-        const last = focusables[focusables.length - 1];
-        const active = document.activeElement as HTMLElement | null;
-
-        if (e.shiftKey) {
-          if (!active || active === first || !root?.contains(active)) {
-            e.preventDefault();
-            last.focus();
-          }
-        } else {
-          if (!active || active === last || !root?.contains(active)) {
-            e.preventDefault();
-            first.focus();
-          }
-        }
-      }
-    };
-
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-    };
-  }, [reviewOpen]);
-
-  useEffect(() => {
-    if (reviewOpen) return;
-    // restore focus after modal close
-    const prev = lastActiveElRef.current;
-    if (prev && typeof prev.focus === 'function') {
-      window.setTimeout(() => prev.focus(), 0);
-    }
-  }, [reviewOpen]);
-
-  // Checkout executor (only calls hook)
   const doCheckout = useCallback(async () => {
     if (disabled) return;
 
@@ -405,24 +479,31 @@ function CheckoutButton({
       return;
     }
 
-    // idempotent click lock (also prevents modal -> button race)
     if (inflightRef.current) return;
     inflightRef.current = true;
 
     try {
-      await checkout({
+      await redirectToCheckout({
         customer_uid: user.id,
-        email: user.email,
-        name: user.name ?? undefined,
-        phone: (user as unknown as { phone?: string | null })?.phone ?? undefined,
+        email: typeof user.email === 'string' ? user.email : undefined,
+        name:
+          isRecord(user) && typeof user.name === 'string'
+            ? user.name
+            : isRecord(user) && typeof user.full_name === 'string'
+              ? user.full_name
+              : undefined,
+        phone: isRecord(user) && typeof user.phone === 'string' ? user.phone : undefined,
         promo_code: normalizedPromo,
         credit_id: normalizedCreditId,
-        orderType,
+        orderType: normalizedOrderType,
         notes,
       });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Checkout failed';
-      if (onPromoError && isPromoRelatedMessage(msg)) onPromoError(msg);
+    } catch (checkoutError: unknown) {
+      const message = checkoutError instanceof Error ? checkoutError.message : 'Checkout failed';
+
+      if (onPromoError && (isPromoRelatedMessage(message) || isCreditRelatedMessage(message))) {
+        onPromoError(message);
+      }
     } finally {
       inflightRef.current = false;
     }
@@ -431,42 +512,37 @@ function CheckoutButton({
     stripeEnabled,
     isAuthed,
     user,
-    checkout,
+    redirectToCheckout,
     normalizedPromo,
     normalizedCreditId,
-    onPromoError,
-    orderType,
+    normalizedOrderType,
     notes,
+    onPromoError,
   ]);
 
   const handlePrimaryClick = useCallback(() => {
     if (disabled) return;
-    if (reviewFirst) setReviewOpen(true);
-    else void doCheckout();
+
+    if (reviewFirst) {
+      setReviewOpen(true);
+      return;
+    }
+
+    void doCheckout();
   }, [disabled, reviewFirst, doCheckout]);
 
-  const handleRetry = useCallback(() => {
-    if (disabledBecauseCooldown) return;
-    reset();
-  }, [disabledBecauseCooldown, reset]);
+  const shimmerEnabled = !prefersReducedMotion();
 
-  const modalTitleId = useId();
-  const modalDescId = useId();
-
-  // --------------------------------------------------------------------------
-  // Render: auth loading skeleton
-  // --------------------------------------------------------------------------
   if (authLoading) {
     return (
       <button
         type="button"
         disabled
+        aria-busy="true"
         className={cx(
-          'w-full select-none rounded-xl border border-zinc-200 bg-zinc-100 px-6 py-4 text-zinc-500',
-          'cursor-not-allowed',
+          'w-full cursor-not-allowed select-none rounded-xl border border-zinc-200 bg-zinc-100 px-6 py-4 text-zinc-500',
           className,
         )}
-        aria-busy="true"
       >
         <div className="flex items-center justify-center gap-3">
           <Loader2 className="h-5 w-5 animate-spin" />
@@ -476,9 +552,6 @@ function CheckoutButton({
     );
   }
 
-  // --------------------------------------------------------------------------
-  // Render: Stripe missing
-  // --------------------------------------------------------------------------
   if (!stripeEnabled) {
     return (
       <div className={cx('space-y-3', className)} aria-live="polite">
@@ -507,9 +580,6 @@ function CheckoutButton({
     );
   }
 
-  // --------------------------------------------------------------------------
-  // Render: Hook error UI
-  // --------------------------------------------------------------------------
   if (error) {
     return (
       <div className={cx('space-y-3', className)} aria-live="polite">
@@ -555,28 +625,22 @@ function CheckoutButton({
     );
   }
 
-  const shimmerEnabled = !prefersReducedMotion();
-
-  // --------------------------------------------------------------------------
-  // Render: Normal button + Review modal
-  // --------------------------------------------------------------------------
   return (
     <>
       <button
         type="button"
         onClick={handlePrimaryClick}
         disabled={disabled}
+        aria-disabled={disabled}
+        aria-busy={isLoading ? 'true' : 'false'}
         className={cx(
           'group relative w-full overflow-hidden rounded-xl px-6 py-4 text-white',
-          'bg-linear-to-r from-zinc-900 to-zinc-800',
-          'shadow-sm transition',
+          'bg-linear-to-r from-zinc-900 to-zinc-800 shadow-sm transition',
           'hover:from-zinc-800 hover:to-zinc-700',
           'focus:outline-none focus:ring-2 focus:ring-zinc-900/20',
           'disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:from-zinc-900 disabled:hover:to-zinc-800',
           className,
         )}
-        aria-disabled={disabled}
-        aria-busy={isLoading ? 'true' : 'false'}
       >
         {isLoading ? (
           <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/70">
@@ -609,8 +673,10 @@ function CheckoutButton({
           aria-modal="true"
           aria-labelledby={modalTitleId}
           aria-describedby={modalDescId}
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setReviewOpen(false);
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setReviewOpen(false);
+            }
           }}
         >
           <div ref={modalRef} className="w-full max-w-xl rounded-2xl bg-white shadow-2xl">
@@ -620,16 +686,17 @@ function CheckoutButton({
                   Review your order
                 </h3>
                 <p id={modalDescId} className="mt-1 text-xs text-zinc-600">
-                  Prices are re-validated on the server during checkout.
+                  Prices, promo eligibility, credits, and tax are re-validated securely on the
+                  server before payment.
                 </p>
               </div>
 
               <button
                 ref={closeBtnRef}
                 type="button"
-                className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
-                onClick={() => setReviewOpen(false)}
                 aria-label="Close"
+                onClick={() => setReviewOpen(false)}
+                className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -643,30 +710,35 @@ function CheckoutButton({
               ) : (
                 <>
                   <div className="space-y-3">
-                    {safeItems.map((it) => {
-                      const mods = modifierLabel(it.modifiers);
-                      const key = cartItemKey(it.menuItemId, it.modifiers);
+                    {safeItems.map((item) => {
+                      const key = cartItemKey(item.menuItemId, item.modifiers);
+                      const modifiersText = modifierLabel(item.modifiers);
 
                       return (
                         <div key={key} className="rounded-xl border border-zinc-200 p-4">
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
                               <p className="truncate text-sm font-semibold text-zinc-900">
-                                {it.name}
+                                {item.name}
                               </p>
-                              {mods ? <p className="mt-1 text-xs text-zinc-600">{mods}</p> : null}
-                              {it.notes ? (
+
+                              {modifiersText ? (
+                                <p className="mt-1 text-xs text-zinc-600">{modifiersText}</p>
+                              ) : null}
+
+                              {item.notes ? (
                                 <p className="mt-1 text-xs text-zinc-500">
-                                  Note: {String(it.notes).slice(0, 200)}
+                                  Note: {String(item.notes).slice(0, 200)}
                                 </p>
                               ) : null}
                             </div>
+
                             <div className="shrink-0 text-right">
                               <p className="text-sm font-semibold text-zinc-900">
-                                {formatCents(safeLineTotalCents(it))}
+                                {formatCents(safeLineTotalCents(item))}
                               </p>
                               <p className="mt-1 text-xs text-zinc-500">
-                                Qty {clampInt(it.quantity, 1, 100)}
+                                Qty {clampInt(item.quantity, 1, 100)}
                               </p>
                             </div>
                           </div>
@@ -691,15 +763,17 @@ function CheckoutButton({
                     </div>
 
                     <p className="mt-2 text-[11px] text-zinc-500">
-                      Final total (tax, promo eligibility, credits) is calculated server-side at
-                      checkout.
+                      Final total may change based on server-authoritative tax, deals, credit
+                      validation, and availability.
                     </p>
                   </div>
 
-                  <div className="mt-4 text-xs text-zinc-600 space-y-1">
+                  <div className="mt-4 space-y-1 text-xs text-zinc-600">
                     <div className="flex items-center justify-between">
                       <span>Order type</span>
-                      <span className="font-semibold text-zinc-900">{orderType}</span>
+                      <span className="font-semibold text-zinc-900">
+                        {formatOrderTypeLabel(normalizedOrderType)}
+                      </span>
                     </div>
 
                     {normalizedPromo ? (
@@ -717,7 +791,7 @@ function CheckoutButton({
                     ) : null}
 
                     {safeNotesPreview ? (
-                      <div className="rounded-lg border border-zinc-200 bg-white p-3 mt-2">
+                      <div className="mt-2 rounded-lg border border-zinc-200 bg-white p-3">
                         <p className="text-[11px] font-semibold text-zinc-800">Notes</p>
                         <p className="mt-1 text-[11px] text-zinc-600">{safeNotesPreview}</p>
                       </div>
@@ -730,26 +804,29 @@ function CheckoutButton({
             <div className="flex flex-col gap-3 border-t border-zinc-200 p-5 sm:flex-row sm:justify-end">
               <button
                 type="button"
-                className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm font-semibold text-zinc-900 hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-zinc-900/10 sm:w-auto"
                 onClick={() => setReviewOpen(false)}
+                className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm font-semibold text-zinc-900 hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-zinc-900/10 sm:w-auto"
               >
                 Back
               </button>
 
               <button
                 type="button"
+                disabled={disabled}
+                onClick={() => {
+                  setReviewOpen(false);
+                  void doCheckout();
+                }}
                 className={cx(
                   'w-full rounded-xl bg-zinc-900 px-5 py-3 text-sm font-semibold text-white sm:w-auto',
                   'hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-zinc-900/20',
                   'disabled:cursor-not-allowed disabled:opacity-60',
                 )}
-                onClick={() => {
-                  setReviewOpen(false);
-                  void doCheckout();
-                }}
-                disabled={disabled}
               >
-                {isLoading ? 'Creating secure checkout…' : 'Pay with card'}
+                <span className="inline-flex items-center justify-center gap-2">
+                  <ShoppingBag className="h-4 w-4" />
+                  {isLoading ? 'Creating secure checkout…' : 'Pay with card'}
+                </span>
               </button>
             </div>
           </div>
@@ -759,4 +836,4 @@ function CheckoutButton({
   );
 }
 
-export default memo(CheckoutButton)
+export default memo(CheckoutButton);

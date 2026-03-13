@@ -6,33 +6,33 @@
 // Prevents double-submit. Consistent with the amber/black admin design.
 // ============================================================================
 
-import { type ButtonHTMLAttributes, type ReactNode } from 'react'
+import { type ButtonHTMLAttributes, type ReactNode } from 'react';
 
-type AsyncButtonVariant = 'primary' | 'secondary' | 'danger' | 'ghost'
-type AsyncButtonSize    = 'sm' | 'md' | 'lg'
+type AsyncButtonVariant = 'primary' | 'secondary' | 'danger' | 'ghost';
+type AsyncButtonSize = 'sm' | 'md' | 'lg';
 
 interface AsyncButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children'> {
-  children:    ReactNode
-  loading?:    boolean
-  loadingText?: string
-  variant?:    AsyncButtonVariant
-  size?:       AsyncButtonSize
-  fullWidth?:  boolean
-  icon?:       ReactNode
+  children: ReactNode;
+  loading?: boolean;
+  loadingText?: string;
+  variant?: AsyncButtonVariant;
+  size?: AsyncButtonSize;
+  fullWidth?: boolean;
+  icon?: ReactNode;
 }
 
 const variantClass: Record<AsyncButtonVariant, string> = {
-  primary:   'bg-black text-white hover:opacity-90 disabled:opacity-40',
+  primary: 'bg-black text-white hover:opacity-90 disabled:opacity-40',
   secondary: 'border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-40',
-  danger:    'bg-red-600 text-white hover:bg-red-700 disabled:opacity-40',
-  ghost:     'text-gray-600 hover:text-gray-900 hover:bg-gray-100 disabled:opacity-40',
-}
+  danger: 'bg-red-600 text-white hover:bg-red-700 disabled:opacity-40',
+  ghost: 'text-gray-600 hover:text-gray-900 hover:bg-gray-100 disabled:opacity-40',
+};
 
 const sizeClass: Record<AsyncButtonSize, string> = {
   sm: 'px-3 py-1.5 text-xs',
   md: 'px-5 py-2 text-sm',
   lg: 'px-7 py-3 text-base',
-}
+};
 
 export function AsyncButton({
   children,
@@ -57,7 +57,9 @@ export function AsyncButton({
         fullWidth ? 'w-full' : '',
         'disabled:cursor-not-allowed',
         className,
-      ].filter(Boolean).join(' ')}
+      ]
+        .filter(Boolean)
+        .join(' ')}
     >
       {loading ? (
         <>
@@ -71,5 +73,5 @@ export function AsyncButton({
         </>
       )}
     </button>
-  )
+  );
 }

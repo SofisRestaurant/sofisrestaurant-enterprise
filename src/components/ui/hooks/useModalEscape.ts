@@ -1,5 +1,5 @@
 // src/components/ui/hooks/useModalEscape.ts
-import { useEffect } from 'react'
+import { useEffect } from 'react';
 
 /**
  * Calls `onEscape` when the user presses the Escape key.
@@ -7,16 +7,16 @@ import { useEffect } from 'react'
  */
 export function useModalEscape(onEscape: () => void, active: boolean) {
   useEffect(() => {
-    if (!active) return
+    if (!active) return;
 
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        e.preventDefault()
-        onEscape()
+        e.preventDefault();
+        onEscape();
       }
-    }
+    };
 
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [onEscape, active])
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onEscape, active]);
 }

@@ -24,7 +24,7 @@ import {
   pinFeatured,
 } from './campaigns.ts';
 
-import { listPromos, togglePromo } from './promos.ts';
+import { listPromos, togglePromo, createPromo } from './promos.ts';
 
 /* -------------------------------------------------------------------------- */
 /* Dispatch                                                                   */
@@ -34,7 +34,6 @@ export async function dispatch(
   req: GatewayRequest,
 ): Promise<{ action: AdminAction; result: unknown }> {
   switch (req.action) {
-
     // ── Core ────────────────────────────────────────────────────────────────
 
     case 'metrics': {
@@ -42,7 +41,9 @@ export async function dispatch(
         .from('admin_executive_snapshot')
         .select('*')
         .maybeSingle();
+
       if (error) dbError(error.message, 'DB_METRICS');
+
       return { action: 'metrics', result: data };
     }
 
@@ -51,7 +52,9 @@ export async function dispatch(
         .from('admin_layout_snapshot')
         .select('*')
         .maybeSingle();
+
       if (error) dbError(error.message, 'DB_LAYOUT');
+
       return { action: 'layout', result: data };
     }
 
@@ -59,12 +62,15 @@ export async function dispatch(
       const page = Math.max(0, req.payload?.page ?? 0);
       const from = page * 25;
       const to = from + 24;
+
       const { data, error } = await service
         .from('orders')
         .select('*')
         .range(from, to)
         .order('created_at', { ascending: false });
+
       if (error) dbError(error.message, 'DB_ORDERS');
+
       return { action: 'orders:list', result: data ?? [] };
     }
 
@@ -73,16 +79,25 @@ export async function dispatch(
       const pageSize = Math.min(500, Math.max(1, req.payload?.pageSize ?? 200));
       const from = page * pageSize;
       const to = from + pageSize - 1;
+
       const { data, error } = await service
         .from('menu_items_admin_full')
         .select('*')
         .order('sort_order', { ascending: true })
         .range(from, to);
+
       if (error) dbError(error.message, 'DB_MENU_FULL');
+
       return { action: 'menu:full', result: data ?? [] };
     }
 
     // ── Modifier groups ──────────────────────────────────────────────────────
+
+    case 'menu:modifier-groups:list':
+      return {
+        action: req.action,
+        result: await ModifierGroups.list(req.payload?.activeOnly ?? false),
+      };
 
     case 'menu:modifier-groups:list-for-item':
       return {
@@ -91,14 +106,29 @@ export async function dispatch(
       };
 
     case 'menu:modifier-groups:get':
-      return { action: req.action, result: await ModifierGroups.getById(req.payload.id) };
+      return {
+        action: req.action,
+        result: await ModifierGroups.getById(req.payload.id),
+      };
+
+    case 'menu:modifier-groups:item-count':
+      return {
+        action: req.action,
+        result: await ModifierGroups.getItemCount(req.payload.id),
+      };
 
     case 'menu:modifier-groups:create':
-      return { action: req.action, result: await ModifierGroups.create(req.payload) };
+      return {
+        action: req.action,
+        result: await ModifierGroups.create(req.payload),
+      };
 
     case 'menu:modifier-groups:update': {
       const { id, ...patch } = req.payload;
-      return { action: req.action, result: await ModifierGroups.update(id, patch) };
+      return {
+        action: req.action,
+        result: await ModifierGroups.update(id, patch),
+      };
     }
 
     case 'menu:modifier-groups:attach':
@@ -113,8 +143,16 @@ export async function dispatch(
       await ModifierGroups.toggleActive(req.payload.id, req.payload.active);
       return { action: req.action, result: null };
 
+    case 'menu:modifier-groups:reorder':
+      await ModifierGroups.reorder(req.payload.items);
+      return { action: req.action, result: null };
+
     case 'menu:modifier-groups:reorder-for-item':
       await ModifierGroups.reorderForItem(req.payload.menu_item_id, req.payload.items);
+      return { action: req.action, result: null };
+
+    case 'menu:modifier-groups:set-item-groups':
+      await ModifierGroups.setItemGroups(req.payload);
       return { action: req.action, result: null };
 
     case 'menu:modifier-groups:delete':
@@ -136,10 +174,16 @@ export async function dispatch(
       };
 
     case 'menu:modifiers:get':
-      return { action: req.action, result: await Modifiers.getById(req.payload.id) };
+      return {
+        action: req.action,
+        result: await Modifiers.getById(req.payload.id),
+      };
 
     case 'menu:modifiers:create':
-      return { action: req.action, result: await Modifiers.create(req.payload) };
+      return {
+        action: req.action,
+        result: await Modifiers.create(req.payload),
+      };
 
     case 'menu:modifiers:create-batch':
       return {
@@ -148,7 +192,10 @@ export async function dispatch(
       };
 
     case 'menu:modifiers:update':
-      return { action: req.action, result: await Modifiers.update(req.payload) };
+      return {
+        action: req.action,
+        result: await Modifiers.update(req.payload),
+      };
 
     case 'menu:modifiers:toggle-availability':
       await Modifiers.toggleAvailability(req.payload.id, req.payload.available);
@@ -197,6 +244,9 @@ export async function dispatch(
 
     case 'promos:toggle':
       return { action: req.action, result: await togglePromo(req.payload) };
+
+    case 'promos:create':
+      return { action: req.action, result: await createPromo(req.payload) };
   }
 
   return assertNever(req);

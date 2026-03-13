@@ -60,7 +60,9 @@ function mapGatewayCampaignRow(row: unknown): Campaign | null {
     'Campaign';
 
   // legacy Campaign expects a channel; fallback keeps UI stable
-  const channel = (readString(row.channel) || readString(row.placement) || 'email') as Campaign['channel'];
+  const channel = (readString(row.channel) ||
+    readString(row.placement) ||
+    'email') as Campaign['channel'];
 
   // growth_campaigns metrics (if present). If not, default 0.
   const budget = centsToDollars(row.budget_cents ?? row.budgetCents);
@@ -109,11 +111,7 @@ function mapGatewayPromoRow(row: unknown): PromoCode | null {
         : null;
 
   const discount_amount =
-    type === 'fixed'
-      ? value
-      : typeof row.discount_amount === 'number'
-        ? row.discount_amount
-        : null;
+    type === 'fixed' ? value : typeof row.discount_amount === 'number' ? row.discount_amount : null;
 
   const starts_at = readNullableString(row.starts_at) ?? readNullableString(row.startsAt);
   const ends_at = readNullableString(row.ends_at) ?? readNullableString(row.endsAt);
@@ -121,8 +119,14 @@ function mapGatewayPromoRow(row: unknown): PromoCode | null {
   return {
     id,
     code,
-    discount_percent: typeof discount_percent === 'number' && Number.isFinite(discount_percent) ? discount_percent : null,
-    discount_amount: typeof discount_amount === 'number' && Number.isFinite(discount_amount) ? discount_amount : null,
+    discount_percent:
+      typeof discount_percent === 'number' && Number.isFinite(discount_percent)
+        ? discount_percent
+        : null,
+    discount_amount:
+      typeof discount_amount === 'number' && Number.isFinite(discount_amount)
+        ? discount_amount
+        : null,
     active,
     starts_at: starts_at ?? null,
     ends_at: ends_at ?? null,

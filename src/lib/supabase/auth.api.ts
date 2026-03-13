@@ -1,332 +1,857 @@
-// src/lib/supabase/auth.api.ts
-// =============================================================================
-// AUTH API — Production Grade (2026)
-// =============================================================================
-// Key upgrades:
-// - ✅ login-guard is a gate only (rate-limit / lockout / anti-bot), NOT a session issuer
-// - ✅ never calls supabase.auth.setSession() from a custom payload
-//   (prevents refresh-token bugs + random 403 -> signed_out)
-// - ✅ consistent error normalization + safe JSON parsing
-// - ✅ strongly-typed, minimal surface area
-// - ✅ optional requestId propagation if your guards return it
-// =============================================================================
+import type { AuthChangeEvent, Session, User } from '@supabase/supabase-js';
 
-import { supabase } from '@/lib/supabase/supabaseClient'
-import type { User, Session, AuthError } from '@supabase/supabase-js'
+import { supabase } from '@/lib/supabase/supabaseClient';
 
-/* =========================
-   Shared Response Type
-========================= */
+type UnknownRecord = Record<string, unknown>;
+type VerifyOtpKind = 'email' | 'recovery';
 
-export interface ApiResponse<T> {
-  data: T | null
-  error: AuthError | null
+export const AUTH_API_ERROR_CODES = {
+  INVALID_EMAIL: 'AUTH_INVALID_EMAIL',
+  INVALID_PASSWORD: 'AUTH_INVALID_PASSWORD',
+  INVALID_REDIRECT: 'AUTH_INVALID_REDIRECT',
+  INVALID_OTP_TOKEN: 'AUTH_INVALID_OTP_TOKEN',
+  UNAUTHORIZED: 'AUTH_UNAUTHORIZED',
+  EMAIL_NOT_CONFIRMED: 'AUTH_EMAIL_NOT_CONFIRMED',
+  RATE_LIMITED: 'AUTH_RATE_LIMITED',
+  CONFLICT: 'AUTH_CONFLICT',
+  PROVIDER_ERROR: 'AUTH_PROVIDER_ERROR',
+  SESSION_NOT_FOUND: 'AUTH_SESSION_NOT_FOUND',
+  UNKNOWN: 'AUTH_UNKNOWN',
+} as const;
+
+export type AuthApiErrorCode =
+  | (typeof AUTH_API_ERROR_CODES)[keyof typeof AUTH_API_ERROR_CODES]
+  | (string & {});
+
+export interface AuthApiErrorShape {
+  code: AuthApiErrorCode;
+  message: string;
+  status: number;
+  details?: unknown;
 }
 
-/* =========================
-   Payload Types
-========================= */
+export class AuthApiError extends Error implements AuthApiErrorShape {
+  public readonly code: AuthApiErrorCode;
+  public readonly status: number;
+  public readonly details?: unknown;
 
-export interface SignUpData {
-  email: string
-  password: string
-  fullName?: string
-}
-
-export interface SignInData {
-  email: string
-  password: string
-}
-
-/* =========================
-   Internal Helpers
-========================= */
-
-type GuardOk = { ok: true; requestId?: string }
-type GuardFail = { ok: false; error?: string; code?: string; requestId?: string }
-type GuardResponse = GuardOk | GuardFail
-
-function logAuth(message: string, extra?: unknown) {
-  console.log(`🔐 [AUTH] ${message}`, extra ?? '')
-}
-
-function env(key: 'VITE_SUPABASE_URL' | 'VITE_SUPABASE_ANON_KEY'): string {
-  const v = (import.meta as any).env?.[key] as string | undefined
-  return (v ?? '').trim()
-}
-
-function asAuthError(message: string, name = 'AuthError'): AuthError {
-  return { name, message } as AuthError
-}
-
-async function safeJson(res: Response): Promise<unknown> {
-  const ct = (res.headers.get('content-type') ?? '').toLowerCase()
-  if (!ct.includes('application/json')) return null
-  try {
-    return await res.json()
-  } catch {
-    return null
+  public constructor(input: AuthApiErrorShape) {
+    super(input.message);
+    this.name = 'AuthApiError';
+    this.code = input.code;
+    this.status = input.status;
+    this.details = input.details;
   }
 }
 
-function guardHeaders(): Record<string, string> {
-  const url = env('VITE_SUPABASE_URL')
-  const anon = env('VITE_SUPABASE_ANON_KEY')
-  if (!url || !anon) {
-    // Do not throw; keep client resilient. Caller will get a friendly error.
-    return {
-      'Content-Type': 'application/json',
-      'x-application-name': 'sofis-restaurant-v2',
+export interface AuthUserProfile {
+  id: string;
+  email: string | null;
+  phone: string | null;
+  displayName: string | null;
+  role: string | null;
+  provider: string | null;
+  emailConfirmedAt: string | null;
+  lastSignInAt: string | null;
+  createdAt: string | null;
+  isAnonymous: boolean;
+}
+
+export interface AuthSessionSummary {
+  user: AuthUserProfile;
+  expiresAt: string | null;
+  expiresAtUnix: number | null;
+  expiresInSeconds: number | null;
+  tokenType: string | null;
+}
+
+export interface SignInWithPasswordInput {
+  email: string;
+  password: string;
+}
+
+export interface SignUpWithPasswordInput {
+  email: string;
+  password: string;
+  fullName?: string;
+  phone?: string;
+  redirectPath?: string;
+  metadata?: Record<string, string>;
+}
+
+export interface RequestPasswordResetInput {
+  email: string;
+  redirectPath?: string;
+}
+
+export interface UpdatePasswordInput {
+  password: string;
+}
+
+export interface ChangeEmailInput {
+  email: string;
+  redirectPath?: string;
+}
+
+export interface SignInWithGoogleInput {
+  redirectPath?: string;
+}
+
+export interface VerifyOtpInput {
+  email: string;
+  token: string;
+  type: VerifyOtpKind;
+}
+
+export type AuthStateChangeCallback = (
+  event: AuthChangeEvent,
+  session: AuthSessionSummary | null,
+) => void;
+
+export interface ApiResponse<T> {
+  data: T | null;
+  error: AuthApiError | null;
+}
+
+export interface LegacyAuthSuccessPayload {
+  user: User;
+  session: Session | null;
+}
+
+export const DEFAULT_AUTH_REDIRECT_PATH = '/account';
+export const DEFAULT_PASSWORD_RESET_REDIRECT_PATH = '/';
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isControlCharacter(code: number): boolean {
+  return code <= 31 || code === 127;
+}
+
+function stripControlCharacters(value: string): string {
+  let output = '';
+
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    output += isControlCharacter(code) ? ' ' : character;
+  }
+
+  return output;
+}
+
+function hasControlCharacters(value: string): boolean {
+  for (const character of value) {
+    if (isControlCharacter(character.charCodeAt(0))) {
+      return true;
     }
   }
 
-  // NOTE: Edge Functions often expect apikey; Authorization is not required for guard endpoints,
-  // but keeping it as anon is harmless if your server expects it.
-  return {
-    'Content-Type': 'application/json',
-    apikey: anon,
-    Authorization: `Bearer ${anon}`,
-    'x-application-name': 'sofis-restaurant-v2',
+  return false;
+}
+
+function collapseWhitespace(value: string): string {
+  return value.trim().split(/\s+/u).join(' ');
+}
+
+function sanitizePlainText(value: unknown, maxLength: number): string | null {
+  if (typeof value !== 'string') {
+    return null;
   }
+
+  const normalized = collapseWhitespace(stripControlCharacters(value));
+
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  return normalized.length <= maxLength
+    ? normalized
+    : normalized.slice(0, maxLength).trim();
+}
+
+function sanitizeEmail(value: unknown): string {
+  const normalized = sanitizePlainText(value, 320)?.toLowerCase() ?? '';
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(normalized)) {
+    throw new AuthApiError({
+      code: AUTH_API_ERROR_CODES.INVALID_EMAIL,
+      message: 'Please enter a valid email address.',
+      status: 400,
+    });
+  }
+
+  return normalized;
+}
+
+function sanitizePassword(value: unknown): string {
+  if (typeof value !== 'string') {
+    throw new AuthApiError({
+      code: AUTH_API_ERROR_CODES.INVALID_PASSWORD,
+      message: 'Password is required.',
+      status: 400,
+    });
+  }
+
+  const trimmed = value.trim();
+
+  if (trimmed.length < 8) {
+    throw new AuthApiError({
+      code: AUTH_API_ERROR_CODES.INVALID_PASSWORD,
+      message: 'Password must be at least 8 characters.',
+      status: 400,
+    });
+  }
+
+  if (trimmed.length > 128) {
+    throw new AuthApiError({
+      code: AUTH_API_ERROR_CODES.INVALID_PASSWORD,
+      message: 'Password must be 128 characters or less.',
+      status: 400,
+    });
+  }
+
+  return value;
+}
+
+function sanitizeOtpToken(value: unknown): string {
+  const normalized = sanitizePlainText(value, 128) ?? '';
+
+  if (normalized.length === 0) {
+    throw new AuthApiError({
+      code: AUTH_API_ERROR_CODES.INVALID_OTP_TOKEN,
+      message: 'Verification token is required.',
+      status: 400,
+    });
+  }
+
+  return normalized;
+}
+
+function sanitizeVerifyOtpType(value: unknown): VerifyOtpKind {
+  if (value === 'email' || value === 'recovery') {
+    return value;
+  }
+
+  throw new AuthApiError({
+    code: AUTH_API_ERROR_CODES.UNKNOWN,
+    message: 'Verification type must be email or recovery.',
+    status: 400,
+  });
+}
+
+function getStringFromRecord(record: UnknownRecord, key: string): string | null {
+  const value = record[key];
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readRole(user: User): string | null {
+  const appMetadata: unknown = user.app_metadata;
+  const userMetadata: unknown = user.user_metadata;
+
+  if (isRecord(appMetadata)) {
+    const role = getStringFromRecord(appMetadata, 'role');
+    if (role !== null) {
+      return role;
+    }
+  }
+
+  if (isRecord(userMetadata)) {
+    const role = getStringFromRecord(userMetadata, 'role');
+    if (role !== null) {
+      return role;
+    }
+  }
+
+  return null;
+}
+
+function readDisplayName(user: User): string | null {
+  const userMetadata: unknown = user.user_metadata;
+
+  if (!isRecord(userMetadata)) {
+    return null;
+  }
+
+  return (
+    getStringFromRecord(userMetadata, 'full_name') ??
+    getStringFromRecord(userMetadata, 'name') ??
+    getStringFromRecord(userMetadata, 'display_name') ??
+    getStringFromRecord(userMetadata, 'username')
+  );
+}
+
+function readProvider(user: User): string | null {
+  const appMetadata: unknown = user.app_metadata;
+
+  if (!isRecord(appMetadata)) {
+    return null;
+  }
+
+  return getStringFromRecord(appMetadata, 'provider');
+}
+
+function toIsoDateTime(unixSeconds: number | null | undefined): string | null {
+  if (typeof unixSeconds !== 'number' || !Number.isFinite(unixSeconds) || unixSeconds <= 0) {
+    return null;
+  }
+
+  return new Date(unixSeconds * 1000).toISOString();
+}
+
+export function toAuthUserProfile(user: User): AuthUserProfile {
+  const provider = readProvider(user);
+
+  return {
+    id: user.id,
+    email: user.email ?? null,
+    phone: user.phone ?? null,
+    displayName: readDisplayName(user),
+    role: readRole(user),
+    provider,
+    emailConfirmedAt: user.email_confirmed_at ?? null,
+    lastSignInAt: user.last_sign_in_at ?? null,
+    createdAt: user.created_at ?? null,
+    isAnonymous: provider === 'anonymous',
+  };
+}
+
+export function toAuthSessionSummary(session: Session | null): AuthSessionSummary | null {
+  if (!session?.user) {
+    return null;
+  }
+
+  return {
+    user: toAuthUserProfile(session.user),
+    expiresAt: toIsoDateTime(session.expires_at ?? null),
+    expiresAtUnix:
+      typeof session.expires_at === 'number' && Number.isFinite(session.expires_at)
+        ? session.expires_at
+        : null,
+    expiresInSeconds:
+      typeof session.expires_in === 'number' && Number.isFinite(session.expires_in)
+        ? session.expires_in
+        : null,
+    tokenType: session.token_type ?? null,
+  };
+}
+
+export function isAuthenticatedSession(
+  session: AuthSessionSummary | null,
+): session is AuthSessionSummary {
+  return session !== null && session.user.id.length > 0;
+}
+
+export function normalizeInternalRedirectPath(
+  input: string | null | undefined,
+  fallback = DEFAULT_AUTH_REDIRECT_PATH,
+): string {
+  const raw = typeof input === 'string' ? input.trim() : '';
+
+  if (raw.length === 0) {
+    return fallback;
+  }
+
+  if (!raw.startsWith('/')) {
+    return fallback;
+  }
+
+  if (/^(https?:)?\/\//iu.test(raw) || raw.startsWith('//')) {
+    return fallback;
+  }
+
+  if (hasControlCharacters(raw)) {
+    return fallback;
+  }
+
+  return raw;
+}
+
+export function buildAuthRedirectUrl(
+  path: string | null | undefined,
+  fallback = DEFAULT_AUTH_REDIRECT_PATH,
+): string {
+  const normalizedPath = normalizeInternalRedirectPath(path, fallback);
+
+  if (typeof window === 'undefined') {
+    return normalizedPath;
+  }
+
+  return new URL(normalizedPath, window.location.origin).toString();
+}
+
+function inferAuthErrorCode(message: string, status: number): AuthApiErrorCode {
+  const normalized = message.toLowerCase();
+
+  if (status === 401 || normalized.includes('invalid login credentials')) {
+    return AUTH_API_ERROR_CODES.UNAUTHORIZED;
+  }
+
+  if (
+    status === 409 ||
+    normalized.includes('already registered') ||
+    normalized.includes('already exists')
+  ) {
+    return AUTH_API_ERROR_CODES.CONFLICT;
+  }
+
+  if (
+    status === 429 ||
+    normalized.includes('rate limit') ||
+    normalized.includes('too many requests')
+  ) {
+    return AUTH_API_ERROR_CODES.RATE_LIMITED;
+  }
+
+  if (
+    normalized.includes('email not confirmed') ||
+    normalized.includes('email not verified') ||
+    normalized.includes('confirm your email')
+  ) {
+    return AUTH_API_ERROR_CODES.EMAIL_NOT_CONFIRMED;
+  }
+
+  return AUTH_API_ERROR_CODES.PROVIDER_ERROR;
+}
+
+function toAuthApiError(
+  error: unknown,
+  fallbackMessage = 'Authentication request failed.',
+  fallbackStatus = 500,
+): AuthApiError {
+  if (error instanceof AuthApiError) {
+    return error;
+  }
+
+  if (error instanceof Error) {
+    return new AuthApiError({
+      code: inferAuthErrorCode(error.message, fallbackStatus),
+      message: error.message || fallbackMessage,
+      status: fallbackStatus,
+      details: undefined,
+    });
+  }
+
+  if (isRecord(error)) {
+    const message =
+      typeof error.message === 'string' && error.message.trim().length > 0
+        ? error.message.trim()
+        : fallbackMessage;
+
+    const status =
+      typeof error.status === 'number' && Number.isFinite(error.status)
+        ? error.status
+        : fallbackStatus;
+
+    return new AuthApiError({
+      code: inferAuthErrorCode(message, status),
+      message,
+      status,
+      details: error,
+    });
+  }
+
+  return new AuthApiError({
+    code: AUTH_API_ERROR_CODES.UNKNOWN,
+    message: fallbackMessage,
+    status: fallbackStatus,
+    details: error,
+  });
+}
+
+function createSignUpMetadata(input: SignUpWithPasswordInput): Record<string, string> {
+  const metadata: Record<string, string> = {};
+
+  const fullName = sanitizePlainText(input.fullName, 120);
+  if (fullName !== null) {
+    metadata.full_name = fullName;
+  }
+
+  const phone = sanitizePlainText(input.phone, 40);
+  if (phone !== null) {
+    metadata.phone = phone;
+  }
+
+  const userMetadata = input.metadata ?? {};
+  for (const [key, value] of Object.entries(userMetadata)) {
+    const safeKey = sanitizePlainText(key, 64);
+    const safeValue = sanitizePlainText(value, 200);
+
+    if (safeKey !== null && safeValue !== null) {
+      metadata[safeKey] = safeValue;
+    }
+  }
+
+  return metadata;
+}
+
+function toApiResponse<T>(data: T): ApiResponse<T> {
+  return {
+    data,
+    error: null,
+  };
+}
+
+function toErrorResponse<T>(error: unknown, fallbackMessage: string): ApiResponse<T> {
+  return {
+    data: null,
+    error: toAuthApiError(error, fallbackMessage),
+  };
+}
+
+export async function getCurrentAuthSession(): Promise<AuthSessionSummary | null> {
+  const { data, error } = await supabase.auth.getSession();
+
+  if (error) {
+    throw toAuthApiError(error, 'Unable to read the current session.');
+  }
+
+  return toAuthSessionSummary(data.session);
+}
+
+export async function getCurrentAuthUser(): Promise<AuthUserProfile | null> {
+  const session = await getCurrentAuthSession();
+  return session?.user ?? null;
+}
+
+export async function signInWithPassword(
+  input: SignInWithPasswordInput,
+): Promise<AuthSessionSummary> {
+  const email = sanitizeEmail(input.email);
+  const password = sanitizePassword(input.password);
+
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+
+  if (error) {
+    throw toAuthApiError(error, 'Unable to sign in.');
+  }
+
+  const session = toAuthSessionSummary(data.session);
+  if (session === null) {
+    throw new AuthApiError({
+      code: AUTH_API_ERROR_CODES.SESSION_NOT_FOUND,
+      message: 'Sign-in succeeded but no session was returned.',
+      status: 500,
+    });
+  }
+
+  return session;
+}
+
+export async function signUpWithPassword(
+  input: SignUpWithPasswordInput,
+): Promise<AuthSessionSummary | null> {
+  const email = sanitizeEmail(input.email);
+  const password = sanitizePassword(input.password);
+  const emailRedirectTo = buildAuthRedirectUrl(input.redirectPath, DEFAULT_AUTH_REDIRECT_PATH);
+
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      emailRedirectTo,
+      data: createSignUpMetadata(input),
+    },
+  });
+
+  if (error) {
+    throw toAuthApiError(error, 'Unable to create your account.');
+  }
+
+  return toAuthSessionSummary(data.session);
+}
+
+export async function signInWithGoogle(
+  input: SignInWithGoogleInput = {},
+): Promise<void> {
+  const redirectTo = buildAuthRedirectUrl(input.redirectPath, DEFAULT_AUTH_REDIRECT_PATH);
+
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo,
+    },
+  });
+
+  if (error) {
+    throw toAuthApiError(error, 'Unable to continue with Google.');
+  }
+}
+
+export async function requestPasswordReset(
+  input: RequestPasswordResetInput,
+): Promise<void> {
+  const email = sanitizeEmail(input.email);
+  const redirectTo = buildAuthRedirectUrl(
+    input.redirectPath,
+    DEFAULT_PASSWORD_RESET_REDIRECT_PATH,
+  );
+
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo,
+  });
+
+  if (error) {
+    throw toAuthApiError(error, 'Unable to send the password reset email.');
+  }
+}
+
+export async function updatePassword(input: UpdatePasswordInput): Promise<AuthUserProfile> {
+  const password = sanitizePassword(input.password);
+
+  const { data, error } = await supabase.auth.updateUser({
+    password,
+  });
+
+  if (error) {
+    throw toAuthApiError(error, 'Unable to update your password.');
+  }
+
+  if (!data.user) {
+    throw new AuthApiError({
+      code: AUTH_API_ERROR_CODES.UNKNOWN,
+      message: 'Password updated but no user was returned.',
+      status: 500,
+    });
+  }
+
+  return toAuthUserProfile(data.user);
+}
+
+export async function changeEmail(input: ChangeEmailInput): Promise<AuthUserProfile> {
+  const email = sanitizeEmail(input.email);
+  const emailRedirectTo = buildAuthRedirectUrl(input.redirectPath, DEFAULT_AUTH_REDIRECT_PATH);
+
+  const { data, error } = await supabase.auth.updateUser(
+    { email },
+    {
+      emailRedirectTo,
+    },
+  );
+
+  if (error) {
+    throw toAuthApiError(error, 'Unable to update your email.');
+  }
+
+  if (!data.user) {
+    throw new AuthApiError({
+      code: AUTH_API_ERROR_CODES.UNKNOWN,
+      message: 'Email updated but no user was returned.',
+      status: 500,
+    });
+  }
+
+  return toAuthUserProfile(data.user);
+}
+
+export async function resendVerificationEmail(
+  email: string,
+  redirectPath?: string,
+): Promise<void> {
+  const safeEmail = sanitizeEmail(email);
+  const emailRedirectTo = buildAuthRedirectUrl(redirectPath, DEFAULT_AUTH_REDIRECT_PATH);
+
+  const { error } = await supabase.auth.resend({
+    type: 'signup',
+    email: safeEmail,
+    options: {
+      emailRedirectTo,
+    },
+  });
+
+  if (error) {
+    throw toAuthApiError(error, 'Unable to resend the verification email.');
+  }
+}
+
+export async function verifyOtp(input: VerifyOtpInput): Promise<AuthSessionSummary | null> {
+  const email = sanitizeEmail(input.email);
+  const token = sanitizeOtpToken(input.token);
+  const type = sanitizeVerifyOtpType(input.type);
+
+  const { data, error } = await supabase.auth.verifyOtp({
+    email,
+    token,
+    type,
+  });
+
+  if (error) {
+    throw toAuthApiError(error, 'Unable to verify the code.');
+  }
+
+  return toAuthSessionSummary(data.session);
+}
+
+export async function signOut(): Promise<void> {
+  const { error } = await supabase.auth.signOut({
+    scope: 'local',
+  });
+
+  if (error) {
+    throw toAuthApiError(error, 'Unable to sign out.');
+  }
+}
+
+export function onAuthStateChange(callback: AuthStateChangeCallback): () => void {
+  const result = supabase.auth.onAuthStateChange((event, session) => {
+    callback(event, toAuthSessionSummary(session));
+  });
+
+  return () => {
+    result.data.subscription.unsubscribe();
+  };
 }
 
 /**
- * Gate requests through an Edge Function guard.
- * This MUST NOT return a "session" used in supabase.auth.setSession().
+ * Legacy compatibility wrappers.
+ * These preserve older call sites that expect `{ data, error }`
+ * and `authAPI.signIn(...)` / `authAPI.signUp(...)`.
  */
-async function callGuard(
-  path: 'login-guard' | 'password-guard',
-  body: unknown,
-): Promise<GuardResponse> {
-  const baseUrl = env('VITE_SUPABASE_URL')
-  if (!baseUrl) return { ok: false, error: 'Missing VITE_SUPABASE_URL', code: 'ENV_MISSING' }
+export async function signIn(
+  input: SignInWithPasswordInput,
+): Promise<ApiResponse<LegacyAuthSuccessPayload>> {
+  try {
+    const email = sanitizeEmail(input.email);
+    const password = sanitizePassword(input.password);
 
-  const res = await fetch(`${baseUrl}/functions/v1/${path}`, {
-    method: 'POST',
-    headers: guardHeaders(),
-    body: JSON.stringify(body),
-  })
-
-  const data = (await safeJson(res)) as any
-
-  if (res.ok) {
-    // If your guard returns structured envelopes, preserve requestId when present.
-    const requestId = typeof data?.requestId === 'string' ? data.requestId : undefined
-    return { ok: true, requestId }
-  }
-
-  // Normalize known server shapes:
-  const msg =
-    (typeof data?.error === 'string' && data.error) ||
-    (typeof data?.message === 'string' && data.message) ||
-    `Request blocked (${res.status})`
-
-  const code = typeof data?.code === 'string' ? data.code : `HTTP_${res.status}`
-  const requestId = typeof data?.requestId === 'string' ? data.requestId : undefined
-
-  return { ok: false, error: msg, code, requestId }
-}
-
-/* =========================
-   Auth API
-========================= */
-
-export const authAPI = {
-  /* -------------------------
-     Sign In (PRODUCTION SAFE)
-     - Guard first
-     - Real Supabase signInWithPassword second
-  -------------------------- */
-  async signIn(credentials: SignInData): Promise<ApiResponse<{ user: User; session: Session }>> {
-    logAuth('Attempt login', credentials.email)
-
-    // 1) Guard (rate limit / lockout / anti-bot)
-    const gate = await callGuard('login-guard', credentials)
-    if (!gate.ok) {
-      console.error('❌ Guard blocked login:', gate.code, gate.error, gate.requestId ?? '')
-      return { data: null, error: asAuthError(gate.error ?? 'Login blocked') }
-    }
-
-    // 2) Real Supabase login (supabase-js owns refresh tokens + session rotation)
     const { data, error } = await supabase.auth.signInWithPassword({
-      email: credentials.email,
-      password: credentials.password,
-    })
+      email,
+      password,
+    });
 
     if (error) {
-      console.error('❌ Supabase login failed:', error.message)
-      return { data: null, error }
+      return toErrorResponse<LegacyAuthSuccessPayload>(error, 'Unable to sign in.');
     }
 
-    if (!data?.user || !data?.session) {
-      return { data: null, error: asAuthError('Login failed: missing session') }
+    if (!data.user) {
+      return toErrorResponse<LegacyAuthSuccessPayload>(
+        new AuthApiError({
+          code: AUTH_API_ERROR_CODES.SESSION_NOT_FOUND,
+          message: 'Sign-in succeeded but no user was returned.',
+          status: 500,
+        }),
+        'Unable to sign in.',
+      );
     }
 
-    logAuth('Login success', data.user.id)
+    return toApiResponse<LegacyAuthSuccessPayload>({
+      user: data.user,
+      session: data.session,
+    });
+  } catch (error: unknown) {
+    return toErrorResponse<LegacyAuthSuccessPayload>(error, 'Unable to sign in.');
+  }
+}
 
-    return {
-      data: { user: data.user, session: data.session },
-      error: null,
-    }
-  },
-
-  /* -------------------------
-     Sign Up
-  -------------------------- */
-  async signUp(payload: SignUpData): Promise<ApiResponse<{ user: User; session: Session | null }>> {
-    const { email, password, fullName } = payload
-    logAuth('Attempt signup', email)
-
-    // Guard password policy / known-bad patterns / etc.
-    const gate = await callGuard('password-guard', { email, password })
-    if (!gate.ok) {
-      console.log('⛔ GUARD BLOCKED SIGNUP', gate.code, gate.requestId ?? '')
-      return { data: null, error: asAuthError(gate.error ?? 'Password validation failed', 'PasswordError') }
-    }
+export async function signUp(
+  input: SignUpWithPasswordInput,
+): Promise<ApiResponse<LegacyAuthSuccessPayload>> {
+  try {
+    const email = sanitizeEmail(input.email);
+    const password = sanitizePassword(input.password);
+    const emailRedirectTo = buildAuthRedirectUrl(
+      input.redirectPath,
+      DEFAULT_AUTH_REDIRECT_PATH,
+    );
 
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        data: { full_name: fullName },
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        emailRedirectTo,
+        data: createSignUpMetadata(input),
       },
-    })
+    });
 
     if (error) {
-      console.error('❌ Signup failed:', error.message)
-      return { data: null, error }
+      return toErrorResponse<LegacyAuthSuccessPayload>(error, 'Unable to create your account.');
     }
 
     if (!data.user) {
-      return { data: null, error: asAuthError('Signup failed') }
+      return toErrorResponse<LegacyAuthSuccessPayload>(
+        new AuthApiError({
+          code: AUTH_API_ERROR_CODES.UNKNOWN,
+          message: 'Signup completed but no user was returned.',
+          status: 500,
+        }),
+        'Unable to create your account.',
+      );
     }
 
-    logAuth('Signup success', data.user.id)
-
-    return {
-      data: { user: data.user, session: data.session },
-      error: null,
-    }
-  },
-
-  /* -------------------------
-     Google OAuth
-  -------------------------- */
-  async signInWithGoogle(): Promise<ApiResponse<null>> {
-    logAuth('Google OAuth start')
-
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: { redirectTo: `${window.location.origin}/auth/callback` },
-    })
-
-    if (error) console.error('❌ Google login failed:', error.message)
-    return { data: null, error }
-  },
-
-  /* -------------------------
-     Sign Out
-  -------------------------- */
-  async signOut(): Promise<ApiResponse<null>> {
-    logAuth('Signing out')
-
-    const { error } = await supabase.auth.signOut()
-    if (error) console.error('❌ Sign out failed:', error.message)
-
-    return { data: null, error }
-  },
-
-  /* -------------------------
-     Reset Password
-  -------------------------- */
-  async resetPassword(email: string): Promise<ApiResponse<null>> {
-    logAuth('Password reset requested', email)
-
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/update-password`,
-    })
-
-    if (error) console.error('❌ Reset failed:', error.message)
-    return { data: null, error }
-  },
-
-  /* -------------------------
-     Update Password
-  -------------------------- */
-  async updatePassword(newPassword: string): Promise<ApiResponse<null>> {
-    logAuth('Updating password')
-
-    const { error } = await supabase.auth.updateUser({ password: newPassword })
-    if (error) console.error('❌ Password update failed:', error.message)
-
-    return { data: null, error }
-  },
-
-  /* -------------------------
-     Update Profile Metadata
-  -------------------------- */
-  async updateProfile(updates: { full_name?: string; avatar_url?: string }): Promise<ApiResponse<null>> {
-    logAuth('Updating profile metadata')
-
-    const { error } = await supabase.auth.updateUser({ data: updates })
-    if (error) console.error('❌ Profile update failed:', error.message)
-
-    return { data: null, error }
-  },
-
-  /* -------------------------
-     Get Session
-  -------------------------- */
-  async getSession(): Promise<ApiResponse<Session>> {
-    const { data, error } = await supabase.auth.getSession()
-    if (error) {
-      console.error('❌ Get session failed:', error.message)
-      return { data: null, error }
-    }
-    return { data: data.session, error: null }
-  },
-
-  /* -------------------------
-     Get User
-  -------------------------- */
-  async getUser(): Promise<ApiResponse<User>> {
-    const { data, error } = await supabase.auth.getUser()
-    if (error) {
-      console.error('❌ Get user failed:', error.message)
-      return { data: null, error }
-    }
-    return { data: data.user, error: null }
-  },
-
-  /* -------------------------
-     OTP Verify
-  -------------------------- */
-  async verifyOtp(email: string, token: string, type: 'email' | 'recovery'): Promise<ApiResponse<null>> {
-    logAuth('Verifying OTP')
-
-    const { error } = await supabase.auth.verifyOtp({ email, token, type })
-    if (error) console.error('❌ OTP failed:', error.message)
-
-    return { data: null, error }
-  },
-
-  /* -------------------------
-     Resend Verification
-  -------------------------- */
-  async resendVerificationEmail(email: string): Promise<ApiResponse<null>> {
-    logAuth('Resending verification', email)
-
-    const { error } = await supabase.auth.resend({ type: 'signup', email })
-    if (error) console.error('❌ Resend failed:', error.message)
-
-    return { data: null, error }
-  },
-
-  /* -------------------------
-     Auth Listener
-  -------------------------- */
-  onAuthStateChange(callback: (event: string, session: Session | null) => void) {
-    return supabase.auth.onAuthStateChange(callback)
-  },
+    return toApiResponse<LegacyAuthSuccessPayload>({
+      user: data.user,
+      session: data.session,
+    });
+  } catch (error: unknown) {
+    return toErrorResponse<LegacyAuthSuccessPayload>(
+      error,
+      'Unable to create your account.',
+    );
+  }
 }
+
+export async function getSession(): Promise<ApiResponse<Session>> {
+  try {
+    const { data, error } = await supabase.auth.getSession();
+
+    if (error) {
+      return toErrorResponse<Session>(error, 'Unable to read the current session.');
+    }
+
+    if (!data.session) {
+      return {
+        data: null,
+        error: null,
+      };
+    }
+
+    return toApiResponse<Session>(data.session);
+  } catch (error: unknown) {
+    return toErrorResponse<Session>(error, 'Unable to read the current session.');
+  }
+}
+
+export async function getUser(): Promise<ApiResponse<User>> {
+  try {
+    const { data, error } = await supabase.auth.getUser();
+
+    if (error) {
+      return toErrorResponse<User>(error, 'Unable to read the current user.');
+    }
+
+    if (!data.user) {
+      return {
+        data: null,
+        error: null,
+      };
+    }
+
+    return toApiResponse<User>(data.user);
+  } catch (error: unknown) {
+    return toErrorResponse<User>(error, 'Unable to read the current user.');
+  }
+}
+
+export const authAPI = {
+  getCurrentAuthSession,
+  getCurrentAuthUser,
+  signInWithPassword,
+  signUpWithPassword,
+  signInWithGoogle,
+  requestPasswordReset,
+  updatePassword,
+  changeEmail,
+  resendVerificationEmail,
+  verifyOtp,
+  signOut,
+  onAuthStateChange,
+
+  // legacy-compatible surface
+  signIn,
+  signUp,
+  getSession,
+  getUser,
+} as const;

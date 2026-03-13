@@ -3,9 +3,9 @@
 // Route entry point — delegates to feature layer
 // =============================================================================
 
-import { memo, useCallback, useMemo } from 'react'
-import { useFraud } from '@/features/admin/fraud/useFraud'
-import type { FraudEvent } from '@/features/admin/fraud/fraud.types'
+import { memo, useCallback, useMemo } from 'react';
+import { useFraud } from '@/features/admin/fraud/useFraud';
+import type { FraudEvent } from '@/features/admin/fraud/fraud.types';
 import {
   Panel,
   KPICard,
@@ -17,7 +17,7 @@ import {
   Badge,
   Skeleton,
   HealthBar,
-} from '@/features/admin/ui'
+} from '@/features/admin/ui';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -30,7 +30,7 @@ const fmtDate = (iso: string) =>
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-  })
+  });
 
 const EVENT_TYPE_LABELS: Record<string, string> = {
   suspicious_login: 'Suspicious Login',
@@ -39,41 +39,39 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   payment_declined: 'Payment Declined',
   velocity_check_failed: 'Velocity Check',
   ip_blocked: 'IP Blocked',
-}
+};
 
-type BadgeTone = 'danger' | 'warn' | 'info' | 'success' | 'default'
+type BadgeTone = 'danger' | 'warn' | 'info' | 'success' | 'default';
 
 function badgeClass(tone: BadgeTone): string {
   // Tailwind-only, no dependency on Badge "variant" prop
   switch (tone) {
     case 'danger':
-      return 'bg-red-500/15 text-red-300 border border-red-500/25'
+      return 'bg-red-500/15 text-red-300 border border-red-500/25';
     case 'warn':
-      return 'bg-amber-500/15 text-amber-300 border border-amber-500/25'
+      return 'bg-amber-500/15 text-amber-300 border border-amber-500/25';
     case 'info':
-      return 'bg-sky-500/15 text-sky-300 border border-sky-500/25'
+      return 'bg-sky-500/15 text-sky-300 border border-sky-500/25';
     case 'success':
-      return 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/25'
+      return 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/25';
     default:
-      return 'bg-zinc-700/30 text-zinc-200 border border-zinc-700/40'
+      return 'bg-zinc-700/30 text-zinc-200 border border-zinc-700/40';
   }
 }
 
 function RiskBadge({ score }: { score: number }) {
-  const tone: BadgeTone = score >= 80 ? 'danger' : score >= 50 ? 'warn' : 'info'
-  return (
-    <Badge className={`font-mono tabular-nums ${badgeClass(tone)}`}>
-      {score}
-    </Badge>
-  )
+  const tone: BadgeTone = score >= 80 ? 'danger' : score >= 50 ? 'warn' : 'info';
+  return <Badge className={`font-mono tabular-nums ${badgeClass(tone)}`}>{score}</Badge>;
 }
 
 function EventBadge({ type }: { type: string }) {
-  const label = EVENT_TYPE_LABELS[type] ?? type
-  const isHigh = ['suspicious_login', 'velocity_check_failed', 'device_trust_mismatch'].includes(type)
-  const tone: BadgeTone = isHigh ? 'danger' : 'warn'
+  const label = EVENT_TYPE_LABELS[type] ?? type;
+  const isHigh = ['suspicious_login', 'velocity_check_failed', 'device_trust_mismatch'].includes(
+    type,
+  );
+  const tone: BadgeTone = isHigh ? 'danger' : 'warn';
 
-  return <Badge className={badgeClass(tone)}>{label}</Badge>
+  return <Badge className={badgeClass(tone)}>{label}</Badge>;
 }
 
 function StatusBadge({ resolved }: { resolved: boolean }) {
@@ -81,7 +79,7 @@ function StatusBadge({ resolved }: { resolved: boolean }) {
     <Badge className={badgeClass('success')}>Resolved</Badge>
   ) : (
     <Badge className={badgeClass('danger')}>Open</Badge>
-  )
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -89,10 +87,10 @@ function StatusBadge({ resolved }: { resolved: boolean }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function RiskBreakdown({ events }: { events: FraudEvent[] }) {
-  const high = events.filter((e) => e.riskScore >= 80).length
-  const medium = events.filter((e) => e.riskScore >= 50 && e.riskScore < 80).length
-  const low = events.filter((e) => e.riskScore < 50).length
-  const total = events.length || 1
+  const high = events.filter((e) => e.riskScore >= 80).length;
+  const medium = events.filter((e) => e.riskScore >= 50 && e.riskScore < 80).length;
+  const low = events.filter((e) => e.riskScore < 50).length;
+  const total = events.length || 1;
 
   return (
     <Panel>
@@ -123,7 +121,7 @@ function RiskBreakdown({ events }: { events: FraudEvent[] }) {
         </span>
       </div>
     </Panel>
-  )
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -131,25 +129,25 @@ function RiskBreakdown({ events }: { events: FraudEvent[] }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const FraudLog = memo(function FraudLog() {
-  const { events, loading, error, filters, setFilters, resolve, refresh } = useFraud()
+  const { events, loading, error, filters, setFilters, resolve, refresh } = useFraud();
 
   const { highCount, avgScore, unresolvedCount } = useMemo(() => {
-    const high = events.filter((e) => e.riskScore >= 80).length
-    const unresolved = events.filter((e) => !e.resolved).length
+    const high = events.filter((e) => e.riskScore >= 80).length;
+    const unresolved = events.filter((e) => !e.resolved).length;
     const avg = events.length
       ? Math.round(events.reduce((sum, e) => sum + e.riskScore, 0) / events.length)
-      : 0
-    return { highCount: high, avgScore: avg, unresolvedCount: unresolved }
-  }, [events])
+      : 0;
+    return { highCount: high, avgScore: avg, unresolvedCount: unresolved };
+  }, [events]);
 
   const handleResolve = useCallback(
     async (id: string) => {
-      await resolve(id)
+      await resolve(id);
     },
     [resolve],
-  )
+  );
 
-  const showResolved = filters.resolved === undefined
+  const showResolved = filters.resolved === undefined;
 
   return (
     <div className="space-y-6">
@@ -211,9 +209,7 @@ const FraudLog = memo(function FraudLog() {
             <div className="flex justify-between text-xs text-zinc-600">
               <span>
                 Min score:{' '}
-                <span className="text-amber-400 font-bold">
-                  {filters.minRiskScore ?? 0}
-                </span>
+                <span className="text-amber-400 font-bold">{filters.minRiskScore ?? 0}</span>
               </span>
               <span>100</span>
             </div>
@@ -255,23 +251,25 @@ const FraudLog = memo(function FraudLog() {
               {events.map((ev) => (
                 <tr key={ev.id} className="hover:bg-zinc-800/30 transition-colors">
                   <Td>
-                    <span className="font-mono text-xs text-zinc-400">
-                      {fmtDate(ev.createdAt)}
-                    </span>
+                    <span className="font-mono text-xs text-zinc-400">{fmtDate(ev.createdAt)}</span>
                   </Td>
-                  <Td><EventBadge type={ev.eventType} /></Td>
-                  <Td><RiskBadge score={ev.riskScore} /></Td>
                   <Td>
-                    <span className="font-mono text-xs text-zinc-500">
-                      {ev.ipAddress ?? '—'}
-                    </span>
+                    <EventBadge type={ev.eventType} />
+                  </Td>
+                  <Td>
+                    <RiskBadge score={ev.riskScore} />
+                  </Td>
+                  <Td>
+                    <span className="font-mono text-xs text-zinc-500">{ev.ipAddress ?? '—'}</span>
                   </Td>
                   <Td>
                     <span className="font-mono text-xs text-zinc-500">
                       {ev.userId ? `${ev.userId.slice(0, 8)}…` : '—'}
                     </span>
                   </Td>
-                  <Td><StatusBadge resolved={ev.resolved} /></Td>
+                  <Td>
+                    <StatusBadge resolved={ev.resolved} />
+                  </Td>
                   <Td>
                     {!ev.resolved && (
                       <ActionButton size="sm" onClick={() => handleResolve(ev.id)}>
@@ -286,7 +284,7 @@ const FraudLog = memo(function FraudLog() {
         )}
       </Panel>
     </div>
-  )
-})
+  );
+});
 
-export default FraudLog
+export default FraudLog;

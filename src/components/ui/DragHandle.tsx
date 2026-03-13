@@ -8,9 +8,9 @@
 
 interface DragHandleProps {
   /** Additional classes */
-  className?: string
+  className?: string;
   /** Passed through to the div for drag event binding */
-  onMouseDown?: (e: React.MouseEvent) => void
+  onMouseDown?: (e: React.MouseEvent) => void;
 }
 
 export function DragHandle({ className = '', onMouseDown }: DragHandleProps) {

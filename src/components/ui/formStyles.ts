@@ -7,8 +7,7 @@
 // ============================================================================
 
 export const formStyles = {
-  label:
-    'block text-sm font-medium text-gray-700 mb-1',
+  label: 'block text-sm font-medium text-gray-700 mb-1',
 
   input:
     'w-full rounded-lg border border-gray-200 px-3 py-2 text-sm ' +
@@ -23,4 +22,4 @@ export const formStyles = {
     'w-full rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white ' +
     'focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent ' +
     'disabled:bg-gray-50 disabled:cursor-not-allowed transition',
-}
+};

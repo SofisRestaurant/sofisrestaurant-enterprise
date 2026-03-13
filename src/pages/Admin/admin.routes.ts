@@ -3,7 +3,7 @@
 // Admin routes metadata — used for nav + RBAC-friendly route organization
 // =============================================================================
 
-import { ADMIN_PATHS } from './admin.constants'
+import { ADMIN_PATHS } from './admin.constants';
 
 export type AdminRouteKey =
   | 'dashboard'
@@ -14,13 +14,13 @@ export type AdminRouteKey =
   | 'finance'
   | 'marketing'
   | 'loyalty'
-  | 'notifications'
+  | 'notifications';
 
 export type AdminRoute = {
-  key: AdminRouteKey
-  label: string
-  path: string
-}
+  key: AdminRouteKey;
+  label: string;
+  path: string;
+};
 
 export const ADMIN_ROUTES: AdminRoute[] = [
   { key: 'dashboard', label: 'Dashboard', path: ADMIN_PATHS.dashboard },
@@ -32,4 +32,4 @@ export const ADMIN_ROUTES: AdminRoute[] = [
   { key: 'marketing', label: 'Marketing', path: ADMIN_PATHS.marketing },
   { key: 'loyalty', label: 'Loyalty', path: ADMIN_PATHS.loyalty },
   { key: 'notifications', label: 'Notifications', path: ADMIN_PATHS.notifications },
-]
+];

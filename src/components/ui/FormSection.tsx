@@ -1,14 +1,14 @@
 // src/components/ui/FormSection.tsx
 
-import { type ReactNode } from 'react'
+import { type ReactNode } from 'react';
 
 interface FormSectionProps {
-  title?: string
-  description?: string
-  children: ReactNode
-  divided?: boolean
-  className?: string
-  compact?: boolean
+  title?: string;
+  description?: string;
+  children: ReactNode;
+  divided?: boolean;
+  className?: string;
+  compact?: boolean;
 }
 
 export function FormSection({
@@ -31,30 +31,24 @@ export function FormSection({
     >
       {(title || description) && (
         <div className="mb-1">
-          {title && (
-            <h3 className="text-sm font-semibold text-gray-800">
-              {title}
-            </h3>
-          )}
+          {title && <h3 className="text-sm font-semibold text-gray-800">{title}</h3>}
           {description && (
-            <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">
-              {description}
-            </p>
+            <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{description}</p>
           )}
         </div>
       )}
       {children}
     </div>
-  )
+  );
 }
 
 interface FormFieldProps {
-  label: string
-  required?: boolean
-  error?: string
-  hint?: string
-  children: ReactNode
-  htmlFor?: string
+  label: string;
+  required?: boolean;
+  error?: string;
+  hint?: string;
+  children: ReactNode;
+  htmlFor?: string;
 }
 
 export function FormField({
@@ -77,13 +71,9 @@ export function FormField({
 
       {children}
 
-      {hint && !error && (
-        <p className="text-xs text-gray-400 mt-1">{hint}</p>
-      )}
+      {hint && !error && <p className="text-xs text-gray-400 mt-1">{hint}</p>}
 
-      {error && (
-        <p className="text-xs text-red-500 mt-1 font-medium">{error}</p>
-      )}
+      {error && <p className="text-xs text-red-500 mt-1 font-medium">{error}</p>}
     </div>
-  )
+  );
 }

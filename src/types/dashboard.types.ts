@@ -135,18 +135,17 @@ export interface HealthBreakdown {
   score: number;
   weight?: number;
   delta?: number | null;
-  detail?: string | null
+  detail?: string | null;
   description?: string;
 }
 
 export interface HealthScore {
-  score: number;               // 0–100 composite
+  score: number; // 0–100 composite
   grade: 'Excellent' | 'Good' | 'Fair' | 'Needs Attention';
-  colorClass: string;          // e.g. "text-emerald-400"
-  colorHex: string;            // e.g. "#34d399"
+  colorClass: string; // e.g. "text-emerald-400"
+  colorHex: string; // e.g. "#34d399"
   breakdown: HealthBreakdown[]; // one entry per HealthSignal
 }
-
 
 // ── Trend ─────────────────────────────────────────────────────────────────────
 

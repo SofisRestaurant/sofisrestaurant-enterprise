@@ -1,48 +1,75 @@
 // src/lib/config/env.ts
-export type AppMode = 'development' | 'production' | 'test'
+export type AppMode = 'development' | 'production' | 'test';
 
-type EnvKey = keyof ImportMetaEnv
+type EnvKey = keyof ImportMetaEnv;
+type EnvRecord = Record<string, unknown>;
+
+const DEFAULT_APP_NAME = 'sofis-restaurant-v2';
 
 function readEnv(key: EnvKey): unknown {
-  return (import.meta.env as unknown as Record<string, unknown>)[key as string]
+  const source = import.meta.env as unknown as EnvRecord;
+  return source[String(key)];
+}
+
+function asTrimmedString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
 function mustGetString(key: EnvKey): string {
-  const v = readEnv(key)
-  if (typeof v !== 'string' || v.trim() === '') {
-    throw new Error(`Missing required environment variable: ${String(key)}`)
+  const value = asTrimmedString(readEnv(key));
+
+  if (value === null) {
+    throw new Error(`Missing required environment variable: ${String(key)}`);
   }
-  return v
+
+  return value;
 }
 
 function getOptionalString(key: EnvKey): string | undefined {
-  const v = readEnv(key)
-  return typeof v === 'string' && v.trim() !== '' ? v : undefined
+  return asTrimmedString(readEnv(key)) ?? undefined;
 }
 
 function mode(): AppMode {
-  const m = import.meta.env.MODE; // ok
-  return m === 'production' || m === 'test' ? m : 'development';
+  const currentMode = import.meta.env.MODE;
+  return currentMode === 'production' || currentMode === 'test'
+    ? currentMode
+    : 'development';
 }
 
-const stripePublicKey = getOptionalString('VITE_STRIPE_PUBLIC_KEY')
+const supabaseUrl = mustGetString('VITE_SUPABASE_URL');
+const supabaseAnonKey = mustGetString('VITE_SUPABASE_ANON_KEY');
+const stripePublicKey = getOptionalString('VITE_STRIPE_PUBLIC_KEY');
+const apiBaseUrl = getOptionalString('VITE_API_BASE_URL') ?? '';
+const appName = getOptionalString('VITE_APP_NAME') ?? DEFAULT_APP_NAME;
 
 export const env = {
   supabase: {
-    url: mustGetString('VITE_SUPABASE_URL'),
-    anonKey: mustGetString('VITE_SUPABASE_ANON_KEY'),
+    url: supabaseUrl,
+    anonKey: supabaseAnonKey,
   },
   stripe: {
-    // ✅ Don’t crash app: allow site to load even if Stripe isn't configured
     enabled: Boolean(stripePublicKey),
     publicKey: stripePublicKey ?? '',
   },
   api: {
-    baseUrl: getOptionalString('VITE_API_BASE_URL') ?? '',
+    baseUrl: apiBaseUrl,
   },
   app: {
+    name: appName,
     mode: mode(),
     isDev: import.meta.env.DEV,
     isProd: import.meta.env.PROD,
   },
-} as const
+} as const;
+
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  console.info('[env] loaded', {
+    supabaseUrl: env.supabase.url,
+    hasAnonKey: env.supabase.anonKey.length > 0,
+    stripeEnabled: env.stripe.enabled,
+    stripeKeyPrefix: env.stripe.publicKey ? env.stripe.publicKey.slice(0, 8) : null,
+    apiBaseUrl: env.api.baseUrl,
+    appName: env.app.name,
+    mode: env.app.mode,
+  });
+}

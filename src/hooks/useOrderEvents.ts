@@ -1,79 +1,125 @@
 // src/hooks/useOrderEvents.ts
 // ============================================================================
-// USE ORDER EVENTS HOOK
+// USE ORDER EVENTS HOOKS — Production Grade (2026)
 // ============================================================================
-// React hook for working with order events in components
+// Purpose:
+// - Fetch order events, timelines, and performance metrics safely
+// - Provide stable refresh handlers for UI consumers
+// - Support realtime subscriptions without violating strict lint rules
+// - Preserve backward compatibility for recordEvent trigger-based flows
+//
+// Notes:
+// - No sensitive data is logged
+// - Async effects use explicit void fire-and-forget semantics
+// - State resets cleanly when orderId is missing or changes
 // ============================================================================
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   getOrderEvents,
   getOrderTimeline,
   getOrderPerformance,
   subscribeToOrderEvents,
   recordOrderEvent,
-} from '@/modules/orders/api/order-events.api'
+} from '@/modules/orders/api/order-events.api';
 import type {
   OrderEvent,
   OrderTimeline,
   OrderPerformanceMetrics,
   RecordEventRequest,
-} from '@/domain/orders/order-events.types'
+} from '@/domain/orders/order-events.types';
+
+// ============================================================================
+// Shared helpers
+// ============================================================================
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message.trim() ? error.message : fallback;
+}
+
+function normalizeOrderId(orderId: string | null): string | null {
+  if (typeof orderId !== 'string') return null;
+  const normalized = orderId.trim();
+  return normalized.length > 0 ? normalized : null;
+}
 
 // ============================================================================
 // HOOK: USE ORDER EVENTS
 // ============================================================================
 
 interface UseOrderEventsReturn {
-  events: OrderEvent[]
-  loading: boolean
-  error: string | null
-  refresh: () => Promise<void>
+  events: OrderEvent[];
+  loading: boolean;
+  error: string | null;
+  refresh: () => Promise<void>;
 }
 
 /**
- * Hook to fetch and watch order events
- * 
+ * Hook to fetch and watch order events.
+ *
  * @example
  * ```tsx
- * const { events, loading, refresh } = useOrderEvents(orderId)
+ * const { events, loading, refresh } = useOrderEvents(orderId);
  * ```
  */
 export function useOrderEvents(orderId: string | null): UseOrderEventsReturn {
-  const [events, setEvents] = useState<OrderEvent[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const normalizedOrderId = normalizeOrderId(orderId);
 
-  const loadEvents = useCallback(async () => {
-    if (!orderId) {
-      setEvents([])
-      setLoading(false)
-      return
-    }
+  const [events, setEvents] = useState<OrderEvent[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
 
-    try {
-      setLoading(true)
-      setError(null)
-      const data = await getOrderEvents(orderId)
-      setEvents(data)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load events')
-      console.error('Error loading events:', err)
-    } finally {
-      setLoading(false)
-    }
-  }, [orderId])
+  const mountedRef = useRef<boolean>(true);
 
   useEffect(() => {
-    loadEvents()
-  }, [loadEvents])
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const loadEvents = useCallback(async (): Promise<void> => {
+    if (!normalizedOrderId) {
+      if (!mountedRef.current) return;
+      setEvents([]);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
+    if (mountedRef.current) {
+      setLoading(true);
+      setError(null);
+    }
+
+  try {
+  const data = await getOrderEvents(normalizedOrderId);
+
+  if (!mountedRef.current) return;
+  setEvents(Array.isArray(data) ? data : []);
+} catch (err) {
+  if (!mountedRef.current) return;
+  setError(getErrorMessage(err, 'Failed to load events'));
+  setEvents([]);
+  console.error('Error loading order events:', err);
+} finally {
+  if (mountedRef.current) {
+    setLoading(false);
+  }
+}
+  }, [normalizedOrderId]);
+
+  useEffect(() => {
+    void loadEvents();
+  }, [loadEvents]);
 
   return {
     events,
     loading,
     error,
     refresh: loadEvents,
-  }
+  };
 }
 
 // ============================================================================
@@ -81,55 +127,78 @@ export function useOrderEvents(orderId: string | null): UseOrderEventsReturn {
 // ============================================================================
 
 interface UseOrderTimelineReturn {
-  timeline: OrderTimeline | null
-  loading: boolean
-  error: string | null
-  refresh: () => Promise<void>
+  timeline: OrderTimeline | null;
+  loading: boolean;
+  error: string | null;
+  refresh: () => Promise<void>;
 }
 
 /**
- * Hook to fetch complete order timeline
- * 
+ * Hook to fetch complete order timeline.
+ *
  * @example
  * ```tsx
- * const { timeline, loading } = useOrderTimeline(orderId)
+ * const { timeline, loading } = useOrderTimeline(orderId);
  * ```
  */
 export function useOrderTimeline(orderId: string | null): UseOrderTimelineReturn {
-  const [timeline, setTimeline] = useState<OrderTimeline | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const normalizedOrderId = normalizeOrderId(orderId);
 
-  const loadTimeline = useCallback(async () => {
-    if (!orderId) {
-      setTimeline(null)
-      setLoading(false)
-      return
-    }
+  const [timeline, setTimeline] = useState<OrderTimeline | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
 
-    try {
-      setLoading(true)
-      setError(null)
-      const data = await getOrderTimeline(orderId)
-      setTimeline(data)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load timeline')
-      console.error('Error loading timeline:', err)
-    } finally {
-      setLoading(false)
-    }
-  }, [orderId])
+  const mountedRef = useRef<boolean>(true);
 
   useEffect(() => {
-    loadTimeline()
-  }, [loadTimeline])
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const loadTimeline = useCallback(async (): Promise<void> => {
+    if (!normalizedOrderId) {
+      if (!mountedRef.current) return;
+      setTimeline(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
+    if (mountedRef.current) {
+      setLoading(true);
+      setError(null);
+    }
+
+   try {
+  const data = await getOrderTimeline(normalizedOrderId);
+
+  if (!mountedRef.current) return;
+  setTimeline(data);
+} catch (err) {
+  if (!mountedRef.current) return;
+  setError(getErrorMessage(err, 'Failed to load timeline'));
+  setTimeline(null);
+  console.error('Error loading order timeline:', err);
+} finally {
+  if (mountedRef.current) {
+    setLoading(false);
+  }
+}
+  }, [normalizedOrderId]);
+
+  useEffect(() => {
+    void loadTimeline();
+  }, [loadTimeline]);
 
   return {
     timeline,
     loading,
     error,
     refresh: loadTimeline,
-  }
+  };
 }
 
 // ============================================================================
@@ -137,55 +206,78 @@ export function useOrderTimeline(orderId: string | null): UseOrderTimelineReturn
 // ============================================================================
 
 interface UseOrderPerformanceReturn {
-  metrics: OrderPerformanceMetrics | null
-  loading: boolean
-  error: string | null
-  refresh: () => Promise<void>
+  metrics: OrderPerformanceMetrics | null;
+  loading: boolean;
+  error: string | null;
+  refresh: () => Promise<void>;
 }
 
 /**
- * Hook to fetch order performance metrics
- * 
+ * Hook to fetch order performance metrics.
+ *
  * @example
  * ```tsx
- * const { metrics, loading } = useOrderPerformance(orderId)
+ * const { metrics, loading } = useOrderPerformance(orderId);
  * ```
  */
 export function useOrderPerformance(orderId: string | null): UseOrderPerformanceReturn {
-  const [metrics, setMetrics] = useState<OrderPerformanceMetrics | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const normalizedOrderId = normalizeOrderId(orderId);
 
-  const loadMetrics = useCallback(async () => {
-    if (!orderId) {
-      setMetrics(null)
-      setLoading(false)
-      return
-    }
+  const [metrics, setMetrics] = useState<OrderPerformanceMetrics | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
 
-    try {
-      setLoading(true)
-      setError(null)
-      const data = await getOrderPerformance(orderId)
-      setMetrics(data)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load metrics')
-      console.error('Error loading metrics:', err)
-    } finally {
-      setLoading(false)
-    }
-  }, [orderId])
+  const mountedRef = useRef<boolean>(true);
 
   useEffect(() => {
-    loadMetrics()
-  }, [loadMetrics])
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const loadMetrics = useCallback(async (): Promise<void> => {
+    if (!normalizedOrderId) {
+      if (!mountedRef.current) return;
+      setMetrics(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
+    if (mountedRef.current) {
+      setLoading(true);
+      setError(null);
+    }
+
+   try {
+  const data = await getOrderPerformance(normalizedOrderId);
+
+  if (!mountedRef.current) return;
+  setMetrics(data);
+} catch (err) {
+  if (!mountedRef.current) return;
+  setError(getErrorMessage(err, 'Failed to load metrics'));
+  setMetrics(null);
+  console.error('Error loading order performance:', err);
+} finally {
+  if (mountedRef.current) {
+    setLoading(false);
+  }
+}
+  }, [normalizedOrderId]);
+
+  useEffect(() => {
+    void loadMetrics();
+  }, [loadMetrics]);
 
   return {
     metrics,
     loading,
     error,
     refresh: loadMetrics,
-  }
+  };
 }
 
 // ============================================================================
@@ -193,54 +285,47 @@ export function useOrderPerformance(orderId: string | null): UseOrderPerformance
 // ============================================================================
 
 interface UseRealtimeOrderEventsOptions {
-  enabled?: boolean
-  onNewEvent?: (event: OrderEvent) => void
+  enabled?: boolean;
+  onNewEvent?: (event: OrderEvent) => void;
 }
 
 /**
- * Hook to subscribe to real-time order events
- * 
+ * Hook to subscribe to real-time order events.
+ *
  * @example
  * ```tsx
  * const { events } = useRealtimeOrderEvents(orderId, {
- *   onNewEvent: (event) => console.log('New event:', event)
- * })
+ *   onNewEvent: (event) => console.log('New event:', event),
+ * });
  * ```
  */
 export function useRealtimeOrderEvents(
   orderId: string | null,
-  options: UseRealtimeOrderEventsOptions = {}
+  options: UseRealtimeOrderEventsOptions = {},
 ): UseOrderEventsReturn {
-  const { enabled = true, onNewEvent } = options
-  const { events, loading, error, refresh } = useOrderEvents(orderId)
+  const normalizedOrderId = normalizeOrderId(orderId);
+  const { enabled = true, onNewEvent } = options;
+  const { events, loading, error, refresh } = useOrderEvents(normalizedOrderId);
 
   useEffect(() => {
-    if (!orderId || !enabled) return
+    if (!normalizedOrderId || !enabled) return;
 
-    console.log('📡 Subscribing to real-time events for order:', orderId)
-
-    const unsubscribe = subscribeToOrderEvents(orderId, (event) => {
-      console.log('📡 New event received:', event)
-      
-      // Call callback
-      onNewEvent?.(event)
-      
-      // Refresh events
-      refresh()
-    })
+    const unsubscribe = subscribeToOrderEvents(normalizedOrderId, (event) => {
+      onNewEvent?.(event);
+      void refresh();
+    });
 
     return () => {
-      console.log('📡 Unsubscribing from order events')
-      unsubscribe()
-    }
-  }, [orderId, enabled, onNewEvent, refresh])
+      unsubscribe();
+    };
+  }, [normalizedOrderId, enabled, onNewEvent, refresh]);
 
   return {
     events,
     loading,
     error,
     refresh,
-  }
+  };
 }
 
 // ============================================================================
@@ -248,62 +333,52 @@ export function useRealtimeOrderEvents(
 // ============================================================================
 
 interface UseRecordEventReturn {
-  recordEvent: (
-    request: Omit<RecordEventRequest, 'order_id'>
-  ) => Promise<boolean>
-  recording: boolean
-  error: string | null
+  recordEvent: (request: Omit<RecordEventRequest, 'order_id'>) => Promise<boolean>;
+  recording: boolean;
+  error: string | null;
 }
 
 /**
  * Hook to record events for an order.
- * In DB-trigger architecture, this function does NOT directly insert events.
- * It exists for backward compatibility.
+ * In trigger-based architecture, this remains a compatibility wrapper.
  */
-export function useRecordEvent(
-  orderId: string | null
-): UseRecordEventReturn {
-  const [recording, setRecording] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+export function useRecordEvent(orderId: string | null): UseRecordEventReturn {
+  const normalizedOrderId = normalizeOrderId(orderId);
+
+  const [recording, setRecording] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
 
   const record = useCallback(
-    async (
-      request: Omit<RecordEventRequest, 'order_id'>
-    ): Promise<boolean> => {
-      if (!orderId) {
-        setError('Order ID is required')
-        return false
+    async (request: Omit<RecordEventRequest, 'order_id'>): Promise<boolean> => {
+      if (!normalizedOrderId) {
+        setError('Order ID is required');
+        return false;
       }
 
       try {
-        setRecording(true)
-        setError(null)
+        setRecording(true);
+        setError(null);
 
-        // In trigger-based system, this is a no-op.
-         await recordOrderEvent({
-         ...request,
-        order_id: orderId,
-       })
-       return true
-        // Always return true because we don't control DB insertion
+        await recordOrderEvent({
+          ...request,
+          order_id: normalizedOrderId,
+        });
+
+        return true;
       } catch (err) {
-        setError(
-          err instanceof Error
-            ? err.message
-            : 'Failed to record event'
-        )
-        console.error('Error recording event:', err)
-        return false
+        setError(getErrorMessage(err, 'Failed to record event'));
+        console.error('Error recording order event:', err);
+        return false;
       } finally {
-        setRecording(false)
+        setRecording(false);
       }
     },
-    [orderId]
-  )
+    [normalizedOrderId],
+  );
 
   return {
     recordEvent: record,
     recording,
     error,
-  }
+  };
 }

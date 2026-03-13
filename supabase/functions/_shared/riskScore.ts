@@ -5,42 +5,42 @@
 // =============================================================================
 
 export interface RiskFactors {
-  deviceUnknown:      boolean;
-  geoMismatch:        boolean;   // country differs from last 5 sessions
-  rapidAttempts:      boolean;   // > 3 failures in last 15 minutes
-  unusualTime:        boolean;   // outside user's normal activity window
-  passwordMismatches: number;    // consecutive password failures this session
+  deviceUnknown: boolean;
+  geoMismatch: boolean; // country differs from last 5 sessions
+  rapidAttempts: boolean; // > 3 failures in last 15 minutes
+  unusualTime: boolean; // outside user's normal activity window
+  passwordMismatches: number; // consecutive password failures this session
 }
 
 export interface RiskResult {
-  score:                number;   // 0–100
+  score: number; // 0–100
   breakdown: {
-    deviceUnknownPts:   number;
-    geoMismatchPts:     number;
-    rapidAttemptsPts:   number;
-    unusualTimePts:     number;
-    pwMismatchPts:      number;
+    deviceUnknownPts: number;
+    geoMismatchPts: number;
+    rapidAttemptsPts: number;
+    unusualTimePts: number;
+    pwMismatchPts: number;
   };
-  requiresDeviceTrust: boolean;  // score >= 20
-  requiresMfa:         boolean;  // score >= 50
-  requiresStepUp:      boolean;  // score >= 75 (step-up auth or lock)
+  requiresDeviceTrust: boolean; // score >= 20
+  requiresMfa: boolean; // score >= 50
+  requiresStepUp: boolean; // score >= 75 (step-up auth or lock)
   tier: 'low' | 'medium' | 'high' | 'critical';
 }
 
 const WEIGHTS = {
-  deviceUnknown:    20,
-  geoMismatch:      25,
-  rapidAttempts:    20,
-  unusualTime:      10,
-  passwordMismatch: 10,   // per mismatch, capped at 25
+  deviceUnknown: 20,
+  geoMismatch: 25,
+  rapidAttempts: 20,
+  unusualTime: 10,
+  passwordMismatch: 10, // per mismatch, capped at 25
 } as const;
 
 export function computeRiskScore(factors: RiskFactors): RiskResult {
-  const deviceUnknownPts  = factors.deviceUnknown  ? WEIGHTS.deviceUnknown  : 0;
-  const geoMismatchPts    = factors.geoMismatch    ? WEIGHTS.geoMismatch    : 0;
-  const rapidAttemptsPts  = factors.rapidAttempts  ? WEIGHTS.rapidAttempts  : 0;
-  const unusualTimePts    = factors.unusualTime    ? WEIGHTS.unusualTime    : 0;
-  const pwMismatchPts     = Math.min(factors.passwordMismatches * WEIGHTS.passwordMismatch, 25);
+  const deviceUnknownPts = factors.deviceUnknown ? WEIGHTS.deviceUnknown : 0;
+  const geoMismatchPts = factors.geoMismatch ? WEIGHTS.geoMismatch : 0;
+  const rapidAttemptsPts = factors.rapidAttempts ? WEIGHTS.rapidAttempts : 0;
+  const unusualTimePts = factors.unusualTime ? WEIGHTS.unusualTime : 0;
+  const pwMismatchPts = Math.min(factors.passwordMismatches * WEIGHTS.passwordMismatch, 25);
 
   const score = Math.min(
     deviceUnknownPts + geoMismatchPts + rapidAttemptsPts + unusualTimePts + pwMismatchPts,
@@ -49,14 +49,17 @@ export function computeRiskScore(factors: RiskFactors): RiskResult {
 
   return {
     score,
-    breakdown: { deviceUnknownPts, geoMismatchPts, rapidAttemptsPts, unusualTimePts, pwMismatchPts },
+    breakdown: {
+      deviceUnknownPts,
+      geoMismatchPts,
+      rapidAttemptsPts,
+      unusualTimePts,
+      pwMismatchPts,
+    },
     requiresDeviceTrust: score >= 20,
-    requiresMfa:         score >= 50,
-    requiresStepUp:      score >= 75,
-    tier: score >= 75 ? 'critical'
-        : score >= 50 ? 'high'
-        : score >= 20 ? 'medium'
-        : 'low',
+    requiresMfa: score >= 50,
+    requiresStepUp: score >= 75,
+    tier: score >= 75 ? 'critical' : score >= 50 ? 'high' : score >= 20 ? 'medium' : 'low',
   };
 }
 

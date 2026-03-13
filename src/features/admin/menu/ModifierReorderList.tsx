@@ -1,12 +1,12 @@
-import { useMemo, useRef, useState, type DragEvent } from 'react'
-import clsx from 'clsx'
-import type { AdminModifierGroup } from '@/types/admin-menu'
+import { useMemo, useRef, useState, type DragEvent } from 'react';
+import clsx from 'clsx';
+import type { AdminModifierGroup } from '@/types/admin-menu';
 
 export interface ModifierGroupReorderListProps {
-  groups: AdminModifierGroup[]
-  disabled?: boolean
+  groups: AdminModifierGroup[];
+  disabled?: boolean;
   /** Called after every successful drop with the reordered array */
-  onReorder: (reordered: AdminModifierGroup[]) => void
+  onReorder: (reordered: AdminModifierGroup[]) => void;
 }
 
 export function ModifierGroupReorderList({
@@ -14,33 +14,33 @@ export function ModifierGroupReorderList({
   disabled = false,
   onReorder,
 }: ModifierGroupReorderListProps) {
-  const dragIndex = useRef<number | null>(null)
-  const [draggingIdx, setDraggingIdx] = useState<number | null>(null)
+  const dragIndex = useRef<number | null>(null);
+  const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
 
   // keep stable array reference for drag operations
-  const list = useMemo(() => groups, [groups])
+  const list = useMemo(() => groups, [groups]);
 
   function handleDragStart(i: number) {
-    if (disabled) return
-    dragIndex.current = i
-    setDraggingIdx(i)
+    if (disabled) return;
+    dragIndex.current = i;
+    setDraggingIdx(i);
   }
 
   function handleDragOver(e: DragEvent<HTMLDivElement>, i: number) {
-    if (disabled) return
-    e.preventDefault()
-    if (dragIndex.current === null || dragIndex.current === i) return
+    if (disabled) return;
+    e.preventDefault();
+    if (dragIndex.current === null || dragIndex.current === i) return;
 
-    const next = [...list]
-    const [item] = next.splice(dragIndex.current, 1)
-    next.splice(i, 0, item)
-    dragIndex.current = i
-    onReorder(next)
+    const next = [...list];
+    const [item] = next.splice(dragIndex.current, 1);
+    next.splice(i, 0, item);
+    dragIndex.current = i;
+    onReorder(next);
   }
 
   function handleDragEnd() {
-    dragIndex.current = null
-    setDraggingIdx(null)
+    dragIndex.current = null;
+    setDraggingIdx(null);
   }
 
   return (
@@ -71,5 +71,5 @@ export function ModifierGroupReorderList({
         </div>
       ))}
     </div>
-  )
+  );
 }

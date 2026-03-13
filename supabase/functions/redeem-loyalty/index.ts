@@ -11,33 +11,32 @@
 // - ✅ Always returns: { ok, new_balance, was_duplicate, meta }
 // =============================================================================
 
-import { createServiceClient, createAnonClient, type SvcClient } from "../_shared/supabase.ts";
+import { createServiceClient, createAnonClient, type SvcClient } from '../_shared/supabase.ts';
 
 const CONFIG = {
   MAX_BODY_BYTES: 10_000,
   MAX_POINTS: 1_000_000,
   ALLOWED_ORIGINS: [
-    "https://sofislegacy.com",
-    "https://www.sofislegacy.com",
-    "https://sofisrestaurant.netlify.app",
-    "http://localhost:3000",
-    "http://localhost:5173",
+    'https://sofislegacy.com',
+    'https://www.sofislegacy.com',
+    'https://sofisrestaurant.netlify.app',
+    'http://localhost:3000',
+    'http://localhost:5173',
   ] as const,
 } as const;
 
 const ORIGINS = new Set<string>(CONFIG.ALLOWED_ORIGINS);
 
 const ALLOWED_HEADERS =
-  "authorization, apikey, x-client-info, content-type, x-application-name, x-request-id, x-idempotency-key";
-const ALLOWED_METHODS = "POST, OPTIONS";
+  'authorization, apikey, x-client-info, content-type, x-application-name, x-request-id, x-idempotency-key';
+const ALLOWED_METHODS = 'POST, OPTIONS';
 
 type JsonRecord = Record<string, unknown>;
 function isRecord(v: unknown): v is JsonRecord {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function isUuid(v: string): boolean {
   return UUID_RE.test(v);
 }
@@ -47,7 +46,7 @@ function nowIso(): string {
 }
 
 function makeRequestId(req: Request): string {
-  const h = (req.headers.get("x-request-id") ?? "").trim();
+  const h = (req.headers.get('x-request-id') ?? '').trim();
   if (h) return h.slice(0, 128);
   try {
     return crypto.randomUUID();
@@ -56,30 +55,30 @@ function makeRequestId(req: Request): string {
   }
 }
 
-function log(level: "info" | "warn" | "error", event: string, data?: Record<string, unknown>) {
+function log(level: 'info' | 'warn' | 'error', event: string, data?: Record<string, unknown>) {
   const entry = JSON.stringify({
     level,
     event,
-    service: "redeem-loyalty",
+    service: 'redeem-loyalty',
     ts: nowIso(),
     ...(data ?? {}),
   });
-  if (level === "error") console.error(entry);
-  else if (level === "warn") console.warn(entry);
+  if (level === 'error') console.error(entry);
+  else if (level === 'warn') console.warn(entry);
   else console.log(entry);
 }
 
 function cors(req: Request): Record<string, string> | null {
-  const origin = (req.headers.get("origin") ?? "").trim();
+  const origin = (req.headers.get('origin') ?? '').trim();
   if (!origin || !ORIGINS.has(origin)) return null;
 
   return {
-    "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Headers": ALLOWED_HEADERS,
-    "Access-Control-Allow-Methods": ALLOWED_METHODS,
-    "Access-Control-Allow-Credentials": "true",
-    "Access-Control-Max-Age": "86400",
-    Vary: "Origin",
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Headers': ALLOWED_HEADERS,
+    'Access-Control-Allow-Methods': ALLOWED_METHODS,
+    'Access-Control-Allow-Credentials': 'true',
+    'Access-Control-Max-Age': '86400',
+    Vary: 'Origin',
   };
 }
 
@@ -88,31 +87,31 @@ function json(corsHeaders: Record<string, string>, body: unknown, status = 200):
     status,
     headers: {
       ...corsHeaders,
-      "Content-Type": "application/json",
-      "Cache-Control": "no-store",
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
     },
   });
 }
 
 async function readJsonWithLimit(req: Request, maxBytes: number): Promise<unknown> {
-  const ct = (req.headers.get("content-type") ?? "").toLowerCase();
-  if (!ct.includes("application/json")) throw new Error("UNSUPPORTED_CONTENT_TYPE");
+  const ct = (req.headers.get('content-type') ?? '').toLowerCase();
+  if (!ct.includes('application/json')) throw new Error('UNSUPPORTED_CONTENT_TYPE');
 
   const ab = await req.arrayBuffer();
-  if (ab.byteLength > maxBytes) throw new Error("PAYLOAD_TOO_LARGE");
+  if (ab.byteLength > maxBytes) throw new Error('PAYLOAD_TOO_LARGE');
 
   const text = new TextDecoder().decode(ab);
-  if (!text.trim()) throw new Error("EMPTY_BODY");
+  if (!text.trim()) throw new Error('EMPTY_BODY');
 
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error("INVALID_JSON");
+    throw new Error('INVALID_JSON');
   }
 }
 
 function readBearer(req: Request): string | null {
-  const raw = req.headers.get("authorization") ?? req.headers.get("Authorization") ?? "";
+  const raw = req.headers.get('authorization') ?? req.headers.get('Authorization') ?? '';
   const m = raw.trim().match(/^bearer\s+(.+)$/i);
   const token = m?.[1]?.trim();
   return token ? token : null;
@@ -128,25 +127,25 @@ async function requireAdmin(req: Request, svc: SvcClient): Promise<string | null
   if (error || !userId) return null;
 
   const { data: profile, error: profErr } = await svc
-    .from("profiles")
-    .select("role")
-    .eq("id", userId)
+    .from('profiles')
+    .select('role')
+    .eq('id', userId)
     .maybeSingle();
 
   if (profErr || !profile) return null;
-  if (String(profile.role).toLowerCase() !== "admin") return null;
+  if (String(profile.role).toLowerCase() !== 'admin') return null;
 
   return userId;
 }
 
 function asString(v: unknown, max = 200): string {
-  const s = typeof v === "string" ? v.trim() : "";
-  if (!s) return "";
+  const s = typeof v === 'string' ? v.trim() : '';
+  if (!s) return '';
   return s.length > max ? s.slice(0, max) : s;
 }
 
 function asInt(v: unknown, fallback = 0): number {
-  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
   if (!Number.isFinite(n)) return fallback;
   return Math.trunc(n);
 }
@@ -168,16 +167,15 @@ function fnv1a32(input: string): string {
 type RedeemRow = { new_balance?: unknown; was_duplicate?: unknown };
 
 function normalizeRedeemRow(raw: unknown): { new_balance: number; was_duplicate: boolean } | null {
-  const row: unknown =
-    Array.isArray(raw) ? raw[0] ?? null : raw;
+  const row: unknown = Array.isArray(raw) ? (raw[0] ?? null) : raw;
 
   if (!isRecord(row)) return null;
 
   const nb = row.new_balance;
   const wd = row.was_duplicate;
 
-  const new_balance = typeof nb === "number" && Number.isFinite(nb) ? nb : NaN;
-  const was_duplicate = typeof wd === "boolean" ? wd : false;
+  const new_balance = typeof nb === 'number' && Number.isFinite(nb) ? nb : NaN;
+  const was_duplicate = typeof wd === 'boolean' ? wd : false;
 
   if (!Number.isFinite(new_balance)) return null;
   return { new_balance, was_duplicate };
@@ -186,41 +184,58 @@ function normalizeRedeemRow(raw: unknown): { new_balance: number; was_duplicate:
 Deno.serve(async (req) => {
   const requestId = makeRequestId(req);
   const ch = cors(req);
-  if (!ch) return new Response("Origin not allowed", { status: 403 });
+  if (!ch) return new Response('Origin not allowed', { status: 403 });
 
-  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: ch });
-  if (req.method !== "POST") {
-    return json(ch, { ok: false, error: "Method not allowed", code: "METHOD_NOT_ALLOWED", meta: { requestId } }, 405);
+  if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: ch });
+  if (req.method !== 'POST') {
+    return json(
+      ch,
+      { ok: false, error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED', meta: { requestId } },
+      405,
+    );
   }
 
   const svc = createServiceClient();
 
   const adminId = await requireAdmin(req, svc);
   if (!adminId) {
-    return json(ch, { ok: false, error: "Unauthorized", code: "UNAUTHORIZED", meta: { requestId } }, 401);
+    return json(
+      ch,
+      { ok: false, error: 'Unauthorized', code: 'UNAUTHORIZED', meta: { requestId } },
+      401,
+    );
   }
 
   let rawBody: unknown;
   try {
     rawBody = await readJsonWithLimit(req, CONFIG.MAX_BODY_BYTES);
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "BAD_REQUEST";
+    const msg = e instanceof Error ? e.message : 'BAD_REQUEST';
     const code =
-      msg === "PAYLOAD_TOO_LARGE"
-        ? "PAYLOAD_TOO_LARGE"
-        : msg === "UNSUPPORTED_CONTENT_TYPE"
-          ? "UNSUPPORTED_CONTENT_TYPE"
-          : msg === "EMPTY_BODY"
-            ? "EMPTY_BODY"
-            : "INVALID_JSON";
+      msg === 'PAYLOAD_TOO_LARGE'
+        ? 'PAYLOAD_TOO_LARGE'
+        : msg === 'UNSUPPORTED_CONTENT_TYPE'
+          ? 'UNSUPPORTED_CONTENT_TYPE'
+          : msg === 'EMPTY_BODY'
+            ? 'EMPTY_BODY'
+            : 'INVALID_JSON';
 
-    const status = code === "PAYLOAD_TOO_LARGE" ? 413 : code === "UNSUPPORTED_CONTENT_TYPE" ? 415 : 400;
+    const status =
+      code === 'PAYLOAD_TOO_LARGE' ? 413 : code === 'UNSUPPORTED_CONTENT_TYPE' ? 415 : 400;
 
-    return json(ch, { ok: false, error: "Invalid request payload", code, meta: { requestId } }, status);
+    return json(
+      ch,
+      { ok: false, error: 'Invalid request payload', code, meta: { requestId } },
+      status,
+    );
   }
 
   if (!isRecord(rawBody)) {
-    return json(ch, { ok: false, error: "Invalid request payload", code: "BAD_REQUEST", meta: { requestId } }, 400);
+    return json(
+      ch,
+      { ok: false, error: 'Invalid request payload', code: 'BAD_REQUEST', meta: { requestId } },
+      400,
+    );
   }
 
   const accountId = asString(rawBody.account_id, 128);
@@ -228,19 +243,27 @@ Deno.serve(async (req) => {
   const points = clampInt(asInt(pointsRaw, 0), 1, CONFIG.MAX_POINTS);
 
   if (!accountId || !isUuid(accountId)) {
-    return json(ch, { ok: false, error: "Invalid account_id", code: "INVALID_ACCOUNT", meta: { requestId } }, 400);
+    return json(
+      ch,
+      { ok: false, error: 'Invalid account_id', code: 'INVALID_ACCOUNT', meta: { requestId } },
+      400,
+    );
   }
   if (!Number.isFinite(points) || points <= 0) {
-    return json(ch, { ok: false, error: "Invalid points", code: "INVALID_POINTS", meta: { requestId } }, 400);
+    return json(
+      ch,
+      { ok: false, error: 'Invalid points', code: 'INVALID_POINTS', meta: { requestId } },
+      400,
+    );
   }
 
-  const clientIdem = asString(req.headers.get("x-idempotency-key"), 180);
+  const clientIdem = asString(req.headers.get('x-idempotency-key'), 180);
   const idem = clientIdem || `redeem:${fnv1a32(`${adminId}:${accountId}:${points}`)}`;
 
   const referenceId = crypto.randomUUID();
 
   try {
-    const { data, error } = await svc.rpc("v2_redeem_points", {
+    const { data, error } = await svc.rpc('v2_redeem_points', {
       p_account_id: accountId,
       p_amount: points,
       p_admin_id: adminId,
@@ -249,7 +272,7 @@ Deno.serve(async (req) => {
     });
 
     if (error) {
-      log("warn", "redeem_rpc_failed", {
+      log('warn', 'redeem_rpc_failed', {
         requestId,
         code: error.code ?? null,
         adminId: adminId.slice(0, 8),
@@ -257,13 +280,21 @@ Deno.serve(async (req) => {
         points,
       });
 
-      return json(ch, { ok: false, error: "Redeem failed", code: "REDEEM_FAILED", meta: { requestId } }, 400);
+      return json(
+        ch,
+        { ok: false, error: 'Redeem failed', code: 'REDEEM_FAILED', meta: { requestId } },
+        400,
+      );
     }
 
     const normalized = normalizeRedeemRow(data);
     if (!normalized) {
-      log("warn", "redeem_bad_shape", { requestId });
-      return json(ch, { ok: false, error: "Invalid response shape", code: "BAD_RESPONSE", meta: { requestId } }, 500);
+      log('warn', 'redeem_bad_shape', { requestId });
+      return json(
+        ch,
+        { ok: false, error: 'Invalid response shape', code: 'BAD_RESPONSE', meta: { requestId } },
+        500,
+      );
     }
 
     return json(ch, {
@@ -274,7 +305,14 @@ Deno.serve(async (req) => {
       meta: { requestId, ts: nowIso(), account_id: accountId, points },
     });
   } catch (e) {
-    log("error", "redeem_crashed", { requestId, error: e instanceof Error ? e.message : String(e) });
-    return json(ch, { ok: false, error: "Internal server error", code: "INTERNAL", meta: { requestId } }, 500);
+    log('error', 'redeem_crashed', {
+      requestId,
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return json(
+      ch,
+      { ok: false, error: 'Internal server error', code: 'INTERNAL', meta: { requestId } },
+      500,
+    );
   }
 });

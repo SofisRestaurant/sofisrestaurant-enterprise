@@ -9,17 +9,17 @@
 // Application is handled by ModifierTemplateService.applyToMenuItem().
 // ============================================================================
 
-import { useState }                  from 'react'
-import { AsyncButton }               from '@/components/ui/AsyncButton'
-import { ErrorBanner }               from '@/components/ui/ErrorBanner'
-import { MODIFIER_TEMPLATES, TEMPLATE_CATEGORIES } from '@/domain/menu/modifier.constants'
-import type { ModifierTemplate }     from '@/types/admin-menu'
-import { PricingEngine }             from '@/domain/pricing/pricing.engine'
+import { useState } from 'react';
+import { AsyncButton } from '@/components/ui/AsyncButton';
+import { ErrorBanner } from '@/components/ui/ErrorBanner';
+import { MODIFIER_TEMPLATES, TEMPLATE_CATEGORIES } from '@/domain/menu/modifier.constants';
+import type { ModifierTemplate } from '@/types/admin-menu';
+import { PricingEngine } from '@/domain/pricing/pricing.engine';
 
 interface ModifierTemplateLibraryProps {
-  onApply:       (templateId: string) => Promise<void>
-  appliedIds?:   string[]    // template IDs already applied to this item
-  disabled?:     boolean
+  onApply: (templateId: string) => Promise<void>;
+  appliedIds?: string[]; // template IDs already applied to this item
+  disabled?: boolean;
 }
 
 export function ModifierTemplateLibrary({
@@ -27,47 +27,47 @@ export function ModifierTemplateLibrary({
   appliedIds = [],
   disabled = false,
 }: ModifierTemplateLibraryProps) {
-  const [activeCategory, setActiveCategory] = useState<string>('all')
-  const [applyingId,     setApplyingId]     = useState<string | null>(null)
-  const [error,          setError]          = useState<string | null>(null)
-  const [justApplied,    setJustApplied]    = useState<Set<string>>(new Set())
+  const [activeCategory, setActiveCategory] = useState<string>('all');
+  const [applyingId, setApplyingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [justApplied, setJustApplied] = useState<Set<string>>(new Set());
 
   const filtered: ModifierTemplate[] =
     activeCategory === 'all'
       ? MODIFIER_TEMPLATES
-      : MODIFIER_TEMPLATES.filter((t) => t.category === activeCategory)
+      : MODIFIER_TEMPLATES.filter((t) => t.category === activeCategory);
 
   async function handleApply(template: ModifierTemplate) {
-    if (applyingId || disabled) return
-    setApplyingId(template.id)
-    setError(null)
+    if (applyingId || disabled) return;
+    setApplyingId(template.id);
+    setError(null);
     try {
-      await onApply(template.id)
-      setJustApplied((p) => new Set(p).add(template.id))
+      await onApply(template.id);
+      setJustApplied((p) => new Set(p).add(template.id));
       // Clear success flash after 3s
       setTimeout(() => {
         setJustApplied((p) => {
-          const next = new Set(p)
-          next.delete(template.id)
-          return next
-        })
-      }, 3000)
+          const next = new Set(p);
+          next.delete(template.id);
+          return next;
+        });
+      }, 3000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to apply template')
+      setError(err instanceof Error ? err.message : 'Failed to apply template');
     } finally {
-      setApplyingId(null)
+      setApplyingId(null);
     }
   }
 
-  const allModifierCount = (t: ModifierTemplate) => t.modifiers.length
+  const allModifierCount = (t: ModifierTemplate) => t.modifiers.length;
   const priceRange = (t: ModifierTemplate) => {
-    const prices = t.modifiers.map((m) => m.price_adjustment)
-    const min = Math.min(...prices)
-    const max = Math.max(...prices)
-    if (min === 0 && max === 0) return 'Free'
-    if (min === max) return `+${PricingEngine.formatPrice(max)}`
-    return `+${PricingEngine.formatPrice(min)} – +${PricingEngine.formatPrice(max)}`
-  }
+    const prices = t.modifiers.map((m) => m.price_adjustment);
+    const min = Math.min(...prices);
+    const max = Math.max(...prices);
+    if (min === 0 && max === 0) return 'Free';
+    if (min === max) return `+${PricingEngine.formatPrice(max)}`;
+    return `+${PricingEngine.formatPrice(min)} – +${PricingEngine.formatPrice(max)}`;
+  };
 
   return (
     <div className="space-y-4">
@@ -87,8 +87,8 @@ export function ModifierTemplateLibrary({
           All ({MODIFIER_TEMPLATES.length})
         </button>
         {TEMPLATE_CATEGORIES.map((cat) => {
-          const count = MODIFIER_TEMPLATES.filter((t) => t.category === cat).length
-          if (!count) return null
+          const count = MODIFIER_TEMPLATES.filter((t) => t.category === cat).length;
+          if (!count) return null;
           return (
             <button
               key={cat}
@@ -102,7 +102,7 @@ export function ModifierTemplateLibrary({
             >
               {cat} ({count})
             </button>
-          )
+          );
         })}
       </div>
 
@@ -113,9 +113,9 @@ export function ModifierTemplateLibrary({
         )}
 
         {filtered.map((template) => {
-          const alreadyApplied = appliedIds.includes(template.id)
-          const wasJustApplied = justApplied.has(template.id)
-          const isLoading      = applyingId === template.id
+          const alreadyApplied = appliedIds.includes(template.id);
+          const wasJustApplied = justApplied.has(template.id);
+          const isLoading = applyingId === template.id;
 
           return (
             <div
@@ -147,14 +147,19 @@ export function ModifierTemplateLibrary({
                   )}
                 </div>
                 {template.description && (
-                  <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">{template.description}</p>
+                  <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">
+                    {template.description}
+                  </p>
                 )}
                 <p className="text-xs text-gray-400 mt-1">
                   {allModifierCount(template)} options · {priceRange(template)}
                 </p>
                 {/* Option preview */}
                 <p className="text-xs text-gray-400 mt-0.5 truncate">
-                  {template.modifiers.slice(0, 4).map((m) => m.name).join(', ')}
+                  {template.modifiers
+                    .slice(0, 4)
+                    .map((m) => m.name)
+                    .join(', ')}
                   {template.modifiers.length > 4 && ` + ${template.modifiers.length - 4} more`}
                 </p>
               </div>
@@ -171,7 +176,7 @@ export function ModifierTemplateLibrary({
                 {wasJustApplied ? '✓ Applied' : alreadyApplied ? 'Apply Again' : 'Apply'}
               </AsyncButton>
             </div>
-          )
+          );
         })}
       </div>
 
@@ -179,5 +184,5 @@ export function ModifierTemplateLibrary({
         Templates create a new group with pre-configured options. You can edit them after applying.
       </p>
     </div>
-  )
+  );
 }

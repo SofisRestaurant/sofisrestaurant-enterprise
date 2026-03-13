@@ -20,39 +20,39 @@
 // =============================================================================
 
 interface FingerprintComponents {
-  canvas:      string;
-  webgl:       string;
-  screen:      string;
-  timezone:    string;
-  locale:      string;
-  hardware:    string;
-  uaHash:      string;
+  canvas: string;
+  webgl: string;
+  screen: string;
+  timezone: string;
+  locale: string;
+  hardware: string;
+  uaHash: string;
 }
 
 /** Collect raw fingerprint components (no hashing at this stage) */
 async function collectComponents(): Promise<FingerprintComponents> {
   return {
-    canvas:   getCanvasSignature(),
-    webgl:    getWebGLSignature(),
-    screen:   getScreenSignature(),
+    canvas: getCanvasSignature(),
+    webgl: getWebGLSignature(),
+    screen: getScreenSignature(),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    locale:   navigator.language ?? 'unknown',
+    locale: navigator.language ?? 'unknown',
     hardware: getHardwareSignature(),
-    uaHash:   await hashString(navigator.userAgent),
+    uaHash: await hashString(navigator.userAgent),
   };
 }
 
 function getCanvasSignature(): string {
   try {
     const canvas = document.createElement('canvas');
-    canvas.width  = 200;
+    canvas.width = 200;
     canvas.height = 50;
     const ctx = canvas.getContext('2d');
     if (!ctx) return 'no-canvas';
 
     ctx.textBaseline = 'top';
-    ctx.font         = '14px Arial';
-    ctx.fillStyle    = '#f60';
+    ctx.font = '14px Arial';
+    ctx.fillStyle = '#f60';
     ctx.fillRect(125, 1, 62, 20);
     ctx.fillStyle = '#069';
     ctx.fillText('Cwm fjordbank glyphs vext quiz 🍕', 2, 15);
@@ -68,8 +68,9 @@ function getCanvasSignature(): string {
 function getWebGLSignature(): string {
   try {
     const canvas = document.createElement('canvas');
-    const gl = canvas.getContext('webgl') as WebGLRenderingContext | null
-            ?? canvas.getContext('experimental-webgl') as WebGLRenderingContext | null;
+    const gl =
+      canvas.getContext('webgl') ??
+      (canvas.getContext('experimental-webgl') as WebGLRenderingContext | null);
     if (!gl) return 'no-webgl';
 
     const ext = gl.getExtension('WEBGL_debug_renderer_info');
@@ -96,9 +97,9 @@ function getHardwareSignature(): string {
 
 async function hashString(input: string): Promise<string> {
   const encoded = new TextEncoder().encode(input);
-  const buffer  = await crypto.subtle.digest('SHA-256', encoded);
+  const buffer = await crypto.subtle.digest('SHA-256', encoded);
   return Array.from(new Uint8Array(buffer))
-    .map(b => b.toString(16).padStart(2, '0'))
+    .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
 }
 
@@ -115,7 +116,7 @@ export async function getDeviceFingerprint(): Promise<string> {
   if (_cachedHash) return _cachedHash;
 
   const components = await collectComponents();
-  const composite  = Object.values(components).join('||');
+  const composite = Object.values(components).join('||');
   _cachedHash = await hashString(composite);
   return _cachedHash;
 }
@@ -125,20 +126,30 @@ export async function getDeviceFingerprint(): Promise<string> {
  * Used as the display name when registering device trust.
  */
 export function getDeviceLabel(): string {
-  const ua  = navigator.userAgent;
-  const os  = /Mac/.test(ua)     ? 'Mac'
-            : /Win/.test(ua)     ? 'Windows'
-            : /Linux/.test(ua)   ? 'Linux'
-            : /iPhone/.test(ua)  ? 'iPhone'
-            : /iPad/.test(ua)    ? 'iPad'
-            : /Android/.test(ua) ? 'Android'
-            : 'Device';
+  const ua = navigator.userAgent;
+  const os = /Mac/.test(ua)
+    ? 'Mac'
+    : /Win/.test(ua)
+      ? 'Windows'
+      : /Linux/.test(ua)
+        ? 'Linux'
+        : /iPhone/.test(ua)
+          ? 'iPhone'
+          : /iPad/.test(ua)
+            ? 'iPad'
+            : /Android/.test(ua)
+              ? 'Android'
+              : 'Device';
 
-  const browser = /Edg/.test(ua)     ? 'Edge'
-                : /Chrome/.test(ua)  ? 'Chrome'
-                : /Firefox/.test(ua) ? 'Firefox'
-                : /Safari/.test(ua)  ? 'Safari'
-                : 'Browser';
+  const browser = /Edg/.test(ua)
+    ? 'Edge'
+    : /Chrome/.test(ua)
+      ? 'Chrome'
+      : /Firefox/.test(ua)
+        ? 'Firefox'
+        : /Safari/.test(ua)
+          ? 'Safari'
+          : 'Browser';
 
   return `${browser} on ${os}`;
 }

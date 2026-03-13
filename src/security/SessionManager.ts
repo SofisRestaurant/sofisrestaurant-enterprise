@@ -1,9 +1,9 @@
-import type { Session } from '@supabase/supabase-js'
-import { supabase } from '@/lib/supabase/supabaseClient'
+import type { Session } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabase/supabaseClient';
 
 export interface SessionManagerOptions {
-  onExpire: () => void
-  onRefresh: (session: Session) => void
+  onExpire: () => void;
+  onRefresh: (session: Session) => void;
 }
 
 /**
@@ -11,54 +11,54 @@ export interface SessionManagerOptions {
  * Refreshes 5 minutes before expiration.
  */
 export class SessionManager {
-  private timer: ReturnType<typeof setTimeout> | null = null
-  private readonly options: SessionManagerOptions
-  private readonly REFRESH_BUFFER_MS = 5 * 60 * 1000 // 5 minutes
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private readonly options: SessionManagerOptions;
+  private readonly REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
   constructor(options: SessionManagerOptions) {
-    this.options = options
+    this.options = options;
   }
 
-  start(session: Session) {
-    this.stop()
+  start(session: Session): void {
+    this.stop();
 
-    if (!session.expires_at) return
+    if (session.expires_at === undefined || session.expires_at === null) {
+      return;
+    }
 
-    const expiresAtMs = session.expires_at * 1000
-    const now = Date.now()
+    const expiresAtMs = session.expires_at * 1000;
+    const now = Date.now();
+    const refreshAt = expiresAtMs - now - this.REFRESH_BUFFER_MS;
 
-    const refreshAt = expiresAtMs - now - this.REFRESH_BUFFER_MS
-
-    // If already near expiry, refresh immediately
     if (refreshAt <= 0) {
-      this.refreshNow()
-      return
+      void this.refreshNow();
+      return;
     }
 
     this.timer = setTimeout(() => {
-      this.refreshNow()
-    }, refreshAt)
+      void this.refreshNow();
+    }, refreshAt);
   }
 
-  stop() {
-    if (this.timer) {
-      clearTimeout(this.timer)
-      this.timer = null
+  stop(): void {
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
     }
   }
 
-  private async refreshNow() {
+  private async refreshNow(): Promise<void> {
     try {
-      const { data, error } = await supabase.auth.refreshSession()
+      const { data, error } = await supabase.auth.refreshSession();
 
-      if (error || !data.session) {
-        this.options.onExpire()
-        return
+      if (error !== null || data.session === null) {
+        this.options.onExpire();
+        return;
       }
 
-      this.options.onRefresh(data.session)
+      this.options.onRefresh(data.session);
     } catch {
-      this.options.onExpire()
+      this.options.onExpire();
     }
   }
 }

@@ -6,9 +6,9 @@
 // Consistent with the amber/black design system.
 // ============================================================================
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react';
 
-type BannerVariant = 'error' | 'warning' | 'success' | 'info'
+type BannerVariant = 'error' | 'warning' | 'success' | 'info';
 
 interface ErrorBannerProps {
   message: string | null | undefined;
@@ -20,37 +20,40 @@ interface ErrorBannerProps {
   compact?: boolean;
 }
 
-const VARIANT_STYLES: Record<BannerVariant, {
-  wrapper: string
-  icon:    string
-  text:    string
-  dismiss: string
-}> = {
+const VARIANT_STYLES: Record<
+  BannerVariant,
+  {
+    wrapper: string;
+    icon: string;
+    text: string;
+    dismiss: string;
+  }
+> = {
   error: {
     wrapper: 'bg-red-50 border-red-200',
-    icon:    '✕',
-    text:    'text-red-700',
+    icon: '✕',
+    text: 'text-red-700',
     dismiss: 'text-red-400 hover:text-red-600',
   },
   warning: {
     wrapper: 'bg-amber-50 border-amber-200',
-    icon:    '⚠',
-    text:    'text-amber-700',
+    icon: '⚠',
+    text: 'text-amber-700',
     dismiss: 'text-amber-400 hover:text-amber-600',
   },
   success: {
     wrapper: 'bg-green-50 border-green-200',
-    icon:    '✓',
-    text:    'text-green-700',
+    icon: '✓',
+    text: 'text-green-700',
     dismiss: 'text-green-400 hover:text-green-600',
   },
   info: {
     wrapper: 'bg-blue-50 border-blue-200',
-    icon:    'ℹ',
-    text:    'text-blue-700',
+    icon: 'ℹ',
+    text: 'text-blue-700',
     dismiss: 'text-blue-400 hover:text-blue-600',
   },
-}
+};
 
 export function ErrorBanner({
   message,

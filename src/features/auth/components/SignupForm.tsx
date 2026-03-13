@@ -1,15 +1,7 @@
 // src/features/auth/components/SignupForm.tsx
 
 import { useState } from 'react';
-import {
-  Mail,
-  Lock,
-  User,
-  AlertCircle,
-  Eye,
-  EyeOff,
-  Loader2,
-} from 'lucide-react';
+import { Mail, Lock, User, AlertCircle, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { authAPI } from '@/lib/supabase/auth.api';
 
 interface SignupFormProps {
@@ -40,25 +32,22 @@ export function SignupForm({ onSuccess, onSwitchToLogin }: SignupFormProps) {
         throw new Error('Please enter a valid email address');
       }
 
-     const { error } = await authAPI.signUp({
-  email: email.trim(),
-  password,
-  fullName: name.trim(),
-});
+      const { error } = await authAPI.signUp({
+        email: email.trim(),
+        password,
+        fullName: name.trim(),
+      });
 
-if (error) {
-  setError(error.message);
-  return;
-}
+      if (error) {
+        setError(error.message);
+        return;
+      }
 
-onSuccess();
+      onSuccess();
     } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : 'Failed to create account';
+      const message = err instanceof Error ? err.message : 'Failed to create account';
       if (message.toLowerCase().includes('already')) {
-        setError(
-          'An account with this email already exists. Please sign in instead.'
-        );
+        setError('An account with this email already exists. Please sign in instead.');
       } else {
         setError(message);
       }
@@ -81,10 +70,7 @@ onSuccess();
 
       {/* Full Name */}
       <div>
-        <label
-          htmlFor="signup-name"
-          className="block text-sm font-medium text-gray-700 mb-1.5"
-        >
+        <label htmlFor="signup-name" className="block text-sm font-medium text-gray-700 mb-1.5">
           Full Name
         </label>
         <div className="relative">
@@ -105,10 +91,7 @@ onSuccess();
 
       {/* Email */}
       <div>
-        <label
-          htmlFor="signup-email"
-          className="block text-sm font-medium text-gray-700 mb-1.5"
-        >
+        <label htmlFor="signup-email" className="block text-sm font-medium text-gray-700 mb-1.5">
           Email Address
         </label>
         <div className="relative">
@@ -129,10 +112,7 @@ onSuccess();
 
       {/* Password */}
       <div>
-        <label
-          htmlFor="signup-password"
-          className="block text-sm font-medium text-gray-700 mb-1.5"
-        >
+        <label htmlFor="signup-password" className="block text-sm font-medium text-gray-700 mb-1.5">
           Password
         </label>
         <div className="relative">
@@ -155,11 +135,7 @@ onSuccess();
             tabIndex={-1}
             aria-label={showPassword ? 'Hide password' : 'Show password'}
           >
-            {showPassword ? (
-              <EyeOff className="w-5 h-5" />
-            ) : (
-              <Eye className="w-5 h-5" />
-            )}
+            {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
           </button>
         </div>
       </div>

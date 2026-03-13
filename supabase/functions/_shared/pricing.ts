@@ -9,15 +9,16 @@
 // - Safe decoding for legacy Json payloads (Supabase Json union).
 // - Deterministic hashing for auditability.
 // - Never write empty {} pricing_snapshot.
+// - Make money-unit intent explicit (cents vs dollars) to prevent drift.
 // =============================================================================
 
-import Stripe from "stripe";
-import type { Database, Json } from "./database.types.ts";
-import type { DbClient } from "./supabase.ts";
+import Stripe from 'stripe';
+import type { Database, Json } from './database.types.ts';
+import type { DbClient } from './supabase.ts';
 
-type MenuCategory = Database["public"]["Enums"]["menu_category"];
+type MenuCategory = Database['public']['Enums']['menu_category'];
 
-export type OrderType = "pickup" | "delivery" | "dine_in";
+export type OrderType = 'pickup' | 'delivery' | 'dine_in';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Canonical cart types (server-side validated cart)
@@ -52,7 +53,7 @@ type PricingCampaign = {
   menuItemId: string | null;
   appliesToCategory: MenuCategory | null;
   appliesToOrderType: OrderType | null;
-  dealType: "fixed_price" | "percent_off" | "amount_off" | "bogo";
+  dealType: 'fixed_price' | 'percent_off' | 'amount_off' | 'bogo';
   dealPriceCents: number | null;
   discountPercent: number | null;
   discountCents: number | null;
@@ -126,8 +127,8 @@ export type PricingSnapshotLine = {
 };
 
 export type PricingSnapshot = {
-  version: "2026-03-06";
-  currency: "usd";
+  version: '2026-03-06';
+  currency: 'usd';
   orderType: OrderType;
   orderNotes: string | null;
   userId: string;
@@ -180,10 +181,12 @@ type LegacyPendingCartSnapshotInput = {
 // Errors
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SUPPORTED_PROMO_TYPES = new Set(["percent", "fixed"]);
+const SUPPORTED_PROMO_TYPES = new Set(['percent', 'fixed']);
+const SUPPORTED_CURRENCIES = new Set(['usd']);
+const STRIPE_MIN_CHARGEABLE_TOTAL_CENTS_USD = 50;
 
 // Keep literal for strict validation + forward migration control
-const PRICING_VERSION: PricingSnapshot["version"] = "2026-03-06";
+const PRICING_VERSION: PricingSnapshot['version'] = '2026-03-06';
 
 export class PricingValidationError extends Error {
   readonly code: string;
@@ -191,7 +194,7 @@ export class PricingValidationError extends Error {
 
   constructor(code: string, message: string, status = 400) {
     super(message);
-    this.name = "PricingValidationError";
+    this.name = 'PricingValidationError';
     this.code = code;
     this.status = status;
   }
@@ -202,30 +205,28 @@ export class PricingValidationError extends Error {
 // ─────────────────────────────────────────────────────────────────────────────
 
 type JsonRecord = Record<string, unknown>;
-
-// For decoding Supabase Json union safely.
 type JsonObject = { [key: string]: Json | undefined };
 
 function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function isJsonObject(value: Json): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function asString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
+  return typeof value === 'string' ? value : null;
 }
 
 function asNullableString(value: unknown): string | null {
   if (value === null || value === undefined) return null;
-  return typeof value === "string" ? value : null;
+  return typeof value === 'string' ? value : null;
 }
 
 function asNumber(value: unknown, fallback: number): number {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
     const parsed = Number(value);
     if (Number.isFinite(parsed)) return parsed;
   }
@@ -233,7 +234,7 @@ function asNumber(value: unknown, fallback: number): number {
 }
 
 function asBoolean(value: unknown, fallback: boolean): boolean {
-  return typeof value === "boolean" ? value : fallback;
+  return typeof value === 'boolean' ? value : fallback;
 }
 
 function clampInt(value: number, min: number, max: number): number {
@@ -241,12 +242,18 @@ function clampInt(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.trunc(value)));
 }
 
-function cents(value: unknown): number {
+function normalizeCents(value: unknown): number {
   return Math.max(0, clampInt(asNumber(value, 0), 0, 50_000_000));
 }
 
-function signedCents(value: unknown): number {
+function normalizeSignedCents(value: unknown): number {
   return clampInt(asNumber(value, 0), -50_000_000, 50_000_000);
+}
+
+export function dollarsToCents(value: unknown): number {
+  const amount = asNumber(value, 0);
+  if (!Number.isFinite(amount)) return 0;
+  return Math.max(0, clampInt(Math.round(amount * 100), 0, 50_000_000));
 }
 
 function nowIso(): string {
@@ -261,18 +268,18 @@ function parseIsoMs(value: string | null): number | null {
 
 function isMenuCategory(value: string | null): value is MenuCategory {
   return (
-    value === "appetizers" ||
-    value === "entrees" ||
-    value === "desserts" ||
-    value === "drinks" ||
-    value === "lunch" ||
-    value === "breakfast" ||
-    value === "specials"
+    value === 'appetizers' ||
+    value === 'entrees' ||
+    value === 'desserts' ||
+    value === 'drinks' ||
+    value === 'lunch' ||
+    value === 'breakfast' ||
+    value === 'specials'
   );
 }
 
 function sanitizeOrderType(value: string | null): OrderType | null {
-  if (value === "pickup" || value === "delivery" || value === "dine_in") return value;
+  if (value === 'pickup' || value === 'delivery' || value === 'dine_in') return value;
   return null;
 }
 
@@ -280,8 +287,13 @@ function stableSortStrings(values: string[]): string[] {
   return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
 
+function normalizeCurrency(value: unknown): PricingSnapshot['currency'] {
+  const candidate = typeof value === 'string' ? value.trim().toLowerCase() : 'usd';
+  return SUPPORTED_CURRENCIES.has(candidate) ? 'usd' : 'usd';
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Json decoding helpers (turn "errors" into useful safety)
+// Json decoding helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 type DecodeIssue = {
@@ -299,12 +311,12 @@ function issue(path: string, message: string): DecodeIssue {
 
 function getJsonString(obj: JsonObject, key: string): string | null {
   const v = obj[key];
-  return typeof v === "string" ? v : null;
+  return typeof v === 'string' ? v : null;
 }
 
 function getJsonNumber(obj: JsonObject, key: string): number | null {
   const v = obj[key];
-  return typeof v === "number" && Number.isFinite(v) ? v : null;
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
 function getJsonArray(obj: JsonObject, key: string): Json[] | null {
@@ -314,16 +326,44 @@ function getJsonArray(obj: JsonObject, key: string): Json[] | null {
 
 function _getJsonObject(obj: JsonObject, key: string): JsonObject | null {
   const v = obj[key];
-  return v !== undefined && v !== null && typeof v === "object" && !Array.isArray(v)
+  return v !== undefined && v !== null && typeof v === 'object' && !Array.isArray(v)
     ? (v as JsonObject)
     : null;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Money helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function assertCentsInvariant(label: string, value: number): void {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new PricingValidationError(
+      'INVALID_MONEY_VALUE',
+      `${label} is invalid.`,
+      503,
+    );
+  }
+}
+
+function ensureMinimumStripeChargeableTotal(currency: string, totalCents: number): void {
+  if (normalizeCurrency(currency) === 'usd' && totalCents < STRIPE_MIN_CHARGEABLE_TOTAL_CENTS_USD) {
+    throw new PricingValidationError(
+      'CREDIT_MINIMUM_ORDER_TOTAL',
+      'Order total must be at least $0.50 USD after discounts and credits.',
+      422,
+    );
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Modifier pricing + hashing (integrity tag; NOT security)
 // ─────────────────────────────────────────────────────────────────────────────
 
 function modifierUnitPriceCents(item: CanonicalCartItem): number {
-  return item.modifiers.reduce((sum, modifier) => sum + signedCents(modifier.priceAdjustmentCents), 0);
+  return item.modifiers.reduce(
+    (sum, modifier) => sum + normalizeSignedCents(modifier.priceAdjustmentCents),
+    0,
+  );
 }
 
 function modifierLineSubtotalCents(item: CanonicalCartItem): number {
@@ -331,7 +371,7 @@ function modifierLineSubtotalCents(item: CanonicalCartItem): number {
 }
 
 function baseLineSubtotalCents(item: CanonicalCartItem): number {
-  return cents(item.baseUnitPriceCents) * item.quantity;
+  return normalizeCents(item.baseUnitPriceCents) * item.quantity;
 }
 
 function canonicalizeModifierHash(modifiers: CanonicalModifier[]): string {
@@ -342,7 +382,7 @@ function canonicalizeModifierHash(modifiers: CanonicalModifier[]): string {
       return left.priceAdjustmentCents - right.priceAdjustmentCents;
     })
     .map((modifier) => `${modifier.groupId}:${modifier.id}:${modifier.priceAdjustmentCents}`)
-    .join("|");
+    .join('|');
 }
 
 export function buildClientIntegrityHash(
@@ -353,12 +393,11 @@ export function buildClientIntegrityHash(
 ): string {
   const payload = [
     menuItemId.trim(),
-    String(cents(baseUnitPriceCents)),
+    String(normalizeCents(baseUnitPriceCents)),
     String(clampInt(quantity, 1, 99)),
     canonicalizeModifierHash(modifiers),
-  ].join("|");
+  ].join('|');
 
-  // Small deterministic hash (fast; integrity tag)
   let hash = 0x811c9dc5;
   for (let index = 0; index < payload.length; index += 1) {
     hash ^= payload.charCodeAt(index);
@@ -384,30 +423,31 @@ function computeCampaignDiscount(item: CanonicalCartItem, campaign: PricingCampa
   const baseSubtotal = baseLineSubtotalCents(item);
   if (baseSubtotal <= 0) return 0;
 
-  if (campaign.dealType === "fixed_price") {
-    const fixedPrice = campaign.dealPriceCents === null ? null : cents(campaign.dealPriceCents);
+  if (campaign.dealType === 'fixed_price') {
+    const fixedPrice =
+      campaign.dealPriceCents === null ? null : normalizeCents(campaign.dealPriceCents);
     if (fixedPrice === null) return 0;
     const desiredSubtotal = fixedPrice * item.quantity;
     return Math.max(0, Math.min(baseSubtotal, baseSubtotal - desiredSubtotal));
   }
 
-  if (campaign.dealType === "percent_off") {
-    const percent = campaign.discountPercent === null
-      ? null
-      : clampInt(campaign.discountPercent, 0, 100);
+  if (campaign.dealType === 'percent_off') {
+    const percent =
+      campaign.discountPercent === null ? null : clampInt(campaign.discountPercent, 0, 100);
     if (percent === null || percent <= 0) return 0;
     return Math.max(0, Math.min(baseSubtotal, Math.round(baseSubtotal * (percent / 100))));
   }
 
-  if (campaign.dealType === "amount_off") {
-    const discount = campaign.discountCents === null ? null : cents(campaign.discountCents);
+  if (campaign.dealType === 'amount_off') {
+    const discount =
+      campaign.discountCents === null ? null : normalizeCents(campaign.discountCents);
     if (discount === null || discount <= 0) return 0;
     return Math.max(0, Math.min(baseSubtotal, discount * item.quantity));
   }
 
-  if (campaign.dealType === "bogo") {
+  if (campaign.dealType === 'bogo') {
     const freeUnits = Math.floor(item.quantity / 2);
-    return Math.max(0, Math.min(baseSubtotal, freeUnits * cents(item.baseUnitPriceCents)));
+    return Math.max(0, Math.min(baseSubtotal, freeUnits * normalizeCents(item.baseUnitPriceCents)));
   }
 
   return 0;
@@ -540,8 +580,8 @@ function compactStripeLineItems(
       continue;
     }
 
-    const existingQty = typeof existing.quantity === "number" ? existing.quantity : 0;
-    const incomingQty = typeof raw.item.quantity === "number" ? raw.item.quantity : 0;
+    const existingQty = typeof existing.quantity === 'number' ? existing.quantity : 0;
+    const incomingQty = typeof raw.item.quantity === 'number' ? raw.item.quantity : 0;
     existing.quantity = existingQty + incomingQty;
   }
 
@@ -557,7 +597,7 @@ function buildStripeDescription(line: PricingSnapshotLine): string | undefined {
       .filter((name) => name.length > 0);
 
     if (modifierNames.length > 0) {
-      parts.push(`Modifiers: ${modifierNames.join(", ")}`);
+      parts.push(`Modifiers: ${modifierNames.join(', ')}`);
     }
   }
 
@@ -565,7 +605,7 @@ function buildStripeDescription(line: PricingSnapshotLine): string | undefined {
     parts.push(`Deal: ${line.campaignName}`);
   }
 
-  return parts.length > 0 ? parts.join(" • ") : undefined;
+  return parts.length > 0 ? parts.join(' • ') : undefined;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -582,10 +622,10 @@ function parseCampaignRow(value: unknown): PricingCampaign | null {
 
   if (!id || !dealTypeRaw) return null;
   if (
-    dealTypeRaw !== "fixed_price" &&
-    dealTypeRaw !== "percent_off" &&
-    dealTypeRaw !== "amount_off" &&
-    dealTypeRaw !== "bogo"
+    dealTypeRaw !== 'fixed_price' &&
+    dealTypeRaw !== 'percent_off' &&
+    dealTypeRaw !== 'amount_off' &&
+    dealTypeRaw !== 'bogo'
   ) {
     return null;
   }
@@ -603,7 +643,7 @@ function parseCampaignRow(value: unknown): PricingCampaign | null {
     dealPriceCents:
       value.deal_price_cents === null || value.deal_price_cents === undefined
         ? null
-        : cents(value.deal_price_cents),
+        : normalizeCents(value.deal_price_cents),
     discountPercent:
       value.discount_percent === null || value.discount_percent === undefined
         ? null
@@ -611,7 +651,7 @@ function parseCampaignRow(value: unknown): PricingCampaign | null {
     discountCents:
       value.discount_cents === null || value.discount_cents === undefined
         ? null
-        : cents(value.discount_cents),
+        : normalizeCents(value.discount_cents),
     stackable: asBoolean(value.stackable, false),
     priority: clampInt(asNumber(value.priority, 0), -10_000, 10_000),
     pricingPriority: clampInt(asNumber(value.pricing_priority, 0), -10_000, 10_000),
@@ -637,7 +677,7 @@ function parsePromotionRow(value: unknown): PromotionRecord | null {
     channel: asNullableString(value.channel),
     type,
     value: asNumber(value.value, 0),
-    minOrderCents: cents(value.min_order_cents),
+    minOrderCents: normalizeCents(value.min_order_cents),
     maxUses:
       value.max_uses === null || value.max_uses === undefined
         ? null
@@ -661,7 +701,7 @@ function parseCreditRow(value: unknown): CreditRecord | null {
   return {
     id,
     userId,
-    amountCents: cents(value.amount_cents),
+    amountCents: normalizeCents(value.amount_cents),
     used: asBoolean(value.used, false),
     expiresAt: asNullableString(value.expires_at),
     checkoutSessionId: asNullableString(value.checkout_session_id),
@@ -674,10 +714,10 @@ function parseCreditRow(value: unknown): CreditRecord | null {
 
 async function sha256Hex(value: string): Promise<string> {
   const bytes = new TextEncoder().encode(value);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest))
-    .map((part) => part.toString(16).padStart(2, "0"))
-    .join("");
+    .map((part) => part.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -686,20 +726,20 @@ async function sha256Hex(value: string): Promise<string> {
 
 async function loadActiveCampaigns(svc: DbClient): Promise<PricingCampaign[]> {
   const { data, error } = await svc
-    .from("growth_campaigns")
+    .from('growth_campaigns')
     .select(
-      "id,campaign_name,menu_item_id,priority,weight,starts_at,ends_at,deal_type,deal_price_cents,discount_percent,discount_cents,applies_to_category,applies_to_order_type,auto_apply,stackable,pricing_priority,active",
+      'id,campaign_name,menu_item_id,priority,weight,starts_at,ends_at,deal_type,deal_price_cents,discount_percent,discount_cents,applies_to_category,applies_to_order_type,auto_apply,stackable,pricing_priority,active',
     )
-    .eq("active", true)
-    .eq("auto_apply", true)
-    .order("pricing_priority", { ascending: false })
-    .order("priority", { ascending: false })
-    .order("weight", { ascending: false });
+    .eq('active', true)
+    .eq('auto_apply', true)
+    .order('pricing_priority', { ascending: false })
+    .order('priority', { ascending: false })
+    .order('weight', { ascending: false });
 
   if (error) {
     throw new PricingValidationError(
-      "PRICING_LOOKUP_FAILED",
-      "Unable to load pricing campaigns.",
+      'PRICING_LOOKUP_FAILED',
+      'Unable to load pricing campaigns.',
       503,
     );
   }
@@ -712,6 +752,7 @@ async function loadActiveCampaigns(svc: DbClient): Promise<PricingCampaign[]> {
     const parsed = parseCampaignRow(entry);
     if (parsed) campaigns.push(parsed);
   }
+
   return campaigns;
 }
 
@@ -721,28 +762,28 @@ async function loadPromotion(
   promoId: string | null,
   promoCode: string | null,
 ): Promise<PromotionRecord | null> {
-  const requestedPromoId = promoId?.trim() ?? "";
-  const requestedPromoCode = promoCode?.trim().toUpperCase() ?? "";
+  const requestedPromoId = promoId?.trim() ?? '';
+  const requestedPromoCode = promoCode?.trim().toUpperCase() ?? '';
 
   if (!requestedPromoId && !requestedPromoCode) return null;
 
   const query = svc
-    .from("promotions")
+    .from('promotions')
     .select(
-      "id,code,campaign_id,channel,type,value,min_order_cents,max_uses,current_uses,per_user_limit,active,starts_at,ends_at,expires_at",
+      'id,code,campaign_id,channel,type,value,min_order_cents,max_uses,current_uses,per_user_limit,active,starts_at,ends_at,expires_at',
     );
 
   const { data, error } = requestedPromoId
-    ? await query.eq("id", requestedPromoId).maybeSingle()
-    : await query.ilike("code", requestedPromoCode).maybeSingle();
+    ? await query.eq('id', requestedPromoId).maybeSingle()
+    : await query.ilike('code', requestedPromoCode).maybeSingle();
 
   if (error || !data) {
-    throw new PricingValidationError("PROMO_INVALID", "Promotion code is invalid.");
+    throw new PricingValidationError('PROMO_INVALID', 'Promotion code is invalid.');
   }
 
   const promo = parsePromotionRow(data);
   if (!promo) {
-    throw new PricingValidationError("PROMO_INVALID", "Promotion code is invalid.");
+    throw new PricingValidationError('PROMO_INVALID', 'Promotion code is invalid.');
   }
 
   const nowMs = Date.now();
@@ -750,36 +791,40 @@ async function loadPromotion(
   const endsAt = parseIsoMs(promo.endsAt);
   const expiresAt = parseIsoMs(promo.expiresAt);
 
-  if (!promo.active) throw new PricingValidationError("PROMO_INACTIVE", "Promotion is not active.");
+  if (!promo.active) throw new PricingValidationError('PROMO_INACTIVE', 'Promotion is not active.');
   if (startsAt !== null && startsAt > nowMs) {
-    throw new PricingValidationError("PROMO_INACTIVE", "Promotion is not active yet.");
+    throw new PricingValidationError('PROMO_INACTIVE', 'Promotion is not active yet.');
   }
   if ((expiresAt !== null && expiresAt < nowMs) || (endsAt !== null && endsAt < nowMs)) {
-    throw new PricingValidationError("PROMO_EXPIRED", "Promotion has expired.");
+    throw new PricingValidationError('PROMO_EXPIRED', 'Promotion has expired.');
   }
   if (promo.maxUses !== null && promo.currentUses >= promo.maxUses) {
-    throw new PricingValidationError("PROMO_EXHAUSTED", "Promotion has reached its usage limit.");
+    throw new PricingValidationError('PROMO_EXHAUSTED', 'Promotion has reached its usage limit.');
   }
   if (!SUPPORTED_PROMO_TYPES.has(promo.type)) {
-    throw new PricingValidationError("PROMO_INVALID", "Promotion type is not supported.");
+    throw new PricingValidationError('PROMO_INVALID', 'Promotion type is not supported.');
   }
 
   if (promo.perUserLimit > 0) {
     const { count, error: countError } = await svc
-      .from("promo_redemptions")
-      .select("id", { head: true, count: "exact" })
-      .eq("promotion_id", promo.id)
-      .eq("user_id", userId);
+      .from('promo_redemptions')
+      .select('id', { head: true, count: 'exact' })
+      .eq('promotion_id', promo.id)
+      .eq('user_id', userId);
 
     if (countError) {
-      throw new PricingValidationError("PROMO_LOOKUP_FAILED", "Unable to validate promotion.", 503);
+      throw new PricingValidationError(
+        'PROMO_LOOKUP_FAILED',
+        'Unable to validate promotion.',
+        503,
+      );
     }
 
-    const usedCount = typeof count === "number" ? count : 0;
+    const usedCount = typeof count === 'number' ? count : 0;
     if (usedCount >= promo.perUserLimit) {
       throw new PricingValidationError(
-        "PROMO_LIMIT_REACHED",
-        "Promotion usage limit reached for this user.",
+        'PROMO_LIMIT_REACHED',
+        'Promotion usage limit reached for this user.',
       );
     }
   }
@@ -792,24 +837,30 @@ async function loadCredit(
   userId: string,
   creditId: string | null,
 ): Promise<CreditRecord | null> {
-  const requestedCreditId = creditId?.trim() ?? "";
+  const requestedCreditId = creditId?.trim() ?? '';
   if (!requestedCreditId) return null;
 
   const { data, error } = await svc
-    .from("user_credits")
-    .select("id,user_id,amount_cents,used,expires_at,checkout_session_id")
-    .eq("id", requestedCreditId)
+    .from('user_credits')
+    .select('id,user_id,amount_cents,used,expires_at,checkout_session_id')
+    .eq('id', requestedCreditId)
     .maybeSingle();
 
-  if (error || !data) throw new PricingValidationError("CREDIT_INVALID", "Credit is invalid.");
+  if (error || !data) {
+    throw new PricingValidationError('CREDIT_INVALID', 'Credit is invalid.');
+  }
 
   const credit = parseCreditRow(data);
-  if (!credit || credit.userId !== userId) throw new PricingValidationError("CREDIT_INVALID", "Credit is invalid.");
-  if (credit.used) throw new PricingValidationError("CREDIT_USED", "Credit has already been used.");
+  if (!credit || credit.userId !== userId) {
+    throw new PricingValidationError('CREDIT_INVALID', 'Credit is invalid.');
+  }
+  if (credit.used) {
+    throw new PricingValidationError('CREDIT_USED', 'Credit has already been used.');
+  }
 
   const expiresAt = parseIsoMs(credit.expiresAt);
   if (expiresAt !== null && expiresAt < Date.now()) {
-    throw new PricingValidationError("CREDIT_EXPIRED", "Credit has expired.");
+    throw new PricingValidationError('CREDIT_EXPIRED', 'Credit has expired.');
   }
 
   return credit;
@@ -819,8 +870,19 @@ async function loadCredit(
 // Main resolver (authoritative pricing)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function resolvePricingForCheckout(input: ResolvePricingInput): Promise<PricingResolution> {
-  if (input.items.length === 0) throw new PricingValidationError("EMPTY_CART", "Cart is empty.");
+export async function resolvePricingForCheckout(
+  input: ResolvePricingInput,
+): Promise<PricingResolution> {
+  if (input.items.length === 0) {
+    throw new PricingValidationError('EMPTY_CART', 'Cart is empty.');
+  }
+
+  for (const item of input.items) {
+    if (item.quantity < 1) {
+      throw new PricingValidationError('INVALID_CART_ITEM', 'Cart contains an invalid quantity.');
+    }
+    assertCentsInvariant('Base unit price', normalizeCents(item.baseUnitPriceCents));
+  }
 
   const campaigns = await loadActiveCampaigns(input.svc);
   const nowMs = Date.now();
@@ -830,7 +892,7 @@ export async function resolvePricingForCheckout(input: ResolvePricingInput): Pro
     const baseSubtotal = baseLineSubtotalCents(item);
     const chosenCampaign = chooseBestCampaign(item, campaigns, input.orderType, nowMs);
     const campaignDiscount = chosenCampaign ? computeCampaignDiscount(item, chosenCampaign) : 0;
-    const pretaxBeforePromo = baseSubtotal - campaignDiscount + modifierSubtotal;
+    const pretaxBeforePromo = Math.max(0, baseSubtotal - campaignDiscount + modifierSubtotal);
 
     return {
       index,
@@ -852,7 +914,10 @@ export async function resolvePricingForCheckout(input: ResolvePricingInput): Pro
 
   const promotion = await loadPromotion(input.svc, input.userId, input.promoId, input.promoCode);
   if (promotion && subtotalCents < promotion.minOrderCents) {
-    throw new PricingValidationError("PROMO_MIN_ORDER", "Cart does not meet the promotion minimum.");
+    throw new PricingValidationError(
+      'PROMO_MIN_ORDER',
+      'Cart does not meet the promotion minimum.',
+    );
   }
 
   const eligiblePromoLines = draftLines.filter((line) => {
@@ -863,18 +928,24 @@ export async function resolvePricingForCheckout(input: ResolvePricingInput): Pro
   });
 
   if (promotion?.campaignId && eligiblePromoLines.length === 0) {
-    throw new PricingValidationError("PROMO_NOT_APPLICABLE", "Promotion does not apply to the current cart.");
+    throw new PricingValidationError(
+      'PROMO_NOT_APPLICABLE',
+      'Promotion does not apply to the current cart.',
+    );
   }
 
-  const eligiblePromoSubtotal = eligiblePromoLines.reduce((sum, line) => sum + line.pretaxBeforePromo, 0);
+  const eligiblePromoSubtotal = eligiblePromoLines.reduce(
+    (sum, line) => sum + line.pretaxBeforePromo,
+    0,
+  );
 
   let promoDiscountCents = 0;
   if (promotion !== null) {
-    if (promotion.type === "percent") {
+    if (promotion.type === 'percent') {
       const percent = Math.max(0, Math.min(100, promotion.value));
       promoDiscountCents = Math.round(eligiblePromoSubtotal * (percent / 100));
-    } else if (promotion.type === "fixed") {
-      promoDiscountCents = cents(promotion.value);
+    } else if (promotion.type === 'fixed') {
+      promoDiscountCents = normalizeCents(promotion.value);
     }
     promoDiscountCents = Math.max(0, Math.min(eligiblePromoSubtotal, promoDiscountCents));
   }
@@ -885,7 +956,9 @@ export async function resolvePricingForCheckout(input: ResolvePricingInput): Pro
       promoDiscountCents,
       eligiblePromoLines.map((line) => line.pretaxBeforePromo),
     );
-    eligiblePromoLines.forEach((line, idx) => promoSharesByIndex.set(line.index, shares[idx] ?? 0));
+    eligiblePromoLines.forEach((line, idx) => {
+      promoSharesByIndex.set(line.index, shares[idx] ?? 0);
+    });
   }
 
   const pretaxAfterPromo = draftLines.reduce((sum, line) => {
@@ -895,7 +968,9 @@ export async function resolvePricingForCheckout(input: ResolvePricingInput): Pro
 
   const credit = await loadCredit(input.svc, input.userId, input.creditId);
   let creditCents = 0;
-  if (credit !== null) creditCents = Math.max(0, Math.min(pretaxAfterPromo, credit.amountCents));
+  if (credit !== null) {
+    creditCents = Math.max(0, Math.min(pretaxAfterPromo, credit.amountCents));
+  }
 
   const creditShares = allocateCents(
     creditCents,
@@ -916,13 +991,21 @@ export async function resolvePricingForCheckout(input: ResolvePricingInput): Pro
   const totalCents = pretaxAfterCredit + taxCents;
 
   if (totalCents <= 0) {
-    throw new PricingValidationError("NO_CHARGEABLE_AMOUNT", "Cart total must be greater than zero.");
+    throw new PricingValidationError(
+      'NO_CHARGEABLE_AMOUNT',
+      'Cart total must be greater than zero.',
+    );
   }
+
+  ensureMinimumStripeChargeableTotal('usd', totalCents);
 
   const lines: PricingSnapshotLine[] = draftLines.map((line, idx: number) => {
     const promoDiscount = promoSharesByIndex.get(line.index) ?? 0;
     const creditDiscount = creditShares[idx] ?? 0;
-    const finalPretaxLineTotalCents = Math.max(0, line.pretaxBeforePromo - promoDiscount - creditDiscount);
+    const finalPretaxLineTotalCents = Math.max(
+      0,
+      line.pretaxBeforePromo - promoDiscount - creditDiscount,
+    );
 
     return {
       lineId: `${line.item.menuItemId}:${idx}`,
@@ -936,10 +1019,10 @@ export async function resolvePricingForCheckout(input: ResolvePricingInput): Pro
         id: modifier.id,
         groupId: modifier.groupId,
         name: modifier.name,
-        priceAdjustmentCents: signedCents(modifier.priceAdjustmentCents),
+        priceAdjustmentCents: normalizeSignedCents(modifier.priceAdjustmentCents),
       })),
-      baseUnitPriceCents: cents(line.item.baseUnitPriceCents),
-      modifierUnitPriceCents: signedCents(line.modifierUnitPriceCents),
+      baseUnitPriceCents: normalizeCents(line.item.baseUnitPriceCents),
+      modifierUnitPriceCents: normalizeSignedCents(line.modifierUnitPriceCents),
       baseLineSubtotalCents: line.baseSubtotal,
       modifierLineSubtotalCents: line.modifierSubtotal,
       campaignId: line.chosenCampaign?.id ?? null,
@@ -957,12 +1040,14 @@ export async function resolvePricingForCheckout(input: ResolvePricingInput): Pro
   });
 
   const appliedCampaignIds = stableSortStrings(
-    lines.map((line) => line.campaignId).filter((v): v is string => typeof v === "string" && v.length > 0),
+    lines
+      .map((line) => line.campaignId)
+      .filter((value): value is string => typeof value === 'string' && value.length > 0),
   );
 
   const snapshot: PricingSnapshot = {
     version: PRICING_VERSION,
-    currency: "usd",
+    currency: 'usd',
     orderType: input.orderType,
     orderNotes: input.orderNotes,
     userId: input.userId,
@@ -982,7 +1067,11 @@ export async function resolvePricingForCheckout(input: ResolvePricingInput): Pro
 
   const pricingHash = await hashPricingSnapshot(snapshot);
   if (!pricingHash || pricingHash.length < 16) {
-    throw new PricingValidationError("MISSING_PRICING_HASH", "Pricing hash generation failed.", 503);
+    throw new PricingValidationError(
+      'MISSING_PRICING_HASH',
+      'Pricing hash generation failed.',
+      503,
+    );
   }
 
   return { snapshot, pricingHash };
@@ -1020,7 +1109,7 @@ export async function hashPricingSnapshot(snapshot: PricingSnapshot): Promise<st
 export function parsePricingSnapshot(value: unknown): PricingSnapshot | null {
   if (!isRecord(value)) return null;
   if (value.version !== PRICING_VERSION) return null;
-  if (value.currency !== "usd") return null;
+  if (value.currency !== 'usd') return null;
 
   const orderType = sanitizeOrderType(asNullableString(value.orderType));
   const userId = asString(value.userId);
@@ -1041,12 +1130,14 @@ export function parsePricingSnapshot(value: unknown): PricingSnapshot | null {
     const quantity = clampInt(asNumber(rawLine.quantity, 0), 1, 99);
     const lineId = asString(rawLine.lineId);
 
-    if (!menuItemId || !name || !lineId || !categoryRaw || !isMenuCategory(categoryRaw)) return null;
+    if (!menuItemId || !name || !lineId || !categoryRaw || !isMenuCategory(categoryRaw)) {
+      return null;
+    }
 
     const modifiersUnknown = rawLine.modifiers;
     if (!Array.isArray(modifiersUnknown)) return null;
 
-    const modifiers: PricingSnapshotLine["modifiers"] = [];
+    const modifiers: PricingSnapshotLine['modifiers'] = [];
     for (const rawModifier of modifiersUnknown) {
       if (!isRecord(rawModifier)) return null;
 
@@ -1060,14 +1151,14 @@ export function parsePricingSnapshot(value: unknown): PricingSnapshot | null {
         id: modifierId,
         groupId,
         name: modifierName,
-        priceAdjustmentCents: signedCents(rawModifier.priceAdjustmentCents),
+        priceAdjustmentCents: normalizeSignedCents(rawModifier.priceAdjustmentCents),
       });
     }
 
     const unitAmountsUnknown = rawLine.unitAmountsCents;
     if (!Array.isArray(unitAmountsUnknown)) return null;
 
-    const unitAmountsCents = unitAmountsUnknown.map((entry) => cents(entry));
+    const unitAmountsCents = unitAmountsUnknown.map((entry) => normalizeCents(entry));
     if (unitAmountsCents.length !== quantity) return null;
 
     lines.push({
@@ -1079,53 +1170,51 @@ export function parsePricingSnapshot(value: unknown): PricingSnapshot | null {
       quantity,
       notes: asNullableString(rawLine.notes),
       modifiers,
-      baseUnitPriceCents: cents(rawLine.baseUnitPriceCents),
-      modifierUnitPriceCents: signedCents(rawLine.modifierUnitPriceCents),
-      baseLineSubtotalCents: cents(rawLine.baseLineSubtotalCents),
-      modifierLineSubtotalCents: cents(rawLine.modifierLineSubtotalCents),
+      baseUnitPriceCents: normalizeCents(rawLine.baseUnitPriceCents),
+      modifierUnitPriceCents: normalizeSignedCents(rawLine.modifierUnitPriceCents),
+      baseLineSubtotalCents: normalizeCents(rawLine.baseLineSubtotalCents),
+      modifierLineSubtotalCents: normalizeCents(rawLine.modifierLineSubtotalCents),
       campaignId: asNullableString(rawLine.campaignId),
       campaignName: asNullableString(rawLine.campaignName),
       campaignDealType: asNullableString(rawLine.campaignDealType),
       campaignStackable: asBoolean(rawLine.campaignStackable, false),
-      campaignDiscountCents: cents(rawLine.campaignDiscountCents),
+      campaignDiscountCents: normalizeCents(rawLine.campaignDiscountCents),
       promoEligible: asBoolean(rawLine.promoEligible, false),
-      promoDiscountCents: cents(rawLine.promoDiscountCents),
-      creditDiscountCents: cents(rawLine.creditDiscountCents),
-      finalPretaxLineTotalCents: cents(rawLine.finalPretaxLineTotalCents),
+      promoDiscountCents: normalizeCents(rawLine.promoDiscountCents),
+      creditDiscountCents: normalizeCents(rawLine.creditDiscountCents),
+      finalPretaxLineTotalCents: normalizeCents(rawLine.finalPretaxLineTotalCents),
       unitAmountsCents,
-      basePricingHash: asString(rawLine.basePricingHash) ?? "",
+      basePricingHash: asString(rawLine.basePricingHash) ?? '',
     });
   }
 
   return {
     version: PRICING_VERSION,
-    currency: "usd",
+    currency: 'usd',
     orderType,
     orderNotes: asNullableString(value.orderNotes),
     userId,
     createdAt,
     lines,
-    subtotalCents: cents(value.subtotalCents),
-    campaignDiscountCents: cents(value.campaignDiscountCents),
+    subtotalCents: normalizeCents(value.subtotalCents),
+    campaignDiscountCents: normalizeCents(value.campaignDiscountCents),
     promoId: asNullableString(value.promoId),
     promoCode: asNullableString(value.promoCode),
-    promoDiscountCents: cents(value.promoDiscountCents),
+    promoDiscountCents: normalizeCents(value.promoDiscountCents),
     creditId: asNullableString(value.creditId),
-    creditCents: cents(value.creditCents),
-    taxCents: cents(value.taxCents),
-    totalCents: cents(value.totalCents),
+    creditCents: normalizeCents(value.creditCents),
+    taxCents: normalizeCents(value.taxCents),
+    totalCents: normalizeCents(value.totalCents),
     appliedCampaignIds: Array.isArray(value.appliedCampaignIds)
       ? value.appliedCampaignIds
           .map((entry) => asString(entry))
-          .filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+          .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
       : [],
   };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Legacy cart decoder (turn the old TS errors into a *feature*)
-// - returns PricingSnapshot from pending_carts.items where old rows exist
-// - collects issues (optional) for debugging/forensics
+// Legacy cart decoder
 // ─────────────────────────────────────────────────────────────────────────────
 
 function decodeLegacyCartLines(inputItems: Json): DecodeResult<PricingSnapshotLine[]> {
@@ -1139,85 +1228,73 @@ function decodeLegacyCartLines(inputItems: Json): DecodeResult<PricingSnapshotLi
     const pathBase = `items[${index}]`;
 
     if (!rawItem || !isJsonObject(rawItem)) {
-      issues.push(issue(pathBase, "Item is not an object; skipped."));
+      issues.push(issue(pathBase, 'Item is not an object; skipped.'));
       continue;
     }
 
     const itemObj = rawItem;
 
     const quantity = clampInt(
-      getJsonNumber(itemObj, "quantity") ??
-        getJsonNumber(itemObj, "qty") ??
-        1,
+      getJsonNumber(itemObj, 'quantity') ?? getJsonNumber(itemObj, 'qty') ?? 1,
       1,
       99,
     );
 
     const menuItemId =
-      getJsonString(itemObj, "menuItemId") ??
-      getJsonString(itemObj, "menu_item_id") ??
+      getJsonString(itemObj, 'menuItemId') ??
+      getJsonString(itemObj, 'menu_item_id') ??
       `legacy-${index}`;
 
-    const name =
-      getJsonString(itemObj, "name") ??
-      `Item ${index + 1}`;
+    const name = getJsonString(itemObj, 'name') ?? `Item ${index + 1}`;
 
-    const categoryRaw = getJsonString(itemObj, "category");
+    const categoryRaw = getJsonString(itemObj, 'category');
     const category: MenuCategory =
-      categoryRaw && isMenuCategory(categoryRaw) ? categoryRaw : "specials";
+      categoryRaw && isMenuCategory(categoryRaw) ? categoryRaw : 'specials';
 
     const imageUrl =
-      getJsonString(itemObj, "imageUrl") ??
-      getJsonString(itemObj, "image_url") ??
-      null;
+      getJsonString(itemObj, 'imageUrl') ?? getJsonString(itemObj, 'image_url') ?? null;
 
-    const notes = getJsonString(itemObj, "notes");
+    const notes = getJsonString(itemObj, 'notes');
 
-    const baseUnit = cents(
-      getJsonNumber(itemObj, "unitPriceCents") ??
-        getJsonNumber(itemObj, "unit_price_cents") ??
-        0,
+    const baseUnit = normalizeCents(
+      getJsonNumber(itemObj, 'unitPriceCents') ?? getJsonNumber(itemObj, 'unit_price_cents') ?? 0,
     );
 
-    const lineTotal = cents(
-      getJsonNumber(itemObj, "lineTotalCents") ??
-        getJsonNumber(itemObj, "line_total_cents") ??
+    const lineTotal = normalizeCents(
+      getJsonNumber(itemObj, 'lineTotalCents') ??
+        getJsonNumber(itemObj, 'line_total_cents') ??
         baseUnit * quantity,
     );
 
-    const modifiersArray = getJsonArray(itemObj, "modifiers") ?? [];
+    const modifiersArray = getJsonArray(itemObj, 'modifiers') ?? [];
 
-    const modifiers: PricingSnapshotLine["modifiers"] = [];
+    const modifiers: PricingSnapshotLine['modifiers'] = [];
 
     for (let mIndex = 0; mIndex < modifiersArray.length; mIndex += 1) {
       const rawMod = modifiersArray[mIndex];
       const mPath = `${pathBase}.modifiers[${mIndex}]`;
 
       if (!rawMod || !isJsonObject(rawMod)) {
-        issues.push(issue(mPath, "Modifier is not an object; skipped."));
+        issues.push(issue(mPath, 'Modifier is not an object; skipped.'));
         continue;
       }
 
       const modObj = rawMod;
 
-      const id =
-        getJsonString(modObj, "id") ??
-        `${menuItemId}-modifier-${mIndex}`;
+      const id = getJsonString(modObj, 'id') ?? `${menuItemId}-modifier-${mIndex}`;
 
       const groupId =
-        getJsonString(modObj, "groupId") ??
-        getJsonString(modObj, "group_id") ??
-        getJsonString(modObj, "modifier_group_id") ??
-        "legacy";
+        getJsonString(modObj, 'groupId') ??
+        getJsonString(modObj, 'group_id') ??
+        getJsonString(modObj, 'modifier_group_id') ??
+        'legacy';
 
-      const modName =
-        getJsonString(modObj, "name") ??
-        "Modifier";
+      const modName = getJsonString(modObj, 'name') ?? 'Modifier';
 
-      const priceAdj = signedCents(
-        getJsonNumber(modObj, "priceAdjustmentCents") ??
-          getJsonNumber(modObj, "priceAdjustment") ??
-          getJsonNumber(modObj, "price_adjustment") ??
+      const priceAdj = normalizeSignedCents(
+        getJsonNumber(modObj, 'priceAdjustmentCents') ??
+          getJsonNumber(modObj, 'priceAdjustment') ??
+          getJsonNumber(modObj, 'price_adjustment') ??
           0,
       );
 
@@ -1229,7 +1306,7 @@ function decodeLegacyCartLines(inputItems: Json): DecodeResult<PricingSnapshotLi
       });
     }
 
-    const modifierUnit = modifiers.reduce((sum, m) => sum + m.priceAdjustmentCents, 0);
+    const modifierUnit = modifiers.reduce((sum, modifier) => sum + modifier.priceAdjustmentCents, 0);
 
     lines.push({
       lineId: `${menuItemId}:${index}`,
@@ -1264,22 +1341,20 @@ function decodeLegacyCartLines(inputItems: Json): DecodeResult<PricingSnapshotLi
 export function buildLegacyPricingSnapshotFromPendingCart(
   input: LegacyPendingCartSnapshotInput,
 ): PricingSnapshot {
-  const currency = (input.currency ?? "usd").trim().toLowerCase() === "usd" ? "usd" : "usd";
+  const currency = normalizeCurrency(input.currency);
 
   const decoded = decodeLegacyCartLines(input.items);
   const lines = decoded.ok ? decoded.value : [];
 
-  // If legacy items are totally unusable, we STILL return a non-empty snapshot,
-  // but we hard-fail if the cart is effectively chargeable without lines.
-  if (lines.length === 0 && cents(input.totalCents) > 0) {
+  if (lines.length === 0 && normalizeCents(input.totalCents) > 0) {
     throw new PricingValidationError(
-      "LEGACY_CART_INVALID",
-      "Legacy cart data is invalid; cannot build pricing snapshot.",
+      'LEGACY_CART_INVALID',
+      'Legacy cart data is invalid; cannot build pricing snapshot.',
       503,
     );
   }
 
-  return {
+  const snapshot: PricingSnapshot = {
     version: PRICING_VERSION,
     currency,
     orderType: input.orderType,
@@ -1287,17 +1362,23 @@ export function buildLegacyPricingSnapshotFromPendingCart(
     userId: input.userId,
     createdAt: nowIso(),
     lines,
-    subtotalCents: cents(input.subtotalCents),
+    subtotalCents: normalizeCents(input.subtotalCents),
     campaignDiscountCents: 0,
     promoId: input.promoId,
     promoCode: null,
-    promoDiscountCents: cents(input.discountCents),
+    promoDiscountCents: normalizeCents(input.discountCents),
     creditId: input.creditId,
     creditCents: 0,
-    taxCents: cents(input.taxCents),
-    totalCents: cents(input.totalCents),
+    taxCents: normalizeCents(input.taxCents),
+    totalCents: normalizeCents(input.totalCents),
     appliedCampaignIds: [],
   };
+
+  if (snapshot.totalCents > 0) {
+    ensureMinimumStripeChargeableTotal(snapshot.currency, snapshot.totalCents);
+  }
+
+  return snapshot;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1322,7 +1403,7 @@ export function buildStripeLineItemsFromPricing(
       const metadata: Record<string, string> = {
         menu_item_id: line.menuItemId,
         line_id: line.lineId,
-        campaign_id: line.campaignId ?? "",
+        campaign_id: line.campaignId ?? '',
         pricing_hash_base: line.basePricingHash,
       };
 
@@ -1340,21 +1421,19 @@ export function buildStripeLineItemsFromPricing(
         },
       };
 
-      // Key must be stable; group identical units.
       const key = [
         line.name,
-        description ?? "",
+        description ?? '',
         String(unitAmount),
         line.menuItemId,
-        line.campaignId ?? "",
-        line.imageUrl ?? "",
-      ].join("|");
+        line.campaignId ?? '',
+        line.imageUrl ?? '',
+      ].join('|');
 
       rawItems.push({ key, quantity: 1, item: lineItem });
     }
   }
 
-  // You chose tax as its own line item (fine). Keep it deterministic.
   if (snapshot.taxCents > 0) {
     rawItems.push({
       key: `sales-tax|${snapshot.taxCents}`,
@@ -1365,15 +1444,34 @@ export function buildStripeLineItemsFromPricing(
           currency: snapshot.currency,
           unit_amount: snapshot.taxCents,
           product_data: {
-            name: "Sales Tax",
-            metadata: { pricing_component: "tax" },
+            name: 'Sales Tax',
+            metadata: { pricing_component: 'tax' },
           },
         },
       },
     });
   }
 
-  return compactStripeLineItems(rawItems);
+  const compacted = compactStripeLineItems(rawItems);
+
+  const computedTotal = compacted.reduce((sum, line) => {
+    const qty = typeof line.quantity === 'number' ? line.quantity : 0;
+    const unitAmount =
+      line.price_data && typeof line.price_data.unit_amount === 'number'
+        ? line.price_data.unit_amount
+        : 0;
+    return sum + qty * unitAmount;
+  }, 0);
+
+  if (computedTotal !== snapshot.totalCents) {
+    throw new PricingValidationError(
+      'STRIPE_LINE_ITEMS_MISMATCH',
+      'Stripe line items do not match pricing snapshot total.',
+      503,
+    );
+  }
+
+  return compacted;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1383,33 +1481,31 @@ export function buildStripeLineItemsFromPricing(
 export function pricingSnapshotToJson(snapshot: PricingSnapshot): Json {
   if (!snapshot) {
     throw new PricingValidationError(
-      "MISSING_PRICING_SNAPSHOT",
-      "Pricing snapshot is missing.",
+      'MISSING_PRICING_SNAPSHOT',
+      'Pricing snapshot is missing.',
       503,
     );
   }
 
-  // minimal hard validation
   if (
     snapshot.version !== PRICING_VERSION ||
-    snapshot.currency !== "usd" ||
+    snapshot.currency !== 'usd' ||
     !snapshot.userId ||
     !snapshot.createdAt ||
     !Array.isArray(snapshot.lines)
   ) {
     throw new PricingValidationError(
-      "INVALID_PRICING_SNAPSHOT",
-      "Pricing snapshot is invalid.",
+      'INVALID_PRICING_SNAPSHOT',
+      'Pricing snapshot is invalid.',
       503,
     );
   }
 
-  // Never allow {} snapshots to be persisted.
   const stable = JSON.parse(JSON.stringify(snapshot)) as Json;
   if (!stable || !isJsonObject(stable) || Object.keys(stable).length === 0) {
     throw new PricingValidationError(
-      "EMPTY_PRICING_SNAPSHOT",
-      "Pricing snapshot is empty.",
+      'EMPTY_PRICING_SNAPSHOT',
+      'Pricing snapshot is empty.',
       503,
     );
   }

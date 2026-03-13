@@ -15,7 +15,7 @@ import { Minus, Plus, Trash2 } from 'lucide-react';
 import { useCartStore } from '@/modules/cart/store/cart.store';
 import { cartItemKey, computeLineTotalCents } from '@/modules/cart/types/cart.types';
 import type { CartItem } from '@/modules/cart/types/cart.types';
-import { formatCents } from '@/modules/cart/utils/cart.utils'
+import { formatCents } from '@/modules/cart/utils/cart.utils';
 
 type Props = { item: CartItem };
 

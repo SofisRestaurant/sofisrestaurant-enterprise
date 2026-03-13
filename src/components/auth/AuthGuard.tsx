@@ -5,30 +5,30 @@
 // Protect routes based on authentication and roles
 // ============================================================================
 
-import { ReactNode } from 'react'
-import { Navigate, useLocation } from 'react-router-dom'
-import { useUserContext } from '@/contexts/useUserContext'
-import { Loader2 } from 'lucide-react'
-import type { UserRole } from '@/contexts/userTypes'
+import { ReactNode } from 'react';
+import { Navigate, useLocation } from 'react-router-dom';
+import { useUserContext } from '@/contexts/useUserContext';
+import { Loader2 } from 'lucide-react';
+import type { UserRole } from '@/contexts/userTypes';
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
 interface AuthGuardProps {
-  children: ReactNode
-  requireAuth?: boolean
-  requireAdmin?: boolean
-  requireStaff?: boolean
-  fallback?: ReactNode
-  redirectTo?: string
+  children: ReactNode;
+  requireAuth?: boolean;
+  requireAdmin?: boolean;
+  requireStaff?: boolean;
+  fallback?: ReactNode;
+  redirectTo?: string;
 }
 
 interface RoleGuardProps {
-  children: ReactNode
-  allowedRoles: UserRole[]
-  fallback?: ReactNode
-  redirectTo?: string
+  children: ReactNode;
+  allowedRoles: UserRole[];
+  fallback?: ReactNode;
+  redirectTo?: string;
 }
 
 // ============================================================================
@@ -37,7 +37,7 @@ interface RoleGuardProps {
 
 /**
  * Protect routes that require authentication
- * 
+ *
  * @example
  * ```tsx
  * <AuthGuard requireAuth>
@@ -53,30 +53,30 @@ export function AuthGuard({
   fallback,
   redirectTo = '/login',
 }: AuthGuardProps) {
-  const { loading, isAuthenticated, isAdmin, role } = useUserContext()
-  const location = useLocation()
+  const { loading, isAuthenticated, isAdmin, role } = useUserContext();
+  const location = useLocation();
 
   // Show loading state
   if (loading) {
-    return fallback || <LoadingScreen />
+    return fallback || <LoadingScreen />;
   }
 
   // Check auth requirement
   if (requireAuth && !isAuthenticated) {
-    return <Navigate to={redirectTo} state={{ from: location }} replace />
+    return <Navigate to={redirectTo} state={{ from: location }} replace />;
   }
 
   // Check admin requirement
   if (requireAdmin && !isAdmin) {
-    return <Navigate to="/unauthorized" replace />
+    return <Navigate to="/unauthorized" replace />;
   }
 
   // Check staff requirement
   if (requireStaff && role !== 'staff' && !isAdmin) {
-    return <Navigate to="/unauthorized" replace />
+    return <Navigate to="/unauthorized" replace />;
   }
 
-  return <>{children}</>
+  return <>{children}</>;
 }
 
 // ============================================================================
@@ -85,7 +85,7 @@ export function AuthGuard({
 
 /**
  * Protect routes based on specific roles
- * 
+ *
  * @example
  * ```tsx
  * <RoleGuard allowedRoles={['admin', 'staff']}>
@@ -99,25 +99,25 @@ export function RoleGuard({
   fallback,
   redirectTo = '/unauthorized',
 }: RoleGuardProps) {
-  const { loading, role, isAuthenticated } = useUserContext()
-  const location = useLocation()
+  const { loading, role, isAuthenticated } = useUserContext();
+  const location = useLocation();
 
   // Show loading state
   if (loading) {
-    return fallback || <LoadingScreen />
+    return fallback || <LoadingScreen />;
   }
 
   // Not authenticated
   if (!isAuthenticated) {
-    return <Navigate to="/login" state={{ from: location }} replace />
+    return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
   // Check role
   if (!allowedRoles.includes(role)) {
-    return <Navigate to={redirectTo} replace />
+    return <Navigate to={redirectTo} replace />;
   }
 
-  return <>{children}</>
+  return <>{children}</>;
 }
 
 // ============================================================================
@@ -127,7 +127,7 @@ export function RoleGuard({
 /**
  * Protect routes that should only be accessible to guests (non-authenticated users)
  * Example: Login, Register pages
- * 
+ *
  * @example
  * ```tsx
  * <GuestGuard>
@@ -139,20 +139,20 @@ export function GuestGuard({
   children,
   redirectTo = '/dashboard',
 }: {
-  children: ReactNode
-  redirectTo?: string
+  children: ReactNode;
+  redirectTo?: string;
 }) {
-  const { loading, isAuthenticated } = useUserContext()
+  const { loading, isAuthenticated } = useUserContext();
 
   if (loading) {
-    return <LoadingScreen />
+    return <LoadingScreen />;
   }
 
   if (isAuthenticated) {
-    return <Navigate to={redirectTo} replace />
+    return <Navigate to={redirectTo} replace />;
   }
 
-  return <>{children}</>
+  return <>{children}</>;
 }
 
 // ============================================================================
@@ -167,11 +167,11 @@ function LoadingScreen() {
         <p className="text-sm text-gray-600">Loading...</p>
       </div>
     </div>
-  )
+  );
 }
 
 // ============================================================================
 // EXPORTS
 // ============================================================================
 
-export default AuthGuard
+export default AuthGuard;

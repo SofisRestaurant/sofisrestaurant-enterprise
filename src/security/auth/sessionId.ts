@@ -9,24 +9,23 @@
 //  2) requireSessionIdFromAccessToken(token: string) -> extract + validate
 // =============================================================================
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type JwtPayload = Record<string, unknown>;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 function base64UrlToString(base64Url: string): string {
-  const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
-  const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), "=");
+  const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), '=');
   return atob(padded);
 }
 
 function decodeJwtPayload(token: string): JwtPayload | null {
   try {
-    const parts = token.split(".");
+    const parts = token.split('.');
     if (parts.length < 2) return null;
 
     const payloadPart = parts[1];
@@ -40,7 +39,7 @@ function decodeJwtPayload(token: string): JwtPayload | null {
 }
 
 export function isUuid(v: string): boolean {
-  return UUID_RE.test(String(v ?? "").trim());
+  return UUID_RE.test(String(v ?? '').trim());
 }
 
 /**
@@ -48,8 +47,8 @@ export function isUuid(v: string): boolean {
  * Use this everywhere your app passes sessionId around.
  */
 export function requireSessionId(sessionId: string): string {
-  const s = String(sessionId ?? "").trim();
-  if (!isUuid(s)) throw new Error("Invalid sessionId (expected UUID)");
+  const s = String(sessionId ?? '').trim();
+  if (!isUuid(s)) throw new Error('Invalid sessionId (expected UUID)');
   return s;
 }
 
@@ -61,8 +60,8 @@ export function getSupabaseSessionIdFromAccessToken(accessToken: string): string
   const payload = decodeJwtPayload(accessToken);
   if (!payload) return null;
 
-  const sid = payload["session_id"];
-  if (typeof sid !== "string") return null;
+  const sid = payload['session_id'];
+  if (typeof sid !== 'string') return null;
 
   const s = sid.trim();
   return isUuid(s) ? s : null;
@@ -70,6 +69,6 @@ export function getSupabaseSessionIdFromAccessToken(accessToken: string): string
 
 export function requireSessionIdFromAccessToken(accessToken: string): string {
   const sid = getSupabaseSessionIdFromAccessToken(accessToken);
-  if (!sid) throw new Error("Missing/invalid session_id claim in access token");
+  if (!sid) throw new Error('Missing/invalid session_id claim in access token');
   return sid;
 }

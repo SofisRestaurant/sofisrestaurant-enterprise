@@ -7,9 +7,11 @@ export default function PrivacyPolicy() {
         <div className="prose max-w-none">
           <p>Last updated: {new Date().toLocaleDateString()}</p>
           <h2 className="text-2xl font-bold mt-6 mb-4">Information We Collect</h2>
-          <p className="text-gray-700">We collect information necessary to process your orders and improve our services.</p>
+          <p className="text-gray-700">
+            We collect information necessary to process your orders and improve our services.
+          </p>
         </div>
       </div>
     </div>
-  )
+  );
 }

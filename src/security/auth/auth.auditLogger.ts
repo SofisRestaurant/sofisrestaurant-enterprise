@@ -29,38 +29,45 @@ export type AuditEventType =
   | 'suspicious_activity';
 
 interface AuditPayload {
-  eventType:   AuditEventType;
-  eventData?:  Record<string, unknown>;
+  eventType: AuditEventType;
+  eventData?: Record<string, unknown>;
 }
 
 /** Flush queue immediately (called on logout to ensure last event is captured) */
-let _pendingFlush: ReturnType<typeof setTimeout> | null = null;
-const _queue: AuditPayload[] = [];
+let pendingFlush: ReturnType<typeof setTimeout> | null = null;
+const queue: AuditPayload[] = [];
 
 async function flush(): Promise<void> {
-  if (_queue.length === 0) return;
+  if (queue.length === 0) {
+    return;
+  }
 
-  const events = _queue.splice(0); // drain queue atomically
+  const events = queue.splice(0);
 
   try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) return;
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (session?.access_token == null) {
+      return;
+    }
 
     const [fingerprint, uaHash] = await Promise.all([
       getDeviceFingerprint(),
       getUserAgentHash(),
     ]);
 
-    // Batch insert via the existing login-guard function
-    // (or directly via service-role if a dedicated audit endpoint exists)
     await supabase.functions.invoke('auth-device-trust', {
       body: {
-        action:          '_audit_batch',
+        action: '_audit_batch',
         events,
         fingerprintHash: fingerprint,
         uaHash,
       },
-      headers: { Authorization: `Bearer ${session.access_token}` },
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
     });
   } catch {
     // Silent — never block UX on audit failures
@@ -72,21 +79,28 @@ async function flush(): Promise<void> {
  * Events are queued and flushed together after a 300ms debounce
  * to prevent multiple rapid events from causing multiple edge calls.
  */
-export function logAuthEvent(type: AuditEventType, data?: Record<string, unknown>): void {
-  _queue.push({ eventType: type, eventData: data ?? {} });
+export function logAuthEvent(
+  type: AuditEventType,
+  data?: Record<string, unknown>,
+): void {
+  queue.push({ eventType: type, eventData: data ?? {} });
 
-  if (_pendingFlush) clearTimeout(_pendingFlush);
-  _pendingFlush = setTimeout(() => {
-    _pendingFlush = null;
-    flush();
+  if (pendingFlush !== null) {
+    clearTimeout(pendingFlush);
+  }
+
+  pendingFlush = setTimeout(() => {
+    pendingFlush = null;
+    void flush();
   }, 300);
 }
 
 /** Call on logout — flush any pending events synchronously */
 export async function flushAndClear(): Promise<void> {
-  if (_pendingFlush) {
-    clearTimeout(_pendingFlush);
-    _pendingFlush = null;
+  if (pendingFlush !== null) {
+    clearTimeout(pendingFlush);
+    pendingFlush = null;
   }
+
   await flush();
 }

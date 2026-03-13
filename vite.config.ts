@@ -1,12 +1,12 @@
 // vite.config.ts
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import path from 'path'
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import path from 'path';
 
 export default defineConfig(({ mode }) => {
-  const isProduction = mode === 'production'
+  const isProduction = mode === 'production';
 
-  return {
+  return { 
     plugins: [react()],
     resolve: {
       alias: {
@@ -35,5 +35,5 @@ export default defineConfig(({ mode }) => {
         },
       },
     },
-  }
-})
+  };
+});

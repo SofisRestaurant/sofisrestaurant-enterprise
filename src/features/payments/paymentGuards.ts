@@ -16,15 +16,15 @@
 // =============================================================================
 
 export type PaymentInput = {
-  email: string
-  amount: number // dollars
-}
+  email: string;
+  amount: number; // dollars
+};
 
 export type PaymentValidationResult = {
-  valid: boolean
-  errors: string[]
-  normalized: PaymentInput
-}
+  valid: boolean;
+  errors: string[];
+  normalized: PaymentInput;
+};
 
 const CONFIG = {
   // UX validation in dollars (not cents)
@@ -45,12 +45,12 @@ const CONFIG = {
 
   // Reject obvious PAN-like inputs in a “card field” (should not exist in your app)
   PAN_LIKE_RE: /^\d{13,19}$/,
-} as const
+} as const;
 
-type UnknownRecord = Record<string, unknown>
+type UnknownRecord = Record<string, unknown>;
 
 function isRecord(v: unknown): v is UnknownRecord {
-  return typeof v === 'object' && v !== null && !Array.isArray(v)
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 /**
@@ -62,13 +62,13 @@ function isRecord(v: unknown): v is UnknownRecord {
  * So: explicitly type `max` as `number`.
  */
 function capString(s: string, max: number = CONFIG.MAX_RAW_STRING_LEN): string {
-  if (s.length <= max) return s
-  return s.slice(0, max)
+  if (s.length <= max) return s;
+  return s.slice(0, max);
 }
 
 function toFiniteNumber(v: unknown): number | null {
-  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN
-  return Number.isFinite(n) ? n : null
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : null;
 }
 
 /**
@@ -78,16 +78,16 @@ function toFiniteNumber(v: unknown): number | null {
  * - lower-case domain part only (preserves local-part case just in case)
  */
 function normalizeEmail(email: unknown): string {
-  if (typeof email !== 'string') return ''
-  const trimmed = capString(email.trim(), CONFIG.MAX_EMAIL_LEN)
-  if (!trimmed) return ''
+  if (typeof email !== 'string') return '';
+  const trimmed = capString(email.trim(), CONFIG.MAX_EMAIL_LEN);
+  if (!trimmed) return '';
 
-  const at = trimmed.lastIndexOf('@')
-  if (at <= 0 || at === trimmed.length - 1) return trimmed
+  const at = trimmed.lastIndexOf('@');
+  if (at <= 0 || at === trimmed.length - 1) return trimmed;
 
-  const local = trimmed.slice(0, at)
-  const domain = trimmed.slice(at + 1).toLowerCase()
-  return `${local}@${domain}`
+  const local = trimmed.slice(0, at);
+  const domain = trimmed.slice(at + 1).toLowerCase();
+  return `${local}@${domain}`;
 }
 
 /**
@@ -95,12 +95,12 @@ function normalizeEmail(email: unknown): string {
  * Normalizes to 2 decimals and clamps non-finite/negative to 0.
  */
 export function sanitizeAmount(amount: number): number {
-  if (!Number.isFinite(amount)) return 0
-  if (amount <= 0) return 0
+  if (!Number.isFinite(amount)) return 0;
+  if (amount <= 0) return 0;
 
-  const factor = 10 ** CONFIG.AMOUNT_DECIMALS
-  const rounded = Math.round(amount * factor) / factor
-  return rounded > 0 ? rounded : 0
+  const factor = 10 ** CONFIG.AMOUNT_DECIMALS;
+  const rounded = Math.round(amount * factor) / factor;
+  return rounded > 0 ? rounded : 0;
 }
 
 /**
@@ -108,33 +108,33 @@ export function sanitizeAmount(amount: number): number {
  * Server must validate totals, currency, and re-price items.
  */
 export function validateAmount(amount: number): boolean {
-  if (!Number.isFinite(amount)) return false
-  const normalized = sanitizeAmount(amount)
-  if (!normalized) return false
-  return normalized >= CONFIG.MIN_AMOUNT && normalized <= CONFIG.MAX_AMOUNT
+  if (!Number.isFinite(amount)) return false;
+  const normalized = sanitizeAmount(amount);
+  if (!normalized) return false;
+  return normalized >= CONFIG.MIN_AMOUNT && normalized <= CONFIG.MAX_AMOUNT;
 }
 
 /**
  * RFC-lite email validation (UX-only).
  */
 export function validateEmail(email: string): boolean {
-  const s = normalizeEmail(email)
-  if (!s) return false
-  if (s.length > CONFIG.MAX_EMAIL_LEN) return false
-  if (/\s/.test(s)) return false
+  const s = normalizeEmail(email);
+  if (!s) return false;
+  if (s.length > CONFIG.MAX_EMAIL_LEN) return false;
+  if (/\s/.test(s)) return false;
 
-  const at = s.indexOf('@')
-  if (at <= 0) return false
-  if (s.indexOf('@', at + 1) !== -1) return false
+  const at = s.indexOf('@');
+  if (at <= 0) return false;
+  if (s.indexOf('@', at + 1) !== -1) return false;
 
-  const domain = s.slice(at + 1)
-  if (domain.length < 3) return false
-  if (!domain.includes('.')) return false
-  if (domain.startsWith('.') || domain.endsWith('.')) return false
-  if (domain.includes('..')) return false
+  const domain = s.slice(at + 1);
+  if (domain.length < 3) return false;
+  if (!domain.includes('.')) return false;
+  if (domain.startsWith('.') || domain.endsWith('.')) return false;
+  if (domain.includes('..')) return false;
 
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-  return emailRegex.test(s)
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(s);
 }
 
 /**
@@ -143,46 +143,46 @@ export function validateEmail(email: string): boolean {
  * - Rejects any PAN-like input.
  */
 export function isValidCardNumber(cardNumber: string): boolean {
-  if (typeof cardNumber !== 'string') return false
+  if (typeof cardNumber !== 'string') return false;
 
-  const raw = capString(cardNumber.trim(), 256)
-  if (!raw) return true
+  const raw = capString(cardNumber.trim(), 256);
+  if (!raw) return true;
 
-  if (CONFIG.MASKED_CARD_RE.test(raw)) return true
+  if (CONFIG.MASKED_CARD_RE.test(raw)) return true;
 
-  const digitsOnly = raw.replace(/\s+/g, '')
-  if (CONFIG.PAN_LIKE_RE.test(digitsOnly)) return false
+  const digitsOnly = raw.replace(/\s+/g, '');
+  if (CONFIG.PAN_LIKE_RE.test(digitsOnly)) return false;
 
-  return false
+  return false;
 }
 
 export function validatePaymentData(data: PaymentInput): { valid: boolean; errors: string[] } {
-  const result = validateAndNormalizePaymentData(data)
-  return { valid: result.valid, errors: result.errors }
+  const result = validateAndNormalizePaymentData(data);
+  return { valid: result.valid, errors: result.errors };
 }
 
 export function validateAndNormalizePaymentData(data: PaymentInput): PaymentValidationResult {
-  const errors: string[] = []
+  const errors: string[] = [];
 
-  const email = normalizeEmail(data?.email)
-  if (!validateEmail(email)) errors.push('Invalid email address')
+  const email = normalizeEmail(data?.email);
+  if (!validateEmail(email)) errors.push('Invalid email address');
 
-  const amount = sanitizeAmount(data?.amount)
-  if (!validateAmount(amount)) errors.push('Invalid payment amount')
+  const amount = sanitizeAmount(data?.amount);
+  if (!validateAmount(amount)) errors.push('Invalid payment amount');
 
   return {
     valid: errors.length === 0,
     errors,
     normalized: { email, amount },
-  }
+  };
 }
 
 /**
  * Optional: safely coerce unknown input (forms / query params) without `any`.
  */
 export function coercePaymentInput(raw: unknown): PaymentInput {
-  const r = isRecord(raw) ? raw : {}
-  const email = normalizeEmail(r.email)
-  const amount = sanitizeAmount(toFiniteNumber(r.amount) ?? 0)
-  return { email, amount }
+  const r = isRecord(raw) ? raw : {};
+  const email = normalizeEmail(r.email);
+  const amount = sanitizeAmount(toFiniteNumber(r.amount) ?? 0);
+  return { email, amount };
 }

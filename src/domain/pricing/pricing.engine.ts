@@ -8,114 +8,183 @@
 // - No floating point is used for totals.
 // - `formatPrice()` is cents-based (for backward compatibility in UI).
 // - `normalizeMoney()` supports future merch needs (explicit dollars vs cents).
-// - `pricing_hash` is a *client-side integrity tag* (NOT security). Server must
+// - `pricing_hash` is a client-side integrity tag (NOT security). Server must
 //   validate prices against DB regardless.
 //
 // Public API (kept stable):
-// - PricingEngine.formatPrice(cents) => "$x.xx"  ✅ cents-based
-// - PricingEngine.formatDollars(dollars) => "$x.xx" (explicit dollars)
+// - PricingEngine.formatPrice(cents) => "$x.xx"
+// - PricingEngine.formatDollars(dollars) => "$x.xx"
 // - PricingEngine.calculate(itemId, unitPriceCents, compatModifiers, qty)
 // - PricingEngine.buildCartModifiers(item, selectedByGroup)
 //
 // ALSO provides stock helpers used by Admin/Menu UI + inventory engine:
-// - PricingEngine.getStockStatus(item) => "unknown" | "in_stock" | "low_stock" | "out_of_stock"
-// - PricingEngine.getStockMessage(item) => string | null
+// - PricingEngine.getStockStatus(item)
+// - PricingEngine.getStockMessage(item)
 // - PricingEngine.isLowStock(item) / isOutOfStock(item)
-//
 // =============================================================================
 
-export type MoneyUnit = 'cents' | 'dollars'
+export type MoneyUnit = 'cents' | 'dollars';
 
 export type CartItemModifierCompat = {
-  id: string
-  groupId: string
-  name: string
+  id: string;
+  groupId: string;
+  name: string;
   /** integer cents; may be negative */
-  priceAdjustmentCents: number
+  priceAdjustmentCents: number;
 
   // legacy aliases (old code paths)
-  modifier_group_id?: string
-  group_id?: string
-}
+  modifier_group_id?: string;
+  group_id?: string;
+};
 
 export type CartItemModifierGroupCompat = {
-  groupId: string
+  groupId: string;
   // legacy aliases
-  modifier_group_id?: string
-  group_id?: string
+  modifier_group_id?: string;
+  group_id?: string;
 
-  selections: CartItemModifierCompat[]
-}
+  selections: CartItemModifierCompat[];
+};
 
-export type CartItemModifiersCompat = Array<CartItemModifierCompat | CartItemModifierGroupCompat>
+export type CartItemModifiersCompat = Array<CartItemModifierCompat | CartItemModifierGroupCompat>;
 
 export type SelectedModLike = {
-  id: string
-  name: string
-  // your domain uses price_adjustment; some drift uses priceAdjustment
-  price_adjustment?: number
-  priceAdjustment?: number
-}
+  id: string;
+  name: string;
+  // domain drift support
+  price_adjustment?: number;
+  priceAdjustment?: number;
+};
 
-export type SelectedByGroup = Record<string, SelectedModLike[]>
+export type SelectedByGroup = Record<string, SelectedModLike[]>;
 
-export type StockStatus = 'unknown' | 'in_stock' | 'low_stock' | 'out_of_stock'
+export type StockStatus = 'unknown' | 'in_stock' | 'low_stock' | 'out_of_stock';
 
-// Minimal “menu item” shape we need for modifier extraction.
-// We intentionally accept camelCase and snake_case drift.
 type ModifierLike = {
-  id: string
-  name: string
-  price_adjustment?: number | null
-  priceAdjustment?: number | null
-}
+  id: string;
+  name: string;
+  price_adjustment?: number | null;
+  priceAdjustment?: number | null;
+};
 
 type ModifierGroupLike = {
-  id: string
-  name: string
-  modifiers?: ModifierLike[] | null
-}
+  id: string;
+  name: string;
+  modifiers?: ModifierLike[] | null;
+};
 
-type MenuItemLike = {
-  id: string
-  modifier_groups?: ModifierGroupLike[] | null
-  modifierGroups?: ModifierGroupLike[] | null
-}
+type UnknownRecord = Record<string, unknown>;
+
+type ModifierLookupValue = {
+  name: string;
+  groupId: string;
+  adjCents: number;
+};
 
 // -----------------------------------------------------------------------------
-// Guards / helpers (no unsafe member access)
+// Guards / helpers
 // -----------------------------------------------------------------------------
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function asString(v: unknown, fallback = ''): string {
-  return typeof v === 'string' ? v : fallback
+function asString(value: unknown, fallback = ''): string {
+  return typeof value === 'string' ? value : fallback;
 }
 
-function asNumber(v: unknown, fallback: number): number {
-  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN
-  return Number.isFinite(n) ? n : fallback
+function asNumber(value: unknown, fallback: number): number {
+  const n =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? Number(value)
+        : Number.NaN;
+
+  return Number.isFinite(n) ? n : fallback;
 }
 
-function asBool(v: unknown, fallback: boolean): boolean {
-  return typeof v === 'boolean' ? v : fallback
+function asBool(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
 }
 
-function clampInt(n: number, min: number, max: number): number {
-  if (!Number.isFinite(n)) return min
-  return Math.max(min, Math.min(max, Math.trunc(n)))
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, Math.trunc(value)));
 }
 
-/**
- * IMPORTANT:
- * - Treat anything that is not a finite number as 0 (or fallback).
- * - Always return integer cents.
- */
-function toCentsInt(n: number, fallback = 0): number {
-  if (!Number.isFinite(n)) return fallback
-  return Math.trunc(Math.round(n))
+function toCentsInt(value: number, fallback = 0): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.trunc(Math.round(value));
+}
+
+function isModifierLike(value: unknown): value is ModifierLike {
+  return isRecord(value) && typeof value.id === 'string';
+}
+
+function isModifierGroupLike(value: unknown): value is ModifierGroupLike {
+  return isRecord(value) && typeof value.id === 'string';
+}
+
+function isSelectedModLike(value: unknown): value is SelectedModLike {
+  return isRecord(value) && typeof value.id === 'string';
+}
+
+function sanitizeIdentifier(value: unknown, maxLength = 128): string {
+  const trimmed = asString(value).trim();
+  if (!trimmed) return '';
+  return trimmed.slice(0, maxLength);
+}
+
+function sanitizeLabel(value: unknown, fallback = '', maxLength = 240): string {
+  const trimmed = asString(value, fallback).trim();
+  if (!trimmed) return fallback;
+  return trimmed.slice(0, maxLength);
+}
+
+function getModifierAdjustment(value: ModifierLike | SelectedModLike): number {
+  if (typeof value.price_adjustment === 'number') return value.price_adjustment;
+  if (typeof value.priceAdjustment === 'number') return value.priceAdjustment;
+  return 0;
+}
+
+function getModifierGroups(item: unknown): ModifierGroupLike[] {
+  if (!isRecord(item)) return [];
+
+  const snake = item.modifier_groups;
+  if (Array.isArray(snake)) {
+    return snake.filter(isModifierGroupLike);
+  }
+
+  const camel = item.modifierGroups;
+  if (Array.isArray(camel)) {
+    return camel.filter(isModifierGroupLike);
+  }
+
+  return [];
+}
+
+function getGroupModifiers(group: ModifierGroupLike): ModifierLike[] {
+  if (!Array.isArray(group.modifiers)) return [];
+  return group.modifiers.filter(isModifierLike);
+}
+
+function getSelectedByGroup(selected: unknown): Array<[string, SelectedModLike[]]> {
+  if (!isRecord(selected)) return [];
+
+  const result: Array<[string, SelectedModLike[]]> = [];
+
+  for (const [groupIdRaw, rawMods] of Object.entries(selected)) {
+    const groupId = sanitizeIdentifier(groupIdRaw);
+    if (!groupId || !Array.isArray(rawMods)) continue;
+
+    const safeMods = rawMods.filter(isSelectedModLike);
+    if (safeMods.length === 0) continue;
+
+    result.push([groupId, safeMods]);
+  }
+
+  return result;
 }
 
 /**
@@ -123,63 +192,78 @@ function toCentsInt(n: number, fallback = 0): number {
  * Examples:
  * - 3.99 -> dollars-like
  * - 399  -> cents-like
- *
- * This is a heuristic. For merch later, prefer normalizeMoney(value, 'dollars'|'cents')
- * instead of relying on guessing.
  */
 function guessMoneyUnit(value: number): MoneyUnit {
-  // If it has decimals, it’s almost certainly dollars.
-  if (Math.abs(value % 1) > 0) return 'dollars'
-
-  // If it’s small like 2, 3, 13, also likely dollars (but could be cents).
-  // We only guess dollars for small integers to catch cases like `price: 3`.
-  // If you ever have $0.03 items, use explicit units.
-  if (Math.abs(value) > 0 && Math.abs(value) < 50) return 'dollars'
-
-  // Otherwise assume cents.
-  return 'cents'
+  if (Math.abs(value % 1) > 0) return 'dollars';
+  if (Math.abs(value) > 0 && Math.abs(value) < 50) return 'dollars';
+  return 'cents';
 }
 
 /**
  * Normalize money input to integer cents.
- * - If you pass unit explicitly, it will be respected.
- * - If unit omitted, we guess (safe for your current menu case).
  */
 export function normalizeMoney(value: unknown, unit?: MoneyUnit): number {
-  const raw = asNumber(value, 0)
-  const u = unit ?? guessMoneyUnit(raw)
+  const raw = asNumber(value, 0);
+  const resolvedUnit = unit ?? guessMoneyUnit(raw);
 
-  if (u === 'dollars') {
-    // dollars -> cents (integer)
-    return toCentsInt(raw * 100, 0)
+  if (resolvedUnit === 'dollars') {
+    return toCentsInt(raw * 100, 0);
   }
-  // cents already
-  return toCentsInt(raw, 0)
+
+  return toCentsInt(raw, 0);
 }
 
 /**
  * Stable, deterministic, fast hash for client integrity tags.
- * NOT cryptographic security. Server must validate.
+ * NOT cryptographic security.
  */
 function fnv1a32(input: string): string {
-  let hash = 0x811c9dc5
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i)
-    hash = (hash * 0x01000193) >>> 0
+  let hash = 0x811c9dc5;
+
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = (hash * 0x01000193) >>> 0;
   }
-  // base36 short tag
-  return hash.toString(36)
+
+  return hash.toString(36);
 }
 
 function canonicalizeModifiers(mods: CartItemModifierCompat[]): string {
-  // Stable ordering
   const sorted = [...mods].sort((a, b) => {
-    if (a.groupId !== b.groupId) return a.groupId.localeCompare(b.groupId)
-    if (a.id !== b.id) return a.id.localeCompare(b.id)
-    return a.priceAdjustmentCents - b.priceAdjustmentCents
-  })
+    if (a.groupId !== b.groupId) return a.groupId.localeCompare(b.groupId);
+    if (a.id !== b.id) return a.id.localeCompare(b.id);
+    return a.priceAdjustmentCents - b.priceAdjustmentCents;
+  });
 
-  return sorted.map((m) => `${m.groupId}:${m.id}:${m.priceAdjustmentCents}`).join('|')
+  return sorted.map((m) => `${m.groupId}:${m.id}:${m.priceAdjustmentCents}`).join('|');
+}
+
+function buildModifierLookup(groups: ModifierGroupLike[]): Map<string, ModifierLookupValue> {
+  const lookup = new Map<string, ModifierLookupValue>();
+
+  for (const group of groups) {
+    const groupId = sanitizeIdentifier(group.id);
+    if (!groupId) continue;
+
+    for (const modifier of getGroupModifiers(group)) {
+      const modifierId = sanitizeIdentifier(modifier.id);
+      if (!modifierId) continue;
+
+      const adjustment = getModifierAdjustment(modifier);
+
+      lookup.set(`${groupId}:${modifierId}`, {
+        name: sanitizeLabel(modifier.name, modifierId),
+        groupId,
+        adjCents: clampInt(
+          normalizeMoney(adjustment, guessMoneyUnit(adjustment)),
+          -50_000_000,
+          50_000_000,
+        ),
+      });
+    }
+  }
+
+  return lookup;
 }
 
 // -----------------------------------------------------------------------------
@@ -187,38 +271,31 @@ function canonicalizeModifiers(mods: CartItemModifierCompat[]): string {
 // -----------------------------------------------------------------------------
 
 export class PricingEngine {
-  /**
-   * ✅ BACKWARD-COMPAT:
-   * This expects cents and returns a USD string.
-   */
   static formatPrice(cents: number): string {
-    const c = clampInt(toCentsInt(cents, 0), -50_000_000, 50_000_000)
+    const safeCents = clampInt(toCentsInt(cents, 0), -50_000_000, 50_000_000);
+
     return new Intl.NumberFormat(undefined, {
       style: 'currency',
       currency: 'USD',
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
-    }).format(c / 100)
+    }).format(safeCents / 100);
   }
 
-  /** Explicit dollars formatting */
   static formatDollars(dollars: number): string {
-    return PricingEngine.formatPrice(normalizeMoney(dollars, 'dollars'))
+    return PricingEngine.formatPrice(normalizeMoney(dollars, 'dollars'));
   }
 
-  /** Explicit cents formatting (alias; clearer intent in new code) */
   static formatCents(cents: number): string {
-    return PricingEngine.formatPrice(cents)
+    return PricingEngine.formatPrice(cents);
   }
 
   // ===========================================================================
-  // Stock helpers — Admin/UI compatibility
-  // Returns: "unknown" | "in_stock" | "low_stock" | "out_of_stock"
-  // Fail-open by design when inventory is not tracked.
+  // Stock helpers
   // ===========================================================================
 
   static getStockCount(item: unknown): number | null {
-    if (!isRecord(item)) return null
+    if (!isRecord(item)) return null;
 
     const raw =
       item.inventory_count ??
@@ -229,136 +306,102 @@ export class PricingEngine {
       item.stockQty ??
       item.stock ??
       item.inventory ??
-      null
+      null;
 
-    const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN
-    if (!Number.isFinite(n)) return null
-    return Math.trunc(n)
+    const parsed = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+    if (!Number.isFinite(parsed)) return null;
+
+    return Math.trunc(parsed);
   }
 
   static getLowStockThreshold(item: unknown): number {
-    if (!isRecord(item)) return 5
-    const raw = item.low_stock_threshold ?? item.lowStockThreshold ?? null
-    const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN
-    if (!Number.isFinite(n)) return 5
-    return Math.max(1, Math.trunc(n))
+    if (!isRecord(item)) return 5;
+
+    const raw = item.low_stock_threshold ?? item.lowStockThreshold ?? null;
+    const parsed = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+    if (!Number.isFinite(parsed)) return 5;
+
+    return Math.max(1, Math.trunc(parsed));
   }
 
   static getStockStatus(item: unknown): StockStatus {
-    if (!isRecord(item)) return 'unknown'
+    if (!isRecord(item)) return 'unknown';
 
-    const available = asBool(item.available, true)
-    if (!available) return 'out_of_stock'
+    const available = asBool(item.available, true);
+    if (!available) return 'out_of_stock';
 
-    const count = PricingEngine.getStockCount(item)
-    if (count === null) return 'unknown' // not tracked -> unknown
-    if (count <= 0) return 'out_of_stock'
-    if (count <= PricingEngine.getLowStockThreshold(item)) return 'low_stock'
-    return 'in_stock'
+    const count = PricingEngine.getStockCount(item);
+    if (count === null) return 'unknown';
+    if (count <= 0) return 'out_of_stock';
+    if (count <= PricingEngine.getLowStockThreshold(item)) return 'low_stock';
+
+    return 'in_stock';
   }
 
   static isOutOfStock(item: unknown): boolean {
-    return PricingEngine.getStockStatus(item) === 'out_of_stock'
+    return PricingEngine.getStockStatus(item) === 'out_of_stock';
   }
 
   static isLowStock(item: unknown): boolean {
-    return PricingEngine.getStockStatus(item) === 'low_stock'
+    return PricingEngine.getStockStatus(item) === 'low_stock';
   }
 
   static getStockMessage(item: unknown): string | null {
-    const s = PricingEngine.getStockStatus(item)
-    if (s === 'out_of_stock') return 'Out of stock'
-    if (s === 'low_stock') return 'Low stock'
-    return null // in_stock/unknown => don’t spam UI unless you want to
+    const status = PricingEngine.getStockStatus(item);
+    if (status === 'out_of_stock') return 'Out of stock';
+    if (status === 'low_stock') return 'Low stock';
+    return null;
   }
 
   /**
    * Build compat modifiers array from:
-   * - MenuItem (with modifier groups)
-   * - SelectedByGroup (groupId -> SelectedModLike[])
+   * - MenuItem-like object with modifier groups
+   * - SelectedByGroup
    *
-   * This is used ONLY for display math + pricing_hash input.
-   * Server must re-price from DB.
+   * Client-display math only. Server must re-price from DB.
    */
   static buildCartModifiers(item: unknown, selected: unknown): CartItemModifierCompat[] {
-    const out: CartItemModifierCompat[] = []
-    if (!isRecord(selected)) return out
+    const out: CartItemModifierCompat[] = [];
+    const groups = getModifierGroups(item);
+    const selectedEntries = getSelectedByGroup(selected);
 
-    // Extract group list from item (snake/camel drift)
-    const it = item as MenuItemLike
-    const groups = (it.modifier_groups ?? it.modifierGroups ?? []) ?? []
+    if (selectedEntries.length === 0) return out;
 
-    // Build a quick lookup for known modifiers -> canonical adjustment
-    const lookup = new Map<string, { name: string; groupId: string; adjCents: number }>()
+    const lookup = buildModifierLookup(groups);
 
-    for (const g of groups) {
-      if (!g || typeof g.id !== 'string') continue
-      const mods = (g.modifiers ?? []) ?? []
-      for (const m of mods) {
-        if (!m || typeof m.id !== 'string') continue
-        const adj =
-          typeof m.price_adjustment === 'number'
-            ? m.price_adjustment
-            : typeof m.priceAdjustment === 'number'
-              ? m.priceAdjustment
-              : 0
+    for (const [groupId, selectedMods] of selectedEntries) {
+      for (const raw of selectedMods) {
+        const id = sanitizeIdentifier(raw.id);
+        if (!id) continue;
 
-        lookup.set(`${g.id}:${m.id}`, {
-          name: typeof m.name === 'string' ? m.name : '',
-          groupId: g.id,
-          adjCents: normalizeMoney(adj, guessMoneyUnit(adj)), // handles accidental dollars
-        })
-      }
-    }
-
-    // Walk selected groups
-    for (const [groupId, arr] of Object.entries(selected as SelectedByGroup)) {
-      if (!Array.isArray(arr)) continue
-
-      for (const raw of arr) {
-        const id = asString((raw as SelectedModLike | undefined)?.id).trim()
-        const name = asString((raw as SelectedModLike | undefined)?.name).trim()
-        if (!groupId || !id) continue
-
-        // Prefer canonical lookup adjustment when available (safer)
-        const hit = lookup.get(`${groupId}:${id}`)
-
-        const adjRaw =
-          typeof raw?.price_adjustment === 'number'
-            ? raw.price_adjustment
-            : typeof raw?.priceAdjustment === 'number'
-              ? raw.priceAdjustment
-              : 0
+        const name = sanitizeLabel(raw.name, id);
+        const hit = lookup.get(`${groupId}:${id}`);
+        const adjustmentRaw = getModifierAdjustment(raw);
 
         const priceAdjustmentCents = hit
-          ? clampInt(hit.adjCents, -50_000_000, 50_000_000)
-          : clampInt(normalizeMoney(adjRaw, guessMoneyUnit(adjRaw)), -50_000_000, 50_000_000)
+          ? hit.adjCents
+          : clampInt(
+              normalizeMoney(adjustmentRaw, guessMoneyUnit(adjustmentRaw)),
+              -50_000_000,
+              50_000_000,
+            );
 
         out.push({
           id,
           groupId,
-          name: hit?.name?.trim() || name || id,
+          name: hit?.name || name,
           priceAdjustmentCents,
-          // keep legacy aliases for older code paths
           modifier_group_id: groupId,
           group_id: groupId,
-        })
+        });
       }
     }
 
-    return out
+    return out;
   }
 
   /**
    * Core pricing math (CLIENT DISPLAY ONLY)
-   * - itemId: string identifier
-   * - basePriceCents: integer cents (use normalizeMoney before calling if needed)
-   * - modifiers: CartItemModifierCompat[] (priceAdjustmentCents included)
-   * - quantity: integer
-   *
-   * Returns:
-   * - subtotal: integer cents
-   * - pricing_hash: deterministic integrity tag
    */
   static calculate(
     itemId: string,
@@ -366,29 +409,29 @@ export class PricingEngine {
     modifiers: CartItemModifierCompat[],
     quantity: number,
   ): { subtotal: number; pricing_hash: string } {
-    const id = asString(itemId).trim()
-    const qty = clampInt(toCentsInt(quantity, 1), 1, 99)
-
-    // Base must be cents. Clamp to protect UI.
-    const base = clampInt(toCentsInt(basePriceCents, 0), 0, 50_000_000)
+    const safeItemId = sanitizeIdentifier(itemId);
+    const safeQty = clampInt(asNumber(quantity, 1), 1, 99);
+    const safeBase = clampInt(toCentsInt(basePriceCents, 0), 0, 50_000_000);
 
     const modSum = clampInt(
-      modifiers.reduce(
-        (sum, m) =>
-          sum + clampInt(toCentsInt(m.priceAdjustmentCents, 0), -50_000_000, 50_000_000),
-        0,
-      ),
+      modifiers.reduce((sum, modifier) => {
+        const safeAdj = clampInt(
+          toCentsInt(modifier.priceAdjustmentCents, 0),
+          -50_000_000,
+          50_000_000,
+        );
+        return sum + safeAdj;
+      }, 0),
       -50_000_000,
       50_000_000,
-    )
+    );
 
-    const unit = clampInt(base + modSum, 0, 50_000_000)
-    const subtotal = clampInt(unit * qty, 0, 2_000_000_000) // $20,000,000 cap for sanity
+    const unit = clampInt(safeBase + modSum, 0, 50_000_000);
+    const subtotal = clampInt(unit * safeQty, 0, 2_000_000_000);
 
-    // pricing_hash (client integrity tag)
-    const payload = `${id}|${base}|${qty}|${canonicalizeModifiers(modifiers)}`
-    const pricing_hash = fnv1a32(payload)
+    const payload = `${safeItemId}|${safeBase}|${safeQty}|${canonicalizeModifiers(modifiers)}`;
+    const pricing_hash = fnv1a32(payload);
 
-    return { subtotal, pricing_hash }
+    return { subtotal, pricing_hash };
   }
 }

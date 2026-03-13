@@ -43,20 +43,13 @@ export function RevenueByChannelCard({ data, loading }: RevenueByChannelCardProp
   const totalRevenue = data.reduce((sum, ch) => sum + ch.revenue, 0);
 
   return (
-    <Panel
-      title="Revenue by Channel"
-      subtitle="Performance by marketing source"
-    >
+    <Panel title="Revenue by Channel" subtitle="Performance by marketing source">
       {data.length === 0 ? (
-        <div className="text-center py-12 text-gray-500">
-          No channel data available
-        </div>
+        <div className="text-center py-12 text-gray-500">No channel data available</div>
       ) : (
         <div className="space-y-6">
           {data.map((channel) => {
-            const percentage = totalRevenue > 0
-              ? (channel.revenue / totalRevenue) * 100
-              : 0;
+            const percentage = totalRevenue > 0 ? (channel.revenue / totalRevenue) * 100 : 0;
 
             const config = channelConfig[channel.channel] || {
               icon: '📊',
@@ -70,17 +63,13 @@ export function RevenueByChannelCard({ data, loading }: RevenueByChannelCardProp
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <span className="text-2xl">{config.icon}</span>
-                    <span className="font-medium text-gray-900">
-                      {config.label}
-                    </span>
+                    <span className="font-medium text-gray-900">{config.label}</span>
                   </div>
                   <div className="text-right">
                     <div className="font-bold text-gray-900">
                       ${(channel.revenue / 100).toLocaleString()}
                     </div>
-                    <div className="text-sm text-gray-500">
-                      {channel.orders} orders
-                    </div>
+                    <div className="text-sm text-gray-500">{channel.orders} orders</div>
                   </div>
                 </div>
 
@@ -95,9 +84,7 @@ export function RevenueByChannelCard({ data, loading }: RevenueByChannelCardProp
 
                 {/* Stats Row */}
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-gray-600">
-                    {percentage.toFixed(1)}% of total
-                  </span>
+                  <span className="text-gray-600">{percentage.toFixed(1)}% of total</span>
                   <span
                     className={`font-medium ${
                       channel.roi >= 0 ? 'text-green-600' : 'text-red-600'

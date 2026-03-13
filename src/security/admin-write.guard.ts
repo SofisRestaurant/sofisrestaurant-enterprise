@@ -13,16 +13,19 @@
 // Pattern follows AdminLayout.tsx: checks profiles.role === 'admin'.
 // ============================================================================
 
-import { supabase } from '@/lib/supabase/supabaseClient'
+import { supabase } from '@/lib/supabase/supabaseClient';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Error
 // ─────────────────────────────────────────────────────────────────────────────
 
 export class AdminAuthError extends Error {
-  constructor(message: string, public code: 'NO_SESSION' | 'NOT_ADMIN' | 'SESSION_EXPIRED') {
-    super(message)
-    this.name = 'AdminAuthError'
+  constructor(
+    message: string,
+    public code: 'NO_SESSION' | 'NOT_ADMIN' | 'SESSION_EXPIRED',
+  ) {
+    super(message);
+    this.name = 'AdminAuthError';
   }
 }
 
@@ -36,16 +39,19 @@ export class AdminAuthError extends Error {
  * Throws AdminAuthError if any check fails.
  */
 export async function adminWriteGuard(): Promise<string> {
-  const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+  const {
+    data: { session },
+    error: sessionError,
+  } = await supabase.auth.getSession();
 
   if (sessionError || !session?.user?.id) {
-    throw new AdminAuthError('No active session. Please sign in.', 'NO_SESSION')
+    throw new AdminAuthError('No active session. Please sign in.', 'NO_SESSION');
   }
 
   // Token expiry check
-  const expiresAt = session.expires_at
+  const expiresAt = session.expires_at;
   if (expiresAt && expiresAt * 1000 < Date.now()) {
-    throw new AdminAuthError('Session expired. Please sign in again.', 'SESSION_EXPIRED')
+    throw new AdminAuthError('Session expired. Please sign in again.', 'SESSION_EXPIRED');
   }
 
   // Role check — mirrors AdminLayout.tsx verification
@@ -53,13 +59,13 @@ export async function adminWriteGuard(): Promise<string> {
     .from('profiles')
     .select('role')
     .eq('id', session.user.id)
-    .single()
+    .single();
 
   if (profileError || profile?.role !== 'admin') {
-    throw new AdminAuthError('Admin access required.', 'NOT_ADMIN')
+    throw new AdminAuthError('Admin access required.', 'NOT_ADMIN');
   }
 
-  return session.user.id
+  return session.user.id;
 }
 
 /**
@@ -67,9 +73,9 @@ export async function adminWriteGuard(): Promise<string> {
  */
 export async function tryAdminWriteGuard(): Promise<string | null> {
   try {
-    return await adminWriteGuard()
+    return await adminWriteGuard();
   } catch {
-    return null
+    return null;
   }
 }
 
@@ -79,6 +85,6 @@ export async function tryAdminWriteGuard(): Promise<string | null> {
  */
 export function assertAdminRole(role: string | undefined | null): void {
   if (role !== 'admin') {
-    throw new AdminAuthError('Admin access required.', 'NOT_ADMIN')
+    throw new AdminAuthError('Admin access required.', 'NOT_ADMIN');
   }
 }

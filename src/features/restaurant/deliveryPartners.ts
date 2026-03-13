@@ -1,11 +1,11 @@
 // src/features/restaurant/deliveryPartners.ts
 export interface DeliveryPartner {
-  id: string
-  name: string
-  url: string
-  logo?: string
-  estimatedTime: string
-  deliveryFee: number
+  id: string;
+  name: string;
+  url: string;
+  logo?: string;
+  estimatedTime: string;
+  deliveryFee: number;
 }
 
 export const deliveryPartners: DeliveryPartner[] = [
@@ -30,8 +30,8 @@ export const deliveryPartners: DeliveryPartner[] = [
     estimatedTime: '35-45 min',
     deliveryFee: 2.99,
   },
-]
+];
 
 export function getDeliveryPartner(id: string): DeliveryPartner | undefined {
-  return deliveryPartners.find((partner) => partner.id === id)
+  return deliveryPartners.find((partner) => partner.id === id);
 }

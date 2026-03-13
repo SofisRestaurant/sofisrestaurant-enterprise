@@ -95,6 +95,13 @@ export type Database = {
             foreignKeyName: "admin_notifications_order_id_fkey"
             columns: ["order_id"]
             isOneToOne: false
+            referencedRelation: "admin_tax_order_breakdown"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "admin_notifications_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
             referencedRelation: "financial_revenue_view"
             referencedColumns: ["id"]
           },
@@ -614,6 +621,13 @@ export type Database = {
             foreignKeyName: "financial_transactions_order_id_fkey"
             columns: ["order_id"]
             isOneToOne: false
+            referencedRelation: "admin_tax_order_breakdown"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "financial_transactions_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
             referencedRelation: "financial_revenue_view"
             referencedColumns: ["id"]
           },
@@ -694,13 +708,22 @@ export type Database = {
       growth_campaigns: {
         Row: {
           active: boolean
+          applies_to_category:
+            | Database["public"]["Enums"]["menu_category"]
+            | null
+          applies_to_order_type: string | null
+          auto_apply: boolean
           badge: string | null
           budget_cents: number | null
           campaign_name: string | null
           channel: string | null
           created_at: string | null
           cta_label: string | null
+          deal_price_cents: number | null
+          deal_type: string | null
           deep_link: string | null
+          discount_cents: number | null
+          discount_percent: number | null
           eligible_for_rotation: boolean
           ends_at: string | null
           featured_for_date: string | null
@@ -708,13 +731,17 @@ export type Database = {
           hero_title: string | null
           id: string
           is_featured: boolean | null
+          max_redemptions: number | null
           menu_item_id: string | null
           name: string | null
+          per_user_limit: number | null
           placement: string | null
+          pricing_priority: number
           priority: number | null
           promo_id: string | null
           revenue_cents: number | null
           spent_cents: number | null
+          stackable: boolean
           starts_at: string | null
           status: string | null
           updated_at: string | null
@@ -722,13 +749,22 @@ export type Database = {
         }
         Insert: {
           active?: boolean
+          applies_to_category?:
+            | Database["public"]["Enums"]["menu_category"]
+            | null
+          applies_to_order_type?: string | null
+          auto_apply?: boolean
           badge?: string | null
           budget_cents?: number | null
           campaign_name?: string | null
           channel?: string | null
           created_at?: string | null
           cta_label?: string | null
+          deal_price_cents?: number | null
+          deal_type?: string | null
           deep_link?: string | null
+          discount_cents?: number | null
+          discount_percent?: number | null
           eligible_for_rotation?: boolean
           ends_at?: string | null
           featured_for_date?: string | null
@@ -736,13 +772,17 @@ export type Database = {
           hero_title?: string | null
           id?: string
           is_featured?: boolean | null
+          max_redemptions?: number | null
           menu_item_id?: string | null
           name?: string | null
+          per_user_limit?: number | null
           placement?: string | null
+          pricing_priority?: number
           priority?: number | null
           promo_id?: string | null
           revenue_cents?: number | null
           spent_cents?: number | null
+          stackable?: boolean
           starts_at?: string | null
           status?: string | null
           updated_at?: string | null
@@ -750,13 +790,22 @@ export type Database = {
         }
         Update: {
           active?: boolean
+          applies_to_category?:
+            | Database["public"]["Enums"]["menu_category"]
+            | null
+          applies_to_order_type?: string | null
+          auto_apply?: boolean
           badge?: string | null
           budget_cents?: number | null
           campaign_name?: string | null
           channel?: string | null
           created_at?: string | null
           cta_label?: string | null
+          deal_price_cents?: number | null
+          deal_type?: string | null
           deep_link?: string | null
+          discount_cents?: number | null
+          discount_percent?: number | null
           eligible_for_rotation?: boolean
           ends_at?: string | null
           featured_for_date?: string | null
@@ -764,13 +813,17 @@ export type Database = {
           hero_title?: string | null
           id?: string
           is_featured?: boolean | null
+          max_redemptions?: number | null
           menu_item_id?: string | null
           name?: string | null
+          per_user_limit?: number | null
           placement?: string | null
+          pricing_priority?: number
           priority?: number | null
           promo_id?: string | null
           revenue_cents?: number | null
           spent_cents?: number | null
+          stackable?: boolean
           starts_at?: string | null
           status?: string | null
           updated_at?: string | null
@@ -1078,6 +1131,13 @@ export type Database = {
             foreignKeyName: "loyalty_transactions_order_id_fkey"
             columns: ["order_id"]
             isOneToOne: false
+            referencedRelation: "admin_tax_order_breakdown"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "loyalty_transactions_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
             referencedRelation: "financial_revenue_view"
             referencedColumns: ["id"]
           },
@@ -1173,7 +1233,7 @@ export type Database = {
           pairs_with: string[] | null
           popularity_score: number | null
           price: number
-          sort_order: number | null
+          sort_order: number
           spicy_level: number | null
           updated_at: string | null
         }
@@ -1195,7 +1255,7 @@ export type Database = {
           pairs_with?: string[] | null
           popularity_score?: number | null
           price: number
-          sort_order?: number | null
+          sort_order?: number
           spicy_level?: number | null
           updated_at?: string | null
         }
@@ -1217,7 +1277,7 @@ export type Database = {
           pairs_with?: string[] | null
           popularity_score?: number | null
           price?: number
-          sort_order?: number | null
+          sort_order?: number
           spicy_level?: number | null
           updated_at?: string | null
         }
@@ -1332,6 +1392,128 @@ export type Database = {
           },
         ]
       }
+      order_dispute_events: {
+        Row: {
+          actor_id: string | null
+          actor_name: string | null
+          actor_role: string | null
+          created_at: string
+          dispute_id: string | null
+          event_source: Database["public"]["Enums"]["dispute_event_source_enum"]
+          event_type: Database["public"]["Enums"]["dispute_event_type_enum"]
+          evidence_labels: string[] | null
+          evidence_urls: string[] | null
+          id: string
+          metadata: Json | null
+          new_amount_cents: number | null
+          new_status: string | null
+          note: string | null
+          occurred_at: string
+          order_id: string
+          previous_amount_cents: number | null
+          previous_status: string | null
+          raw_stripe_event: Json | null
+          stripe_event_id: string | null
+          stripe_event_type: string | null
+        }
+        Insert: {
+          actor_id?: string | null
+          actor_name?: string | null
+          actor_role?: string | null
+          created_at?: string
+          dispute_id?: string | null
+          event_source?: Database["public"]["Enums"]["dispute_event_source_enum"]
+          event_type: Database["public"]["Enums"]["dispute_event_type_enum"]
+          evidence_labels?: string[] | null
+          evidence_urls?: string[] | null
+          id?: string
+          metadata?: Json | null
+          new_amount_cents?: number | null
+          new_status?: string | null
+          note?: string | null
+          occurred_at?: string
+          order_id: string
+          previous_amount_cents?: number | null
+          previous_status?: string | null
+          raw_stripe_event?: Json | null
+          stripe_event_id?: string | null
+          stripe_event_type?: string | null
+        }
+        Update: {
+          actor_id?: string | null
+          actor_name?: string | null
+          actor_role?: string | null
+          created_at?: string
+          dispute_id?: string | null
+          event_source?: Database["public"]["Enums"]["dispute_event_source_enum"]
+          event_type?: Database["public"]["Enums"]["dispute_event_type_enum"]
+          evidence_labels?: string[] | null
+          evidence_urls?: string[] | null
+          id?: string
+          metadata?: Json | null
+          new_amount_cents?: number | null
+          new_status?: string | null
+          note?: string | null
+          occurred_at?: string
+          order_id?: string
+          previous_amount_cents?: number | null
+          previous_status?: string | null
+          raw_stripe_event?: Json | null
+          stripe_event_id?: string | null
+          stripe_event_type?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "order_dispute_events_actor_id_fkey"
+            columns: ["actor_id"]
+            isOneToOne: false
+            referencedRelation: "loyalty_leaderboard"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_dispute_events_actor_id_fkey"
+            columns: ["actor_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_dispute_events_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "admin_tax_order_breakdown"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "order_dispute_events_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "financial_revenue_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_dispute_events_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "order_performance"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "order_dispute_events_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "order_timeline"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "order_dispute_events_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       order_events: {
         Row: {
           created_at: string | null
@@ -1362,6 +1544,13 @@ export type Database = {
             foreignKeyName: "order_events_order_id_fkey"
             columns: ["order_id"]
             isOneToOne: false
+            referencedRelation: "admin_tax_order_breakdown"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "order_events_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
             referencedRelation: "financial_revenue_view"
             referencedColumns: ["id"]
           },
@@ -1384,6 +1573,240 @@ export type Database = {
             columns: ["order_id"]
             isOneToOne: false
             referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      order_fulfillment_evidence: {
+        Row: {
+          arrived_at_door_at: string | null
+          created_at: string
+          delivered_at: string | null
+          delivery_address_snapshot: Json | null
+          delivery_photo_lat: number | null
+          delivery_photo_lng: number | null
+          delivery_photo_taken_at: string | null
+          delivery_photo_url: string | null
+          dispatched_at: string | null
+          driver_id: string | null
+          driver_name: string | null
+          driver_phone: string | null
+          evidence_completeness_score: number
+          evidence_status: Database["public"]["Enums"]["fulfillment_evidence_status_enum"]
+          flagged_at: string | null
+          flagged_by: string | null
+          flagged_reason: string | null
+          fulfillment_type: Database["public"]["Enums"]["fulfillment_type_enum"]
+          geofence_check_passed: boolean | null
+          gps_accuracy_meters: number | null
+          gps_lat: number | null
+          gps_lng: number | null
+          gps_recorded_at: string | null
+          handoff_code: string | null
+          handoff_code_verified_at: string | null
+          handoff_method: Database["public"]["Enums"]["handoff_method_enum"]
+          handoff_notes: string | null
+          handoff_type: string | null
+          id: string
+          left_at_door: boolean
+          order_id: string
+          out_for_delivery_at: string | null
+          picked_up_by_id_verified: boolean
+          picked_up_by_name: string | null
+          pickup_notes: string | null
+          pickup_pin: string | null
+          pickup_pin_verified_at: string | null
+          pickup_station: string | null
+          raw_driver_payload: Json | null
+          recipient_name: string | null
+          recipient_verified: boolean
+          safe_place_description: string | null
+          signature_captured_at: string | null
+          signature_ip: unknown
+          signature_url: string | null
+          staff_verified_at: string | null
+          staff_verified_by: string | null
+          updated_at: string
+          vehicle_description: string | null
+        }
+        Insert: {
+          arrived_at_door_at?: string | null
+          created_at?: string
+          delivered_at?: string | null
+          delivery_address_snapshot?: Json | null
+          delivery_photo_lat?: number | null
+          delivery_photo_lng?: number | null
+          delivery_photo_taken_at?: string | null
+          delivery_photo_url?: string | null
+          dispatched_at?: string | null
+          driver_id?: string | null
+          driver_name?: string | null
+          driver_phone?: string | null
+          evidence_completeness_score?: number
+          evidence_status?: Database["public"]["Enums"]["fulfillment_evidence_status_enum"]
+          flagged_at?: string | null
+          flagged_by?: string | null
+          flagged_reason?: string | null
+          fulfillment_type?: Database["public"]["Enums"]["fulfillment_type_enum"]
+          geofence_check_passed?: boolean | null
+          gps_accuracy_meters?: number | null
+          gps_lat?: number | null
+          gps_lng?: number | null
+          gps_recorded_at?: string | null
+          handoff_code?: string | null
+          handoff_code_verified_at?: string | null
+          handoff_method?: Database["public"]["Enums"]["handoff_method_enum"]
+          handoff_notes?: string | null
+          handoff_type?: string | null
+          id?: string
+          left_at_door?: boolean
+          order_id: string
+          out_for_delivery_at?: string | null
+          picked_up_by_id_verified?: boolean
+          picked_up_by_name?: string | null
+          pickup_notes?: string | null
+          pickup_pin?: string | null
+          pickup_pin_verified_at?: string | null
+          pickup_station?: string | null
+          raw_driver_payload?: Json | null
+          recipient_name?: string | null
+          recipient_verified?: boolean
+          safe_place_description?: string | null
+          signature_captured_at?: string | null
+          signature_ip?: unknown
+          signature_url?: string | null
+          staff_verified_at?: string | null
+          staff_verified_by?: string | null
+          updated_at?: string
+          vehicle_description?: string | null
+        }
+        Update: {
+          arrived_at_door_at?: string | null
+          created_at?: string
+          delivered_at?: string | null
+          delivery_address_snapshot?: Json | null
+          delivery_photo_lat?: number | null
+          delivery_photo_lng?: number | null
+          delivery_photo_taken_at?: string | null
+          delivery_photo_url?: string | null
+          dispatched_at?: string | null
+          driver_id?: string | null
+          driver_name?: string | null
+          driver_phone?: string | null
+          evidence_completeness_score?: number
+          evidence_status?: Database["public"]["Enums"]["fulfillment_evidence_status_enum"]
+          flagged_at?: string | null
+          flagged_by?: string | null
+          flagged_reason?: string | null
+          fulfillment_type?: Database["public"]["Enums"]["fulfillment_type_enum"]
+          geofence_check_passed?: boolean | null
+          gps_accuracy_meters?: number | null
+          gps_lat?: number | null
+          gps_lng?: number | null
+          gps_recorded_at?: string | null
+          handoff_code?: string | null
+          handoff_code_verified_at?: string | null
+          handoff_method?: Database["public"]["Enums"]["handoff_method_enum"]
+          handoff_notes?: string | null
+          handoff_type?: string | null
+          id?: string
+          left_at_door?: boolean
+          order_id?: string
+          out_for_delivery_at?: string | null
+          picked_up_by_id_verified?: boolean
+          picked_up_by_name?: string | null
+          pickup_notes?: string | null
+          pickup_pin?: string | null
+          pickup_pin_verified_at?: string | null
+          pickup_station?: string | null
+          raw_driver_payload?: Json | null
+          recipient_name?: string | null
+          recipient_verified?: boolean
+          safe_place_description?: string | null
+          signature_captured_at?: string | null
+          signature_ip?: unknown
+          signature_url?: string | null
+          staff_verified_at?: string | null
+          staff_verified_by?: string | null
+          updated_at?: string
+          vehicle_description?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "order_fulfillment_evidence_driver_id_fkey"
+            columns: ["driver_id"]
+            isOneToOne: false
+            referencedRelation: "loyalty_leaderboard"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_fulfillment_evidence_driver_id_fkey"
+            columns: ["driver_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_fulfillment_evidence_flagged_by_fkey"
+            columns: ["flagged_by"]
+            isOneToOne: false
+            referencedRelation: "loyalty_leaderboard"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_fulfillment_evidence_flagged_by_fkey"
+            columns: ["flagged_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_fulfillment_evidence_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "admin_tax_order_breakdown"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "order_fulfillment_evidence_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "financial_revenue_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_fulfillment_evidence_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "order_performance"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "order_fulfillment_evidence_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "order_timeline"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "order_fulfillment_evidence_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_fulfillment_evidence_staff_verified_by_fkey"
+            columns: ["staff_verified_by"]
+            isOneToOne: false
+            referencedRelation: "loyalty_leaderboard"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_fulfillment_evidence_staff_verified_by_fkey"
+            columns: ["staff_verified_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
         ]
@@ -1436,6 +1859,13 @@ export type Database = {
             foreignKeyName: "order_items_order_id_fkey"
             columns: ["order_id"]
             isOneToOne: false
+            referencedRelation: "admin_tax_order_breakdown"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "order_items_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
             referencedRelation: "financial_revenue_view"
             referencedColumns: ["id"]
           },
@@ -1455,6 +1885,222 @@ export type Database = {
           },
           {
             foreignKeyName: "order_items_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      order_payment_details: {
+        Row: {
+          avs_line1_check: Database["public"]["Enums"]["avs_check_enum"]
+          balance_transaction_id: string | null
+          billing_address_line1: string | null
+          billing_address_line2: string | null
+          billing_city: string | null
+          billing_country: string | null
+          billing_name: string | null
+          billing_postal_code: string | null
+          billing_state: string | null
+          card_brand: string | null
+          card_country: string | null
+          card_exp_month: number | null
+          card_exp_year: number | null
+          card_fingerprint: string | null
+          card_last4: string | null
+          card_network: string | null
+          charge_id: string | null
+          created_at: string
+          customer_email: string | null
+          customer_phone: string | null
+          cvc_check: Database["public"]["Enums"]["cvc_check_enum"]
+          device_fingerprint: string | null
+          dispute_amount_cents: number | null
+          dispute_closed_at: string | null
+          dispute_due_by: string | null
+          dispute_evidence_status: Database["public"]["Enums"]["evidence_status_enum"]
+          dispute_id: string | null
+          dispute_network_reason_code: string | null
+          dispute_opened_at: string | null
+          dispute_outcome: string | null
+          dispute_reason: string | null
+          funding: Database["public"]["Enums"]["card_funding_enum"]
+          id: string
+          ip_address: unknown
+          ip_country: string | null
+          last_refund_at: string | null
+          last_refund_reason: string | null
+          net_payout_cents: number | null
+          order_id: string
+          payment_intent_id: string
+          payment_method_id: string | null
+          postal_check: Database["public"]["Enums"]["avs_check_enum"]
+          radar_outcome: string | null
+          radar_rule_id: string | null
+          raw_charge_snapshot: Json | null
+          raw_dispute_snapshot: Json | null
+          refund_ids: string[] | null
+          risk_level: Database["public"]["Enums"]["risk_level_enum"]
+          risk_score: number | null
+          session_id: string | null
+          stripe_fee_cents: number
+          stripe_fee_tax_cents: number
+          three_d_secure_result: Database["public"]["Enums"]["three_ds_result_enum"]
+          three_d_secure_version: string | null
+          updated_at: string
+          user_agent: string | null
+          wallet_type: string | null
+        }
+        Insert: {
+          avs_line1_check?: Database["public"]["Enums"]["avs_check_enum"]
+          balance_transaction_id?: string | null
+          billing_address_line1?: string | null
+          billing_address_line2?: string | null
+          billing_city?: string | null
+          billing_country?: string | null
+          billing_name?: string | null
+          billing_postal_code?: string | null
+          billing_state?: string | null
+          card_brand?: string | null
+          card_country?: string | null
+          card_exp_month?: number | null
+          card_exp_year?: number | null
+          card_fingerprint?: string | null
+          card_last4?: string | null
+          card_network?: string | null
+          charge_id?: string | null
+          created_at?: string
+          customer_email?: string | null
+          customer_phone?: string | null
+          cvc_check?: Database["public"]["Enums"]["cvc_check_enum"]
+          device_fingerprint?: string | null
+          dispute_amount_cents?: number | null
+          dispute_closed_at?: string | null
+          dispute_due_by?: string | null
+          dispute_evidence_status?: Database["public"]["Enums"]["evidence_status_enum"]
+          dispute_id?: string | null
+          dispute_network_reason_code?: string | null
+          dispute_opened_at?: string | null
+          dispute_outcome?: string | null
+          dispute_reason?: string | null
+          funding?: Database["public"]["Enums"]["card_funding_enum"]
+          id?: string
+          ip_address?: unknown
+          ip_country?: string | null
+          last_refund_at?: string | null
+          last_refund_reason?: string | null
+          net_payout_cents?: number | null
+          order_id: string
+          payment_intent_id: string
+          payment_method_id?: string | null
+          postal_check?: Database["public"]["Enums"]["avs_check_enum"]
+          radar_outcome?: string | null
+          radar_rule_id?: string | null
+          raw_charge_snapshot?: Json | null
+          raw_dispute_snapshot?: Json | null
+          refund_ids?: string[] | null
+          risk_level?: Database["public"]["Enums"]["risk_level_enum"]
+          risk_score?: number | null
+          session_id?: string | null
+          stripe_fee_cents?: number
+          stripe_fee_tax_cents?: number
+          three_d_secure_result?: Database["public"]["Enums"]["three_ds_result_enum"]
+          three_d_secure_version?: string | null
+          updated_at?: string
+          user_agent?: string | null
+          wallet_type?: string | null
+        }
+        Update: {
+          avs_line1_check?: Database["public"]["Enums"]["avs_check_enum"]
+          balance_transaction_id?: string | null
+          billing_address_line1?: string | null
+          billing_address_line2?: string | null
+          billing_city?: string | null
+          billing_country?: string | null
+          billing_name?: string | null
+          billing_postal_code?: string | null
+          billing_state?: string | null
+          card_brand?: string | null
+          card_country?: string | null
+          card_exp_month?: number | null
+          card_exp_year?: number | null
+          card_fingerprint?: string | null
+          card_last4?: string | null
+          card_network?: string | null
+          charge_id?: string | null
+          created_at?: string
+          customer_email?: string | null
+          customer_phone?: string | null
+          cvc_check?: Database["public"]["Enums"]["cvc_check_enum"]
+          device_fingerprint?: string | null
+          dispute_amount_cents?: number | null
+          dispute_closed_at?: string | null
+          dispute_due_by?: string | null
+          dispute_evidence_status?: Database["public"]["Enums"]["evidence_status_enum"]
+          dispute_id?: string | null
+          dispute_network_reason_code?: string | null
+          dispute_opened_at?: string | null
+          dispute_outcome?: string | null
+          dispute_reason?: string | null
+          funding?: Database["public"]["Enums"]["card_funding_enum"]
+          id?: string
+          ip_address?: unknown
+          ip_country?: string | null
+          last_refund_at?: string | null
+          last_refund_reason?: string | null
+          net_payout_cents?: number | null
+          order_id?: string
+          payment_intent_id?: string
+          payment_method_id?: string | null
+          postal_check?: Database["public"]["Enums"]["avs_check_enum"]
+          radar_outcome?: string | null
+          radar_rule_id?: string | null
+          raw_charge_snapshot?: Json | null
+          raw_dispute_snapshot?: Json | null
+          refund_ids?: string[] | null
+          risk_level?: Database["public"]["Enums"]["risk_level_enum"]
+          risk_score?: number | null
+          session_id?: string | null
+          stripe_fee_cents?: number
+          stripe_fee_tax_cents?: number
+          three_d_secure_result?: Database["public"]["Enums"]["three_ds_result_enum"]
+          three_d_secure_version?: string | null
+          updated_at?: string
+          user_agent?: string | null
+          wallet_type?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "order_payment_details_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "admin_tax_order_breakdown"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "order_payment_details_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "financial_revenue_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_payment_details_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "order_performance"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "order_payment_details_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "order_timeline"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "order_payment_details_order_id_fkey"
             columns: ["order_id"]
             isOneToOne: false
             referencedRelation: "orders"
@@ -1491,84 +2137,156 @@ export type Database = {
       }
       orders: {
         Row: {
+          amount_received_cents: number
           amount_shipping: number
           amount_subtotal: number
           amount_tax: number
           amount_total: number
           assigned_to: string | null
           cart_items: Json | null
+          charge_captured_at: string | null
           created_at: string
           currency: string
           customer_email: string | null
           customer_name: string | null
           customer_phone: string | null
           customer_uid: string | null
+          delivery_fee_cents: number
+          discount_cents: number
+          dispute_amount_cents: number | null
+          dispute_due_by: string | null
+          dispute_reason: string | null
+          dispute_status: Database["public"]["Enums"]["dispute_status_enum"]
+          disputed_at: string | null
           id: string
+          last_payment_error: string | null
           metadata: Json | null
+          net_amount_cents: number | null
           notes: string | null
           order_number: number | null
           order_type: string
+          payment_failed_at: string | null
+          payment_method_type: Database["public"]["Enums"]["payment_method_type_enum"]
           payment_status: string
+          refunded_amount_cents: number
+          refunded_at: string | null
+          service_fee_cents: number
           shipping_address: Json | null
           shipping_name: string | null
           shipping_phone: string | null
           status: string
+          stripe_charge_id: string | null
+          stripe_checkout_session_id: string | null
+          stripe_customer_id: string | null
+          stripe_invoice_id: string | null
           stripe_payment_intent_id: string | null
           stripe_session_id: string
+          subtotal_cents: number
+          tax_cents: number
+          tip_cents: number
+          total_cents: number
           updated_at: string
         }
         Insert: {
+          amount_received_cents?: number
           amount_shipping?: number
           amount_subtotal?: number
           amount_tax?: number
           amount_total?: number
           assigned_to?: string | null
           cart_items?: Json | null
+          charge_captured_at?: string | null
           created_at?: string
           currency?: string
           customer_email?: string | null
           customer_name?: string | null
           customer_phone?: string | null
           customer_uid?: string | null
+          delivery_fee_cents?: number
+          discount_cents?: number
+          dispute_amount_cents?: number | null
+          dispute_due_by?: string | null
+          dispute_reason?: string | null
+          dispute_status?: Database["public"]["Enums"]["dispute_status_enum"]
+          disputed_at?: string | null
           id?: string
+          last_payment_error?: string | null
           metadata?: Json | null
+          net_amount_cents?: number | null
           notes?: string | null
           order_number?: number | null
           order_type?: string
+          payment_failed_at?: string | null
+          payment_method_type?: Database["public"]["Enums"]["payment_method_type_enum"]
           payment_status?: string
+          refunded_amount_cents?: number
+          refunded_at?: string | null
+          service_fee_cents?: number
           shipping_address?: Json | null
           shipping_name?: string | null
           shipping_phone?: string | null
           status?: string
+          stripe_charge_id?: string | null
+          stripe_checkout_session_id?: string | null
+          stripe_customer_id?: string | null
+          stripe_invoice_id?: string | null
           stripe_payment_intent_id?: string | null
           stripe_session_id: string
+          subtotal_cents?: number
+          tax_cents?: number
+          tip_cents?: number
+          total_cents?: number
           updated_at?: string
         }
         Update: {
+          amount_received_cents?: number
           amount_shipping?: number
           amount_subtotal?: number
           amount_tax?: number
           amount_total?: number
           assigned_to?: string | null
           cart_items?: Json | null
+          charge_captured_at?: string | null
           created_at?: string
           currency?: string
           customer_email?: string | null
           customer_name?: string | null
           customer_phone?: string | null
           customer_uid?: string | null
+          delivery_fee_cents?: number
+          discount_cents?: number
+          dispute_amount_cents?: number | null
+          dispute_due_by?: string | null
+          dispute_reason?: string | null
+          dispute_status?: Database["public"]["Enums"]["dispute_status_enum"]
+          disputed_at?: string | null
           id?: string
+          last_payment_error?: string | null
           metadata?: Json | null
+          net_amount_cents?: number | null
           notes?: string | null
           order_number?: number | null
           order_type?: string
+          payment_failed_at?: string | null
+          payment_method_type?: Database["public"]["Enums"]["payment_method_type_enum"]
           payment_status?: string
+          refunded_amount_cents?: number
+          refunded_at?: string | null
+          service_fee_cents?: number
           shipping_address?: Json | null
           shipping_name?: string | null
           shipping_phone?: string | null
           status?: string
+          stripe_charge_id?: string | null
+          stripe_checkout_session_id?: string | null
+          stripe_customer_id?: string | null
+          stripe_invoice_id?: string | null
           stripe_payment_intent_id?: string | null
           stripe_session_id?: string
+          subtotal_cents?: number
+          tax_cents?: number
+          tip_cents?: number
+          total_cents?: number
           updated_at?: string
         }
         Relationships: []
@@ -1608,13 +2326,17 @@ export type Database = {
       }
       pending_carts: {
         Row: {
+          consumed_at: string | null
           created_at: string | null
           credit_id: string | null
+          currency: string
           discount_cents: number
           expires_at: string | null
           id: string
           idempotency_key: string | null
           items: Json
+          pricing_hash: string | null
+          pricing_snapshot: Json
           promo_id: string | null
           stripe_session_id: string | null
           subtotal_cents: number
@@ -1623,13 +2345,17 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          consumed_at?: string | null
           created_at?: string | null
           credit_id?: string | null
+          currency?: string
           discount_cents?: number
           expires_at?: string | null
           id: string
           idempotency_key?: string | null
           items: Json
+          pricing_hash?: string | null
+          pricing_snapshot: Json
           promo_id?: string | null
           stripe_session_id?: string | null
           subtotal_cents?: number
@@ -1638,13 +2364,17 @@ export type Database = {
           user_id: string
         }
         Update: {
+          consumed_at?: string | null
           created_at?: string | null
           credit_id?: string | null
+          currency?: string
           discount_cents?: number
           expires_at?: string | null
           id?: string
           idempotency_key?: string | null
           items?: Json
+          pricing_hash?: string | null
+          pricing_snapshot?: Json
           promo_id?: string | null
           stripe_session_id?: string | null
           subtotal_cents?: number
@@ -1948,6 +2678,13 @@ export type Database = {
             foreignKeyName: "fk_staff_order"
             columns: ["order_id"]
             isOneToOne: false
+            referencedRelation: "admin_tax_order_breakdown"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "fk_staff_order"
+            columns: ["order_id"]
+            isOneToOne: false
             referencedRelation: "financial_revenue_view"
             referencedColumns: ["id"]
           },
@@ -2099,6 +2836,73 @@ export type Database = {
         }
         Relationships: []
       }
+      admin_dispute_timeline: {
+        Row: {
+          actor_name: string | null
+          actor_role: string | null
+          dispute_due_by: string | null
+          dispute_id: string | null
+          dispute_status:
+            | Database["public"]["Enums"]["dispute_status_enum"]
+            | null
+          event_source:
+            | Database["public"]["Enums"]["dispute_event_source_enum"]
+            | null
+          event_type:
+            | Database["public"]["Enums"]["dispute_event_type_enum"]
+            | null
+          evidence_labels: string[] | null
+          evidence_urls: string[] | null
+          id: string | null
+          metadata: Json | null
+          new_amount_cents: number | null
+          new_status: string | null
+          note: string | null
+          occurred_at: string | null
+          order_id: string | null
+          previous_amount_cents: number | null
+          previous_status: string | null
+          stripe_payment_intent_id: string | null
+          total_cents: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "order_dispute_events_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "admin_tax_order_breakdown"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "order_dispute_events_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "financial_revenue_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_dispute_events_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "order_performance"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "order_dispute_events_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "order_timeline"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "order_dispute_events_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       admin_executive_snapshot: {
         Row: {
           generated_at: string | null
@@ -2181,6 +2985,112 @@ export type Database = {
           rate_limit_attempts_24h: number | null
           rate_limit_rows_24h: number | null
           recovered_sessions_24h: number | null
+        }
+        Relationships: []
+      }
+      admin_tax_daily_summary: {
+        Row: {
+          currency: string | null
+          delivery_fee_cents: number | null
+          discount_cents: number | null
+          disputed_orders_count: number | null
+          gross_sales_cents: number | null
+          gross_total_cents: number | null
+          net_sales_cents: number | null
+          net_tax_cents: number | null
+          orders_count: number | null
+          refunded_orders_count: number | null
+          refunded_sales_cents: number | null
+          refunded_tax_cents: number | null
+          report_date: string | null
+          service_fee_cents: number | null
+          tax_collected_cents: number | null
+          taxable_sales_cents: number | null
+          tip_cents: number | null
+          total_stripe_fees_cents: number | null
+        }
+        Relationships: []
+      }
+      admin_tax_daily_summary_mat: {
+        Row: {
+          currency: string | null
+          delivery_fee_cents: number | null
+          discount_cents: number | null
+          disputed_orders_count: number | null
+          gross_sales_cents: number | null
+          gross_total_cents: number | null
+          net_sales_cents: number | null
+          net_tax_cents: number | null
+          orders_count: number | null
+          refunded_orders_count: number | null
+          refunded_sales_cents: number | null
+          refunded_tax_cents: number | null
+          report_date: string | null
+          service_fee_cents: number | null
+          tax_collected_cents: number | null
+          taxable_sales_cents: number | null
+          tip_cents: number | null
+          total_stripe_fees_cents: number | null
+        }
+        Relationships: []
+      }
+      admin_tax_monthly_summary: {
+        Row: {
+          active_days: number | null
+          currency: string | null
+          delivery_fee_cents: number | null
+          discount_cents: number | null
+          disputed_orders_count: number | null
+          effective_tax_rate_pct: number | null
+          gross_sales_cents: number | null
+          gross_total_cents: number | null
+          net_sales_cents: number | null
+          net_tax_cents: number | null
+          orders_count: number | null
+          refunded_orders_count: number | null
+          refunded_sales_cents: number | null
+          refunded_tax_cents: number | null
+          report_month: string | null
+          report_month_label: string | null
+          service_fee_cents: number | null
+          tax_collected_cents: number | null
+          taxable_sales_cents: number | null
+          tip_cents: number | null
+          total_stripe_fees_cents: number | null
+        }
+        Relationships: []
+      }
+      admin_tax_order_breakdown: {
+        Row: {
+          captured_date: string | null
+          card_brand: string | null
+          card_funding: Database["public"]["Enums"]["card_funding_enum"] | null
+          charge_captured_at: string | null
+          currency: string | null
+          delivery_fee_cents: number | null
+          discount_cents: number | null
+          dispute_status:
+            | Database["public"]["Enums"]["dispute_status_enum"]
+            | null
+          fulfillment_type: string | null
+          gross_total_cents: number | null
+          is_disputed: boolean | null
+          net_tax_cents: number | null
+          net_total_cents: number | null
+          order_created_at: string | null
+          order_id: string | null
+          payment_status: string | null
+          refunded_amount_cents: number | null
+          refunded_tax_estimate_cents: number | null
+          service_fee_cents: number | null
+          status: string | null
+          stripe_charge_id: string | null
+          stripe_fee_cents: number | null
+          stripe_payment_intent_id: string | null
+          subtotal_cents: number | null
+          tax_collected_cents: number | null
+          taxable_sales_cents: number | null
+          tip_cents: number | null
         }
         Relationships: []
       }
@@ -2323,16 +3233,65 @@ export type Database = {
           featured: boolean | null
           id: string | null
           image_url: string | null
+          inventory_count: number | null
           is_gluten_free: boolean | null
           is_vegan: boolean | null
           is_vegetarian: boolean | null
+          low_stock_threshold: number | null
           modifier_groups: Json | null
           name: string | null
           pairs_with: string[] | null
+          popularity_score: number | null
           price: number | null
           sort_order: number | null
           spicy_level: number | null
           updated_at: string | null
+        }
+        Insert: {
+          allergens?: string[] | null
+          available?: boolean | null
+          category?: Database["public"]["Enums"]["menu_category"] | null
+          created_at?: string | null
+          description?: string | null
+          featured?: boolean | null
+          id?: string | null
+          image_url?: string | null
+          inventory_count?: number | null
+          is_gluten_free?: boolean | null
+          is_vegan?: boolean | null
+          is_vegetarian?: boolean | null
+          low_stock_threshold?: number | null
+          modifier_groups?: never
+          name?: string | null
+          pairs_with?: string[] | null
+          popularity_score?: number | null
+          price?: number | null
+          sort_order?: number | null
+          spicy_level?: number | null
+          updated_at?: string | null
+        }
+        Update: {
+          allergens?: string[] | null
+          available?: boolean | null
+          category?: Database["public"]["Enums"]["menu_category"] | null
+          created_at?: string | null
+          description?: string | null
+          featured?: boolean | null
+          id?: string | null
+          image_url?: string | null
+          inventory_count?: number | null
+          is_gluten_free?: boolean | null
+          is_vegan?: boolean | null
+          is_vegetarian?: boolean | null
+          low_stock_threshold?: number | null
+          modifier_groups?: never
+          name?: string | null
+          pairs_with?: string[] | null
+          popularity_score?: number | null
+          price?: number | null
+          sort_order?: number | null
+          spicy_level?: number | null
+          updated_at?: string | null
         }
         Relationships: []
       }
@@ -2678,6 +3637,140 @@ export type Database = {
           new_balance: number
         }[]
       }
+      admin_get_tax_daily_rows: {
+        Args: {
+          date_from?: string
+          date_to?: string
+          p_currency?: string
+          use_cache?: boolean
+        }
+        Returns: {
+          currency: string | null
+          delivery_fee_cents: number | null
+          discount_cents: number | null
+          disputed_orders_count: number | null
+          gross_sales_cents: number | null
+          gross_total_cents: number | null
+          net_sales_cents: number | null
+          net_tax_cents: number | null
+          orders_count: number | null
+          refunded_orders_count: number | null
+          refunded_sales_cents: number | null
+          refunded_tax_cents: number | null
+          report_date: string | null
+          service_fee_cents: number | null
+          tax_collected_cents: number | null
+          taxable_sales_cents: number | null
+          tip_cents: number | null
+          total_stripe_fees_cents: number | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "admin_tax_daily_summary"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      admin_get_tax_export: {
+        Args: {
+          date_from: string
+          date_to: string
+          granularity: string
+          p_currency: string
+        }
+        Returns: Json
+      }
+      admin_get_tax_monthly_rows: {
+        Args: { month_from?: string; month_to?: string; p_currency?: string }
+        Returns: {
+          active_days: number | null
+          currency: string | null
+          delivery_fee_cents: number | null
+          discount_cents: number | null
+          disputed_orders_count: number | null
+          effective_tax_rate_pct: number | null
+          gross_sales_cents: number | null
+          gross_total_cents: number | null
+          net_sales_cents: number | null
+          net_tax_cents: number | null
+          orders_count: number | null
+          refunded_orders_count: number | null
+          refunded_sales_cents: number | null
+          refunded_tax_cents: number | null
+          report_month: string | null
+          report_month_label: string | null
+          service_fee_cents: number | null
+          tax_collected_cents: number | null
+          taxable_sales_cents: number | null
+          tip_cents: number | null
+          total_stripe_fees_cents: number | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "admin_tax_monthly_summary"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      admin_get_tax_orders: {
+        Args: {
+          date_from?: string
+          date_to?: string
+          disputed_only?: boolean
+          fulfillment_filter?: string
+          p_currency?: string
+          page_offset?: number
+          page_size?: number
+          refunded_only?: boolean
+        }
+        Returns: {
+          captured_date: string
+          card_brand: string
+          charge_captured_at: string
+          discount_cents: number
+          dispute_status: string
+          fulfillment_type: string
+          gross_total_cents: number
+          is_disputed: boolean
+          net_tax_cents: number
+          net_total_cents: number
+          order_id: string
+          payment_status: string
+          refunded_amount_cents: number
+          refunded_tax_estimate_cents: number
+          stripe_payment_intent_id: string
+          subtotal_cents: number
+          tax_collected_cents: number
+          taxable_sales_cents: number
+          tip_cents: number
+          total_rows: number
+        }[]
+      }
+      admin_get_tax_summary: {
+        Args: {
+          date_from?: string
+          date_to?: string
+          p_currency?: string
+          use_cache?: boolean
+        }
+        Returns: Database["public"]["CompositeTypes"]["tax_summary_result"]
+        SetofOptions: {
+          from: "*"
+          to: "tax_summary_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      admin_get_tax_ytd: {
+        Args: { p_currency?: string; p_year?: number }
+        Returns: Database["public"]["CompositeTypes"]["tax_summary_result"]
+        SetofOptions: {
+          from: "*"
+          to: "tax_summary_result"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       award_loyalty_points: {
         Args: { p_amount_cents: number; p_order_id: string; p_user_id: string }
         Returns: Json
@@ -2685,6 +3778,7 @@ export type Database = {
       cleanup_pending_carts: { Args: never; Returns: undefined }
       custom_access_token_hook: { Args: { event: Json }; Returns: Json }
       get_admin_layout_snapshot: { Args: never; Returns: Json }
+      get_evidence_summary: { Args: { p_order_id: string }; Returns: Json }
       get_loyalty_by_order: {
         Args: { p_order_id: string }
         Returns: {
@@ -2736,6 +3830,43 @@ export type Database = {
         }
       }
       get_next_order_number: { Args: never; Returns: number }
+      get_order_dispute_timeline: {
+        Args: { p_order_id: string }
+        Returns: {
+          actor_name: string | null
+          actor_role: string | null
+          dispute_due_by: string | null
+          dispute_id: string | null
+          dispute_status:
+            | Database["public"]["Enums"]["dispute_status_enum"]
+            | null
+          event_source:
+            | Database["public"]["Enums"]["dispute_event_source_enum"]
+            | null
+          event_type:
+            | Database["public"]["Enums"]["dispute_event_type_enum"]
+            | null
+          evidence_labels: string[] | null
+          evidence_urls: string[] | null
+          id: string | null
+          metadata: Json | null
+          new_amount_cents: number | null
+          new_status: string | null
+          note: string | null
+          occurred_at: string | null
+          order_id: string | null
+          previous_amount_cents: number | null
+          previous_status: string | null
+          stripe_payment_intent_id: string | null
+          total_cents: number | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "admin_dispute_timeline"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       health_ping: {
         Args: never
         Returns: {
@@ -2747,8 +3878,64 @@ export type Database = {
         Args: { p_promo_id: string }
         Returns: boolean
       }
+      insert_dispute_event: {
+        Args: {
+          p_actor_id?: string
+          p_actor_name?: string
+          p_actor_role?: string
+          p_dispute_id?: string
+          p_event_source?: Database["public"]["Enums"]["dispute_event_source_enum"]
+          p_event_type?: Database["public"]["Enums"]["dispute_event_type_enum"]
+          p_evidence_labels?: string[]
+          p_evidence_urls?: string[]
+          p_metadata?: Json
+          p_new_amount_cents?: number
+          p_new_status?: string
+          p_note?: string
+          p_occurred_at?: string
+          p_order_id: string
+          p_previous_amount_cents?: number
+          p_previous_status?: string
+          p_raw_stripe_event?: Json
+          p_stripe_event_id?: string
+          p_stripe_event_type?: string
+        }
+        Returns: {
+          actor_id: string | null
+          actor_name: string | null
+          actor_role: string | null
+          created_at: string
+          dispute_id: string | null
+          event_source: Database["public"]["Enums"]["dispute_event_source_enum"]
+          event_type: Database["public"]["Enums"]["dispute_event_type_enum"]
+          evidence_labels: string[] | null
+          evidence_urls: string[] | null
+          id: string
+          metadata: Json | null
+          new_amount_cents: number | null
+          new_status: string | null
+          note: string | null
+          occurred_at: string
+          order_id: string
+          previous_amount_cents: number | null
+          previous_status: string | null
+          raw_stripe_event: Json | null
+          stripe_event_id: string | null
+          stripe_event_type: string | null
+        }
+        SetofOptions: {
+          from: "*"
+          to: "order_dispute_events"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       is_admin: { Args: { uid: string }; Returns: boolean }
       is_admin_uid: { Args: { uid: string }; Returns: boolean }
+      is_tax_eligible_status: {
+        Args: { payment_status: string }
+        Returns: boolean
+      }
       issue_loyalty_correction: {
         Args: {
           p_admin_id: string
@@ -2778,6 +3965,7 @@ export type Database = {
         Args: { p_admin_id: string; p_points: number; p_user_id: string }
         Returns: Json
       }
+      refresh_tax_daily_summary: { Args: never; Returns: undefined }
       rotate_daily_campaigns: { Args: never; Returns: undefined }
       rotate_featured_growth_campaigns: {
         Args: { target_placement?: string }
@@ -2791,35 +3979,159 @@ export type Database = {
       update_order_status_secure: {
         Args: { new_status: string; order_id: string }
         Returns: {
+          amount_received_cents: number
           amount_shipping: number
           amount_subtotal: number
           amount_tax: number
           amount_total: number
           assigned_to: string | null
           cart_items: Json | null
+          charge_captured_at: string | null
           created_at: string
           currency: string
           customer_email: string | null
           customer_name: string | null
           customer_phone: string | null
           customer_uid: string | null
+          delivery_fee_cents: number
+          discount_cents: number
+          dispute_amount_cents: number | null
+          dispute_due_by: string | null
+          dispute_reason: string | null
+          dispute_status: Database["public"]["Enums"]["dispute_status_enum"]
+          disputed_at: string | null
           id: string
+          last_payment_error: string | null
           metadata: Json | null
+          net_amount_cents: number | null
           notes: string | null
           order_number: number | null
           order_type: string
+          payment_failed_at: string | null
+          payment_method_type: Database["public"]["Enums"]["payment_method_type_enum"]
           payment_status: string
+          refunded_amount_cents: number
+          refunded_at: string | null
+          service_fee_cents: number
           shipping_address: Json | null
           shipping_name: string | null
           shipping_phone: string | null
           status: string
+          stripe_charge_id: string | null
+          stripe_checkout_session_id: string | null
+          stripe_customer_id: string | null
+          stripe_invoice_id: string | null
           stripe_payment_intent_id: string | null
           stripe_session_id: string
+          subtotal_cents: number
+          tax_cents: number
+          tip_cents: number
+          total_cents: number
           updated_at: string
         }
         SetofOptions: {
           from: "*"
           to: "orders"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      upsert_order_payment_details: {
+        Args: {
+          p_avs_line1_check?: Database["public"]["Enums"]["avs_check_enum"]
+          p_balance_transaction_id?: string
+          p_billing_country?: string
+          p_billing_name?: string
+          p_billing_postal_code?: string
+          p_card_brand?: string
+          p_card_country?: string
+          p_card_fingerprint?: string
+          p_card_last4?: string
+          p_charge_id?: string
+          p_customer_email?: string
+          p_customer_phone?: string
+          p_cvc_check?: Database["public"]["Enums"]["cvc_check_enum"]
+          p_dispute_amount_cents?: number
+          p_dispute_due_by?: string
+          p_dispute_evidence_status?: Database["public"]["Enums"]["evidence_status_enum"]
+          p_dispute_id?: string
+          p_dispute_reason?: string
+          p_funding?: Database["public"]["Enums"]["card_funding_enum"]
+          p_ip_address?: unknown
+          p_order_id: string
+          p_payment_intent_id: string
+          p_payment_method_id?: string
+          p_postal_check?: Database["public"]["Enums"]["avs_check_enum"]
+          p_raw_charge_snapshot?: Json
+          p_raw_dispute_snapshot?: Json
+          p_risk_level?: Database["public"]["Enums"]["risk_level_enum"]
+          p_risk_score?: number
+          p_stripe_fee_cents?: number
+          p_three_d_secure_result?: Database["public"]["Enums"]["three_ds_result_enum"]
+          p_wallet_type?: string
+        }
+        Returns: {
+          avs_line1_check: Database["public"]["Enums"]["avs_check_enum"]
+          balance_transaction_id: string | null
+          billing_address_line1: string | null
+          billing_address_line2: string | null
+          billing_city: string | null
+          billing_country: string | null
+          billing_name: string | null
+          billing_postal_code: string | null
+          billing_state: string | null
+          card_brand: string | null
+          card_country: string | null
+          card_exp_month: number | null
+          card_exp_year: number | null
+          card_fingerprint: string | null
+          card_last4: string | null
+          card_network: string | null
+          charge_id: string | null
+          created_at: string
+          customer_email: string | null
+          customer_phone: string | null
+          cvc_check: Database["public"]["Enums"]["cvc_check_enum"]
+          device_fingerprint: string | null
+          dispute_amount_cents: number | null
+          dispute_closed_at: string | null
+          dispute_due_by: string | null
+          dispute_evidence_status: Database["public"]["Enums"]["evidence_status_enum"]
+          dispute_id: string | null
+          dispute_network_reason_code: string | null
+          dispute_opened_at: string | null
+          dispute_outcome: string | null
+          dispute_reason: string | null
+          funding: Database["public"]["Enums"]["card_funding_enum"]
+          id: string
+          ip_address: unknown
+          ip_country: string | null
+          last_refund_at: string | null
+          last_refund_reason: string | null
+          net_payout_cents: number | null
+          order_id: string
+          payment_intent_id: string
+          payment_method_id: string | null
+          postal_check: Database["public"]["Enums"]["avs_check_enum"]
+          radar_outcome: string | null
+          radar_rule_id: string | null
+          raw_charge_snapshot: Json | null
+          raw_dispute_snapshot: Json | null
+          refund_ids: string[] | null
+          risk_level: Database["public"]["Enums"]["risk_level_enum"]
+          risk_score: number | null
+          session_id: string | null
+          stripe_fee_cents: number
+          stripe_fee_tax_cents: number
+          three_d_secure_result: Database["public"]["Enums"]["three_ds_result_enum"]
+          three_d_secure_version: string | null
+          updated_at: string
+          user_agent: string | null
+          wallet_type: string | null
+        }
+        SetofOptions: {
+          from: "*"
+          to: "order_payment_details"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -2875,6 +4187,68 @@ export type Database = {
       }
     }
     Enums: {
+      avs_check_enum: "pass" | "fail" | "unavailable" | "unchecked" | "unknown"
+      card_funding_enum: "credit" | "debit" | "prepaid" | "unknown"
+      cvc_check_enum: "pass" | "fail" | "unavailable" | "unchecked" | "unknown"
+      dispute_event_source_enum:
+        | "stripe_webhook"
+        | "admin_action"
+        | "system"
+        | "customer_action"
+      dispute_event_type_enum:
+        | "dispute_created"
+        | "dispute_updated"
+        | "dispute_funds_withdrawn"
+        | "dispute_funds_reinstated"
+        | "dispute_closed"
+        | "evidence_submitted"
+        | "admin_note_added"
+        | "admin_evidence_uploaded"
+        | "admin_escalated"
+        | "admin_accepted"
+        | "admin_reopened"
+        | "due_date_reminder"
+        | "auto_flagged_high_risk"
+        | "evidence_completeness_checked"
+      dispute_status_enum:
+        | "none"
+        | "warning_needs_response"
+        | "warning_under_review"
+        | "warning_closed"
+        | "needs_response"
+        | "under_review"
+        | "charge_refunded"
+        | "won"
+        | "lost"
+      evidence_status_enum:
+        | "not_started"
+        | "in_progress"
+        | "submitted"
+        | "past_due"
+        | "won"
+        | "lost"
+      fulfillment_evidence_status_enum:
+        | "pending"
+        | "partial"
+        | "complete"
+        | "flagged"
+        | "disputed"
+        | "archived"
+      fulfillment_type_enum:
+        | "pickup"
+        | "curbside"
+        | "delivery"
+        | "dine_in"
+        | "drive_through"
+        | "ship"
+      handoff_method_enum:
+        | "pin_verified"
+        | "signature"
+        | "photo"
+        | "staff_confirmed"
+        | "driver_confirmed"
+        | "contactless"
+        | "none"
       menu_category:
         | "appetizers"
         | "entrees"
@@ -2883,9 +4257,69 @@ export type Database = {
         | "lunch"
         | "breakfast"
         | "specials"
+      payment_method_type_enum:
+        | "card"
+        | "apple_pay"
+        | "google_pay"
+        | "link"
+        | "affirm"
+        | "afterpay_clearpay"
+        | "klarna"
+        | "us_bank_account"
+        | "cashapp"
+        | "unknown"
+      payment_status_enum:
+        | "pending"
+        | "requires_payment_method"
+        | "requires_confirmation"
+        | "requires_action"
+        | "processing"
+        | "succeeded"
+        | "canceled"
+        | "failed"
+        | "refunded"
+        | "partially_refunded"
+      risk_level_enum:
+        | "normal"
+        | "elevated"
+        | "highest"
+        | "not_assessed"
+        | "unknown"
+      three_ds_result_enum:
+        | "authenticated"
+        | "attempted"
+        | "failed"
+        | "not_supported"
+        | "processing_error"
+        | "exempted"
+        | "unknown"
     }
     CompositeTypes: {
-      [_ in never]: never
+      tax_summary_result: {
+        date_from: string | null
+        date_to: string | null
+        currency: string | null
+        period_days: number | null
+        orders_count: number | null
+        disputed_orders_count: number | null
+        refunded_orders_count: number | null
+        gross_sales_cents: number | null
+        discount_cents: number | null
+        taxable_sales_cents: number | null
+        tax_collected_cents: number | null
+        tip_cents: number | null
+        delivery_fee_cents: number | null
+        service_fee_cents: number | null
+        gross_total_cents: number | null
+        refunded_sales_cents: number | null
+        refunded_tax_cents: number | null
+        net_sales_cents: number | null
+        net_tax_cents: number | null
+        total_stripe_fees_cents: number | null
+        effective_tax_rate_pct: number | null
+        avg_order_cents: number | null
+        avg_tax_per_order_cents: number | null
+      }
     }
   }
 }
@@ -3010,6 +4444,75 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      avs_check_enum: ["pass", "fail", "unavailable", "unchecked", "unknown"],
+      card_funding_enum: ["credit", "debit", "prepaid", "unknown"],
+      cvc_check_enum: ["pass", "fail", "unavailable", "unchecked", "unknown"],
+      dispute_event_source_enum: [
+        "stripe_webhook",
+        "admin_action",
+        "system",
+        "customer_action",
+      ],
+      dispute_event_type_enum: [
+        "dispute_created",
+        "dispute_updated",
+        "dispute_funds_withdrawn",
+        "dispute_funds_reinstated",
+        "dispute_closed",
+        "evidence_submitted",
+        "admin_note_added",
+        "admin_evidence_uploaded",
+        "admin_escalated",
+        "admin_accepted",
+        "admin_reopened",
+        "due_date_reminder",
+        "auto_flagged_high_risk",
+        "evidence_completeness_checked",
+      ],
+      dispute_status_enum: [
+        "none",
+        "warning_needs_response",
+        "warning_under_review",
+        "warning_closed",
+        "needs_response",
+        "under_review",
+        "charge_refunded",
+        "won",
+        "lost",
+      ],
+      evidence_status_enum: [
+        "not_started",
+        "in_progress",
+        "submitted",
+        "past_due",
+        "won",
+        "lost",
+      ],
+      fulfillment_evidence_status_enum: [
+        "pending",
+        "partial",
+        "complete",
+        "flagged",
+        "disputed",
+        "archived",
+      ],
+      fulfillment_type_enum: [
+        "pickup",
+        "curbside",
+        "delivery",
+        "dine_in",
+        "drive_through",
+        "ship",
+      ],
+      handoff_method_enum: [
+        "pin_verified",
+        "signature",
+        "photo",
+        "staff_confirmed",
+        "driver_confirmed",
+        "contactless",
+        "none",
+      ],
       menu_category: [
         "appetizers",
         "entrees",
@@ -3018,6 +4521,46 @@ export const Constants = {
         "lunch",
         "breakfast",
         "specials",
+      ],
+      payment_method_type_enum: [
+        "card",
+        "apple_pay",
+        "google_pay",
+        "link",
+        "affirm",
+        "afterpay_clearpay",
+        "klarna",
+        "us_bank_account",
+        "cashapp",
+        "unknown",
+      ],
+      payment_status_enum: [
+        "pending",
+        "requires_payment_method",
+        "requires_confirmation",
+        "requires_action",
+        "processing",
+        "succeeded",
+        "canceled",
+        "failed",
+        "refunded",
+        "partially_refunded",
+      ],
+      risk_level_enum: [
+        "normal",
+        "elevated",
+        "highest",
+        "not_assessed",
+        "unknown",
+      ],
+      three_ds_result_enum: [
+        "authenticated",
+        "attempted",
+        "failed",
+        "not_supported",
+        "processing_error",
+        "exempted",
+        "unknown",
       ],
     },
   },

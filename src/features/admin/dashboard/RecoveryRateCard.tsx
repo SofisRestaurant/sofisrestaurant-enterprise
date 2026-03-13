@@ -37,18 +37,21 @@ export function RecoveryRateCard({
   const delta = prevRate !== undefined ? rate - prevRate : null;
 
   const rateColor =
-    rate >= TARGET_RATE    ? 'text-emerald-400' :
-    rate >= TARGET_RATE / 2 ? 'text-amber-400'  :
-    'text-red-400';
+    rate >= TARGET_RATE
+      ? 'text-emerald-400'
+      : rate >= TARGET_RATE / 2
+        ? 'text-amber-400'
+        : 'text-red-400';
 
   const trackColor =
-    rate >= TARGET_RATE    ? 'bg-emerald-500' :
-    rate >= TARGET_RATE / 2 ? 'bg-amber-500'  :
-    'bg-red-500';
+    rate >= TARGET_RATE
+      ? 'bg-emerald-500'
+      : rate >= TARGET_RATE / 2
+        ? 'bg-amber-500'
+        : 'bg-red-500';
 
   return (
     <Panel title="Cart Recovery Rate">
-
       {/* Main metric row */}
       <div className="mt-4 flex items-center justify-between">
         <div>
@@ -59,13 +62,17 @@ export function RecoveryRateCard({
             {recovered.toLocaleString()} of {totalAbandoned.toLocaleString()} carts recovered
           </p>
           {delta !== null && (
-            <p className={`mt-0.5 font-mono text-[10px] ${delta >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            <p
+              className={`mt-0.5 font-mono text-[10px] ${delta >= 0 ? 'text-emerald-400' : 'text-red-400'}`}
+            >
               {delta >= 0 ? '▲' : '▼'} {formatPct(Math.abs(delta))} vs prev period
             </p>
           )}
         </div>
         <div className="text-right">
-          <p className="font-mono text-[9px] uppercase tracking-wider text-zinc-600">Revenue saved</p>
+          <p className="font-mono text-[9px] uppercase tracking-wider text-zinc-600">
+            Revenue saved
+          </p>
           <p className="text-xl font-black text-white">{formatDollars(recoveredRevenueCents)}</p>
           <p className="mt-0.5 font-mono text-[9px] text-zinc-700">
             avg {recovered > 0 ? formatDollars(recoveredRevenueCents / recovered) : '$0'} / cart
@@ -98,7 +105,6 @@ export function RecoveryRateCard({
             : '✓ Recovery rate above industry benchmark'}
         </p>
       </div>
-
     </Panel>
   );
 }

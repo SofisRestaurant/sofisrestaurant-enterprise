@@ -11,20 +11,20 @@
 //   • Sync hash for client-side (djb2); async SHA-256 for audit logging
 // ============================================================================
 
-import type { ModifierGroup } from '@/domain/menu/menu.types'
-import type { ModifierGroupWritePayload, ModifierWritePayload } from '@/types/admin-menu'
+import type { ModifierGroup } from '@/domain/menu/menu.types';
+import type { ModifierGroupWritePayload, ModifierWritePayload } from '@/types/admin-menu';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // djb2 sync hash (fast, non-cryptographic — suitable for cart integrity)
 // ─────────────────────────────────────────────────────────────────────────────
 
 function djb2(input: string): string {
-  let h = 5381
+  let h = 5381;
   for (let i = 0; i < input.length; i++) {
-    h = ((h << 5) + h) ^ input.charCodeAt(i)
-    h = h >>> 0
+    h = ((h << 5) + h) ^ input.charCodeAt(i);
+    h = h >>> 0;
   }
-  return h.toString(16).padStart(8, '0')
+  return h.toString(16).padStart(8, '0');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -33,25 +33,23 @@ function djb2(input: string): string {
 
 function canonicalGroup(group: ModifierGroup): object {
   return {
-    id:             group.id,
-    type:           group.type,
-    required:       group.required,
+    id: group.id,
+    type: group.type,
+    required: group.required,
     min_selections: group.min_selections,
     max_selections: group.max_selections,
     modifiers: [...group.modifiers]
       .sort((a, b) => a.id.localeCompare(b.id))
       .map((m) => ({
-        id:               m.id,
+        id: m.id,
         price_adjustment: m.price_adjustment,
-        available:        m.available,
+        available: m.available,
       })),
-  }
+  };
 }
 
 function canonicalGroups(groups: ModifierGroup[]): object[] {
-  return [...groups]
-    .sort((a, b) => a.id.localeCompare(b.id))
-    .map(canonicalGroup)
+  return [...groups].sort((a, b) => a.id.localeCompare(b.id)).map(canonicalGroup);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -64,18 +62,15 @@ function canonicalGroups(groups: ModifierGroup[]): object[] {
  * Does NOT change when: sort_order, name, description change.
  */
 export function hashModifierGroup(group: ModifierGroup): string {
-  return djb2(JSON.stringify(canonicalGroup(group)))
+  return djb2(JSON.stringify(canonicalGroup(group)));
 }
 
 /**
  * Hash for a full item's modifier configuration.
  * Used in cart pricing_hash to detect stale config at checkout.
  */
-export function hashItemModifierConfig(
-  itemId: string,
-  groups: ModifierGroup[],
-): string {
-  return djb2(JSON.stringify({ itemId, groups: canonicalGroups(groups) }))
+export function hashItemModifierConfig(itemId: string, groups: ModifierGroup[]): string {
+  return djb2(JSON.stringify({ itemId, groups: canonicalGroups(groups) }));
 }
 
 /**
@@ -87,34 +82,34 @@ export function hashGroupWritePayload(
   modifiers: Omit<ModifierWritePayload, 'modifier_group_id'>[],
 ): string {
   const canonical = {
-    type:           payload.type,
-    required:       payload.required,
+    type: payload.type,
+    required: payload.required,
     min_selections: payload.min_selections,
     max_selections: payload.max_selections,
-    active:         payload.active,
+    active: payload.active,
     modifiers: [...modifiers]
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((m) => ({
-        name:             m.name,
+        name: m.name,
         price_adjustment: m.price_adjustment,
-        available:        m.available,
+        available: m.available,
       })),
-  }
-  return djb2(JSON.stringify(canonical))
+  };
+  return djb2(JSON.stringify(canonical));
 }
 
 /**
  * Async SHA-256 version — for audit log entries and server-side verification.
  */
 export async function hashModifierGroupAsync(group: ModifierGroup): Promise<string> {
-  const input = JSON.stringify(canonicalGroup(group))
+  const input = JSON.stringify(canonicalGroup(group));
   if (typeof crypto !== 'undefined' && crypto.subtle) {
-    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input))
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
     return Array.from(new Uint8Array(buf))
       .map((b) => b.toString(16).padStart(2, '0'))
-      .join('')
+      .join('');
   }
-  return djb2(input)
+  return djb2(input);
 }
 
 /**
@@ -122,5 +117,5 @@ export async function hashModifierGroupAsync(group: ModifierGroup): Promise<stri
  * Returns true if configs are equivalent.
  */
 export function configsMatch(hashA: string, hashB: string): boolean {
-  return hashA === hashB
+  return hashA === hashB;
 }

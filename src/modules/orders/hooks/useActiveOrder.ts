@@ -1,72 +1,108 @@
 // src/features/orders/useActiveOrder.ts
 
-import { useEffect, useRef, useState } from 'react'
-import { supabase } from '@/lib/supabase/supabaseClient'
-import { OrderStatus } from '@/domain/orders/order.types'
+import { useEffect, useRef, useState } from 'react';
+import type { RealtimeChannel } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabase/supabaseClient';
+import { OrderStatus } from '@/domain/orders/order.types';
 
 const TRACKABLE_STATUSES = [
   OrderStatus.CONFIRMED,
   OrderStatus.PREPARING,
   OrderStatus.READY,
   OrderStatus.SHIPPED,
-] as const
+] as const;
+
+function isTrackableStatus(value: unknown): value is (typeof TRACKABLE_STATUSES)[number] {
+  return TRACKABLE_STATUSES.includes(value as (typeof TRACKABLE_STATUSES)[number]);
+}
+
+function isTerminalStatus(value: unknown): boolean {
+  return value === OrderStatus.CANCELLED || value === OrderStatus.DELIVERED;
+}
 
 export function useActiveOrder(userId: string | null): string | null {
-  const [activeOrderId, setActiveOrderId] = useState<string | null>(null)
+  const [activeOrderId, setActiveOrderId] = useState<string | null>(null);
 
-  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
+  const channelRef = useRef<RealtimeChannel | null>(null);
 
   // ─────────────────────────────────────────────
   // Fetch active order
   // ─────────────────────────────────────────────
   useEffect(() => {
-   if (!userId) return
-    const safeUserId: string = userId
-    const controller = new AbortController()
+    if (!userId) {
+      setActiveOrderId(null);
+      return;
+    }
 
-    async function fetchActiveOrder() {
+    const safeUserId = userId;
+    let alive = true;
+
+    async function fetchActiveOrder(): Promise<void> {
       try {
         const { data, error } = await supabase
           .from('orders')
-          .select('id')
+          .select('id, status, payment_status')
           .eq('customer_uid', safeUserId)
           .eq('payment_status', 'paid')
           .in('status', TRACKABLE_STATUSES)
           .order('created_at', { ascending: false })
           .limit(1)
-          .maybeSingle()
+          .maybeSingle();
 
-        if (controller.signal.aborted) return
-        if (error) return
-
-        setActiveOrderId(data?.id ?? null)
-      } catch {
-        if (!controller.signal.aborted) {
-          setActiveOrderId(null)
+        if (!alive) return;
+        if (error) {
+          setActiveOrderId(null);
+          return;
         }
+
+        const nextId =
+          data &&
+          typeof data.id === 'string' &&
+          data.payment_status === 'paid' &&
+          isTrackableStatus(data.status)
+            ? data.id
+            : null;
+
+        setActiveOrderId(nextId);
+      } catch {
+        if (!alive) return;
+        setActiveOrderId(null);
       }
     }
 
-    fetchActiveOrder()
+    void fetchActiveOrder().catch(() => {
+      if (!alive) return;
+      setActiveOrderId(null);
+    });
 
     return () => {
-      controller.abort()
-    }
-  }, [userId])
+      alive = false;
+    };
+  }, [userId]);
 
   // ─────────────────────────────────────────────
   // Realtime updates
   // ─────────────────────────────────────────────
   useEffect(() => {
-    if (!activeOrderId) return
-
-    if (channelRef.current) {
-      supabase.removeChannel(channelRef.current)
-      channelRef.current = null
+    if (!activeOrderId) {
+      if (channelRef.current) {
+        void supabase.removeChannel(channelRef.current).catch(() => {
+          // ignore cleanup failure
+        });
+        channelRef.current = null;
+      }
+      return;
     }
 
-    const channel = supabase.channel(`active-order-${activeOrderId}`)
-    channelRef.current = channel
+    if (channelRef.current) {
+      void supabase.removeChannel(channelRef.current).catch(() => {
+        // ignore cleanup failure
+      });
+      channelRef.current = null;
+    }
+
+    const channel = supabase.channel(`active-order-${activeOrderId}`);
+    channelRef.current = channel;
 
     channel.on(
       'postgres_changes',
@@ -76,32 +112,36 @@ export function useActiveOrder(userId: string | null): string | null {
         table: 'orders',
         filter: `id=eq.${activeOrderId}`,
       },
-      payload => {
-        if (!payload?.new) return
+      (payload) => {
+        if (!payload?.new || typeof payload.new !== 'object') return;
 
-        const status = payload.new.status as OrderStatus | undefined
-        const payment = payload.new.payment_status as string | null
+        const nextRow = payload.new as {
+          status?: unknown;
+          payment_status?: unknown;
+        };
 
-        const orderEnded =
-          status === OrderStatus.CANCELLED ||
-          status === OrderStatus.DELIVERED ||
-          payment !== 'paid'
+        const status = nextRow.status;
+        const payment = nextRow.payment_status;
+
+        const orderEnded = isTerminalStatus(status) || payment !== 'paid';
 
         if (orderEnded) {
-          setActiveOrderId(null)
+          setActiveOrderId(null);
         }
-      }
-    )
+      },
+    );
 
-    channel.subscribe()
+    void channel.subscribe();
 
     return () => {
       if (channelRef.current) {
-        supabase.removeChannel(channelRef.current)
-        channelRef.current = null
+        void supabase.removeChannel(channelRef.current).catch(() => {
+          // ignore cleanup failure
+        });
+        channelRef.current = null;
       }
-    }
-  }, [activeOrderId])
+    };
+  }, [activeOrderId]);
 
-  return activeOrderId
+  return activeOrderId;
 }

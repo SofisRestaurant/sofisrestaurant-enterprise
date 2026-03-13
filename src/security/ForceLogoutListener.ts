@@ -3,41 +3,47 @@
 // FORCE LOGOUT REALTIME LISTENER — PRODUCTION SAFE
 // ============================================================================
 
-import { supabase } from '@/lib/supabase/supabaseClient'
+import {
+  REALTIME_SUBSCRIBE_STATES,
+  type RealtimeChannel,
+} from '@supabase/supabase-js';
+
+import { supabase } from '@/lib/supabase/supabaseClient';
 
 export function subscribeToForceLogout(
   userId: string,
-  onKick: () => void
-) {
-  if (!userId) return () => {}
+  onKick: () => void,
+): () => void {
+  if (userId.trim().length === 0) {
+    return () => undefined;
+  }
 
-  const topic = `force-logout-${userId}`
+  const topic = `force-logout-${userId}`;
 
-  // ✅ If already exists, reuse it (DO NOT DELETE)
-  let channel = supabase.getChannels().find((c) => c.topic === topic)
+  let channel: RealtimeChannel | undefined = supabase
+    .getChannels()
+    .find((candidate) => candidate.topic === topic);
 
-  if (!channel) {
+  if (channel === undefined) {
     channel = supabase
       .channel(topic)
       .on('broadcast', { event: 'kick' }, () => {
-        console.log('🚪 Admin forced logout received')
-        onKick()
-      })
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log(`✅ Force logout listener active for ${userId}`)
-        }
-      })
+        console.log('🚪 Admin forced logout received');
+        onKick();
+      });
+
+    channel.subscribe((status) => {
+      if (status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
+        console.log(`✅ Force logout listener active for ${userId}`);
+      }
+    });
   }
 
-  // ✅ Cleanup ONLY when component truly unmounts
   return () => {
-    try {
-      if (channel) {
-        supabase.removeChannel(channel)
-      }
-    } catch {
-      // ignore strict mode double unmount
+    if (channel === undefined) {
+      return;
     }
-  }
+
+    void supabase.removeChannel(channel).catch(() => undefined);
+  };
 }

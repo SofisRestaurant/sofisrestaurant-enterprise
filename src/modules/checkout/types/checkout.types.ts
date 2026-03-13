@@ -12,45 +12,44 @@
  * Server recalculates everything.
  */
 export interface CheckoutItem {
-  item_id: string
-  quantity: number
+  item_id: string;
+  quantity: number;
 
   modifiers: {
-    group_id: string
-    selections: string[]
-  }[]
+    group_id: string;
+    selections: string[];
+  }[];
 
-  special_instructions?: string
-  pricing_hash: string
+  special_instructions?: string;
+  pricing_hash: string;
 }
-
 
 /* =========================================================
    CHECKOUT REQUEST
 ========================================================= */
 
 export interface CheckoutData {
-  items: CheckoutItem[]
+  items: CheckoutItem[];
 
   customer: {
-    email: string
-    name?: string
-    phone?: string
-    address?: string
-    customer_uid?: string | null
-  }
+    email: string;
+    name?: string;
+    phone?: string;
+    address?: string;
+    customer_uid?: string | null;
+  };
 
-  paymentMethodId?: string
+  paymentMethodId?: string;
 
-  successUrl: string
-  cancelUrl: string
+  successUrl: string;
+  cancelUrl: string;
 }
 /* =========================================================
    CHECKOUT RESPONSE
 ========================================================= */
 
 export interface CheckoutSession {
-  id: string
-  url: string
-  status: 'open' | 'complete' | 'expired'
+  id: string;
+  url: string;
+  status: 'open' | 'complete' | 'expired';
 }

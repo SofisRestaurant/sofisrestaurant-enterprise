@@ -17,42 +17,58 @@
 // Notes:
 //   - Avoids promise-returning functions in JSX handlers (no-misused-promises)
 //   - Avoids unstable callbacks (react-hooks/exhaustive-deps)
-//   - Avoids “used before declaration” by ordering callbacks correctly
+//   - Avoids "used before declaration" by ordering callbacks correctly
+//   - Groups with missing/empty ids are filtered before rendering and before
+//     any modifier fetch — prevents duplicate React keys and 400 gateway errors
 // ============================================================================
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react';
 
-import { ModifierGroupService } from '@/services/modifier-group.service'
-import { ModifierService } from '@/services/modifier.service'
-import { ModifierTemplateService } from '@/services/modifier-template.service'
+import { ModifierGroupService } from '@/services/modifier-group.service';
+import { ModifierService } from '@/services/modifier.service';
+import { ModifierTemplateService } from '@/services/modifier-template.service';
 
-import { useModifierRealtime } from '@/hooks/useModifierRealtime'
+import { useModifierRealtime } from '@/hooks/useModifierRealtime';
 
-import { ModifierGroupCard } from './ModifierGroupCard'
-import { ModifierGroupModal } from './ModifierGroupModal'
-import { ModifierModal } from './ModifierModal'
-import { ModifierEmptyState } from './ModifierEmptyState'
-import { ModifierTemplateLibrary } from '../nav/ModifierTemplateLibrary'
-import { ModifierGroupReorderList } from './ModifierReorderList'
-import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
-import { ErrorBanner } from '@/components/ui/ErrorBanner'
-import { AsyncButton } from '@/components/ui/AsyncButton'
+import { ModifierGroupCard } from './ModifierGroupCard';
+import { ModifierGroupModal } from './ModifierGroupModal';
+import { ModifierModal } from './ModifierModal';
+import { ModifierEmptyState } from './ModifierEmptyState';
+import { ModifierTemplateLibrary } from '../nav/ModifierTemplateLibrary';
+import { ModifierGroupReorderList } from './ModifierReorderList';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { ErrorBanner } from '@/components/ui/ErrorBanner';
+import { AsyncButton } from '@/components/ui/AsyncButton';
 
 import type {
   AdminModifierGroup,
   AdminModifier,
   ModifierGroupWritePayload,
   ModifierWritePayload,
-} from '@/types/admin-menu'
+} from '@/types/admin-menu';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-type ActivePanel = 'groups' | 'reorder' | 'templates'
+type ActivePanel = 'groups' | 'reorder' | 'templates';
 
 interface MenuModifiersTabProps {
-  menuItemId: string
+  menuItemId: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Returns true only for groups with a non-empty trimmed id and name. */
+function isValidGroup(group: AdminModifierGroup): boolean {
+  return (
+    typeof group.id === 'string' &&
+    group.id.trim().length > 0 &&
+    typeof group.name === 'string' &&
+    group.name.trim().length > 0
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -61,68 +77,72 @@ interface MenuModifiersTabProps {
 
 export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
   // ── Data state ─────────────────────────────────────────────────────────────
-  const [groups, setGroups] = useState<AdminModifierGroup[]>([])
-  const [modifiers, setModifiers] = useState<Record<string, AdminModifier[]>>({})
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [groups, setGroups] = useState<AdminModifierGroup[]>([]);
+  const [modifiers, setModifiers] = useState<Record<string, AdminModifier[]>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // ── UI state ───────────────────────────────────────────────────────────────
-  const [activePanel, setActivePanel] = useState<ActivePanel>('groups')
+  const [activePanel, setActivePanel] = useState<ActivePanel>('groups');
 
   // ── Modal state — groups ───────────────────────────────────────────────────
-  const [groupModalOpen, setGroupModalOpen] = useState(false)
-  const [editingGroup, setEditingGroup] = useState<AdminModifierGroup | null>(null)
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [editingGroup, setEditingGroup] = useState<AdminModifierGroup | null>(null);
 
   // ── Modal state — modifiers ────────────────────────────────────────────────
-  const [modifierModalOpen, setModifierModalOpen] = useState(false)
-  const [editingModifier, setEditingModifier] = useState<AdminModifier | null>(null)
-  const [targetGroupId, setTargetGroupId] = useState<string | null>(null)
+  const [modifierModalOpen, setModifierModalOpen] = useState(false);
+  const [editingModifier, setEditingModifier] = useState<AdminModifier | null>(null);
+  const [targetGroupId, setTargetGroupId] = useState<string | null>(null);
 
   // ── Confirm dialog ─────────────────────────────────────────────────────────
-  const [confirmOpen, setConfirmOpen] = useState(false)
-  const [confirmTitle, setConfirmTitle] = useState('')
-  const [confirmMessage, setConfirmMessage] = useState('')
-  const [confirmAction, setConfirmAction] = useState<() => Promise<void>>(
-    () => async () => {},
-  )
-  const [confirmLoading, setConfirmLoading] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmTitle, setConfirmTitle] = useState('');
+  const [confirmMessage, setConfirmMessage] = useState('');
+  const [confirmAction, setConfirmAction] = useState<() => Promise<void>>(() => async () => {});
+  const [confirmLoading, setConfirmLoading] = useState(false);
 
-  const isGroupsPanel = activePanel === 'groups'
-  const isReorderPanel = activePanel === 'reorder'
-  const isTemplatesPanel = activePanel === 'templates'
+  const isGroupsPanel = activePanel === 'groups';
+  const isReorderPanel = activePanel === 'reorder';
+  const isTemplatesPanel = activePanel === 'templates';
 
-  const modifiersByGroup = useMemo(() => modifiers, [modifiers])
+  const modifiersByGroup = useMemo(() => modifiers, [modifiers]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Data loading
   // ─────────────────────────────────────────────────────────────────────────
 
   const loadGroups = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+    setLoading(true);
+    setError(null);
 
     try {
-      const gs = await ModifierGroupService.getForMenuItem(menuItemId)
-      setGroups(gs)
+      const raw = await ModifierGroupService.getForMenuItem(menuItemId);
+
+      // Filter out any groups with invalid/empty ids before storing them.
+      // An empty id would produce duplicate React keys and a 400 on the
+      // subsequent modifier fetch (gateway rejects { group_id: '' }).
+      const gs = raw.filter(isValidGroup);
+
+      setGroups(gs);
 
       const entries = await Promise.all(
         gs.map(async (g) => {
-          const mods = await ModifierService.getForGroup(g.id)
-          return [g.id, mods] as [string, AdminModifier[]]
+          const mods = await ModifierService.getForGroup(g.id);
+          return [g.id, mods] as [string, AdminModifier[]];
         }),
-      )
-      setModifiers(Object.fromEntries(entries))
+      );
+      setModifiers(Object.fromEntries(entries));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load modifiers')
+      setError(err instanceof Error ? err.message : 'Failed to load modifiers');
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }, [menuItemId])
+  }, [menuItemId]);
 
   useEffect(() => {
-    void loadGroups()
-  }, [loadGroups])
+    void loadGroups();
+  }, [loadGroups]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Realtime sync
@@ -131,179 +151,172 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
   // We trigger async work with `void` inside the handler.
 
   const handleRealtimeAnyChange = useCallback((): void => {
-    void loadGroups()
-  }, [loadGroups])
+    void loadGroups();
+  }, [loadGroups]);
 
   useModifierRealtime({
     menuItemId,
     onAnyChange: handleRealtimeAnyChange,
     enabled: true,
-  })
+  });
 
   // ─────────────────────────────────────────────────────────────────────────
   // Confirm helper
   // ─────────────────────────────────────────────────────────────────────────
 
-  const openConfirm = useCallback(
-    (title: string, message: string, action: () => Promise<void>) => {
-      setConfirmTitle(title)
-      setConfirmMessage(message)
-      setConfirmAction(() => action)
-      setConfirmOpen(true)
-    },
-    [],
-  )
+  const openConfirm = useCallback((title: string, message: string, action: () => Promise<void>) => {
+    setConfirmTitle(title);
+    setConfirmMessage(message);
+    setConfirmAction(() => action);
+    setConfirmOpen(true);
+  }, []);
 
   const runConfirm = useCallback(async () => {
-    setConfirmLoading(true)
+    setConfirmLoading(true);
     try {
-      await confirmAction()
-      setConfirmOpen(false)
+      await confirmAction();
+      setConfirmOpen(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Operation failed')
-      setConfirmOpen(false)
+      setError(err instanceof Error ? err.message : 'Operation failed');
+      setConfirmOpen(false);
     } finally {
-      setConfirmLoading(false)
+      setConfirmLoading(false);
     }
-  }, [confirmAction])
+  }, [confirmAction]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Group actions (stable callbacks)
   // ─────────────────────────────────────────────────────────────────────────
 
   const openCreateGroup = useCallback(() => {
-    setEditingGroup(null)
-    setGroupModalOpen(true)
-  }, [])
+    setEditingGroup(null);
+    setGroupModalOpen(true);
+  }, []);
 
   const openEditGroup = useCallback((group: AdminModifierGroup) => {
-    setEditingGroup(group)
-    setGroupModalOpen(true)
-  }, [])
+    setEditingGroup(group);
+    setGroupModalOpen(true);
+  }, []);
 
   const handleSaveGroup = useCallback(
     async (payload: ModifierGroupWritePayload) => {
       if (editingGroup) {
-        const updated = await ModifierGroupService.update(editingGroup.id, payload)
-        setGroups((p) => p.map((g) => (g.id === updated.id ? updated : g)))
-        return
+        const updated = await ModifierGroupService.update(editingGroup.id, payload);
+        setGroups((p) => p.map((g) => (g.id === updated.id ? updated : g)));
+        return;
       }
 
-      const created = await ModifierGroupService.create(payload)
+      const created = await ModifierGroupService.create(payload);
       await ModifierGroupService.attachToMenuItem({
         menu_item_id: menuItemId,
         modifier_group_id: created.id,
         sort_order: groups.length,
-      })
+      });
 
-      setGroups((p) => [...p, created])
-      setModifiers((p) => ({ ...p, [created.id]: [] }))
+      setGroups((p) => [...p, created]);
+      setModifiers((p) => ({ ...p, [created.id]: [] }));
     },
     [editingGroup, menuItemId, groups.length],
-  )
+  );
 
   const handleDeleteGroup = useCallback(
     (group: AdminModifierGroup) => {
-      const modCount = (modifiersByGroup[group.id] ?? []).length
+      const modCount = (modifiersByGroup[group.id] ?? []).length;
 
       openConfirm(
         'Delete Group',
         `Delete "${group.name}"${
-          modCount > 0
-            ? ` and its ${modCount} option${modCount !== 1 ? 's' : ''}`
-            : ''
+          modCount > 0 ? ` and its ${modCount} option${modCount !== 1 ? 's' : ''}` : ''
         }? This cannot be undone.`,
         async () => {
-          await ModifierService.deleteAllInGroup(group.id)
-          await ModifierGroupService.detachFromMenuItem(menuItemId, group.id)
-          await ModifierGroupService.delete(group.id)
+          await ModifierService.deleteAllInGroup(group.id);
+          await ModifierGroupService.detachFromMenuItem(menuItemId, group.id);
+          await ModifierGroupService.delete(group.id);
 
-          setGroups((p) => p.filter((g) => g.id !== group.id))
+          setGroups((p) => p.filter((g) => g.id !== group.id));
           setModifiers((p) => {
-            const next = { ...p }
-            delete next[group.id]
-            return next
-          })
+            const next = { ...p };
+            delete next[group.id];
+            return next;
+          });
         },
-      )
+      );
     },
     [menuItemId, modifiersByGroup, openConfirm],
-  )
+  );
 
   const handleToggleGroup = useCallback(async (group: AdminModifierGroup, active: boolean) => {
-    setSaving(true)
-    setError(null)
+    setSaving(true);
+    setError(null);
     try {
-      await ModifierGroupService.toggleActive(group.id, active)
-      setGroups((p) => p.map((g) => (g.id === group.id ? { ...g, active } : g)))
+      await ModifierGroupService.toggleActive(group.id, active);
+      setGroups((p) => p.map((g) => (g.id === group.id ? { ...g, active } : g)));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update')
+      setError(err instanceof Error ? err.message : 'Failed to update');
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
-  }, [])
+  }, []);
 
   const handleGroupReorder = useCallback(
     async (orderedIds: string[]) => {
-      setSaving(true)
-      setError(null)
+      setSaving(true);
+      setError(null);
       try {
-        const items = orderedIds.map((id, i) => ({ id, sort_order: i }))
-        await ModifierGroupService.reorderForMenuItem(menuItemId, items)
+        const items = orderedIds.map((id, i) => ({ id, sort_order: i }));
+        await ModifierGroupService.reorderForMenuItem(menuItemId, items);
 
         setGroups((prev) => {
-          const byId = new Map(prev.map((g) => [g.id, g] as const))
-          return orderedIds.map((id) => byId.get(id)).filter(Boolean) as AdminModifierGroup[]
-        })
+          const byId = new Map(prev.map((g) => [g.id, g] as const));
+          return orderedIds.map((id) => byId.get(id)).filter(Boolean) as AdminModifierGroup[];
+        });
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to reorder')
+        setError(err instanceof Error ? err.message : 'Failed to reorder');
       } finally {
-        setSaving(false)
+        setSaving(false);
       }
     },
     [menuItemId],
-  )
+  );
 
   // ─────────────────────────────────────────────────────────────────────────
   // Modifier actions (stable callbacks)
   // ─────────────────────────────────────────────────────────────────────────
 
   const openAddModifier = useCallback((groupId: string) => {
-    setEditingModifier(null)
-    setTargetGroupId(groupId)
-    setModifierModalOpen(true)
-  }, [])
+    setEditingModifier(null);
+    setTargetGroupId(groupId);
+    setModifierModalOpen(true);
+  }, []);
 
   const openEditModifier = useCallback((modifier: AdminModifier) => {
-    setEditingModifier(modifier)
-    setTargetGroupId(modifier.modifier_group_id)
-    setModifierModalOpen(true)
-  }, [])
+    setEditingModifier(modifier);
+    setTargetGroupId(modifier.modifier_group_id);
+    setModifierModalOpen(true);
+  }, []);
 
   const handleSaveModifier = useCallback(
     async (payload: Omit<ModifierWritePayload, 'modifier_group_id'>) => {
-      if (!targetGroupId) throw new Error('No group selected')
+      if (!targetGroupId) throw new Error('No group selected');
 
       if (editingModifier) {
-        const updated = await ModifierService.update(editingModifier.id, payload)
+        const updated = await ModifierService.update(editingModifier.id, payload);
         setModifiers((p) => ({
           ...p,
-          [targetGroupId]: (p[targetGroupId] ?? []).map((m) =>
-            m.id === updated.id ? updated : m,
-          ),
-        }))
-        return
+          [targetGroupId]: (p[targetGroupId] ?? []).map((m) => (m.id === updated.id ? updated : m)),
+        }));
+        return;
       }
 
-      const full: ModifierWritePayload = { ...payload, modifier_group_id: targetGroupId }
-      const created = await ModifierService.create(full)
+      const full: ModifierWritePayload = { ...payload, modifier_group_id: targetGroupId };
+      const created = await ModifierService.create(full);
       setModifiers((p) => ({
         ...p,
         [targetGroupId]: [...(p[targetGroupId] ?? []), created],
-      }))
+      }));
     },
     [editingModifier, targetGroupId],
-  )
+  );
 
   const handleDeleteModifier = useCallback(
     (modifier: AdminModifier) => {
@@ -311,51 +324,51 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
         'Delete Option',
         `Delete "${modifier.name}"? This cannot be undone.`,
         async () => {
-          await ModifierService.delete(modifier.id)
+          await ModifierService.delete(modifier.id);
           setModifiers((p) => ({
             ...p,
             [modifier.modifier_group_id]: (p[modifier.modifier_group_id] ?? []).filter(
               (m) => m.id !== modifier.id,
             ),
-          }))
+          }));
         },
-      )
+      );
     },
     [openConfirm],
-  )
+  );
 
   const handleToggleModifier = useCallback(async (modifier: AdminModifier, available: boolean) => {
-    setSaving(true)
-    setError(null)
+    setSaving(true);
+    setError(null);
     try {
-      await ModifierService.toggleAvailability(modifier.id, available)
+      await ModifierService.toggleAvailability(modifier.id, available);
       setModifiers((p) => ({
         ...p,
         [modifier.modifier_group_id]: (p[modifier.modifier_group_id] ?? []).map((m) =>
           m.id === modifier.id ? { ...m, available } : m,
         ),
-      }))
+      }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update')
+      setError(err instanceof Error ? err.message : 'Failed to update');
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
-  }, [])
+  }, []);
 
   // UI-safe wrappers (voiding promises for JSX)
   const onToggleGroupActive = useCallback(
     (group: AdminModifierGroup, active: boolean) => {
-      void handleToggleGroup(group, active)
+      void handleToggleGroup(group, active);
     },
     [handleToggleGroup],
-  )
+  );
 
   const onToggleModifierAvailable = useCallback(
     (modifier: AdminModifier, available: boolean) => {
-      void handleToggleModifier(modifier, available)
+      void handleToggleModifier(modifier, available);
     },
     [handleToggleModifier],
-  )
+  );
 
   // ─────────────────────────────────────────────────────────────────────────
   // Template apply
@@ -363,20 +376,20 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
 
   const handleApplyTemplate = useCallback(
     async (templateId: string) => {
-      setSaving(true)
-      setError(null)
+      setSaving(true);
+      setError(null);
       try {
-        await ModifierTemplateService.applyToMenuItem(menuItemId, templateId, groups.length)
-        await loadGroups()
-        setActivePanel('groups')
+        await ModifierTemplateService.applyToMenuItem(menuItemId, templateId, groups.length);
+        await loadGroups();
+        setActivePanel('groups');
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to apply template')
+        setError(err instanceof Error ? err.message : 'Failed to apply template');
       } finally {
-        setSaving(false)
+        setSaving(false);
       }
     },
     [menuItemId, groups.length, loadGroups],
-  )
+  );
 
   // ─────────────────────────────────────────────────────────────────────────
   // Render
@@ -388,7 +401,7 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
         <div className="h-5 w-5 animate-spin rounded-full border-2 border-gray-200 border-t-gray-700" />
         <span className="ml-3 text-sm text-gray-400">Loading modifiers…</span>
       </div>
-    )
+    );
   }
 
   return (
@@ -425,12 +438,7 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
         </div>
 
         {isGroupsPanel ? (
-          <AsyncButton
-            variant="primary"
-            size="sm"
-            onClick={openCreateGroup}
-            disabled={saving}
-          >
+          <AsyncButton variant="primary" size="sm" onClick={openCreateGroup} disabled={saving}>
             + Add Group
           </AsyncButton>
         ) : null}
@@ -474,7 +482,7 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
             groups={groups}
             disabled={saving}
             onReorder={(reorderedGroups) => {
-              void handleGroupReorder(reorderedGroups.map((g) => g.id))
+              void handleGroupReorder(reorderedGroups.map((g) => g.id));
             }}
           />
         </section>
@@ -498,16 +506,14 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
         onClose={() => setModifierModalOpen(false)}
         onSave={handleSaveModifier}
         editing={editingModifier}
-        groupName={
-          targetGroupId ? groups.find((g) => g.id === targetGroupId)?.name : undefined
-        }
+        groupName={targetGroupId ? groups.find((g) => g.id === targetGroupId)?.name : undefined}
       />
 
       <ConfirmDialog
         isOpen={confirmOpen}
         onCancel={() => setConfirmOpen(false)}
         onConfirm={() => {
-          void runConfirm()
+          void runConfirm();
         }}
         title={confirmTitle}
         message={confirmMessage}
@@ -516,5 +522,5 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
         loading={confirmLoading}
       />
     </div>
-  )
+  );
 }

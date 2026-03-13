@@ -1,7 +1,7 @@
-import AuthModals from '@/features/auth/components/AuthModals'
-import SessionExpiryWarning from '@/components/auth/SessionExpiryWarning'
-import ModalRenderer from '@/components/ui/ModalRenderer'
-import ScrollSafety from '@/components/app/ScrollSafety'
+import AuthModals from '@/features/auth/components/AuthModals';
+import SessionExpiryWarning from '@/components/auth/SessionExpiryWarning';
+import ModalRenderer from '@/components/ui/ModalRenderer';
+import ScrollSafety from '@/components/app/ScrollSafety';
 
 export default function AppOverlays() {
   return (
@@ -18,5 +18,5 @@ export default function AppOverlays() {
       {/* Safety net — must be last */}
       <ScrollSafety />
     </>
-  )
+  );
 }

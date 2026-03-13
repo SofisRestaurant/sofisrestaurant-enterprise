@@ -1,82 +1,266 @@
-// src/features/orders/orders.api.ts
-// ============================================================================
-// ORDERS API — SECURE WITH RLS ENFORCEMENT
-// ============================================================================
-import type { Database } from '@/types/supabase'
-import { supabase } from '@/lib/supabase/supabaseClient'
-import { mapOrderRowToDomain } from '@/domain/orders/order.mapper'
-import { OrderStatus, type Order } from '@/domain/orders/order.types'
+import { supabase } from '@/lib/supabase/supabaseClient';
+import type { Order, OrderStatus } from '@/domain/orders/order.types';
+import type {
+  OrderEvent,
+  OrderPerformanceMetrics,
+  OrderTimeline,
+  RecordEventRequest,
+} from '@/domain/orders/order-events.types';
 
-type OrderRow = Database['public']['Tables']['orders']['Row']
-type OrderInsert = Database['public']['Tables']['orders']['Insert']
-type OrderUpdate = Database['public']['Tables']['orders']['Update']
+import {
+  mapOrderRowToDomain,
+  mapUnknownOrderEvent,
+  mapUnknownOrderToDomain,
+} from '../mappers';
 
-const now = () => new Date().toISOString()
-// ============================================================================
-// SECURITY LOGGING
-// ============================================================================
+import type {
+  AdminOrdersMetrics,
+  OrderInsert,
+  OrdersPageResult,
+  OrderRow,
+  OrderUpdate,
+} from '../types/orders.types';
 
-async function logIllegalAttempt(
-  orderId: string,
-  newStatus: OrderStatus
-) {
-  const { data: { user } } = await supabase.auth.getUser()
+const PAID_PAYMENT_STATUS = 'paid' as const;
 
-if (!user?.id) return
+type AdminMetricStatus =
+  | 'new'
+  | 'confirmed'
+  | 'preparing'
+  | 'ready'
+  | 'out_for_delivery'
+  | 'completed'
+  | 'canceled';
+
+interface OrderAmountRow {
+  amount_total: number | null;
+}
+
+interface OrderStatusRow {
+  status: string | null;
+}
+
+function now(): string {
+  return new Date().toISOString();
+}
+
+function getUserAgent(): string | null {
+  if (typeof navigator === 'undefined') {
+    return null;
+  }
+
+  const value = navigator.userAgent.trim();
+  return value.length > 0 ? value : null;
+}
+
+function getPaginationRange(page: number, pageSize: number): { from: number; to: number } {
+  const safePage = Number.isFinite(page) ? Math.max(0, Math.floor(page)) : 0;
+  const safePageSize = Number.isFinite(pageSize) ? Math.max(1, Math.floor(pageSize)) : 20;
+
+  const from = safePage * safePageSize;
+  const to = from + safePageSize - 1;
+
+  return { from, to };
+}
+
+function normalizeMetricStatus(status: string | null | undefined): AdminMetricStatus | null {
+  const normalized = typeof status === 'string' ? status.trim().toLowerCase() : '';
+
+  switch (normalized) {
+    case 'new':
+    case 'pending':
+    case 'submitted':
+      return 'new';
+    case 'confirmed':
+      return 'confirmed';
+    case 'preparing':
+      return 'preparing';
+    case 'ready':
+      return 'ready';
+    case 'out_for_delivery':
+    case 'shipped':
+      return 'out_for_delivery';
+    case 'completed':
+    case 'delivered':
+      return 'completed';
+    case 'canceled':
+    case 'cancelled':
+      return 'canceled';
+    default:
+      return null;
+  }
+}
+
+function createEmptyAdminMetrics(): AdminOrdersMetrics {
+  return {
+    total: 0,
+    new: 0,
+    confirmed: 0,
+    preparing: 0,
+    ready: 0,
+    out_for_delivery: 0,
+    completed: 0,
+    canceled: 0,
+    active: 0,
+  };
+}
+
+function buildAdminMetricsFromStatuses(statuses: readonly (string | null)[]): AdminOrdersMetrics {
+  const metrics = createEmptyAdminMetrics();
+
+  for (const status of statuses) {
+    metrics.total += 1;
+
+    const normalized = normalizeMetricStatus(status);
+
+    if (normalized !== null) {
+      metrics[normalized] += 1;
+    }
+  }
+
+  metrics.active =
+    metrics.new +
+    metrics.confirmed +
+    metrics.preparing +
+    metrics.ready +
+    metrics.out_for_delivery;
+
+  return metrics;
+}
+
+function minutesBetweenTimestamps(
+  start: string | null | undefined,
+  end: string | null | undefined,
+): number | null {
+  if (!start || !end) {
+    return null;
+  }
+
+  const startMs = new Date(start).getTime();
+  const endMs = new Date(end).getTime();
+
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+    return null;
+  }
+
+  return Math.max(0, Math.floor((endMs - startMs) / 60_000));
+}
+
+function eventTypeMatches(eventType: string, candidates: readonly string[]): boolean {
+  const normalizedEventType = eventType.trim().toLowerCase();
+
+  return candidates.some((candidate) => normalizedEventType === candidate.trim().toLowerCase());
+}
+
+function findFirstEventTimestamp(
+  events: readonly OrderEvent[],
+  candidates: readonly string[],
+): string | null {
+  for (const event of events) {
+    if (eventTypeMatches(event.event_type, candidates)) {
+      return event.created_at;
+    }
+  }
+
+  return null;
+}
+
+async function getCurrentUserId(): Promise<string | null> {
+  const result = await supabase.auth.getUser();
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  return result.data.user?.id ?? null;
+}
+
+async function requireAuth(): Promise<string> {
+  const userId = await getCurrentUserId();
+
+  if (!userId) {
+    throw new Error('User not authenticated');
+  }
+
+  return userId;
+}
+
+async function logIllegalAttempt(orderId: string, newStatus: OrderStatus): Promise<void> {
+  const userId = await getCurrentUserId();
+
+  if (!userId) {
+    return;
+  }
 
   await supabase.from('staff_action_logs').insert({
     order_id: orderId,
-    staff_id: user.id,
+    staff_id: userId,
     old_status: null,
     new_status: newStatus,
     action: 'ILLEGAL_STATUS_ATTEMPT',
     ip_address: null,
-    user_agent: navigator.userAgent,
-    created_at: new Date().toISOString(),
-  })
-}
-// ============================================================================
-// AUTH HELPERS
-// ============================================================================
-
-async function getCurrentUserId(): Promise<string | null> {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  return user?.id || null
+    user_agent: getUserAgent(),
+    created_at: now(),
+  });
 }
 
-async function requireAuth(): Promise<string> {
-  const userId = await getCurrentUserId()
-  if (!userId) {
-    throw new Error('User not authenticated')
+function requireMappedOrder(value: unknown, errorMessage: string): Order {
+  const mapped = mapUnknownOrderToDomain(value);
+
+  if (mapped !== null) {
+    return mapped;
   }
-  return userId
+
+  if (Array.isArray(value) && value.length > 0) {
+    const firstMapped = mapUnknownOrderToDomain(value[0]);
+
+    if (firstMapped !== null) {
+      return firstMapped;
+    }
+  }
+
+  throw new Error(errorMessage);
 }
 
-// ============================================================================
-// CREATE ORDER
-// ============================================================================
-
-export async function createOrder(orderData: OrderInsert): Promise<Order> {
+async function getRawOrderById(orderId: string): Promise<OrderRow | null> {
   const { data, error } = await supabase
     .from('orders')
-    .insert(orderData)
-    .select()
-    .single()
+    .select('*')
+    .eq('id', orderId)
+    .maybeSingle<OrderRow>();
 
-  if (error) throw error
-  return mapOrderRowToDomain(data as OrderRow)
+  if (error) {
+    throw error;
+  }
+
+  return data ?? null;
 }
 
-// ============================================================================
-// UPDATE ORDER
-// ============================================================================
+async function getCustomerMetrics(userId: string): Promise<AdminOrdersMetrics> {
+  const { data, error } = await supabase
+    .from('orders')
+    .select('status')
+    .eq('customer_uid', userId);
 
-export async function updateOrder(
-  orderId: string,
-  updates: OrderUpdate
-): Promise<Order> {
+  if (error) {
+    throw error;
+  }
+
+  const statuses = (data ?? []).map((row: OrderStatusRow) => row.status);
+  return buildAdminMetricsFromStatuses(statuses);
+}
+
+export async function createOrder(orderData: OrderInsert): Promise<Order> {
+  const { data, error } = await supabase.from('orders').insert(orderData).select().single();
+
+  if (error) {
+    throw error;
+  }
+
+  return requireMappedOrder(data, 'Failed to map created order');
+}
+
+export async function updateOrder(orderId: string, updates: OrderUpdate): Promise<Order> {
   const { data, error } = await supabase
     .from('orders')
     .update({
@@ -85,55 +269,30 @@ export async function updateOrder(
     })
     .eq('id', orderId)
     .select()
-    .single()
-
-  if (error) throw error
-  return mapOrderRowToDomain(data as OrderRow)
-}
-
-// ============================================================================
-// UPDATE STATUS (SECURE RPC + AUDIT LOGGING)
-// ============================================================================
-
-export async function updateOrderStatus(
-  orderId: string,
-  status: OrderStatus
-): Promise<Order> {
-
-  const { data, error } = await supabase.rpc(
-    'update_order_status_secure',
-    {
-      order_id: orderId,
-      new_status: status,
-    }
-  )
+    .single();
 
   if (error) {
-
-    await logIllegalAttempt(
-      orderId,
-      status,
-    )
-
-    throw new Error(error.message)
+    throw error;
   }
 
-  if (!data) {
-    throw new Error('No order returned from secure update')
-  }
-
-  return mapOrderRowToDomain(data as OrderRow)
+  return requireMappedOrder(data, 'Failed to map updated order');
 }
-// ============================================================================
-// ASSIGN STAFF
-// ============================================================================
 
+export async function updateOrderStatus(orderId: string, status: OrderStatus): Promise<Order> {
+  const { data, error } = await supabase.rpc('update_order_status_secure', {
+    order_id: orderId,
+    new_status: status,
+  });
 
-export async function assignOrderToStaff(
-  orderId: string,
-  staff: string
-): Promise<Order> {
+  if (error) {
+    await logIllegalAttempt(orderId, status);
+    throw new Error(error.message);
+  }
 
+  return requireMappedOrder(data, 'No order returned from secure update');
+}
+
+export async function assignOrderToStaff(orderId: string, staff: string): Promise<Order> {
   const { data, error } = await supabase
     .from('orders')
     .update({
@@ -142,157 +301,261 @@ export async function assignOrderToStaff(
     })
     .eq('id', orderId)
     .select()
-    .single()
+    .single();
 
-  if (error) throw error
-  return mapOrderRowToDomain(data as OrderRow)
+  if (error) {
+    throw error;
+  }
+
+  return requireMappedOrder(data, 'Failed to map assigned order');
 }
-// ============================================================================
-// ADD NOTE
-// ============================================================================
 
-export async function addOrderNote(
-  orderId: string,
-  note: string
-): Promise<Order> {
+export async function addOrderNote(orderId: string, note: string): Promise<Order> {
+  const sanitizedNote = note.trim();
+
   const { data, error } = await supabase
     .from('orders')
     .update({
-      metadata: { note },
+      metadata: { note: sanitizedNote },
       updated_at: now(),
     })
     .eq('id', orderId)
     .select()
-    .single()
+    .single();
 
-  if (error) throw error
-  return mapOrderRowToDomain(data as OrderRow)
+  if (error) {
+    throw error;
+  }
+
+  return requireMappedOrder(data, 'Failed to map noted order');
 }
 
-// ============================================================================
-// READ HELPERS (SECURE)
-// ============================================================================
-
 export async function getOrderById(id: string): Promise<Order | null> {
-  // 🔒 RLS will also enforce access; we still query by id for efficiency
-  const { data, error } = await supabase
-    .from('orders')
-    .select('*')
-    .eq('id', id)
-    .maybeSingle()
+  const data = await getRawOrderById(id);
 
-  if (error) throw error
-  if (!data) return null
-  return mapOrderRowToDomain(data as OrderRow)
+  if (!data) {
+    return null;
+  }
+
+  return mapOrderRowToDomain(data);
 }
 
 /**
- * 🔒 SECURE: Fetches orders for CURRENT authenticated user only
- * No userId parameter — we rely on auth + RLS
- *
- * page is 0-based (page=0 is first page)
+ * Secure: fetches orders for the current authenticated user only.
+ * page is 0-based.
  */
 export async function fetchOrdersByCustomer(
   page = 0,
-  pageSize = 20
-): Promise<{ rows: Order[]; count: number }> {
-  // ✅ Verify user is authenticated
-  const currentUserId = await requireAuth()
+  pageSize = 20,
+): Promise<OrdersPageResult> {
+  const currentUserId = await requireAuth();
+  const pagination = getPaginationRange(page, pageSize);
 
-  const safePage = Math.max(0, Math.floor(page))
-  const safePageSize = Math.max(1, Math.min(100, Math.floor(pageSize)))
+  const [{ data, count, error }, metrics] = await Promise.all([
+    supabase
+      .from('orders')
+      .select('*', { count: 'exact' })
+      .eq('customer_uid', currentUserId)
+      .order('created_at', { ascending: false })
+      .range(pagination.from, pagination.to),
+    getCustomerMetrics(currentUserId),
+  ]);
 
-  const from = safePage * safePageSize
-  const to = from + safePageSize - 1
+  if (error) {
+    throw error;
+  }
 
-  // 🔒 RLS policy should also filter by auth.uid(); this is an extra safe filter
- const { data, count, error } = await supabase
-  .from('orders')
-  .select('*', { count: 'exact' })
-  .eq('customer_uid', currentUserId)
-  .order('created_at', { ascending: false })
-  .range(from, to)
-
-console.log('[orders] uid=', currentUserId, 'count=', count, 'error=', error)
-if (error) throw error
+  const orders: OrderRow[] = data ?? [];
+  const total = count ?? 0;
 
   return {
-    rows: (data ?? []).map((row) => mapOrderRowToDomain(row as OrderRow)),
-    count: count ?? 0,
-  }
+    orders,
+    total,
+    page: Math.max(0, Math.floor(page)),
+    pageSize: Math.max(1, Math.floor(pageSize)),
+    hasMore: pagination.to + 1 < total,
+    metrics,
+  };
 }
 
 /**
- * 🔒 SECURE: Fetch a single order (RLS enforces ownership)
+ * Secure: fetch a single order while relying on auth + RLS for ownership.
  */
-export async function fetchOrderByIdSecure(
-  orderId: string
-): Promise<Order | null> {
-  await requireAuth()
+export async function fetchOrderByIdSecure(orderId: string): Promise<Order | null> {
+  await requireAuth();
 
+  const data = await getRawOrderById(orderId);
+
+  if (!data) {
+    return null;
+  }
+
+  return mapOrderRowToDomain(data);
+}
+
+export type AdminMetrics = AdminOrdersMetrics;
+
+export async function fetchAdminMetrics(): Promise<AdminOrdersMetrics> {
+  const { data, error } = await supabase.from('orders').select('status');
+
+  if (error) {
+    throw error;
+  }
+
+  const statuses = (data ?? []).map((row: OrderStatusRow) => row.status);
+  return buildAdminMetricsFromStatuses(statuses);
+}
+
+/**
+ * Fetch all events for an order.
+ */
+export async function getOrderEvents(orderId: string): Promise<OrderEvent[]> {
   const { data, error } = await supabase
-    .from('orders')
+    .from('order_events')
     .select('*')
-    .eq('id', orderId)
-    .maybeSingle()
+    .eq('order_id', orderId)
+    .order('created_at', { ascending: true });
 
-  if (error) throw error
-  if (!data) return null
+  if (error) {
+    throw error;
+  }
 
-  return mapOrderRowToDomain(data as OrderRow)
+  const events: OrderEvent[] = [];
+
+  for (const rawEvent of data ?? []) {
+    const event = mapUnknownOrderEvent(rawEvent);
+
+    if (event) {
+      events.push(event);
+    }
+  }
+
+  return events;
 }
 
-// ============================================================================
-// ADMIN METRICS (requires admin role)
-// ============================================================================
+/**
+ * Subscribe to new order events (INSERT only).
+ */
+export function subscribeToOrderEvents(
+  orderId: string,
+  callback: (event: OrderEvent) => void,
+): () => void {
+  const channel = supabase
+    .channel(`order-events-${orderId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'order_events',
+        filter: `order_id=eq.${orderId}`,
+      },
+      (payload) => {
+        const event = mapUnknownOrderEvent(payload.new);
 
-export type AdminMetrics = {
-  totalRevenue: number
-  totalOrders: number
-  todayRevenue: number
-  todayOrders: number
-  averageOrderValue: number
+        if (event) {
+          callback(event);
+        }
+      },
+    )
+    .subscribe();
+
+  return () => {
+    void supabase.removeChannel(channel);
+  };
 }
 
-export async function fetchAdminMetrics(): Promise<AdminMetrics> {
-  // 🔒 RLS policy should restrict this to admin users
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
+/**
+ * Disabled intentionally.
+ * Database triggers own order-event recording.
+ * Signature is preserved for backward compatibility.
+ */
+export async function recordOrderEvent(request: RecordEventRequest): Promise<void> {
+  void request;
+}
 
-  // Total revenue + total orders
-  const { data: totals, error: totalsError } = await supabase
-    .from('orders')
-    .select('amount_total', { count: 'exact' })
-    .eq('payment_status', 'paid')
+export async function getOrderTimeline(orderId: string): Promise<OrderTimeline> {
+  const [events, orderRow] = await Promise.all([getOrderEvents(orderId), getRawOrderById(orderId)]);
 
-  if (totalsError) throw totalsError
-
-  const totalRevenue =
-    totals?.reduce((sum, o) => sum + (o.amount_total ?? 0), 0) ?? 0
-
-  const totalOrders = totals?.length ?? 0
-
-  // Today's revenue + orders
-  const { data: todayData, error: todayError } = await supabase
-    .from('orders')
-    .select('amount_total')
-    .eq('payment_status', 'paid')
-    .gte('created_at', today.toISOString())
-
-  if (todayError) throw todayError
-
-  const todayRevenue =
-    todayData?.reduce((sum, o) => sum + (o.amount_total ?? 0), 0) ?? 0
-
-  const todayOrders = todayData?.length ?? 0
-
-  const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0
+  if (!orderRow) {
+    throw new Error('Order not found');
+  }
 
   return {
-    totalRevenue,
-    totalOrders,
-    todayRevenue,
-    todayOrders,
-    averageOrderValue,
-  }
+    order_id: orderRow.id,
+    order_number: orderRow.order_number !== null ? String(orderRow.order_number) : '',
+    current_status: orderRow.status,
+    total: Math.max(0, Math.round(orderRow.amount_total)),
+    customer_uid: orderRow.customer_uid,
+    events,
+  };
 }
+
+export async function getOrderPerformance(orderId: string): Promise<OrderPerformanceMetrics> {
+  const [timeline, orderRow] = await Promise.all([getOrderTimeline(orderId), getRawOrderById(orderId)]);
+
+  if (!orderRow) {
+    throw new Error('Order not found');
+  }
+
+  const assignedAt = findFirstEventTimestamp(timeline.events, [
+    'COOK_ASSIGNED',
+    'assigned',
+    'assigned_to_staff',
+  ]);
+
+  const preparingAt = findFirstEventTimestamp(timeline.events, [
+    'PREPARING_STARTED',
+    'preparing',
+    'STATUS_CHANGED_TO_PREPARING',
+  ]);
+
+  const readyAt = findFirstEventTimestamp(timeline.events, [
+    'READY_FOR_PICKUP',
+    'PREPARING_COMPLETED',
+    'ready',
+    'STATUS_CHANGED_TO_READY',
+  ]);
+
+  const completedAt =
+    findFirstEventTimestamp(timeline.events, [
+      'COMPLETED',
+      'DELIVERED',
+      'PICKED_UP',
+      'completed',
+      'delivered',
+      'picked_up',
+    ]) ?? orderRow.updated_at;
+
+  return {
+    order_id: orderRow.id,
+    order_number: orderRow.order_number !== null ? String(orderRow.order_number) : null,
+    status: orderRow.status,
+    minutes_to_assign: minutesBetweenTimestamps(orderRow.created_at, assignedAt),
+    minutes_to_start: minutesBetweenTimestamps(orderRow.created_at, preparingAt),
+    minutes_to_ready: minutesBetweenTimestamps(orderRow.created_at, readyAt),
+    minutes_prep_time: minutesBetweenTimestamps(preparingAt, readyAt),
+    total_time_minutes: minutesBetweenTimestamps(orderRow.created_at, completedAt),
+    created_at: orderRow.created_at,
+    updated_at: orderRow.updated_at,
+    on_time: undefined,
+    late_by_minutes: undefined,
+  };
+}
+
+export async function getPaidOrderRevenueTotal(): Promise<number> {
+  const { data, error } = await supabase
+    .from('orders')
+    .select('amount_total')
+    .eq('payment_status', PAID_PAYMENT_STATUS);
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []).reduce((total: number, row: OrderAmountRow) => {
+    return total + Math.max(0, Math.round(row.amount_total ?? 0));
+  }, 0);
+}
+
+export { mapOrderRowToDomain, mapUnknownOrderEvent, mapUnknownOrderToDomain };

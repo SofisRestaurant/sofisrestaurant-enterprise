@@ -6,19 +6,19 @@
 // Shows name, price, availability toggle, edit and delete actions.
 // ============================================================================
 
-import { InlineToggle }          from '@/components/ui/InlineToggle'
-import { DragHandle }            from '@/components/ui/DragHandle'
-import { PricingEngine }         from '@/domain/pricing/pricing.engine'
+import { InlineToggle } from '@/components/ui/InlineToggle';
+import { DragHandle } from '@/components/ui/DragHandle';
+import { PricingEngine } from '@/domain/pricing/pricing.engine';
 
-import type { AdminModifier } from '@/types/admin-menu'
+import type { AdminModifier } from '@/types/admin-menu';
 
 interface ModifierCardProps {
-  modifier: AdminModifier
-  onEdit: (modifier: AdminModifier) => void
-  onDelete: (modifier: AdminModifier) => void
-  onToggleAvailable: (modifier: AdminModifier, available: boolean) => void
-  draggable?: boolean
-  saving?: boolean
+  modifier: AdminModifier;
+  onEdit: (modifier: AdminModifier) => void;
+  onDelete: (modifier: AdminModifier) => void;
+  onToggleAvailable: (modifier: AdminModifier, available: boolean) => void;
+  draggable?: boolean;
+  saving?: boolean;
 }
 
 export function ModifierCard({
@@ -29,28 +29,28 @@ export function ModifierCard({
   draggable = false,
   saving = false,
 }: ModifierCardProps) {
- const priceLabel =
-   modifier.price_adjustment === 0
-     ? 'No charge'
-     : modifier.price_adjustment > 0
-       ? `+${PricingEngine.formatDollars(modifier.price_adjustment)}`
-       : `-${PricingEngine.formatDollars(Math.abs(modifier.price_adjustment))}`;
+  const priceLabel =
+    modifier.price_adjustment === 0
+      ? 'No charge'
+      : modifier.price_adjustment > 0
+        ? `+${PricingEngine.formatDollars(modifier.price_adjustment)}`
+        : `-${PricingEngine.formatDollars(Math.abs(modifier.price_adjustment))}`;
 
   return (
     <div
       className={[
         'flex items-center gap-3 px-4 py-3 bg-white border border-gray-100 rounded-lg',
         modifier.available ? '' : 'opacity-50',
-      ].filter(Boolean).join(' ')}
+      ]
+        .filter(Boolean)
+        .join(' ')}
     >
       {/* Drag handle */}
       {draggable && <DragHandle />}
 
       {/* Name + price */}
       <div className="flex-1 min-w-0">
-        <span className="text-sm font-medium text-gray-800 truncate block">
-          {modifier.name}
-        </span>
+        <span className="text-sm font-medium text-gray-800 truncate block">{modifier.name}</span>
         <span
           className={[
             'text-xs font-mono',
@@ -94,5 +94,5 @@ export function ModifierCard({
         Delete
       </button>
     </div>
-  )
+  );
 }

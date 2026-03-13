@@ -1,20 +1,9 @@
 // src/types/marketing.ts
 // Marketing Domain Types
 
-export type CampaignType =
-  | 'email'
-  | 'sms'
-  | 'social'
-  | 'paid_ads'
-  | 'in_store'
-  | 'referral';
+export type CampaignType = 'email' | 'sms' | 'social' | 'paid_ads' | 'in_store' | 'referral';
 
-export type CampaignStatus =
-  | 'draft'
-  | 'active'
-  | 'paused'
-  | 'completed'
-  | 'archived';
+export type CampaignStatus = 'draft' | 'active' | 'paused' | 'completed' | 'archived';
 
 export type MarketingChannel =
   | 'email'
@@ -48,13 +37,13 @@ export interface AbandonedCart {
 }
 
 export interface CampaignPerformance {
-  campaignId: string
-  campaignName: string
-  revenue: number
-  spent: number
-  roi: number
-  conversions: number
-  reach: number
+  campaignId: string;
+  campaignName: string;
+  revenue: number;
+  spent: number;
+  roi: number;
+  conversions: number;
+  reach: number;
 }
 
 export interface PromoCode {

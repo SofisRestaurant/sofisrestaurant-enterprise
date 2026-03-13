@@ -99,9 +99,7 @@ export default function Notifications() {
             <span className="inline-block h-px w-6 bg-amber-500/60" />
             Notification Center
           </p>
-          <h1 className="text-2xl font-black tracking-tight text-white">
-            Alerts & Messages
-          </h1>
+          <h1 className="text-2xl font-black tracking-tight text-white">Alerts & Messages</h1>
           <p className="mt-1 text-sm text-zinc-500">
             Review system alerts, order updates, and marketing sends in one place.
           </p>
@@ -109,12 +107,14 @@ export default function Notifications() {
 
         {/* Filter pills */}
         <div className="inline-flex items-center gap-1 rounded-full border border-zinc-800 bg-zinc-950/60 p-1 text-[11px]">
-          {([
-            ['all', 'All'],
-            ['system', 'System'],
-            ['orders', 'Orders'],
-            ['marketing', 'Marketing'],
-          ] as const).map(([value, label]) => {
+          {(
+            [
+              ['all', 'All'],
+              ['system', 'System'],
+              ['orders', 'Orders'],
+              ['marketing', 'Marketing'],
+            ] as const
+          ).map(([value, label]) => {
             const active = filter === value;
             return (
               <button
@@ -123,9 +123,7 @@ export default function Notifications() {
                 onClick={() => setFilter(value)}
                 className={[
                   'rounded-full px-3 py-1 font-medium transition-colors',
-                  active
-                    ? 'bg-amber-500 text-black'
-                    : 'text-zinc-400 hover:bg-zinc-900',
+                  active ? 'bg-amber-500 text-black' : 'text-zinc-400 hover:bg-zinc-900',
                 ].join(' ')}
               >
                 {label}
@@ -153,9 +151,7 @@ export default function Notifications() {
               {filtered.map((n) => (
                 <li
                   key={n.id}
-                  className={`flex items-start gap-3 py-3 ${
-                    n.unread ? 'bg-zinc-950/60' : ''
-                  }`}
+                  className={`flex items-start gap-3 py-3 ${n.unread ? 'bg-zinc-950/60' : ''}`}
                 >
                   {/* Unread dot */}
                   <span
@@ -168,29 +164,19 @@ export default function Notifications() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-3">
                       <div className="flex flex-wrap items-center gap-2">
-                        <p className="truncate text-sm font-semibold text-zinc-100">
-                          {n.title}
-                        </p>
-                        {n.important && (
-                          <Badge tone="danger">Priority</Badge>
-                        )}
+                        <p className="truncate text-sm font-semibold text-zinc-100">{n.title}</p>
+                        {n.important && <Badge tone="danger">Priority</Badge>}
                       </div>
                       <span className="shrink-0 text-[11px] font-mono text-zinc-600">
                         {n.createdAt}
                       </span>
                     </div>
 
-                    <p className="mt-1 line-clamp-2 text-xs text-zinc-400">
-                      {n.preview}
-                    </p>
+                    <p className="mt-1 line-clamp-2 text-xs text-zinc-400">{n.preview}</p>
 
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px]">
-                      <Badge tone="neutral">
-                        {CATEGORY_LABEL[n.category]}
-                      </Badge>
-                      <Badge tone={CHANNEL_TONE[n.channel]}>
-                        {CHANNEL_LABEL[n.channel]}
-                      </Badge>
+                      <Badge tone="neutral">{CATEGORY_LABEL[n.category]}</Badge>
+                      <Badge tone={CHANNEL_TONE[n.channel]}>{CHANNEL_LABEL[n.channel]}</Badge>
                       {n.unread && (
                         <span className="rounded-full bg-amber-500/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.18em] text-amber-400">
                           Unread
@@ -206,10 +192,7 @@ export default function Notifications() {
 
         {/* Side panels */}
         <div className="space-y-4">
-          <Panel
-            title="Default channels"
-            subtitle="How the system sends automatic alerts"
-          >
+          <Panel title="Default channels" subtitle="How the system sends automatic alerts">
             <dl className="space-y-3 text-xs text-zinc-300">
               <div className="flex items-center justify-between gap-3">
                 <dt className="text-zinc-400">System health</dt>
@@ -234,15 +217,12 @@ export default function Notifications() {
               </div>
             </dl>
             <p className="mt-4 text-[11px] text-zinc-500">
-              Channel routing will be configurable from this screen once the
-              notifications API is wired up.
+              Channel routing will be configurable from this screen once the notifications API is
+              wired up.
             </p>
           </Panel>
 
-          <Panel
-            title="Preview"
-            subtitle="Example of a customer-facing notification"
-          >
+          <Panel title="Preview" subtitle="Example of a customer-facing notification">
             <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4 text-xs">
               <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-amber-400">
                 SMS · Customer
@@ -251,12 +231,10 @@ export default function Notifications() {
                 Sofi&apos;s Restaurant · Order Ready
               </p>
               <p className="mt-1 text-[12px] text-zinc-300">
-                Your order #{'{{order_number}}'} is ready for pickup at Sofi&apos;s
-                Restaurant. Show this message at the counter. Gracias!
+                Your order #{'{{order_number}}'} is ready for pickup at Sofi&apos;s Restaurant. Show
+                this message at the counter. Gracias!
               </p>
-              <p className="mt-3 text-[10px] text-zinc-600">
-                Reply STOP to unsubscribe.
-              </p>
+              <p className="mt-3 text-[10px] text-zinc-600">Reply STOP to unsubscribe.</p>
             </div>
           </Panel>
         </div>

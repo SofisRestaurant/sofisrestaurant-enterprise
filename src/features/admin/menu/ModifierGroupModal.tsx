@@ -7,36 +7,33 @@
 // Validated against modifier.schema.ts before save.
 // ============================================================================
 
-import { useState, useEffect } from 'react'
-import { ModalShell } from '@/components/ui/ModalShell'
-import { AsyncButton } from '@/components/ui/AsyncButton'
-import { ErrorBanner } from '@/components/ui/ErrorBanner'
-import { InlineToggle } from '@/components/ui/InlineToggle'
-import { FormSection, FormField } from '@/components/ui/FormSection'
-import { formStyles } from '@/components/ui/formStyles'
+import { useState, useEffect } from 'react';
+import { ModalShell } from '@/components/ui/ModalShell';
+import { AsyncButton } from '@/components/ui/AsyncButton';
+import { ErrorBanner } from '@/components/ui/ErrorBanner';
+import { InlineToggle } from '@/components/ui/InlineToggle';
+import { FormSection, FormField } from '@/components/ui/FormSection';
+import { formStyles } from '@/components/ui/formStyles';
 
-import type {
-  AdminModifierGroup,
-  ModifierGroupWritePayload,
-} from '@/types/admin-menu'
+import type { AdminModifierGroup, ModifierGroupWritePayload } from '@/types/admin-menu';
 
-import { MODIFIER_GROUP_TYPES } from '@/domain/menu/modifier.constants'
-import { validateModifierGroupPayload } from '@/domain/menu/modifier.schema'
-import type { ModifierGroupType } from '@/domain/menu/menu.types'
+import { MODIFIER_GROUP_TYPES } from '@/domain/menu/modifier.constants';
+import { validateModifierGroupPayload } from '@/domain/menu/modifier.schema';
+import type { ModifierGroupType } from '@/domain/menu/menu.types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Form State
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface GroupFormState {
-  name: string
-  description: string
-  type: ModifierGroupType
-  required: boolean
-  min_selections: string
-  max_selections: string
-  sort_order: string
-  active: boolean
+  name: string;
+  description: string;
+  type: ModifierGroupType;
+  required: boolean;
+  min_selections: string;
+  max_selections: string;
+  sort_order: string;
+  active: boolean;
 }
 
 const EMPTY: GroupFormState = {
@@ -48,7 +45,7 @@ const EMPTY: GroupFormState = {
   max_selections: '',
   sort_order: '0',
   active: true,
-}
+};
 
 function toForm(g: AdminModifierGroup): GroupFormState {
   return {
@@ -57,11 +54,10 @@ function toForm(g: AdminModifierGroup): GroupFormState {
     type: g.type,
     required: g.required,
     min_selections: g.min_selections.toString(),
-    max_selections:
-      g.max_selections !== null ? g.max_selections.toString() : '',
+    max_selections: g.max_selections !== null ? g.max_selections.toString() : '',
     sort_order: g.sort_order.toString(),
     active: (g as { active?: boolean }).active !== false,
-  }
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -69,38 +65,30 @@ function toForm(g: AdminModifierGroup): GroupFormState {
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface ModifierGroupModalProps {
-  isOpen: boolean
-  onClose: () => void
-  onSave: (payload: ModifierGroupWritePayload) => Promise<void>
-  editing?: AdminModifierGroup | null
+  isOpen: boolean;
+  onClose: () => void;
+  onSave: (payload: ModifierGroupWritePayload) => Promise<void>;
+  editing?: AdminModifierGroup | null;
 }
 
-export function ModifierGroupModal({
-  isOpen,
-  onClose,
-  onSave,
-  editing,
-}: ModifierGroupModalProps) {
-  const [form, setForm] = useState<GroupFormState>(EMPTY)
-  const [error, setError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
+export function ModifierGroupModal({ isOpen, onClose, onSave, editing }: ModifierGroupModalProps) {
+  const [form, setForm] = useState<GroupFormState>(EMPTY);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!isOpen) return
-    setForm(editing ? toForm(editing) : EMPTY)
-    setError(null)
-  }, [isOpen, editing])
+    if (!isOpen) return;
+    setForm(editing ? toForm(editing) : EMPTY);
+    setError(null);
+  }, [isOpen, editing]);
 
-  function field<K extends keyof GroupFormState>(
-    key: K,
-    value: GroupFormState[K],
-  ) {
-    setForm((prev) => ({ ...prev, [key]: value }))
+  function field<K extends keyof GroupFormState>(key: K, value: GroupFormState[K]) {
+    setForm((prev) => ({ ...prev, [key]: value }));
   }
 
   function buildPayload(): ModifierGroupWritePayload {
-    const minNum = parseInt(form.min_selections, 10)
-    const maxRaw = form.max_selections.trim()
+    const minNum = parseInt(form.min_selections, 10);
+    const maxRaw = form.max_selections.trim();
 
     return {
       name: form.name.trim(),
@@ -111,38 +99,38 @@ export function ModifierGroupModal({
       max_selections: maxRaw ? parseInt(maxRaw, 10) || null : null,
       sort_order: parseInt(form.sort_order, 10) || 0,
       active: form.active,
-    }
+    };
   }
 
   function getValidation() {
-    return validateModifierGroupPayload(buildPayload())
+    return validateModifierGroupPayload(buildPayload());
   }
 
   async function handleSave() {
-    const validation = getValidation()
+    const validation = getValidation();
 
     if (!validation.valid) {
-      const firstError = Object.values(validation.errors).find(Boolean)
-      setError(firstError ?? 'Invalid configuration')
-      return
+      const firstError = Object.values(validation.errors).find(Boolean);
+      setError(firstError ?? 'Invalid configuration');
+      return;
     }
 
-    setSaving(true)
-    setError(null)
+    setSaving(true);
+    setError(null);
 
     try {
-      await onSave(buildPayload())
-      onClose()
+      await onSave(buildPayload());
+      onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save group')
+      setError(err instanceof Error ? err.message : 'Failed to save group');
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
   }
 
-  const validation = getValidation()
-  const errs = validation.errors
-  const isRadio = form.type === 'radio'
+  const validation = getValidation();
+  const errs = validation.errors;
+  const isRadio = form.type === 'radio';
 
   return (
     <ModalShell
@@ -166,19 +154,11 @@ export function ModifierGroupModal({
         <div className="space-y-6">
           {/* ── Basic Info ───────────────────────────────────────────── */}
           <FormSection title="Basic Info">
-            <FormField
-              label="Group Name"
-              required
-              error={errs.name}
-            >
+            <FormField label="Group Name" required error={errs.name}>
               <input
                 value={form.name}
                 onChange={(e) => field('name', e.target.value)}
-                className={
-                  errs.name
-                    ? formStyles.inputError
-                    : formStyles.input
-                }
+                className={errs.name ? formStyles.inputError : formStyles.input}
                 autoFocus
               />
             </FormField>
@@ -197,9 +177,7 @@ export function ModifierGroupModal({
             <FormField label="Type" required error={errs.type}>
               <select
                 value={form.type}
-                onChange={(e) =>
-                  field('type', e.target.value as ModifierGroupType)
-                }
+                onChange={(e) => field('type', e.target.value as ModifierGroupType)}
                 className={formStyles.select}
               >
                 {MODIFIER_GROUP_TYPES.map((t) => (
@@ -221,41 +199,23 @@ export function ModifierGroupModal({
           {!isRadio && (
             <FormSection title="Selection Limits">
               <div className="grid grid-cols-2 gap-4">
-                <FormField
-                  label="Min Selections"
-                  error={errs.min_selections}
-                >
+                <FormField label="Min Selections" error={errs.min_selections}>
                   <input
                     type="number"
                     min="0"
                     value={form.min_selections}
-                    onChange={(e) =>
-                      field('min_selections', e.target.value)
-                    }
-                    className={
-                      errs.min_selections
-                        ? formStyles.inputError
-                        : formStyles.input
-                    }
+                    onChange={(e) => field('min_selections', e.target.value)}
+                    className={errs.min_selections ? formStyles.inputError : formStyles.input}
                   />
                 </FormField>
 
-                <FormField
-                  label="Max Selections"
-                  error={errs.max_selections}
-                >
+                <FormField label="Max Selections" error={errs.max_selections}>
                   <input
                     type="number"
                     min="1"
                     value={form.max_selections}
-                    onChange={(e) =>
-                      field('max_selections', e.target.value)
-                    }
-                    className={
-                      errs.max_selections
-                        ? formStyles.inputError
-                        : formStyles.input
-                    }
+                    onChange={(e) => field('max_selections', e.target.value)}
+                    className={errs.max_selections ? formStyles.inputError : formStyles.input}
                   />
                 </FormField>
               </div>
@@ -269,9 +229,7 @@ export function ModifierGroupModal({
                 type="number"
                 min="0"
                 value={form.sort_order}
-                onChange={(e) =>
-                  field('sort_order', e.target.value)
-                }
+                onChange={(e) => field('sort_order', e.target.value)}
                 className={formStyles.input}
               />
             </FormField>
@@ -285,12 +243,7 @@ export function ModifierGroupModal({
         </div>
 
         <div className="flex justify-end gap-3 mt-8 pt-5 border-t border-gray-100">
-          <AsyncButton
-            variant="secondary"
-            size="sm"
-            onClick={onClose}
-            disabled={saving}
-          >
+          <AsyncButton variant="secondary" size="sm" onClick={onClose} disabled={saving}>
             Cancel
           </AsyncButton>
 
@@ -307,5 +260,5 @@ export function ModifierGroupModal({
         </div>
       </div>
     </ModalShell>
-  )
+  );
 }

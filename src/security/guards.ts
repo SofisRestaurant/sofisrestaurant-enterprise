@@ -22,7 +22,7 @@ export interface RouteGuard {
 const routeGuards: RouteGuard[] = [
   // Checkout routes
   { path: '/checkout', permission: 'orders:write', exact: false },
-  
+
   // Admin routes
   { path: '/admin', permission: 'admin:access', exact: false },
   { path: '/admin/dashboard', permission: 'admin:access', exact: false },
@@ -30,11 +30,11 @@ const routeGuards: RouteGuard[] = [
   { path: '/admin/menu', permission: 'menu:write', exact: false },
   { path: '/admin/users', permission: 'users:manage', exact: false },
   { path: '/admin/settings', permission: 'settings:manage', exact: false },
-  
+
   // Order routes
   { path: '/orders', permission: 'orders:read', exact: false },
   { path: '/orders/:id', permission: 'orders:read', exact: false },
-  
+
   // Profile routes
   { path: '/profile', permission: 'profile:read', exact: false },
   { path: '/profile/edit', permission: 'profile:write', exact: false },
@@ -53,7 +53,7 @@ const routeGuards: RouteGuard[] = [
 export function canAccessRoute(role: UserRole, routePath: string): boolean {
   // Normalize route path
   const normalizedPath = routePath.startsWith('/') ? routePath : `/${routePath}`;
-  
+
   // Find matching route guard
   const guard = routeGuards.find((guard) => {
     if (guard.exact) {
@@ -78,7 +78,7 @@ export function canAccessRoute(role: UserRole, routePath: string): boolean {
  */
 export function getRequiredPermission(routePath: string): Permission | null {
   const normalizedPath = routePath.startsWith('/') ? routePath : `/${routePath}`;
-  
+
   const guard = routeGuards.find((guard) => {
     if (guard.exact) {
       return normalizedPath === guard.path;

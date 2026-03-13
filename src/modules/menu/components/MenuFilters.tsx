@@ -347,7 +347,7 @@ export default function MenuFilters(props: MenuFiltersProps) {
                     id="menu-price-range"
                     value={priceRange}
                     onChange={(e) => {
-                      const v = e.target.value as string;
+                      const v = e.target.value;
                       if (
                         v === 'any' ||
                         v === 'under_10' ||
@@ -385,7 +385,7 @@ export default function MenuFilters(props: MenuFiltersProps) {
                     id="menu-sort"
                     value={sort}
                     onChange={(e) => {
-                      const v = e.target.value as string;
+                      const v = e.target.value;
                       const allowed = new Set<MenuSortKey>(allSorts);
                       if (allowed.has(v as MenuSortKey)) onSortChange(v as MenuSortKey);
                     }}

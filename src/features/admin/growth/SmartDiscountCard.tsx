@@ -16,7 +16,7 @@ type SmartDiscount = Tables<'smart_discounts'>;
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
 
 function fmtHour(h: number): string {
-  if (h === 0)  return '12am';
+  if (h === 0) return '12am';
   if (h === 12) return '12pm';
   return h < 12 ? `${h}am` : `${h - 12}pm`;
 }
@@ -38,7 +38,7 @@ export function SmartDiscountCard({
   onToggle,
   onDelete,
 }: SmartDiscountCardProps) {
-  const dayLabel  = d.day_of_week !== null ? DAYS[d.day_of_week] : 'Every day';
+  const dayLabel = d.day_of_week !== null ? DAYS[d.day_of_week] : 'Every day';
   const timeLabel =
     d.start_hour !== null && d.end_hour !== null
       ? `${fmtHour(d.start_hour)} – ${fmtHour(d.end_hour)}`
@@ -48,25 +48,21 @@ export function SmartDiscountCard({
     d.type === 'percent'
       ? `${d.value}% off`
       : d.value !== null
-      ? `${formatDollars((d.value ?? 0) * 100)} off`
-      : '—';
+        ? `${formatDollars((d.value ?? 0) * 100)} off`
+        : '—';
 
   const isActive = d.active ?? false;
 
   return (
     <div
       className={`flex items-center gap-4 rounded-xl border px-4 py-3 transition-all ${
-        isActive
-          ? 'border-zinc-800 bg-zinc-900/40'
-          : 'border-zinc-800/50 bg-zinc-900/20 opacity-60'
+        isActive ? 'border-zinc-800 bg-zinc-900/40' : 'border-zinc-800/50 bg-zinc-900/20 opacity-60'
       }`}
     >
       {/* Value badge */}
       <div
         className={`min-w-60px rounded-xl border px-3 py-2 text-center ${
-          isActive
-            ? 'border-amber-500/20 bg-amber-500/10'
-            : 'border-zinc-700 bg-zinc-800'
+          isActive ? 'border-amber-500/20 bg-amber-500/10' : 'border-zinc-700 bg-zinc-800'
         }`}
       >
         <p
@@ -113,7 +109,14 @@ export function SmartDiscountCard({
           onClick={() => onEdit(d)}
           className="rounded-lg p-1.5 text-zinc-600 transition-colors hover:bg-zinc-800 hover:text-amber-400"
         >
-          <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.6">
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 13 13"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+          >
             <path d="M9 1.5l2.5 2.5-7 7H2v-2.5l7-7z" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </button>
@@ -123,8 +126,18 @@ export function SmartDiscountCard({
           onClick={() => onDelete(d.id)}
           className="rounded-lg p-1.5 text-zinc-600 transition-colors hover:bg-zinc-800 hover:text-red-400"
         >
-          <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.6">
-            <path d="M2 3.5h9M5 1.5h3M4.5 3.5v7a.5.5 0 00.5.5h3a.5.5 0 00.5-.5v-7" strokeLinecap="round" />
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 13 13"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+          >
+            <path
+              d="M2 3.5h9M5 1.5h3M4.5 3.5v7a.5.5 0 00.5.5h3a.5.5 0 00.5-.5v-7"
+              strokeLinecap="round"
+            />
           </svg>
         </button>
       </div>
@@ -150,7 +163,7 @@ export function SmartDiscountList({
   onDelete,
   onAdd,
 }: SmartDiscountListProps) {
-  const active   = discounts.filter((d) => d.active).length;
+  const active = discounts.filter((d) => d.active).length;
   const inactive = discounts.length - active;
 
   return (
@@ -159,8 +172,8 @@ export function SmartDiscountList({
       <div className="flex items-center justify-between">
         <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-zinc-600">
           {discounts.length} rule{discounts.length !== 1 ? 's' : ''}
-          {active > 0    && ` · ${active} active`}
-          {inactive > 0  && ` · ${inactive} off`}
+          {active > 0 && ` · ${active} active`}
+          {inactive > 0 && ` · ${inactive} off`}
         </p>
         <button
           onClick={onAdd}
@@ -192,8 +205,10 @@ export function SmartDiscountList({
           .slice()
           .sort((a, b) => {
             // Active first, then by day, then by start hour
-            if ((a.active ? 0 : 1) !== (b.active ? 0 : 1)) return (a.active ? 0 : 1) - (b.active ? 0 : 1);
-            if ((a.day_of_week ?? 7) !== (b.day_of_week ?? 7)) return (a.day_of_week ?? 7) - (b.day_of_week ?? 7);
+            if ((a.active ? 0 : 1) !== (b.active ? 0 : 1))
+              return (a.active ? 0 : 1) - (b.active ? 0 : 1);
+            if ((a.day_of_week ?? 7) !== (b.day_of_week ?? 7))
+              return (a.day_of_week ?? 7) - (b.day_of_week ?? 7);
             return (a.start_hour ?? 0) - (b.start_hour ?? 0);
           })
           .map((d) => (

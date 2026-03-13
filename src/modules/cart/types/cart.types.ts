@@ -13,17 +13,17 @@
 //   orders (cart_items) → CartOrderItem (shape stored in orders.cart_items JSON)
 // =============================================================================
 
-import type { Database } from '@/types/supabase'
+import type { Database } from '@/types/supabase';
 // ─────────────────────────────────────────────────────────────────────────────
 // Raw DB row aliases (for service layer use)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type PendingCartRow    = Database['public']['Tables']['pending_carts']['Row']
-export type PromotionRow      = Database['public']['Tables']['promotions']['Row']
-export type UserCreditRow     = Database['public']['Tables']['user_credits']['Row']
-export type MenuItemRow       = Database['public']['Tables']['menu_items']['Row']
-export type ModifierRow       = Database['public']['Tables']['modifiers']['Row']
-export type ModifierGroupRow  = Database['public']['Tables']['modifier_groups']['Row']
+export type PendingCartRow = Database['public']['Tables']['pending_carts']['Row'];
+export type PromotionRow = Database['public']['Tables']['promotions']['Row'];
+export type UserCreditRow = Database['public']['Tables']['user_credits']['Row'];
+export type MenuItemRow = Database['public']['Tables']['menu_items']['Row'];
+export type ModifierRow = Database['public']['Tables']['modifiers']['Row'];
+export type ModifierGroupRow = Database['public']['Tables']['modifier_groups']['Row'];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Cart Item Modifier (selected modifier on a line item)
@@ -31,13 +31,13 @@ export type ModifierGroupRow  = Database['public']['Tables']['modifier_groups'][
 
 export interface CartModifier {
   /** modifiers.id */
-  id:              string
+  id: string;
   /** modifiers.modifier_group_id */
-  groupId:         string
+  groupId: string;
   /** modifiers.name */
-  name:            string
+  name: string;
   /** modifiers.price_adjustment (in cents) */
-  priceAdjustment: number
+  priceAdjustment: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -46,16 +46,16 @@ export interface CartModifier {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface CartItem {
-  menuItemId:      string
-  name:            string
-  unitPriceCents:  number
-  imageUrl:        string | null
-  category:        Database['public']['Enums']['menu_category']
-  modifiers:       CartModifier[]
-  quantity:        number
-  notes:           string | null
-  lineTotalCents:  number
-  pricingHash: string
+  menuItemId: string;
+  name: string;
+  unitPriceCents: number;
+  imageUrl: string | null;
+  category: Database['public']['Enums']['menu_category'];
+  modifiers: CartModifier[];
+  quantity: number;
+  notes: string | null;
+  lineTotalCents: number;
+  pricingHash: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -64,39 +64,39 @@ export interface CartItem {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface CartPromotion {
-  id:              string
-  code:            string
-  type:            'percent' | 'fixed'
-  value:           number
-  minOrderCents:   number
-  expiresAt:       string | null
-  discountCents:   number
+  id: string;
+  code: string;
+  type: 'percent' | 'fixed';
+  value: number;
+  minOrderCents: number;
+  expiresAt: string | null;
+  discountCents: number;
 }
-export type AddToCartPayload = Omit<CartItem, 'lineTotalCents'>
+export type AddToCartPayload = Omit<CartItem, 'lineTotalCents'>;
 
 // (2) CartStore — public interface for your Zustand store (useCartStore)
 //     Keep this aligned with src/features/cart/cart.store.ts
 export interface CartStore {
   // state
-  items: CartItem[]
-  promotion: CartPromotion | null
-  credit: CartCredit | null
-  totals: CartTotals
+  items: CartItem[];
+  promotion: CartPromotion | null;
+  credit: CartCredit | null;
+  totals: CartTotals;
 
   // actions
-  addItem: (payload: AddToCartPayload) => void
-  removeItem: (menuItemId: string, modifierKey: string) => void
-  updateQuantity: (menuItemId: string, modifierKey: string, quantity: number) => void
-  updateNotes: (menuItemId: string, modifierKey: string, notes: string) => void
+  addItem: (payload: AddToCartPayload) => void;
+  removeItem: (menuItemId: string, modifierKey: string) => void;
+  updateQuantity: (menuItemId: string, modifierKey: string, quantity: number) => void;
+  updateNotes: (menuItemId: string, modifierKey: string, notes: string) => void;
 
-  applyPromo: (promo: CartPromotion) => void
-  removePromo: () => void
+  applyPromo: (promo: CartPromotion) => void;
+  removePromo: () => void;
 
-  applyCredit: (credit: CartCredit) => void
-  removeCredit: () => void
+  applyCredit: (credit: CartCredit) => void;
+  removeCredit: () => void;
 
-  clearCart: () => void
-  hydrate: (state: CartState) => void
+  clearCart: () => void;
+  hydrate: (state: CartState) => void;
 }
 // ─────────────────────────────────────────────────────────────────────────────
 // Applied Store Credit
@@ -105,13 +105,13 @@ export interface CartStore {
 
 export interface CartCredit {
   /** user_credits.id */
-  id:            string
+  id: string;
   /** user_credits.amount_cents */
-  amountCents:   number
+  amountCents: number;
   /** user_credits.source */
-  source:        string
+  source: string;
   /** user_credits.expires_at */
-  expiresAt:     string | null
+  expiresAt: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -120,15 +120,15 @@ export interface CartCredit {
 
 export interface CartTotals {
   /** Sum of all lineTotalCents, pre-discount */
-  subtotalCents:   number
+  subtotalCents: number;
   /** Discount from promotion */
-  discountCents:   number
+  discountCents: number;
   /** Discount from store credit */
-  creditCents:     number
+  creditCents: number;
   /** Tax applied after discounts (matches orders.amount_tax) */
-  taxCents:        number
+  taxCents: number;
   /** Final amount the customer pays (matches orders.amount_total) */
-  totalCents:      number
+  totalCents: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -137,13 +137,13 @@ export interface CartTotals {
 
 export interface CartState {
   /** Keyed by menuItemId + serialized modifier IDs for deduplication */
-  items:       CartItem[]
+  items: CartItem[];
   /** Applied promotion, or null */
-  promotion:   CartPromotion | null
+  promotion: CartPromotion | null;
   /** Applied store credit, or null */
-  credit:      CartCredit | null
+  credit: CartCredit | null;
   /** Computed totals — always derived from items + promotion + credit */
-  totals:      CartTotals
+  totals: CartTotals;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -152,27 +152,27 @@ export interface CartState {
 
 export interface CartSession {
   /** pending_carts.id (= checkout session ID from Stripe) */
-  id:              string
+  id: string;
   /** pending_carts.user_id */
-  userId:          string
+  userId: string;
   /** pending_carts.items — JSON array of CartItem[] */
-  items:           CartItem[]
+  items: CartItem[];
   /** pending_carts.subtotal_cents */
-  subtotalCents:   number
+  subtotalCents: number;
   /** pending_carts.discount_cents */
-  discountCents:   number
+  discountCents: number;
   /** pending_carts.tax_cents */
-  taxCents:        number
+  taxCents: number;
   /** pending_carts.total_cents */
-  totalCents:      number
+  totalCents: number;
   /** pending_carts.promo_id */
-  promoId:         string | null
+  promoId: string | null;
   /** pending_carts.credit_id */
-  creditId:        string | null
+  creditId: string | null;
   /** pending_carts.expires_at */
-  expiresAt:       string | null
+  expiresAt: string | null;
   /** pending_carts.created_at */
-  createdAt:       string
+  createdAt: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -181,12 +181,12 @@ export interface CartSession {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface CheckoutPayload {
-  items:        CartItem[]
-  promoId:      string | null
-  creditId:     string | null
-  totals:       CartTotals
-  orderType:    'pickup' | 'delivery' | 'dine_in'
-  notes:        string | null
+  items: CartItem[];
+  promoId: string | null;
+  creditId: string | null;
+  totals: CartTotals;
+  orderType: 'pickup' | 'delivery' | 'dine_in';
+  notes: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -194,16 +194,19 @@ export interface CheckoutPayload {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type CartAction =
-  | { type: 'ADD_ITEM';        payload: CartItem }
-  | { type: 'REMOVE_ITEM';     payload: { menuItemId: string; modifierKey: string } }
-  | { type: 'UPDATE_QUANTITY'; payload: { menuItemId: string; modifierKey: string; quantity: number } }
-  | { type: 'UPDATE_NOTES';    payload: { menuItemId: string; modifierKey: string; notes: string } }
-  | { type: 'APPLY_PROMO';     payload: CartPromotion }
+  | { type: 'ADD_ITEM'; payload: CartItem }
+  | { type: 'REMOVE_ITEM'; payload: { menuItemId: string; modifierKey: string } }
+  | {
+      type: 'UPDATE_QUANTITY';
+      payload: { menuItemId: string; modifierKey: string; quantity: number };
+    }
+  | { type: 'UPDATE_NOTES'; payload: { menuItemId: string; modifierKey: string; notes: string } }
+  | { type: 'APPLY_PROMO'; payload: CartPromotion }
   | { type: 'REMOVE_PROMO' }
-  | { type: 'APPLY_CREDIT';    payload: CartCredit }
+  | { type: 'APPLY_CREDIT'; payload: CartCredit }
   | { type: 'REMOVE_CREDIT' }
   | { type: 'CLEAR_CART' }
-  | { type: 'HYDRATE';         payload: CartState }
+  | { type: 'HYDRATE'; payload: CartState };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Promo Validation Result
@@ -216,11 +219,11 @@ export type PromoValidationError =
   | 'LIMIT_REACHED'
   | 'USER_LIMIT_REACHED'
   | 'MIN_ORDER_NOT_MET'
-  | 'ALREADY_APPLIED'
+  | 'ALREADY_APPLIED';
 
 export type PromoValidationResult =
-  | { valid: true;  promo: CartPromotion }
-  | { valid: false; error: PromoValidationError }
+  | { valid: true; promo: CartPromotion }
+  | { valid: false; error: PromoValidationError };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -235,16 +238,18 @@ export function cartItemKey(menuItemId: string, modifiers: Pick<CartModifier, 'i
   const modKey = modifiers
     .map((m) => m.id)
     .sort()
-    .join('|')
-  return `${menuItemId}::${modKey}`
+    .join('|');
+  return `${menuItemId}::${modKey}`;
 }
 
 /**
  * Compute line total for a single cart item in cents.
  */
-export function computeLineTotalCents(item: Pick<CartItem, 'unitPriceCents' | 'modifiers' | 'quantity'>): number {
-  const modifierSum = item.modifiers.reduce((sum, m) => sum + m.priceAdjustment, 0)
-  return (item.unitPriceCents + modifierSum) * item.quantity
+export function computeLineTotalCents(
+  item: Pick<CartItem, 'unitPriceCents' | 'modifiers' | 'quantity'>,
+): number {
+  const modifierSum = item.modifiers.reduce((sum, m) => sum + m.priceAdjustment, 0);
+  return (item.unitPriceCents + modifierSum) * item.quantity;
 }
 
 /**
@@ -252,12 +257,12 @@ export function computeLineTotalCents(item: Pick<CartItem, 'unitPriceCents' | 'm
  * Tax rate matches Stripe tax calculation convention (8.25% example — override as needed).
  */
 export function computeCartTotals(
-  items:     CartItem[],
+  items: CartItem[],
   promotion: CartPromotion | null,
-  credit:    CartCredit    | null,
-  taxRate    = 0.0825,
+  credit: CartCredit | null,
+  taxRate = 0.095,
 ): CartTotals {
-  const subtotalCents = items.reduce((sum, i) => sum + i.lineTotalCents, 0)
+  const subtotalCents = items.reduce((sum, i) => sum + i.lineTotalCents, 0);
 
   const discountCents = promotion
     ? Math.min(
@@ -266,17 +271,15 @@ export function computeCartTotals(
           ? Math.round(subtotalCents * (promotion.value / 100))
           : promotion.value,
       )
-    : 0
+    : 0;
 
-  const afterDiscount = Math.max(0, subtotalCents - discountCents)
+  const afterDiscount = Math.max(0, subtotalCents - discountCents);
 
-  const creditCents = credit
-    ? Math.min(afterDiscount, credit.amountCents)
-    : 0
+  const creditCents = credit ? Math.min(afterDiscount, credit.amountCents) : 0;
 
-  const taxable    = Math.max(0, afterDiscount - creditCents)
-  const taxCents   = Math.round(taxable * taxRate)
-  const totalCents = taxable + taxCents
+  const taxable = Math.max(0, afterDiscount - creditCents);
+  const taxCents = Math.round(taxable * taxRate);
+  const totalCents = taxable + taxCents;
 
-  return { subtotalCents, discountCents, creditCents, taxCents, totalCents }
+  return { subtotalCents, discountCents, creditCents, taxCents, totalCents };
 }

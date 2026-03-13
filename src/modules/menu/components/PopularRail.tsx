@@ -16,78 +16,78 @@
 // - Safe defaults + no crashes on odd data
 // ============================================================================
 
-import React, { memo, useCallback, useEffect, useMemo, useRef } from 'react'
-import { ChevronLeft, ChevronRight, Flame, Star } from 'lucide-react'
+import React, { memo, useCallback, useEffect, useMemo, useRef } from 'react';
+import { ChevronLeft, ChevronRight, Flame, Star } from 'lucide-react';
 
 export type BaseItem = {
-  id?: string
-  name?: string
-}
+  id?: string;
+  name?: string;
+};
 
 export type PopularRailProps<TItem extends BaseItem = BaseItem> = {
-  items: TItem[]
-  onOpenItem: (item: TItem) => void
-  getPriceCents: (item: TItem) => number
-  getAvailable: (item: TItem) => boolean
+  items: TItem[];
+  onOpenItem: (item: TItem) => void;
+  getPriceCents: (item: TItem) => number;
+  getAvailable: (item: TItem) => boolean;
 
-  emptyHintActionLabel: string
-  onEmptyHintAction: () => void
+  emptyHintActionLabel: string;
+  onEmptyHintAction: () => void;
 
-  className?: string
-  title?: string
-  subtitle?: string
-  maxItems?: number
-  loading?: boolean
-  ariaLabel?: string
-}
+  className?: string;
+  title?: string;
+  subtitle?: string;
+  maxItems?: number;
+  loading?: boolean;
+  ariaLabel?: string;
+};
 
 // IMPORTANT: Your TS error expects the component's props type name to be `Props`.
-export type Props = PopularRailProps<BaseItem>
+export type Props = PopularRailProps<BaseItem>;
 
 function cx(...c: Array<string | false | null | undefined>) {
-  return c.filter(Boolean).join(' ')
+  return c.filter(Boolean).join(' ');
 }
 
 function prefersReducedMotion(): boolean {
   try {
-    return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   } catch {
-    return false
+    return false;
   }
 }
 
 function safeStr(v: unknown, fallback = ''): string {
-  return typeof v === 'string' ? v : fallback
+  return typeof v === 'string' ? v : fallback;
 }
 
 function safeId(item: BaseItem, idx: number): string {
-  const id = safeStr(item?.id, '').trim()
-  if (id) return id
-  const name = safeStr(item?.name, '').trim()
-  return name ? `name:${name}:${idx}` : `idx:${idx}`
+  const id = safeStr(item?.id, '').trim();
+  if (id) return id;
+  const name = safeStr(item?.name, '').trim();
+  return name ? `name:${name}:${idx}` : `idx:${idx}`;
 }
 
 function formatCents(cents: number): string {
-  const n = Number.isFinite(cents) ? Math.max(0, Math.round(cents)) : 0
-  return (n / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+  const n = Number.isFinite(cents) ? Math.max(0, Math.round(cents)) : 0;
+  return (n / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
 function useHorizontalRail() {
-  const ref = useRef<HTMLDivElement | null>(null)
+  const ref = useRef<HTMLDivElement | null>(null);
 
   const scrollBy = useCallback((dx: number) => {
-    const el = ref.current
-    if (!el) return
-    el.scrollBy({ left: dx, behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
-  }, [])
+    const el = ref.current;
+    if (!el) return;
+    el.scrollBy({ left: dx, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+  }, []);
 
   const scrollToStart = useCallback(() => {
-    const el = ref.current
-    if (!el) return
-    el.scrollTo({ left: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
-  }, [])
+    const el = ref.current;
+    if (!el) return;
+    el.scrollTo({ left: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+  }, []);
 
-  return { ref, scrollBy, scrollToStart }
+  return { ref, scrollBy, scrollToStart };
 }
 
 function PopularRailImpl<TItem extends BaseItem>({
@@ -104,20 +104,20 @@ function PopularRailImpl<TItem extends BaseItem>({
   loading = false,
   ariaLabel = 'Popular items',
 }: PopularRailProps<TItem>): React.ReactElement | null {
-  const { ref, scrollBy, scrollToStart } = useHorizontalRail()
+  const { ref, scrollBy, scrollToStart } = useHorizontalRail();
 
   const list = useMemo(() => {
-    const arr = Array.isArray(items) ? items : []
-    const cap = Math.max(0, Math.min(maxItems, 50))
-    return arr.slice(0, cap)
-  }, [items, maxItems])
+    const arr = Array.isArray(items) ? items : [];
+    const cap = Math.max(0, Math.min(maxItems, 50));
+    return arr.slice(0, cap);
+  }, [items, maxItems]);
 
-  const hasItems = list.length > 0
+  const hasItems = list.length > 0;
 
   useEffect(() => {
-    if (!hasItems) return
-    scrollToStart()
-  }, [hasItems, list.length, scrollToStart])
+    if (!hasItems) return;
+    scrollToStart();
+  }, [hasItems, list.length, scrollToStart]);
 
   const headerRight = useMemo(() => {
     return (
@@ -147,8 +147,8 @@ function PopularRailImpl<TItem extends BaseItem>({
           <ChevronRight className="h-4 w-4" aria-hidden="true" />
         </button>
       </div>
-    )
-  }, [scrollBy])
+    );
+  }, [scrollBy]);
 
   return (
     <section className={cx('space-y-3', className)} aria-label={ariaLabel}>
@@ -179,7 +179,9 @@ function PopularRailImpl<TItem extends BaseItem>({
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="font-semibold text-white">Nothing popular to show yet</p>
-              <p className="mt-1 text-xs text-neutral-500">Try browsing the full menu or clear filters.</p>
+              <p className="mt-1 text-xs text-neutral-500">
+                Try browsing the full menu or clear filters.
+              </p>
             </div>
             <button
               type="button"
@@ -202,21 +204,21 @@ function PopularRailImpl<TItem extends BaseItem>({
           aria-label="Popular list"
           onKeyDown={(e) => {
             if (e.key === 'ArrowLeft') {
-              e.preventDefault()
-              scrollBy(-240)
+              e.preventDefault();
+              scrollBy(-240);
             } else if (e.key === 'ArrowRight') {
-              e.preventDefault()
-              scrollBy(240)
+              e.preventDefault();
+              scrollBy(240);
             } else if (e.key === 'Home') {
-              e.preventDefault()
-              scrollToStart()
+              e.preventDefault();
+              scrollToStart();
             }
           }}
         >
           {list.map((it, idx) => {
-            const name = safeStr(it?.name, 'Item')
-            const priceCents = getPriceCents(it)
-            const available = getAvailable(it)
+            const name = safeStr(it?.name, 'Item');
+            const priceCents = getPriceCents(it);
+            const available = getAvailable(it);
 
             return (
               <button
@@ -229,7 +231,8 @@ function PopularRailImpl<TItem extends BaseItem>({
                   'bg-white/5 p-4 text-left shadow-sm transition',
                   'hover:bg-white/8 hover:border-white/15',
                   'focus:outline-none focus:ring-2 focus:ring-amber-500/25',
-                  !available && 'cursor-not-allowed opacity-60 hover:bg-white/5 hover:border-white/10',
+                  !available &&
+                    'cursor-not-allowed opacity-60 hover:bg-white/5 hover:border-white/10',
                 )}
                 role="listitem"
                 aria-label={`Popular item: ${name}${available ? '' : ', unavailable'}`}
@@ -237,7 +240,9 @@ function PopularRailImpl<TItem extends BaseItem>({
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold text-white">{name}</p>
-                    <p className="mt-1 text-xs text-neutral-500 tabular-nums">{formatCents(priceCents)}</p>
+                    <p className="mt-1 text-xs text-neutral-500 tabular-nums">
+                      {formatCents(priceCents)}
+                    </p>
                   </div>
                   <span className="inline-flex items-center gap-1 rounded-full bg-white/5 px-2 py-1 text-[10px] font-bold text-neutral-200">
                     <Flame className="h-3 w-3" aria-hidden="true" />
@@ -256,19 +261,19 @@ function PopularRailImpl<TItem extends BaseItem>({
                   className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-white/5 blur-2xl transition group-hover:bg-white/8"
                 />
               </button>
-            )
+            );
           })}
         </div>
       )}
     </section>
-  )
+  );
 }
 
 // ✅ Named export (generic-friendly)
 export function PopularRail<TItem extends BaseItem>(props: PopularRailProps<TItem>) {
-  return <PopularRailImpl {...props} />
+  return <PopularRailImpl {...props} />;
 }
 
 // ✅ Default export (memoized). If you need generics at call sites, prefer the named export.
-const PopularRailMemo = memo(PopularRail) as unknown as (props: Props) => React.ReactElement | null
-export default PopularRailMemo
+const PopularRailMemo = memo(PopularRail) as unknown as (props: Props) => React.ReactElement | null;
+export default PopularRailMemo;

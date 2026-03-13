@@ -13,12 +13,33 @@ import type {
   ModifierGroupUpdatePayload,
   ModifierGroupAttachPayload,
   ModifierGroupDetachPayload,
+  ModifierGroupSetItemGroupsPayload,
   ReorderItem,
 } from '../types.ts';
 
 /* -------------------------------------------------------------------------- */
 /* READ                                                                       */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * List all modifier groups, optionally filtered to active-only.
+ * Ordered by sort_order ASC, then name ASC for stable display.
+ */
+export async function list(activeOnly = false): Promise<unknown[]> {
+  let query = service
+    .from('modifier_groups')
+    .select('*')
+    .order('sort_order', { ascending: true })
+    .order('name', { ascending: true });
+
+  if (activeOnly) {
+    query = query.eq('active', true);
+  }
+
+  const { data, error } = await query;
+  if (error) dbError(error.message, 'DB_MOD_GROUPS_LIST');
+  return (data ?? []) as unknown[];
+}
 
 export async function listForItem(menuItemId: string): Promise<unknown[]> {
   // Join through the join table so results are ordered by that table's
@@ -29,7 +50,7 @@ export async function listForItem(menuItemId: string): Promise<unknown[]> {
     .eq('menu_item_id', menuItemId)
     .order('sort_order', { ascending: true });
 
-  if (error) dbError(error.message, 'DB_MOD_GROUPS_LIST');
+  if (error) dbError(error.message, 'DB_MOD_GROUPS_LIST_FOR_ITEM');
   return (data ?? []) as unknown[];
 }
 
@@ -42,6 +63,19 @@ export async function getById(id: string): Promise<unknown> {
 
   if (error) dbError(error.message, 'DB_MOD_GROUP_GET');
   return data;
+}
+
+/**
+ * Returns the number of menu items this modifier group is attached to.
+ */
+export async function getItemCount(id: string): Promise<{ count: number }> {
+  const { count, error } = await service
+    .from('menu_item_modifier_groups')
+    .select('*', { count: 'exact', head: true })
+    .eq('modifier_group_id', id);
+
+  if (error) dbError(error.message, 'DB_MOD_GROUP_ITEM_COUNT');
+  return { count: count ?? 0 };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -110,7 +144,31 @@ export async function toggleActive(id: string, active: boolean): Promise<void> {
 }
 
 /* -------------------------------------------------------------------------- */
-/* JOIN TABLE — attach / detach / reorder                                    */
+/* REORDER (standalone — updates modifier_groups.sort_order)                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Bulk-updates sort_order on modifier_groups rows directly.
+ * Runs updates in parallel; throws on any failure.
+ */
+export async function reorder(items: ReorderItem[]): Promise<void> {
+  const results = await Promise.allSettled(
+    items.map(({ id, sort_order }) =>
+      service
+        .from('modifier_groups')
+        .update({ sort_order, updated_at: nowIso() })
+        .eq('id', id),
+    ),
+  );
+
+  const failed = results.filter((r) => r.status === 'rejected');
+  if (failed.length > 0) {
+    dbError(`Reorder failed for ${failed.length} group(s)`, 'DB_MOD_GROUP_REORDER');
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* JOIN TABLE — attach / detach / set / reorder                              */
 /* -------------------------------------------------------------------------- */
 
 /** Upsert on (menu_item_id, modifier_group_id) — idempotent. */
@@ -139,6 +197,34 @@ export async function detachFromItem(payload: ModifierGroupDetachPayload): Promi
   if (error) dbError(error.message, 'DB_MOD_GROUP_DETACH');
 }
 
+/**
+ * Replaces all modifier group links for a menu item atomically:
+ * deletes existing links then inserts the new set in sort_order increments of 10.
+ * Passing an empty group_ids array clears all links.
+ */
+export async function setItemGroups(payload: ModifierGroupSetItemGroupsPayload): Promise<void> {
+  const { error: deleteError } = await service
+    .from('menu_item_modifier_groups')
+    .delete()
+    .eq('menu_item_id', payload.menu_item_id);
+
+  if (deleteError) dbError(deleteError.message, 'DB_MOD_GROUP_SET_ITEM_GROUPS_DELETE');
+
+  if (payload.group_ids.length === 0) return;
+
+  const rows = payload.group_ids.map((modifier_group_id, index) => ({
+    menu_item_id: payload.menu_item_id,
+    modifier_group_id,
+    sort_order: index * 10,
+  }));
+
+  const { error: insertError } = await service
+    .from('menu_item_modifier_groups')
+    .insert(rows);
+
+  if (insertError) dbError(insertError.message, 'DB_MOD_GROUP_SET_ITEM_GROUPS_INSERT');
+}
+
 export async function reorderForItem(menuItemId: string, items: ReorderItem[]): Promise<void> {
   const results = await Promise.allSettled(
     items.map(({ id, sort_order }) =>
@@ -152,7 +238,7 @@ export async function reorderForItem(menuItemId: string, items: ReorderItem[]): 
 
   const failed = results.filter((r) => r.status === 'rejected');
   if (failed.length > 0) {
-    dbError(`Reorder failed for ${failed.length} group(s)`, 'DB_MOD_GROUP_REORDER');
+    dbError(`Reorder failed for ${failed.length} group(s)`, 'DB_MOD_GROUP_REORDER_FOR_ITEM');
   }
 }
 

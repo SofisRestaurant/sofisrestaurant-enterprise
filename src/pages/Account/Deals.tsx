@@ -17,121 +17,130 @@
 // If your promotions table differs, adjust the SELECT list only.
 // =============================================================================
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { BadgeDollarSign, Copy, Search, Tag, X } from 'lucide-react'
-import { ErrorBanner } from '@/components/ui/ErrorBanner'
-import { supabase } from '@/lib/supabase/supabaseClient'
-import Spinner from '@/components/ui/Spinner'
-import { Button } from '@/components/ui/Button'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { BadgeDollarSign, Copy, Search, Tag, X } from 'lucide-react';
+import { ErrorBanner } from '@/components/ui/ErrorBanner';
+import { supabase } from '@/lib/supabase/supabaseClient';
+import Spinner from '@/components/ui/Spinner';
+import { Button } from '@/components/ui/Button';
 
-type PromoType = 'percent' | 'fixed' | 'unknown'
+type PromoType = 'percent' | 'fixed' | 'unknown';
 
 type Deal = {
-  id: string
-  code: string | null
-  title: string
-  description: string | null
-  bannerText: string | null
-  imageUrl: string | null
-  type: PromoType
-  value: number | null
-  minOrderCents: number | null
-  startsAt: string | null
-  endsAt: string | null
-  expiresAt: string | null
-  maxUses: number | null
-  currentUses: number | null
-  active: boolean
-}
+  id: string;
+  code: string | null;
+  title: string;
+  description: string | null;
+  bannerText: string | null;
+  imageUrl: string | null;
+  type: PromoType;
+  value: number | null;
+  minOrderCents: number | null;
+  startsAt: string | null;
+  endsAt: string | null;
+  expiresAt: string | null;
+  maxUses: number | null;
+  currentUses: number | null;
+  active: boolean;
+};
 
 type DealsFilterState = {
-  q: string
-  showExpired: boolean
-  type: 'any' | 'percent' | 'fixed'
-  minOrder: 'any' | 'under25' | 'under50' | '50plus'
-}
+  q: string;
+  showExpired: boolean;
+  type: 'any' | 'percent' | 'fixed';
+  minOrder: 'any' | 'under25' | 'under50' | '50plus';
+};
+
+const DEALS_SKELETON_KEYS = [
+  'deal-skeleton-1',
+  'deal-skeleton-2',
+  'deal-skeleton-3',
+  'deal-skeleton-4',
+  'deal-skeleton-5',
+  'deal-skeleton-6',
+] as const;
 
 function cx(...c: Array<string | false | null | undefined>) {
-  return c.filter(Boolean).join(' ')
+  return c.filter(Boolean).join(' ');
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v)
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 function safeString(v: unknown, max = 500): string | null {
-  if (typeof v !== 'string') return null
-  const s = v.trim()
-  if (!s) return null
-  return s.length > max ? s.slice(0, max) : s
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  if (!s) return null;
+  return s.length > max ? s.slice(0, max) : s;
 }
 
 function safeBool(v: unknown): boolean {
-  return v === true
+  return v === true;
 }
 
 function safeNumber(v: unknown): number | null {
-  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN
-  return Number.isFinite(n) ? n : null
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : null;
 }
 
 function safeInt(v: unknown): number | null {
-  const n = safeNumber(v)
-  if (n == null) return null
-  return Math.trunc(n)
+  const n = safeNumber(v);
+  if (n == null) return null;
+  return Math.trunc(n);
 }
 
 function safeCents(v: unknown): number | null {
-  const n = safeNumber(v)
-  if (n == null) return null
-  const c = Math.round(n)
-  return c >= 0 ? c : 0
+  const n = safeNumber(v);
+  if (n == null) return null;
+  const c = Math.round(n);
+  return c >= 0 ? c : 0;
 }
 
 function formatCents(cents: number): string {
-  const safe = Number.isFinite(cents) ? cents : 0
-  return (safe / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+  const safe = Number.isFinite(cents) ? cents : 0;
+  return (safe / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
 function formatDateTime(iso: string | null): string | null {
-  if (!iso) return null
-  const t = new Date(iso).getTime()
-  if (!Number.isFinite(t)) return null
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return null;
   return new Date(t).toLocaleString('en-US', {
     month: 'short',
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
-  })
+  });
 }
 
 function isExpired(nowMs: number, endsAt: string | null, expiresAt: string | null): boolean {
-  const end = endsAt ? new Date(endsAt).getTime() : NaN
-  const exp = expiresAt ? new Date(expiresAt).getTime() : NaN
-  const t = Number.isFinite(exp) ? exp : Number.isFinite(end) ? end : NaN
-  if (!Number.isFinite(t)) return false
-  return t < nowMs
+  const end = endsAt ? new Date(endsAt).getTime() : NaN;
+  const exp = expiresAt ? new Date(expiresAt).getTime() : NaN;
+  const t = Number.isFinite(exp) ? exp : Number.isFinite(end) ? end : NaN;
+  if (!Number.isFinite(t)) return false;
+  return t < nowMs;
 }
 
 function inferPromoType(typeRaw: unknown): PromoType {
-  const s = typeof typeRaw === 'string' ? typeRaw.trim().toLowerCase() : ''
-  if (s === 'percent') return 'percent'
-  if (s === 'fixed') return 'fixed'
-  return 'unknown'
+  const s = typeof typeRaw === 'string' ? typeRaw.trim().toLowerCase() : '';
+  if (s === 'percent') return 'percent';
+  if (s === 'fixed') return 'fixed';
+  return 'unknown';
 }
 
 function dealFromRow(row: unknown): Deal | null {
-  if (!isRecord(row)) return null
+  if (!isRecord(row)) return null;
 
-  const id = safeString(row.id, 128)
-  if (!id) return null
+  const id = safeString(row.id, 128);
+  if (!id) return null;
 
-  const code = safeString(row.code, 64)
+  const code = safeString(row.code, 64);
   const title =
     safeString(row.title, 140) ??
     safeString(row.banner_text, 140) ??
-    (code ? `Promo: ${code}` : 'Special Offer')
+    (code ? `Promo: ${code}` : 'Special Offer');
 
   return {
     id,
@@ -149,177 +158,193 @@ function dealFromRow(row: unknown): Deal | null {
     maxUses: safeInt(row.max_uses),
     currentUses: safeInt(row.current_uses),
     active: safeBool(row.active),
-  }
+  };
 }
 
 function matchesQuery(d: Deal, q: string): boolean {
-  const needle = q.trim().toLowerCase()
-  if (!needle) return true
-  const hay = [
-    d.title,
-    d.code ?? '',
-    d.bannerText ?? '',
-    d.description ?? '',
-    d.type,
-  ]
+  const needle = q.trim().toLowerCase();
+  if (!needle) return true;
+  const hay = [d.title, d.code ?? '', d.bannerText ?? '', d.description ?? '', d.type]
     .join(' ')
-    .toLowerCase()
-  return hay.includes(needle)
+    .toLowerCase();
+  return hay.includes(needle);
 }
 
 function typeLabel(d: Deal): string {
-  if (d.type === 'percent' && d.value != null) return `${Math.max(0, Math.min(100, d.value))}% OFF`
-  if (d.type === 'fixed' && d.value != null) return `${formatCents(Math.max(0, Math.round(d.value)))} OFF`
-  return 'Special'
+  if (d.type === 'percent' && d.value != null) return `${Math.max(0, Math.min(100, d.value))}% OFF`;
+  if (d.type === 'fixed' && d.value != null) {
+    return `${formatCents(Math.max(0, Math.round(d.value)))} OFF`;
+  }
+  return 'Special';
 }
 
 function minOrderLabel(minOrderCents: number | null): string | null {
-  if (minOrderCents == null || minOrderCents <= 0) return null
-  return `Min order ${formatCents(minOrderCents)}`
+  if (minOrderCents == null || minOrderCents <= 0) return null;
+  return `Min order ${formatCents(minOrderCents)}`;
 }
 
 function usageLabel(d: Deal): string | null {
-  if (d.maxUses == null || d.currentUses == null) return null
-  if (!Number.isFinite(d.maxUses) || d.maxUses <= 0) return null
-  const used = Math.max(0, Math.min(d.maxUses, d.currentUses))
-  return `${used}/${d.maxUses} used`
+  if (d.maxUses == null || d.currentUses == null) return null;
+  if (!Number.isFinite(d.maxUses) || d.maxUses <= 0) return null;
+  const used = Math.max(0, Math.min(d.maxUses, d.currentUses));
+  return `${used}/${d.maxUses} used`;
 }
 
 export default function Deals() {
-  const mountedRef = useRef(true)
+  const mountedRef = useRef(true);
+  const copiedTimerRef = useRef<number | null>(null);
 
-  const [loading, setLoading] = useState<boolean>(true)
-  const [error, setError] = useState<string | null>(null)
-  const [deals, setDeals] = useState<Deal[]>([])
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [deals, setDeals] = useState<Deal[]>([]);
 
   const [filters, setFilters] = useState<DealsFilterState>({
     q: '',
     showExpired: false,
     type: 'any',
     minOrder: 'any',
-  })
+  });
 
-  const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   useEffect(() => {
-    mountedRef.current = true
-    return () => {
-      mountedRef.current = false
-    }
-  }, [])
+    mountedRef.current = true;
 
-  const loadDeals = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+    return () => {
+      mountedRef.current = false;
+      if (copiedTimerRef.current !== null) {
+        window.clearTimeout(copiedTimerRef.current);
+        copiedTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const loadDeals = useCallback(async (): Promise<void> => {
+    if (mountedRef.current) {
+      setLoading(true);
+      setError(null);
+    }
 
     try {
-      // Keep SELECT list conservative + safe. Adjust if your schema differs.
       const { data, error: dbErr } = await supabase
         .from('promotions')
         .select(
           'id, code, active, type, value, min_order_cents, starts_at, ends_at, expires_at, max_uses, current_uses, title, description, banner_text, image_url',
         )
         .order('starts_at', { ascending: false })
-        .limit(200)
+        .limit(200);
 
-      if (dbErr) throw new Error(dbErr.message)
-
-      const rows = Array.isArray(data) ? data : []
-      const parsed = rows.map(dealFromRow).filter((x): x is Deal => Boolean(x))
-
-      if (!mountedRef.current) return
-      setDeals(parsed)
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to load deals'
-      if (!mountedRef.current) return
-      setError(msg)
-      setDeals([])
-    } finally {
-      if (!mountedRef.current) return
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void loadDeals()
-  }, [loadDeals])
-
-  const nowMs = Date.now()
-
-  const filtered = useMemo(() => {
-    const q = filters.q
-    const wantExpired = filters.showExpired
-
-    let list = deals.slice()
-
-    // Active window filtering (client-side display only)
-    list = list.filter((d) => {
-      const startsOk = d.startsAt ? new Date(d.startsAt).getTime() <= nowMs : true
-      const expired = isExpired(nowMs, d.endsAt, d.expiresAt)
-      const activeFlag = d.active === true
-
-      if (!wantExpired) {
-        // show only active-ish deals by default
-        return activeFlag && startsOk && !expired
+      if (dbErr) {
+        throw new Error(dbErr.message);
       }
 
-      // show everything if asked (still prefer active first)
-      return startsOk || activeFlag || expired
-    })
+      const rows = Array.isArray(data) ? data : [];
+      const parsed = rows.map(dealFromRow).filter((x): x is Deal => x !== null);
+
+      if (mountedRef.current) {
+        setDeals(parsed);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to load deals';
+      if (mountedRef.current) {
+        setError(msg);
+        setDeals([]);
+      }
+    } finally {
+      if (mountedRef.current) {
+        setLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadDeals();
+  }, [loadDeals]);
+
+  const nowMs = Date.now();
+
+  const filtered = useMemo(() => {
+    const q = filters.q;
+    const wantExpired = filters.showExpired;
+
+    let list = deals.slice();
+
+    list = list.filter((d) => {
+      const startsOk = d.startsAt ? new Date(d.startsAt).getTime() <= nowMs : true;
+      const expired = isExpired(nowMs, d.endsAt, d.expiresAt);
+      const activeFlag = d.active === true;
+
+      if (!wantExpired) {
+        return activeFlag && startsOk && !expired;
+      }
+
+      return startsOk || activeFlag || expired;
+    });
 
     if (filters.type !== 'any') {
-      list = list.filter((d) => d.type === filters.type)
+      list = list.filter((d) => d.type === filters.type);
     }
 
     if (filters.minOrder !== 'any') {
       list = list.filter((d) => {
-        const min = d.minOrderCents ?? 0
-        if (filters.minOrder === 'under25') return min > 0 && min < 2500
-        if (filters.minOrder === 'under50') return min > 0 && min < 5000
-        return min >= 5000
-      })
+        const min = d.minOrderCents ?? 0;
+        if (filters.minOrder === 'under25') return min > 0 && min < 2500;
+        if (filters.minOrder === 'under50') return min > 0 && min < 5000;
+        return min >= 5000;
+      });
     }
 
-    list = list.filter((d) => matchesQuery(d, q))
+    list = list.filter((d) => matchesQuery(d, q));
 
-    // Stable sort: active first, then nearest ending, then title
     list.sort((a, b) => {
-      const aExp = isExpired(nowMs, a.endsAt, a.expiresAt)
-      const bExp = isExpired(nowMs, b.endsAt, b.expiresAt)
-      if (aExp !== bExp) return aExp ? 1 : -1
+      const aExp = isExpired(nowMs, a.endsAt, a.expiresAt);
+      const bExp = isExpired(nowMs, b.endsAt, b.expiresAt);
+      if (aExp !== bExp) return aExp ? 1 : -1;
 
-      const aEnd = a.expiresAt ?? a.endsAt ?? ''
-      const bEnd = b.expiresAt ?? b.endsAt ?? ''
-      const ta = aEnd ? new Date(aEnd).getTime() : Number.POSITIVE_INFINITY
-      const tb = bEnd ? new Date(bEnd).getTime() : Number.POSITIVE_INFINITY
-      if (ta !== tb) return ta - tb
+      const aEnd = a.expiresAt ?? a.endsAt ?? '';
+      const bEnd = b.expiresAt ?? b.endsAt ?? '';
+      const ta = aEnd ? new Date(aEnd).getTime() : Number.POSITIVE_INFINITY;
+      const tb = bEnd ? new Date(bEnd).getTime() : Number.POSITIVE_INFINITY;
+      if (ta !== tb) return ta - tb;
 
-      return a.title.localeCompare(b.title)
-    })
+      return a.title.localeCompare(b.title);
+    });
 
-    return list
-  }, [deals, filters, nowMs])
+    return list;
+  }, [deals, filters, nowMs]);
 
   const clearSearch = useCallback(() => {
-    setFilters((p) => ({ ...p, q: '' }))
-  }, [])
+    setFilters((p) => ({ ...p, q: '' }));
+  }, []);
 
   const clearAll = useCallback(() => {
-    setFilters({ q: '', showExpired: false, type: 'any', minOrder: 'any' })
-  }, [])
+    setFilters({ q: '', showExpired: false, type: 'any', minOrder: 'any' });
+  }, []);
 
-  const copyCode = useCallback(async (deal: Deal) => {
-    if (!deal.code) return
+  const copyCode = useCallback(async (deal: Deal): Promise<void> => {
+    if (!deal.code) return;
+
     try {
-      await navigator.clipboard.writeText(deal.code)
-      setCopiedId(deal.id)
-      window.setTimeout(() => setCopiedId((prev) => (prev === deal.id ? null : prev)), 1200)
+      await navigator.clipboard.writeText(deal.code);
     } catch {
-      // ignore (clipboard may be blocked); still provide visual feedback
-      setCopiedId(deal.id)
-      window.setTimeout(() => setCopiedId((prev) => (prev === deal.id ? null : prev)), 1200)
+      // Clipboard may be blocked; still show temporary feedback.
     }
-  }, [])
+
+    if (!mountedRef.current) return;
+
+    setCopiedId(deal.id);
+
+    if (copiedTimerRef.current !== null) {
+      window.clearTimeout(copiedTimerRef.current);
+    }
+
+    copiedTimerRef.current = window.setTimeout(() => {
+      if (mountedRef.current) {
+        setCopiedId((prev) => (prev === deal.id ? null : prev));
+      }
+      copiedTimerRef.current = null;
+    }, 1200);
+  }, []);
 
   const hasActiveFilters = useMemo(() => {
     return (
@@ -327,8 +352,8 @@ export default function Deals() {
       filters.showExpired ||
       filters.type !== 'any' ||
       filters.minOrder !== 'any'
-    )
-  }, [filters])
+    );
+  }, [filters]);
 
   return (
     <main className="mx-auto w-full max-w-4xl px-4 py-8">
@@ -341,13 +366,12 @@ export default function Deals() {
             </p>
           </div>
           <div className="shrink-0">
-            <Button variant="secondary" onClick={loadDeals}>
+            <Button variant="secondary" onClick={() => void loadDeals()}>
               Refresh
             </Button>
           </div>
         </div>
 
-        {/* Search + filters */}
         <div className="mt-5 grid gap-3 sm:grid-cols-2">
           <div className="relative">
             <label className="sr-only" htmlFor="deals-search">
@@ -467,9 +491,9 @@ export default function Deals() {
             Loading deals…
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
-            {Array.from({ length: 6 }).map((_, i) => (
+            {DEALS_SKELETON_KEYS.map((key) => (
               <div
-                key={i}
+                key={key}
                 className="h-32 animate-pulse rounded-2xl border border-neutral-200 bg-white"
               />
             ))}
@@ -499,11 +523,11 @@ export default function Deals() {
       ) : (
         <section aria-label="Deals list" className="grid gap-3 sm:grid-cols-2">
           {filtered.map((d) => {
-            const exp = isExpired(nowMs, d.endsAt, d.expiresAt)
-            const starts = formatDateTime(d.startsAt)
-            const ends = formatDateTime(d.expiresAt ?? d.endsAt)
-            const minOrder = minOrderLabel(d.minOrderCents)
-            const usage = usageLabel(d)
+            const exp = isExpired(nowMs, d.endsAt, d.expiresAt);
+            const starts = formatDateTime(d.startsAt);
+            const ends = formatDateTime(d.expiresAt ?? d.endsAt);
+            const minOrder = minOrderLabel(d.minOrderCents);
+            const usage = usageLabel(d);
 
             return (
               <article
@@ -539,7 +563,9 @@ export default function Deals() {
                       ) : null}
                     </div>
 
-                    <h3 className="mt-2 truncate text-base font-bold text-neutral-900">{d.title}</h3>
+                    <h3 className="mt-2 truncate text-base font-bold text-neutral-900">
+                      {d.title}
+                    </h3>
                     {d.description ? (
                       <p className="mt-1 line-clamp-2 text-sm text-neutral-600">{d.description}</p>
                     ) : null}
@@ -599,12 +625,13 @@ export default function Deals() {
                     to="/checkout"
                     className={cx(
                       'inline-flex items-center justify-center rounded-xl px-4 py-2.5 text-sm font-semibold',
-                      exp ? 'bg-neutral-200 text-neutral-700' : 'bg-neutral-900 text-white hover:bg-neutral-800',
+                      exp
+                        ? 'bg-neutral-200 text-neutral-700'
+                        : 'bg-neutral-900 text-white hover:bg-neutral-800',
                     )}
                     aria-disabled={exp ? 'true' : 'false'}
                     onClick={(e) => {
-                      // If expired, don’t send them to checkout from this card.
-                      if (exp) e.preventDefault()
+                      if (exp) e.preventDefault();
                     }}
                   >
                     {exp ? 'Expired' : 'Use at checkout'}
@@ -626,7 +653,7 @@ export default function Deals() {
                   )}
                 />
               </article>
-            )
+            );
           })}
         </section>
       )}
@@ -639,5 +666,5 @@ export default function Deals() {
         </p>
       </footer>
     </main>
-  )
+  );
 }

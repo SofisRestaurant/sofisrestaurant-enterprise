@@ -15,12 +15,12 @@ export const ADMIN_PATHS = {
   marketing: '/admin/marketing',
   loyalty: '/admin/loyalty',
   notifications: '/admin/notifications',
-} as const
+} as const;
 
 export const ADMIN_APP = {
   metricsPollMs: 20_000,
   metricsCacheTtlMs: 15_000,
-} as const
+} as const;
 
 export const ADMIN_ALLOWED_ORIGINS = [
   'http://localhost:3000',
@@ -28,4 +28,4 @@ export const ADMIN_ALLOWED_ORIGINS = [
   'https://sofislegacy.com',
   'https://www.sofislegacy.com',
   'https://sofisrestaurant.netlify.app',
-] as const
+] as const;

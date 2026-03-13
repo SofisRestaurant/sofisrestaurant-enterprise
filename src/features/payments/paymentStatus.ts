@@ -8,38 +8,38 @@ export enum PaymentStatus {
 }
 
 export interface PaymentState {
-  status: PaymentStatus
-  sessionId?: string
-  error?: string
-  amount?: number
+  status: PaymentStatus;
+  sessionId?: string;
+  error?: string;
+  amount?: number;
 }
 
 export function getPaymentStatusMessage(status: PaymentStatus): string {
   switch (status) {
     case PaymentStatus.PROCESSING:
-      return 'Processing your payment...'
+      return 'Processing your payment...';
     case PaymentStatus.SUCCESS:
-      return 'Payment successful!'
+      return 'Payment successful!';
     case PaymentStatus.FAILED:
-      return 'Payment failed. Please try again.'
+      return 'Payment failed. Please try again.';
     case PaymentStatus.CANCELLED:
-      return 'Payment was cancelled.'
+      return 'Payment was cancelled.';
     default:
-      return ''
+      return '';
   }
 }
 
 export function getPaymentStatusColor(status: PaymentStatus): string {
   switch (status) {
     case PaymentStatus.PROCESSING:
-      return 'text-blue-600'
+      return 'text-blue-600';
     case PaymentStatus.SUCCESS:
-      return 'text-green-600'
+      return 'text-green-600';
     case PaymentStatus.FAILED:
-      return 'text-red-600'
+      return 'text-red-600';
     case PaymentStatus.CANCELLED:
-      return 'text-gray-600'
+      return 'text-gray-600';
     default:
-      return 'text-gray-600'
+      return 'text-gray-600';
   }
 }

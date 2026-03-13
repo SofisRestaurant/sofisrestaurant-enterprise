@@ -1,8 +1,8 @@
 export interface UserBehavior {
-  pageViews: string[]
-  cartActions: string[]
-  searchQueries: string[]
-  timeOnPage: Record<string, number>
+  pageViews: string[];
+  cartActions: string[];
+  searchQueries: string[];
+  timeOnPage: Record<string, number>;
 }
 
 class BehaviorTracker {
@@ -11,27 +11,26 @@ class BehaviorTracker {
     cartActions: [],
     searchQueries: [],
     timeOnPage: {},
-  }
+  };
 
   trackPageView(path: string): void {
-    this.behavior.pageViews.push(path)
+    this.behavior.pageViews.push(path);
   }
 
   trackCartAction(action: string): void {
-    this.behavior.cartActions.push(action)
+    this.behavior.cartActions.push(action);
   }
 
   trackSearch(query: string): void {
-    this.behavior.searchQueries.push(query)
+    this.behavior.searchQueries.push(query);
   }
 
   trackTimeOnPage(path: string, seconds: number): void {
-    this.behavior.timeOnPage[path] = 
-      (this.behavior.timeOnPage[path] || 0) + seconds
+    this.behavior.timeOnPage[path] = (this.behavior.timeOnPage[path] || 0) + seconds;
   }
 
   getBehavior(): UserBehavior {
-    return { ...this.behavior }
+    return { ...this.behavior };
   }
 
   reset(): void {
@@ -40,8 +39,8 @@ class BehaviorTracker {
       cartActions: [],
       searchQueries: [],
       timeOnPage: {},
-    }
+    };
   }
 }
 
-export const behaviorTracker = new BehaviorTracker()
+export const behaviorTracker = new BehaviorTracker();

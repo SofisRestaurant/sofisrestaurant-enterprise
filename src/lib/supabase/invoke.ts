@@ -6,7 +6,7 @@
 // Guarantees:
 // - Always attaches freshest access token (if available)
 // - On 401/403, attempts a single refreshSession() + retries once
-// - Single-flight refresh (prevents storm when many requests hit at once)
+// - Single-flight refresh (prevents storm when many requests hit once)
 // - Typed errors, safe JSON parsing, no token logging
 //
 // Hardened:
@@ -14,189 +14,328 @@
 //     invokeEdge(fn, { action, payload })                ✅ preferred
 //     invokeEdge(fn, { body: { action, payload } })     ✅ tolerated
 //   This prevents "Invalid request" 400s when callers accidentally double-wrap.
+// - Also accepts primitive / string / unknown bodies for legacy callers
+//   like auth-risk-evaluation and auth-session-validation.
 // =============================================================================
 
-import { supabase } from '@/lib/supabase/supabaseClient'
+import { supabase } from '@/lib/supabase/supabaseClient';
 
-type JsonRecord = Record<string, unknown>
+type JsonRecord = Record<string, unknown>;
 
-export type InvokeError = {
-  status: number
-  message: string
-  details?: unknown
+export type InvokeError = Readonly<{
+  status: number;
+  message: string;
+  details?: unknown;
+}>;
+
+export class InvokeEdgeError extends Error implements InvokeError {
+  public readonly status: number;
+  public readonly details?: unknown;
+  public readonly functionName: string;
+  public readonly requestId: string;
+
+  public constructor(args: {
+    functionName: string;
+    requestId: string;
+    status: number;
+    message: string;
+    details?: unknown;
+  }) {
+    super(args.message);
+    this.name = 'InvokeEdgeError';
+    this.functionName = args.functionName;
+    this.requestId = args.requestId;
+    this.status = args.status;
+    this.details = args.details;
+  }
 }
 
-type InvokeInit = {
-  method?: 'POST' | 'GET' | 'PUT' | 'PATCH' | 'DELETE'
-  headers?: Record<string, string>
-  signal?: AbortSignal
-  // optional hard disable auth header (rare)
-  skipAuth?: boolean
+export type InvokeInit = Readonly<{
+  method?: 'POST' | 'GET' | 'PUT' | 'PATCH' | 'DELETE';
+  headers?: Readonly<Record<string, string>>;
+  signal?: AbortSignal;
+  skipAuth?: boolean;
+}>;
+
+type ImportMetaEnvLike = Readonly<Record<string, unknown>>;
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isRecord(v: unknown): v is JsonRecord {
-  return typeof v === 'object' && v !== null && !Array.isArray(v)
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
 function errMsgFromPayload(payload: unknown, fallback: string): string {
-  if (typeof payload === 'string' && payload.trim()) return payload
-  if (payload instanceof Error) return payload.message
-  if (isRecord(payload)) {
-    const e = payload.error
-    const m = payload.message
-    if (typeof e === 'string' && e.trim()) return e
-    if (typeof m === 'string' && m.trim()) return m
-    // supabase edge often returns { error: { message } }
-    const eo = payload.error
-    if (isRecord(eo) && typeof eo.message === 'string' && eo.message.trim()) return eo.message
+  if (isNonEmptyString(payload)) {
+    return payload.trim();
   }
-  return fallback
+
+  if (payload instanceof Error && payload.message.trim().length > 0) {
+    return payload.message;
+  }
+
+  if (isRecord(payload)) {
+    const errorValue = payload.error;
+    const messageValue = payload.message;
+
+    if (isNonEmptyString(errorValue)) {
+      return errorValue.trim();
+    }
+
+    if (isNonEmptyString(messageValue)) {
+      return messageValue.trim();
+    }
+
+    if (isRecord(errorValue) && isNonEmptyString(errorValue.message)) {
+      return errorValue.message.trim();
+    }
+  }
+
+  return fallback;
 }
 
-async function safeJson(res: Response): Promise<unknown> {
-  const text = await res.text().catch(() => '')
-  if (!text) return null
-  try {
-    return JSON.parse(text)
-  } catch {
-    return text
+async function safeJson(response: Response): Promise<unknown> {
+  const text = await response.text().catch(() => '');
+
+  if (text.length === 0) {
+    return null;
   }
+
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+function getImportMetaEnv(): ImportMetaEnvLike {
+  const meta = import.meta as ImportMeta & {
+    readonly env?: unknown;
+  };
+
+  return isRecord(meta.env) ? meta.env : {};
+}
+
+function getEnvString(name: string): string | null {
+  const value = getImportMetaEnv()[name];
+  return isNonEmptyString(value) ? value.trim() : null;
 }
 
 async function getAccessToken(): Promise<string | null> {
-  const { data } = await supabase.auth.getSession()
-  const token = data?.session?.access_token ?? null
-  return token && token.trim().length > 0 ? token : null
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token ?? null;
+
+  return isNonEmptyString(token) ? token.trim() : null;
 }
 
 // ─────────────────────────────────────────────────────────────
 // Single-flight refresh (prevents request storms)
 // ─────────────────────────────────────────────────────────────
 
-let refreshPromise: Promise<boolean> | null = null
+let refreshPromise: Promise<boolean> | null = null;
 
 async function refreshSessionSingleFlight(): Promise<boolean> {
-  if (!refreshPromise) {
-    refreshPromise = (async () => {
-      try {
-        const { data, error } = await supabase.auth.refreshSession()
-        if (error) return false
-        return Boolean(data?.session?.access_token)
-      } catch {
-        return false
-      } finally {
-        refreshPromise = null
-      }
-    })()
+  if (refreshPromise !== null) {
+    return refreshPromise;
   }
-  return refreshPromise
+
+  refreshPromise = (async () => {
+    try {
+      const { data, error } = await supabase.auth.refreshSession();
+
+      if (error) {
+        return false;
+      }
+
+      return isNonEmptyString(data.session?.access_token);
+    } catch {
+      return false;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
 }
 
 function makeRequestId(): string {
   try {
-    return crypto.randomUUID()
+    return crypto.randomUUID();
   } catch {
-    return `req_${Date.now()}_${Math.random().toString(16).slice(2)}`
+    return `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   }
 }
 
 // ─────────────────────────────────────────────────────────────
 // Body normalizer (prevents 400 "invalid request")
 // ─────────────────────────────────────────────────────────────
-function normalizeBody(body: unknown): unknown {
-  // Tolerate accidental Supabase-SDK style wrapper:
-  //   { body: { action, payload } }
-  // so the Edge function still receives { action, payload }.
-  if (!isRecord(body)) return body
-  if (!('body' in body)) return body
 
-  const inner = (body as JsonRecord).body
-  // Only unwrap when "body" is the primary container
-  if (isRecord(inner)) return inner
-  return body
+function normalizeBody(body: unknown): unknown {
+  if (!isRecord(body)) {
+    return body;
+  }
+
+  if (!('body' in body)) {
+    return body;
+  }
+
+  const inner = body.body;
+  return isRecord(inner) ? inner : body;
 }
 
-async function doFetch(
-  url: string,
-  method: string,
-  body: unknown,
-  init: InvokeInit | undefined,
-  token: string | null,
-): Promise<Response> {
-  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
-  const appName = import.meta.env.VITE_APP_NAME ?? 'sofis-restaurant-v2'
+function createMissingEnvError(
+  functionName: string,
+  requestId: string,
+  baseUrl: string | null,
+  anonKey: string | null,
+): InvokeEdgeError {
+  return new InvokeEdgeError({
+    functionName,
+    requestId,
+    status: 0,
+    message: 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY',
+    details: {
+      hasBaseUrl: baseUrl !== null,
+      hasAnonKey: anonKey !== null,
+    },
+  });
+}
 
-  const normalized = normalizeBody(body)
-  const hasBody = normalized !== undefined && normalized !== null && method !== 'GET'
+function readRequestId(init: InvokeInit | undefined): string {
+  const fromHeader = init?.headers?.['x-request-id'];
+  return isNonEmptyString(fromHeader) ? fromHeader.trim() : makeRequestId();
+}
 
+function buildHeaders(args: {
+  anonKey: string;
+  appName: string;
+  requestId: string;
+  init: InvokeInit | undefined;
+  token: string | null;
+  hasBody: boolean;
+}): Record<string, string> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
-    apikey: anonKey,
-    'x-application-name': appName,
-    'x-request-id': init?.headers?.['x-request-id'] ?? makeRequestId(),
-    ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
-    ...(init?.headers ?? {}),
+    apikey: args.anonKey,
+    'x-application-name': args.appName,
+    'x-request-id': args.requestId,
+    ...(args.hasBody ? { 'Content-Type': 'application/json' } : {}),
+    ...(args.init?.headers ?? {}),
+  };
+
+  if (!args.init?.skipAuth && args.token !== null) {
+    headers.Authorization = `Bearer ${args.token}`;
   }
 
-  if (!init?.skipAuth && token) {
-    headers.Authorization = `Bearer ${token}`
-  }
-
-  return fetch(url, {
-    method,
-    headers,
-    body: hasBody ? JSON.stringify(normalized) : undefined,
-    signal: init?.signal,
-  })
+  return headers;
 }
 
-export async function invokeEdge<
-  TResponse = unknown,
-  TBody extends JsonRecord = JsonRecord
->(
+async function doFetch(args: {
+  url: string;
+  method: NonNullable<InvokeInit['method']>;
+  body: unknown;
+  init: InvokeInit | undefined;
+  token: string | null;
+  anonKey: string;
+  appName: string;
+  requestId: string;
+}): Promise<Response> {
+  const normalizedBody = normalizeBody(args.body);
+  const hasBody =
+    normalizedBody !== undefined && normalizedBody !== null && args.method !== 'GET';
+
+  const headers = buildHeaders({
+    anonKey: args.anonKey,
+    appName: args.appName,
+    requestId: args.requestId,
+    init: args.init,
+    token: args.token,
+    hasBody,
+  });
+
+  return fetch(args.url, {
+    method: args.method,
+    headers,
+    body: hasBody ? JSON.stringify(normalizedBody) : undefined,
+    signal: args.init?.signal,
+  });
+}
+
+function createInvokeResponseError(args: {
+  functionName: string;
+  requestId: string;
+  status: number;
+  payload: unknown;
+}): InvokeEdgeError {
+  return new InvokeEdgeError({
+    functionName: args.functionName,
+    requestId: args.requestId,
+    status: args.status,
+    message: errMsgFromPayload(args.payload, 'Request failed'),
+    details: args.payload,
+  });
+}
+
+export async function invokeEdge<TResponse = unknown, TBody = unknown>(
   functionName: string,
   body?: TBody,
   init?: InvokeInit,
 ): Promise<TResponse> {
-  const method = init?.method ?? 'POST'
+  const method = init?.method ?? 'POST';
+  const requestId = readRequestId(init);
 
-  const baseUrl = import.meta.env.VITE_SUPABASE_URL
-  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+  const baseUrl = getEnvString('VITE_SUPABASE_URL');
+  const anonKey = getEnvString('VITE_SUPABASE_ANON_KEY');
 
-  if (!baseUrl || !anonKey) {
-    const err: InvokeError = {
-      status: 0,
-      message: 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY',
-      details: { baseUrl: Boolean(baseUrl), anonKey: Boolean(anonKey) },
-    }
-    throw err
+  if (baseUrl === null || anonKey === null) {
+    throw createMissingEnvError(functionName, requestId, baseUrl, anonKey);
   }
 
-  const url = `${baseUrl.replace(/\/+$/, '')}/functions/v1/${functionName}`
+  const appName = getEnvString('VITE_APP_NAME') ?? 'sofis-restaurant-v2';
+  const url = `${baseUrl.replace(/\/+$/, '')}/functions/v1/${functionName}`;
 
-  // 1) First attempt with current token
-  let token = await getAccessToken()
-  let res = await doFetch(url, method, body, init, token)
-  let payload = await safeJson(res)
+  let token = await getAccessToken();
+  let response = await doFetch({
+    url,
+    method,
+    body,
+    init,
+    token,
+    anonKey,
+    appName,
+    requestId,
+  });
+  let payload = await safeJson(response);
 
-  // 2) If auth error, try refreshSession() once and retry
-  if ((res.status === 401 || res.status === 403) && !init?.skipAuth) {
-    const refreshed = await refreshSessionSingleFlight()
+  if ((response.status === 401 || response.status === 403) && !init?.skipAuth) {
+    const refreshed = await refreshSessionSingleFlight();
+
     if (refreshed) {
-      token = await getAccessToken()
-      res = await doFetch(url, method, body, init, token)
-      payload = await safeJson(res)
+      token = await getAccessToken();
+      response = await doFetch({
+        url,
+        method,
+        body,
+        init,
+        token,
+        anonKey,
+        appName,
+        requestId,
+      });
+      payload = await safeJson(response);
     }
   }
 
-  if (!res.ok) {
-    const err: InvokeError = {
-      status: res.status,
-      message: errMsgFromPayload(payload, 'Request failed'),
-      details: payload,
-    }
-    throw err
+  if (!response.ok) {
+    throw createInvokeResponseError({
+      functionName,
+      requestId,
+      status: response.status,
+      payload,
+    });
   }
 
-  return payload as TResponse
+  return payload as TResponse;
 }

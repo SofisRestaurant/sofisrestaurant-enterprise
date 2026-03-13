@@ -3,6 +3,18 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase/supabaseClient';
 import { Button } from '@/components/ui/Button';
 
+function hasRecoveryParams(): boolean {
+  const hash = window.location.hash;
+  const search = window.location.search;
+
+  return (
+    hash.includes('access_token=') ||
+    hash.includes('refresh_token=') ||
+    hash.includes('type=recovery') ||
+    search.includes('code=')
+  );
+}
+
 export default function UpdatePassword() {
   const navigate = useNavigate();
   const [ready, setReady] = useState(false);
@@ -11,27 +23,61 @@ export default function UpdatePassword() {
   const [status, setStatus] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
-useEffect(() => {
-  const init = async () => {
-    const { data: { session } } = await supabase.auth.getSession()
+  useEffect(() => {
+    let isMounted = true;
 
-    if (session) {
-      setReady(true)
-    }
-  }
+    const init = async (): Promise<void> => {
+      try {
+        const url = new URL(window.location.href);
+        const code = url.searchParams.get('code');
 
-  init()
+        if (code) {
+          const { error } = await supabase.auth.exchangeCodeForSession(code);
 
-  const { data: listener } = supabase.auth.onAuthStateChange(
-    (event, session) => {
-      if (event === 'PASSWORD_RECOVERY' || session) {
-        setReady(true)
+          if (error) {
+            if (isMounted) {
+              setStatus('This password reset link is invalid or expired.');
+              setReady(false);
+            }
+            return;
+          }
+        }
+
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (!isMounted) return;
+
+        if (session || hasRecoveryParams()) {
+          setReady(true);
+        } else {
+          setStatus('This password reset link is invalid or expired.');
+          setReady(false);
+        }
+      } catch {
+        if (!isMounted) return;
+        setStatus('Could not open password reset. Please request a new reset link.');
+        setReady(false);
       }
-    }
-  )
+    };
 
-  return () => listener.subscription.unsubscribe()
-}, [])
+    void init();
+
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!isMounted) return;
+
+      if (event === 'PASSWORD_RECOVERY' || !!session) {
+        setReady(true);
+        setStatus(null);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
 
   const isValid = useMemo(() => {
     if (password.length < 8) return false;
@@ -39,7 +85,7 @@ useEffect(() => {
     return true;
   }, [password, confirmPassword]);
 
-  const onSubmit = async (e: React.FormEvent) => {
+  const onSubmit = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
     setStatus(null);
 
@@ -54,7 +100,9 @@ useEffect(() => {
     }
 
     setIsSaving(true);
+
     const { error } = await supabase.auth.updateUser({ password });
+
     setIsSaving(false);
 
     if (error) {
@@ -63,10 +111,9 @@ useEffect(() => {
     }
 
     setStatus('✅ Password updated successfully!');
-    
-    // Redirect to home after 2 seconds
+
     setTimeout(() => {
-      navigate('/');
+      void navigate('/');
     }, 2000);
   };
 
@@ -79,14 +126,12 @@ useEffect(() => {
 
       {!ready ? (
         <div className="mt-6 rounded-xl border bg-white p-4 text-sm text-gray-700">
-          Opening password reset…
+          {status ?? 'Opening password reset…'}
         </div>
       ) : (
         <form onSubmit={onSubmit} className="mt-6 space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-800 mb-2">
-              New password
-            </label>
+            <label className="mb-2 block text-sm font-medium text-gray-800">New password</label>
             <input
               className="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 outline-none focus:ring-2 focus:ring-primary"
               type="password"
@@ -99,9 +144,7 @@ useEffect(() => {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-800 mb-2">
-              Confirm password
-            </label>
+            <label className="mb-2 block text-sm font-medium text-gray-800">Confirm password</label>
             <input
               className="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 outline-none focus:ring-2 focus:ring-primary"
               type="password"
@@ -123,7 +166,11 @@ useEffect(() => {
           </Button>
 
           {status && (
-            <p className={`pt-2 text-sm ${status.startsWith('✅') ? 'text-green-600' : 'text-red-600'}`}>
+            <p
+              className={`pt-2 text-sm ${
+                status.startsWith('✅') ? 'text-green-600' : 'text-red-600'
+              }`}
+            >
               {status}
             </p>
           )}

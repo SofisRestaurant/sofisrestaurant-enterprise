@@ -13,20 +13,20 @@
 // - Uses generated Database types for correct table names + payload shapes
 // =============================================================================
 
-import { requireAuth, serviceClient, AuthError } from "../_shared/auth.ts";
-import { handlePreflight, ok, err, clientIp } from "../_shared/http.ts";
-import { computeRiskScore, isUnusualTime } from "../_shared/riskScore.ts";
+import { requireAuth, serviceClient, AuthError } from '../_shared/auth.ts';
+import { handlePreflight, ok, err, clientIp } from '../_shared/http.ts';
+import { computeRiskScore, isUnusualTime } from '../_shared/riskScore.ts';
 
-import type { Database, Json } from "../_shared/database.types.ts";
+import type { Database, Json } from '../_shared/database.types.ts';
 
 type Db = ReturnType<typeof serviceClient>;
-type Tables = Database["public"]["Tables"];
+type Tables = Database['public']['Tables'];
 
-type AuthAuditInsert = Tables["auth_audit_log"]["Insert"];
-type RateLimitRow = Tables["auth_risk_rate_limits"]["Row"];
-type DeviceTrustRow = Tables["device_trust"]["Row"];
-type SessionMetaRow = Tables["auth_sessions_meta"]["Row"];
-type RiskScoreRow = Tables["auth_risk_scores"]["Row"];
+type AuthAuditInsert = Tables['auth_audit_log']['Insert'];
+type RateLimitRow = Tables['auth_risk_rate_limits']['Row'];
+type DeviceTrustRow = Tables['device_trust']['Row'];
+type SessionMetaRow = Tables['auth_sessions_meta']['Row'];
+type RiskScoreRow = Tables['auth_risk_scores']['Row'];
 
 const CONFIG = {
   MAX_BODY_BYTES: 6_000,
@@ -49,14 +49,13 @@ const CONFIG = {
 } as const;
 
 const FINGERPRINT_RE = /^[0-9a-f]{64}$/i;
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const COUNTRY_RE = /^[A-Z]{2}$/;
 
 type JsonRecord = Record<string, unknown>;
 
 function isRecord(v: unknown): v is JsonRecord {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 function nowIso(): string {
@@ -64,21 +63,21 @@ function nowIso(): string {
 }
 
 function isProd(): boolean {
-  const env = (Deno.env.get("APP_ENV") ?? Deno.env.get("NODE_ENV") ?? "development")
+  const env = (Deno.env.get('APP_ENV') ?? Deno.env.get('NODE_ENV') ?? 'development')
     .trim()
     .toLowerCase();
-  return env === "production";
+  return env === 'production';
 }
 
 function asString(v: unknown, max: number): string {
-  if (typeof v !== "string") return "";
+  if (typeof v !== 'string') return '';
   const s = v.trim();
-  if (!s) return "";
+  if (!s) return '';
   return s.length > max ? s.slice(0, max) : s;
 }
 
 function normalizeCountry(v: unknown): string | null {
-  if (typeof v !== "string") return null;
+  if (typeof v !== 'string') return null;
   const s = v.trim().toUpperCase();
   if (s.length !== 2) return null;
   return COUNTRY_RE.test(s) ? s : null;
@@ -99,33 +98,33 @@ function safeDateMs(v: string | null): number | null {
 }
 
 async function readJsonWithLimit(req: Request, maxBytes: number): Promise<unknown> {
-  const ct = (req.headers.get("content-type") ?? "").toLowerCase();
-  if (!ct.includes("application/json")) throw new Error("UNSUPPORTED_CONTENT_TYPE");
+  const ct = (req.headers.get('content-type') ?? '').toLowerCase();
+  if (!ct.includes('application/json')) throw new Error('UNSUPPORTED_CONTENT_TYPE');
 
   const ab = await req.arrayBuffer();
-  if (ab.byteLength > maxBytes) throw new Error("PAYLOAD_TOO_LARGE");
+  if (ab.byteLength > maxBytes) throw new Error('PAYLOAD_TOO_LARGE');
 
   const text = new TextDecoder().decode(ab);
-  if (!text.trim()) throw new Error("EMPTY_BODY");
+  if (!text.trim()) throw new Error('EMPTY_BODY');
 
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error("INVALID_JSON");
+    throw new Error('INVALID_JSON');
   }
 }
 
 function pickEdgeCountry(req: Request): string | null {
-  const cf = normalizeCountry(req.headers.get("CF-IPCountry"));
+  const cf = normalizeCountry(req.headers.get('CF-IPCountry'));
   if (cf) return cf;
 
-  const vercel = normalizeCountry(req.headers.get("x-vercel-ip-country"));
+  const vercel = normalizeCountry(req.headers.get('x-vercel-ip-country'));
   if (vercel) return vercel;
 
-  const fly = normalizeCountry(req.headers.get("fly-client-country"));
+  const fly = normalizeCountry(req.headers.get('fly-client-country'));
   if (fly) return fly;
 
-  const generic = normalizeCountry(req.headers.get("x-country"));
+  const generic = normalizeCountry(req.headers.get('x-country'));
   if (generic) return generic;
 
   return null;
@@ -173,7 +172,7 @@ async function audit(
   };
 
   try {
-    await db.from("auth_audit_log").insert(payload);
+    await db.from('auth_audit_log').insert(payload);
   } catch {
     // swallow
   }
@@ -194,19 +193,19 @@ async function checkCooldown(
   const windowStartMs = nowMs - CONFIG.RL_WINDOW_MINUTES * 60_000;
 
   const { data, error } = await db
-    .from("auth_risk_rate_limits")
-    .select("session_id,user_id,attempts,last_attempt_at,blocked_until")
-    .eq("session_id", sessionId)
+    .from('auth_risk_rate_limits')
+    .select('session_id,user_id,attempts,last_attempt_at,blocked_until')
+    .eq('session_id', sessionId)
     .maybeSingle();
 
   if (error) {
     await audit(db, {
       user_id: userId,
-      event_type: "rate_limit_table_error",
+      event_type: 'rate_limit_table_error',
       ip_address: ip,
       risk_score: null,
       device_id: null,
-      event_data: toJson({ requestId, table: "auth_risk_rate_limits", error: error.message }),
+      event_data: toJson({ requestId, table: 'auth_risk_rate_limits', error: error.message }),
     });
     // Fail-open: risk eval should not brick login
     return { blocked: false, blockedUntil: null };
@@ -220,13 +219,13 @@ async function checkCooldown(
 
     await audit(db, {
       user_id: userId,
-      event_type: "suspicious_activity",
+      event_type: 'suspicious_activity',
       ip_address: ip,
       risk_score: 100,
       device_id: null,
       event_data: toJson({
         requestId,
-        reason: "session_id_owner_mismatch",
+        reason: 'session_id_owner_mismatch',
         session_id: sessionId,
       }),
     });
@@ -249,7 +248,7 @@ async function checkCooldown(
     ? new Date(nowMs + CONFIG.RL_BLOCK_MINUTES * 60_000).toISOString()
     : null;
 
-  const { error: upErr } = await db.from("auth_risk_rate_limits").upsert(
+  const { error: upErr } = await db.from('auth_risk_rate_limits').upsert(
     {
       session_id: sessionId,
       user_id: userId,
@@ -257,13 +256,13 @@ async function checkCooldown(
       last_attempt_at: new Date(nowMs).toISOString(),
       blocked_until: newBlockedUntil,
     },
-    { onConflict: "session_id" },
+    { onConflict: 'session_id' },
   );
 
   if (upErr) {
     await audit(db, {
       user_id: userId,
-      event_type: "rate_limit_upsert_failed",
+      event_type: 'rate_limit_upsert_failed',
       ip_address: ip,
       risk_score: null,
       device_id: null,
@@ -284,10 +283,10 @@ Deno.serve(async (req) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
 
-  const requestId = req.headers.get("x-request-id")?.trim() || makeRequestId();
+  const requestId = req.headers.get('x-request-id')?.trim() || makeRequestId();
 
-  if (req.method !== "POST") {
-    return err(req, "METHOD_NOT_ALLOWED", `Method not allowed (requestId: ${requestId})`, 405);
+  if (req.method !== 'POST') {
+    return err(req, 'METHOD_NOT_ALLOWED', `Method not allowed (requestId: ${requestId})`, 405);
   }
 
   // Auth (server-validated JWT)
@@ -298,7 +297,7 @@ Deno.serve(async (req) => {
     if (e instanceof AuthError) {
       return err(req, e.code, `${e.message} (requestId: ${requestId})`, e.status);
     }
-    return err(req, "AUTH_ERROR", `Authentication failed (requestId: ${requestId})`, 401);
+    return err(req, 'AUTH_ERROR', `Authentication failed (requestId: ${requestId})`, 401);
   }
 
   const db = serviceClient();
@@ -309,27 +308,27 @@ Deno.serve(async (req) => {
   try {
     raw = await readJsonWithLimit(req, CONFIG.MAX_BODY_BYTES);
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "INVALID_BODY";
+    const msg = e instanceof Error ? e.message : 'INVALID_BODY';
 
-    if (msg === "PAYLOAD_TOO_LARGE") {
-      return err(req, "PAYLOAD_TOO_LARGE", `Payload too large (requestId: ${requestId})`, 413);
+    if (msg === 'PAYLOAD_TOO_LARGE') {
+      return err(req, 'PAYLOAD_TOO_LARGE', `Payload too large (requestId: ${requestId})`, 413);
     }
-    if (msg === "UNSUPPORTED_CONTENT_TYPE") {
+    if (msg === 'UNSUPPORTED_CONTENT_TYPE') {
       return err(
         req,
-        "UNSUPPORTED_MEDIA_TYPE",
+        'UNSUPPORTED_MEDIA_TYPE',
         `Content-Type must be application/json (requestId: ${requestId})`,
         415,
       );
     }
-    if (msg === "EMPTY_BODY") {
-      return err(req, "INVALID_BODY", `Empty request body (requestId: ${requestId})`, 400);
+    if (msg === 'EMPTY_BODY') {
+      return err(req, 'INVALID_BODY', `Empty request body (requestId: ${requestId})`, 400);
     }
-    return err(req, "INVALID_BODY", `Invalid JSON body (requestId: ${requestId})`, 400);
+    return err(req, 'INVALID_BODY', `Invalid JSON body (requestId: ${requestId})`, 400);
   }
 
   if (!isRecord(raw)) {
-    return err(req, "INVALID_BODY", `Body must be a JSON object (requestId: ${requestId})`, 400);
+    return err(req, 'INVALID_BODY', `Body must be a JSON object (requestId: ${requestId})`, 400);
   }
 
   const fingerprintHash = asString(raw.fingerprintHash, CONFIG.MAX_FP_LEN);
@@ -339,14 +338,14 @@ Deno.serve(async (req) => {
   if (!FINGERPRINT_RE.test(fingerprintHash)) {
     return err(
       req,
-      "INVALID_FINGERPRINT",
+      'INVALID_FINGERPRINT',
       `fingerprintHash must be 64 hex chars (requestId: ${requestId})`,
       400,
     );
   }
 
   if (!UUID_RE.test(sessionId)) {
-    return err(req, "INVALID_SESSION", `sessionId must be UUID (requestId: ${requestId})`, 400);
+    return err(req, 'INVALID_SESSION', `sessionId must be UUID (requestId: ${requestId})`, 400);
   }
 
   // Edge country required in prod
@@ -354,14 +353,19 @@ Deno.serve(async (req) => {
   if (isProd() && CONFIG.REQUIRE_EDGE_COUNTRY_IN_PROD && !edgeCountry) {
     await audit(db, {
       user_id: user.id,
-      event_type: "missing_edge_country_header",
+      event_type: 'missing_edge_country_header',
       ip_address: ip,
       risk_score: null,
       device_id: null,
       event_data: toJson({ requestId, session_id: sessionId }),
     });
 
-    return err(req, "MISSING_GEO_HEADER", `Missing edge country header (requestId: ${requestId})`, 400);
+    return err(
+      req,
+      'MISSING_GEO_HEADER',
+      `Missing edge country header (requestId: ${requestId})`,
+      400,
+    );
   }
 
   const countryCode = edgeCountry ?? clientCountry ?? null;
@@ -371,14 +375,19 @@ Deno.serve(async (req) => {
   if (rl.blocked) {
     await audit(db, {
       user_id: user.id,
-      event_type: "auth_risk_rate_limited",
+      event_type: 'auth_risk_rate_limited',
       ip_address: ip,
       risk_score: null,
       device_id: null,
       event_data: toJson({ requestId, session_id: sessionId, blocked_until: rl.blockedUntil }),
     });
 
-    return err(req, "RATE_LIMITED", `Too many requests. Please wait. (requestId: ${requestId})`, 429);
+    return err(
+      req,
+      'RATE_LIMITED',
+      `Too many requests. Please wait. (requestId: ${requestId})`,
+      429,
+    );
   }
 
   // ── Gather signals (best-effort) ───────────────────────────────────────────
@@ -386,38 +395,42 @@ Deno.serve(async (req) => {
   const failSinceIso = new Date(Date.now() - CONFIG.RECENT_FAIL_WINDOW_MS).toISOString();
 
   const settled = await Promise.allSettled([
-    db.from("device_trust")
-      .select("id")
-      .eq("user_id", user.id)
-      .eq("fingerprint_hash", fingerprintHash)
-      .eq("is_revoked", false)
+    db
+      .from('device_trust')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('fingerprint_hash', fingerprintHash)
+      .eq('is_revoked', false)
       .maybeSingle(),
 
-    db.from("auth_audit_log")
-      .select("created_at")
-      .eq("user_id", user.id)
-      .eq("event_type", "login_success")
-      .order("created_at", { ascending: false })
+    db
+      .from('auth_audit_log')
+      .select('created_at')
+      .eq('user_id', user.id)
+      .eq('event_type', 'login_success')
+      .order('created_at', { ascending: false })
       .limit(CONFIG.RECENT_LOGIN_LIMIT),
 
-    db.from("account_lockouts")
-      .select("email, locked_until")
-      .eq("email", user.email ?? "")
+    db
+      .from('account_lockouts')
+      .select('email, locked_until')
+      .eq('email', user.email ?? '')
       .maybeSingle(),
 
-    db.from("login_attempts")
-      .select("id")
-      .eq("email", user.email ?? "")
-      .eq("success", false)
-      .gte("created_at", failSinceIso),
+    db
+      .from('login_attempts')
+      .select('id')
+      .eq('email', user.email ?? '')
+      .eq('success', false)
+      .gte('created_at', failSinceIso),
   ] as const);
 
-  const deviceRes = settled[0].status === "fulfilled" ? settled[0].value : null;
-  const loginsRes = settled[1].status === "fulfilled" ? settled[1].value : null;
-  const lockoutRes = settled[2].status === "fulfilled" ? settled[2].value : null;
-  const failuresRes = settled[3].status === "fulfilled" ? settled[3].value : null;
+  const deviceRes = settled[0].status === 'fulfilled' ? settled[0].value : null;
+  const loginsRes = settled[1].status === 'fulfilled' ? settled[1].value : null;
+  const lockoutRes = settled[2].status === 'fulfilled' ? settled[2].value : null;
+  const failuresRes = settled[3].status === 'fulfilled' ? settled[3].value : null;
 
-  const deviceTrustId = (deviceRes?.data as Pick<DeviceTrustRow, "id"> | null)?.id ?? null;
+  const deviceTrustId = (deviceRes?.data as Pick<DeviceTrustRow, 'id'> | null)?.id ?? null;
   const deviceUnknown = !deviceTrustId;
 
   const recentLoginHours = (loginsRes?.data ?? [])
@@ -432,16 +445,16 @@ Deno.serve(async (req) => {
   if (countryCode) {
     try {
       const { data: recentSessions, error: sessErr } = await db
-        .from("auth_sessions_meta")
-        .select("country_code, created_at")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: false })
+        .from('auth_sessions_meta')
+        .select('country_code, created_at')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
         .limit(CONFIG.RECENT_SESSIONS_COUNTRY_LIMIT);
 
       if (!sessErr) {
         const known = new Set(
           (recentSessions ?? [])
-            .map((s) => (typeof s.country_code === "string" ? s.country_code.toUpperCase() : ""))
+            .map((s) => (typeof s.country_code === 'string' ? s.country_code.toUpperCase() : ''))
             .filter(Boolean),
         );
 
@@ -468,7 +481,7 @@ Deno.serve(async (req) => {
   // ── Persist (best-effort) ─────────────────────────────────────────────────
 
   try {
-    await db.from("auth_risk_scores").upsert(
+    await db.from('auth_risk_scores').upsert(
       {
         user_id: user.id,
         session_id: sessionId,
@@ -483,15 +496,15 @@ Deno.serve(async (req) => {
         requires_step_up: result.requiresStepUp,
         evaluated_at: evaluatedAt,
         expires_at: expiresAt,
-      } satisfies Tables["auth_risk_scores"]["Insert"],
-      { onConflict: "session_id" },
+      } satisfies Tables['auth_risk_scores']['Insert'],
+      { onConflict: 'session_id' },
     );
   } catch {
     // swallow
   }
 
   try {
-    await db.from("auth_sessions_meta").upsert(
+    await db.from('auth_sessions_meta').upsert(
       {
         user_id: user.id,
         session_id: sessionId,
@@ -501,17 +514,17 @@ Deno.serve(async (req) => {
         is_trusted_device: !!deviceTrustId,
         risk_score: result.score,
         last_active_at: evaluatedAt,
-      } satisfies Tables["auth_sessions_meta"]["Insert"],
-      { onConflict: "session_id" },
+      } satisfies Tables['auth_sessions_meta']['Insert'],
+      { onConflict: 'session_id' },
     );
   } catch {
     // swallow
   }
 
-  if (result.tier === "high" || result.tier === "critical") {
+  if (result.tier === 'high' || result.tier === 'critical') {
     await audit(db, {
       user_id: user.id,
-      event_type: "suspicious_activity",
+      event_type: 'suspicious_activity',
       ip_address: ip,
       risk_score: result.score,
       device_id: deviceTrustId,

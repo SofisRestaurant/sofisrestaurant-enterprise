@@ -7,19 +7,19 @@
 // Used by: delete group, delete modifier, force-delete with linked items.
 // ============================================================================
 
-import { useEffect, useRef } from 'react'
-import { AsyncButton }       from './AsyncButton'
+import { useEffect, useRef } from 'react';
+import { AsyncButton } from './AsyncButton';
 
 interface ConfirmDialogProps {
-  isOpen:     boolean
-  onConfirm:  () => void
-  onCancel:   () => void
-  title:      string
-  message:    string
-  confirmText?: string
-  cancelText?:  string
-  variant?:   'danger' | 'warning' | 'default'
-  loading?:   boolean
+  isOpen: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+  title: string;
+  message: string;
+  confirmText?: string;
+  cancelText?: string;
+  variant?: 'danger' | 'warning' | 'default';
+  loading?: boolean;
 }
 
 export function ConfirmDialog({
@@ -29,33 +29,45 @@ export function ConfirmDialog({
   title,
   message,
   confirmText = 'Confirm',
-  cancelText  = 'Cancel',
-  variant     = 'danger',
-  loading     = false,
+  cancelText = 'Cancel',
+  variant = 'danger',
+  loading = false,
 }: ConfirmDialogProps) {
-  const cancelRef = useRef<HTMLButtonElement>(null)
+  const cancelRef = useRef<HTMLButtonElement>(null);
 
   // Focus cancel button on open (safer default for destructive dialogs)
   useEffect(() => {
-    if (isOpen) cancelRef.current?.focus()
-  }, [isOpen])
+    if (isOpen) cancelRef.current?.focus();
+  }, [isOpen]);
 
   // Escape to cancel
   useEffect(() => {
-    if (!isOpen) return
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onCancel() }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [isOpen, onCancel])
+    if (!isOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isOpen, onCancel]);
 
-  if (!isOpen) return null
+  if (!isOpen) return null;
 
   const iconMap = {
-    danger:  { bg: 'bg-red-50',    icon: '⚠',  ring: 'ring-red-100',  confirmVariant: 'danger'    as const },
-    warning: { bg: 'bg-amber-50',  icon: '⚠',  ring: 'ring-amber-100', confirmVariant: 'primary'   as const },
-    default: { bg: 'bg-gray-50',   icon: 'ℹ',  ring: 'ring-gray-100',  confirmVariant: 'primary'   as const },
-  }
-  const style = iconMap[variant]
+    danger: { bg: 'bg-red-50', icon: '⚠', ring: 'ring-red-100', confirmVariant: 'danger' as const },
+    warning: {
+      bg: 'bg-amber-50',
+      icon: '⚠',
+      ring: 'ring-amber-100',
+      confirmVariant: 'primary' as const,
+    },
+    default: {
+      bg: 'bg-gray-50',
+      icon: 'ℹ',
+      ring: 'ring-gray-100',
+      confirmVariant: 'primary' as const,
+    },
+  };
+  const style = iconMap[variant];
 
   return (
     <>

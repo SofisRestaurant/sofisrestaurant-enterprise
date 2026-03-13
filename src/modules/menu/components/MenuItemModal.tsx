@@ -696,7 +696,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
 
   // Selection handlers
   const toggleGroupExpanded = useCallback((groupId: string) => {
-    setExpandedGroups((prev) => ({ ...prev, [groupId]: !Boolean(prev[groupId]) }));
+    setExpandedGroups((prev) => ({ ...prev, [groupId]: !prev[groupId] }));
   }, []);
 
   const setSelectionForGroup = useCallback((group: ModifierGroupLike, mod: ModifierLike) => {

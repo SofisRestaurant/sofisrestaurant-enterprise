@@ -7,11 +7,13 @@
 //     invokeFn(fn, { body: { action, payload } })  -> sends { action, payload }
 // - Leaves non-JSON bodies untouched (FormData / Blob / ArrayBuffer / Stream)
 // - Adds a request id header for traceability
+// - Adds an optional device fingerprint header for client-side invocations
 // - Never logs tokens or sensitive data
+// - Avoids unsafe any assignments from the Supabase Functions client response
 // =============================================================================
 
-import { supabase } from './supabaseClient'
-import { requireAccessToken } from './session'
+import { supabase } from './supabaseClient';
+import { requireAccessToken } from './session';
 
 type InvokeBody =
   | string
@@ -20,22 +22,47 @@ type InvokeBody =
   | Blob
   | ArrayBuffer
   | FormData
-  | ReadableStream<Uint8Array>
+  | ReadableStream<Uint8Array>;
 
-type InvokeOk<T> = { data: T; error: null }
-type InvokeFail = { data: null; error: Error }
+type InvokeOk<T> = { data: T; error: null };
+type InvokeFail = { data: null; error: Error };
 
-type UnknownRecord = Record<string, unknown>
+type UnknownRecord = Record<string, unknown>;
 
 function isRecord(v: unknown): v is UnknownRecord {
-  return typeof v === 'object' && v !== null && !Array.isArray(v)
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 function makeRequestId(): string {
   try {
-    return crypto.randomUUID()
+    return crypto.randomUUID();
   } catch {
-    return `req_${Date.now()}_${Math.random().toString(16).slice(2)}`
+    return `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  }
+}
+
+function getDeviceFingerprint(): string | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    const nav = window.navigator;
+    const screenInfo = window.screen;
+
+    const raw = [
+      nav.userAgent ?? '',
+      nav.language ?? '',
+      String(screenInfo?.width ?? ''),
+      String(screenInfo?.height ?? ''),
+      String(new Date().getTimezoneOffset()),
+      window.location.hostname ?? '',
+    ].join('|');
+
+    const fingerprint = raw.trim();
+    return fingerprint ? fingerprint.slice(0, 256) : null;
+  } catch {
+    return 'unknown-device';
   }
 }
 
@@ -47,30 +74,71 @@ function makeRequestId(): string {
  * This prevents intermittent 400s caused by mismatched client helpers.
  */
 function normalizeJsonBody(body: unknown): unknown {
-  if (!isRecord(body)) return body
-  if (!('body' in body)) return body
+  if (!isRecord(body)) return body;
+  if (!('body' in body)) return body;
 
-  const inner = (body as UnknownRecord).body
-  if (isRecord(inner)) return inner
-  return body
+  const inner = body.body;
+  if (isRecord(inner)) return inner;
+  return body;
 }
 
 function toInvokeBody(body: unknown): InvokeBody | undefined {
-  if (body == null) return undefined
+  if (body == null) return undefined;
 
-  // Pass-through binary / streaming / multipart bodies
-  if (typeof body === 'string') return body
-  if (body instanceof ArrayBuffer) return body
-  if (body instanceof Blob) return body
-  if (body instanceof File) return body
-  if (body instanceof FormData) return body
-  if (body instanceof ReadableStream) return body as ReadableStream<Uint8Array>
+  if (typeof body === 'string') return body;
+  if (body instanceof ArrayBuffer) return body;
+  if (body instanceof Blob) return body;
+  if (body instanceof File) return body;
+  if (body instanceof FormData) return body;
+  if (body instanceof ReadableStream) return body as ReadableStream<Uint8Array>;
 
-  // JSON object
-  if (typeof body === 'object') return body as Record<string, unknown>
+  if (typeof body === 'object') return body as Record<string, unknown>;
 
-  // numbers/booleans/etc → send as JSON string
-  return JSON.stringify(body)
+  return JSON.stringify(body);
+}
+
+function normalizeInvokeError(error: unknown): Error | null {
+  if (!error) {
+    return null;
+  }
+
+  if (error instanceof Error) {
+    return error;
+  }
+
+  if (typeof error === 'string') {
+    return new Error(error);
+  }
+
+  if (isRecord(error)) {
+    const message =
+      typeof error.message === 'string'
+        ? error.message
+        : typeof error.error === 'string'
+        ? error.error
+        : null;
+
+    if (message) {
+      return new Error(message);
+    }
+
+    try {
+      return new Error(JSON.stringify(error));
+    } catch {
+      return new Error('Function invoke failed');
+    }
+  }
+
+  if (
+    typeof error === 'number' ||
+    typeof error === 'boolean' ||
+    typeof error === 'bigint' ||
+    typeof error === 'symbol'
+  ) {
+    return new Error(String(error));
+  }
+
+  return new Error('Function invoke failed');
 }
 
 export async function invokeFn<T>(
@@ -78,9 +146,9 @@ export async function invokeFn<T>(
   body?: unknown,
 ): Promise<InvokeOk<T> | InvokeFail> {
   try {
-    const token = await requireAccessToken()
+    const token = await requireAccessToken();
+    const deviceFingerprint = getDeviceFingerprint();
 
-    // Only normalize JSON-ish objects. Do not touch FormData/Blob/etc.
     const normalized =
       body instanceof ArrayBuffer ||
       body instanceof Blob ||
@@ -89,19 +157,28 @@ export async function invokeFn<T>(
       body instanceof ReadableStream ||
       typeof body === 'string'
         ? body
-        : normalizeJsonBody(body)
+        : normalizeJsonBody(body);
 
     const res = await supabase.functions.invoke(fnName, {
       body: toInvokeBody(normalized),
       headers: {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         'x-request-id': makeRequestId(),
+        ...(deviceFingerprint ? { 'x-device-fingerprint': deviceFingerprint } : {}),
       },
-    })
+    });
 
-    if (res.error) return { data: null, error: res.error }
-    return { data: res.data as T, error: null }
-  } catch (e) {
-    return { data: null, error: e instanceof Error ? e : new Error('Invoke failed') }
+    const invokeError = normalizeInvokeError(res.error);
+    if (invokeError) {
+      return { data: null, error: invokeError };
+    }
+
+    const data = res.data as unknown as T;
+    return { data, error: null };
+  } catch (e: unknown) {
+    return {
+      data: null,
+      error: e instanceof Error ? e : new Error('Invoke failed'),
+    };
   }
 }

@@ -1,9 +1,4 @@
-import {
-  useEffect,
-  useRef,
-  useCallback,
-  type ReactNode,
-} from 'react';
+import { useEffect, useRef, useCallback, type ReactNode } from 'react';
 
 interface ModalShellProps {
   isOpen: boolean;
@@ -54,9 +49,7 @@ export function ModalShell({
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key !== 'Tab' || !cardRef.current) return;
 
-    const focusable = Array.from(
-      cardRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)
-    );
+    const focusable = Array.from(cardRef.current.querySelectorAll<HTMLElement>(FOCUSABLE));
 
     if (!focusable.length) return;
 
@@ -147,10 +140,8 @@ export function ModalShell({
             transform: 'translateZ(0)',
             isolation: 'isolate',
             willChange: 'transform',
-            transition:
-              'transform 0.28s cubic-bezier(0.16,1,0.3,1), opacity 0.22s ease',
-            animation:
-              'modalCardIn 0.28s cubic-bezier(0.16,1,0.3,1) both',
+            transition: 'transform 0.28s cubic-bezier(0.16,1,0.3,1), opacity 0.22s ease',
+            animation: 'modalCardIn 0.28s cubic-bezier(0.16,1,0.3,1) both',
           }}
           onMouseDown={(event) => event.stopPropagation()}
           onTouchStart={handleTouchStart}
@@ -161,9 +152,7 @@ export function ModalShell({
             aria-hidden="true"
             className="mx-auto mb-3 h-1 w-10 rounded-full bg-white/20 sm:hidden"
           />
-          <span className="sr-only">
-            Press Escape or swipe down to close
-          </span>
+          <span className="sr-only">Press Escape or swipe down to close</span>
 
           {children}
         </div>

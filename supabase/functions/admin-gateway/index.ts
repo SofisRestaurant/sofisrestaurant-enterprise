@@ -110,6 +110,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // ── Request parse ─────────────────────────────────────────────────────────
   const parsed = parseGatewayRequest(body);
   if (!parsed) {
+    console.log('ADMIN_GATEWAY_BAD_REQUEST_RAW', rawText);
+    console.log('ADMIN_GATEWAY_BAD_REQUEST_BODY', JSON.stringify(body));
     return fail('BAD_REQUEST', 'Invalid request', metaPre, cors, requestId, 400);
   }
 

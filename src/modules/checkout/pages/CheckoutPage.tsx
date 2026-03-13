@@ -25,33 +25,33 @@ import {
   useCallback,
   type ChangeEvent,
   type KeyboardEvent,
-} from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+} from 'react';
+import { useNavigate, Link } from 'react-router-dom';
 
-import CheckoutButton from '@/modules/checkout/components/CheckoutButton'
-import { useCart } from '@/modules/cart/hooks/useCart'
-import { getAvailableCredits, type UserCredit } from '@/modules/checkout/api/checkout.api'
+import CheckoutButton from '@/modules/checkout/components/CheckoutButton';
+import { useCart } from '@/modules/cart/hooks/useCart';
+import { getAvailableCredits, type UserCredit } from '@/modules/checkout/api/checkout.api';
 
-import { computeLineTotalCents, cartItemKey } from '@/modules/cart/types/cart.types'
-import type { CartItem } from '@/modules/cart/types/cart.types'
-import { formatCents } from '@/modules/cart/utils/cart.utils'
+import { computeLineTotalCents, cartItemKey } from '@/modules/cart/types/cart.types';
+import type { CartItem } from '@/modules/cart/types/cart.types';
+import { formatCents } from '@/modules/cart/utils/cart.utils';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
 type PromoState = {
-  code: string
-  applied: boolean
-  error: string | null
-}
+  code: string;
+  applied: boolean;
+  error: string | null;
+};
 
-type OrderType = 'pickup' | 'delivery' | 'dine_in'
+type OrderType = 'pickup' | 'delivery' | 'dine_in';
 
 type OrderDetailsState = {
-  orderType: OrderType
-  notes: string
-}
+  orderType: OrderType;
+  notes: string;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
@@ -62,70 +62,75 @@ const STORAGE = {
   CHECKOUT_NOTES: 'sofis.checkout.notes.v1',
   CHECKOUT_PROMO: 'sofis.checkout.promo.v1',
   CHECKOUT_CREDIT: 'sofis.checkout.credit.v1',
-} as const
+} as const;
 
 const LIMITS = {
   NOTES_MAX: 600,
   PROMO_MAX: 50,
-} as const
+} as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers (safe + cents-canonical)
 // ─────────────────────────────────────────────────────────────────────────────
 
 function clampInt(n: number, min: number, max: number): number {
-  if (!Number.isFinite(n)) return min
-  return Math.max(min, Math.min(max, Math.floor(n)))
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, Math.floor(n)));
 }
 
 function normalizePromo(code: string): string {
   // allow letters/numbers/dash only; strict to reduce junk inputs
-  return code.toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, LIMITS.PROMO_MAX)
+  return code
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]/g, '')
+    .slice(0, LIMITS.PROMO_MAX);
 }
 
 function safeText(v: unknown, maxLen = 500): string | null {
-  if (typeof v !== 'string') return null
-  const s = v.trim()
-  if (!s) return null
-  return s.length > maxLen ? s.slice(0, maxLen) : s
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  if (!s) return null;
+  return s.length > maxLen ? s.slice(0, maxLen) : s;
 }
 
 function safeMoneyCents(v: unknown): number {
-  const n = typeof v === 'number' ? v : Number(v)
-  return Number.isFinite(n) ? Math.round(n) : 0
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? Math.round(n) : 0;
 }
 
 function stableCartKey(item: CartItem): string {
   // Prevent collisions when same menu item but different modifier sets
-  return `${item.menuItemId}:${cartItemKey(item.menuItemId, item.modifiers)}`
+  return `${item.menuItemId}:${cartItemKey(item.menuItemId, item.modifiers)}`;
 }
 
 function computeDisplayLineTotalCents(item: CartItem): number {
-  const fromStore = safeMoneyCents((item as unknown as { lineTotalCents?: unknown }).lineTotalCents)
-  if (fromStore > 0) return fromStore
+  const fromStore = safeMoneyCents(
+    (item as unknown as { lineTotalCents?: unknown }).lineTotalCents,
+  );
+  if (fromStore > 0) return fromStore;
 
   return computeLineTotalCents({
     unitPriceCents: safeMoneyCents(item.unitPriceCents),
     modifiers: item.modifiers ?? [],
     quantity: clampInt(item.quantity, 1, 100),
-  })
+  });
 }
 
 function formatOrderTypeLabel(t: OrderType): string {
-  return t === 'pickup' ? 'Pickup' : t === 'delivery' ? 'Delivery' : 'Dine-in'
+  return t === 'pickup' ? 'Pickup' : t === 'delivery' ? 'Delivery' : 'Dine-in';
 }
 
 function safeLocalGet(key: string): string | null {
   try {
-    return localStorage.getItem(key)
+    return localStorage.getItem(key);
   } catch {
-    return null
+    return null;
   }
 }
 
 function safeLocalSet(key: string, value: string): void {
   try {
-    localStorage.setItem(key, value)
+    localStorage.setItem(key, value);
   } catch {
     // ignore
   }
@@ -133,14 +138,14 @@ function safeLocalSet(key: string, value: string): void {
 
 function safeLocalRemove(key: string): void {
   try {
-    localStorage.removeItem(key)
+    localStorage.removeItem(key);
   } catch {
     // ignore
   }
 }
 
 function cx(...classes: Array<string | false | null | undefined>) {
-  return classes.filter(Boolean).join(' ')
+  return classes.filter(Boolean).join(' ');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -148,172 +153,183 @@ function cx(...classes: Array<string | false | null | undefined>) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function Checkout() {
-  const navigate = useNavigate()
-  const { items } = useCart()
+  const navigate = useNavigate();
+  const { items } = useCart();
 
-  const hasItems = Array.isArray(items) && items.length > 0
+  const hasItems = Array.isArray(items) && items.length > 0;
 
   // Canonical subtotal in cents (never dollars)
   const subtotalCents = useMemo(() => {
-    if (!hasItems) return 0
-    return items.reduce((sum, i) => sum + computeDisplayLineTotalCents(i), 0)
-  }, [items, hasItems])
+    if (!hasItems) return 0;
+    return items.reduce((sum, i) => sum + computeDisplayLineTotalCents(i), 0);
+  }, [items, hasItems]);
+
+  const estimatedTaxCents = useMemo(() => {
+    return Math.round(subtotalCents * 0.095);
+  }, [subtotalCents]);
+
+  const estimatedTotalCents = useMemo(() => {
+    return subtotalCents + estimatedTaxCents;
+  }, [subtotalCents, estimatedTaxCents]);
+
 
   const itemCount = useMemo(() => {
-    if (!hasItems) return 0
-    return items.reduce((acc, i) => acc + clampInt(i.quantity, 0, 10_000), 0)
-  }, [items, hasItems])
+    if (!hasItems) return 0;
+    return items.reduce((acc, i) => acc + clampInt(i.quantity, 0, 10_000), 0);
+  }, [items, hasItems]);
 
   // ── Order details (UX only) ────────────────────────────────────────────────
   const [orderDetails, setOrderDetails] = useState<OrderDetailsState>(() => {
-    const storedType = safeLocalGet(STORAGE.CHECKOUT_ORDER_TYPE)
-    const storedNotes = safeLocalGet(STORAGE.CHECKOUT_NOTES)
+    const storedType = safeLocalGet(STORAGE.CHECKOUT_ORDER_TYPE);
+    const storedNotes = safeLocalGet(STORAGE.CHECKOUT_NOTES);
     const t: OrderType =
       storedType === 'pickup' || storedType === 'delivery' || storedType === 'dine_in'
         ? storedType
-        : 'pickup'
-    const notes = typeof storedNotes === 'string' ? storedNotes.slice(0, LIMITS.NOTES_MAX) : ''
-    return { orderType: t, notes }
-  })
+        : 'pickup';
+    const notes = typeof storedNotes === 'string' ? storedNotes.slice(0, LIMITS.NOTES_MAX) : '';
+    return { orderType: t, notes };
+  });
 
   useEffect(() => {
-    safeLocalSet(STORAGE.CHECKOUT_ORDER_TYPE, orderDetails.orderType)
-  }, [orderDetails.orderType])
+    safeLocalSet(STORAGE.CHECKOUT_ORDER_TYPE, orderDetails.orderType);
+  }, [orderDetails.orderType]);
 
   useEffect(() => {
-    if (!orderDetails.notes) safeLocalRemove(STORAGE.CHECKOUT_NOTES)
-    else safeLocalSet(STORAGE.CHECKOUT_NOTES, orderDetails.notes)
-  }, [orderDetails.notes])
+    if (!orderDetails.notes) safeLocalRemove(STORAGE.CHECKOUT_NOTES);
+    else safeLocalSet(STORAGE.CHECKOUT_NOTES, orderDetails.notes);
+  }, [orderDetails.notes]);
 
   // ── Promo state (UI only — server validates) ───────────────────────────────
   const [promo, setPromo] = useState<PromoState>(() => {
-    const stored = safeLocalGet(STORAGE.CHECKOUT_PROMO)
-    const code = stored ? normalizePromo(stored) : ''
-    return { code, applied: false, error: null }
-  })
+    const stored = safeLocalGet(STORAGE.CHECKOUT_PROMO);
+    const code = stored ? normalizePromo(stored) : '';
+    return { code, applied: false, error: null };
+  });
 
   const onPromoChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
-    const code = normalizePromo(e.target.value)
-    setPromo({ code, applied: false, error: null })
-    if (code) safeLocalSet(STORAGE.CHECKOUT_PROMO, code)
-    else safeLocalRemove(STORAGE.CHECKOUT_PROMO)
-  }, [])
+    const code = normalizePromo(e.target.value);
+    setPromo({ code, applied: false, error: null });
+    if (code) safeLocalSet(STORAGE.CHECKOUT_PROMO, code);
+    else safeLocalRemove(STORAGE.CHECKOUT_PROMO);
+  }, []);
 
   const onPromoApply = useCallback(() => {
-    if (!promo.code.trim()) return
-    setPromo((p) => ({ ...p, applied: true, error: null }))
-  }, [promo.code])
+    if (!promo.code.trim()) return;
+    setPromo((p) => ({ ...p, applied: true, error: null }));
+  }, [promo.code]);
 
   const onPromoClear = useCallback(() => {
-    setPromo({ code: '', applied: false, error: null })
-    safeLocalRemove(STORAGE.CHECKOUT_PROMO)
-  }, [])
+    setPromo({ code: '', applied: false, error: null });
+    safeLocalRemove(STORAGE.CHECKOUT_PROMO);
+  }, []);
 
   const onPromoKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
       if (e.key === 'Enter') {
-        e.preventDefault()
-        onPromoApply()
+        e.preventDefault();
+        onPromoApply();
       }
       if (e.key === 'Escape') {
-        e.preventDefault()
-        onPromoClear()
+        e.preventDefault();
+        onPromoClear();
       }
     },
     [onPromoApply, onPromoClear],
-  )
+  );
 
   // ── Credits ────────────────────────────────────────────────────────────────
-  const [credits, setCredits] = useState<UserCredit[]>([])
+  const [credits, setCredits] = useState<UserCredit[]>([]);
   const [selectedCredit, setSelectedCredit] = useState<string | null>(() => {
-    const stored = safeLocalGet(STORAGE.CHECKOUT_CREDIT)
-    return stored && typeof stored === 'string' ? stored : null
-  })
-  const [creditsLoading, setCreditsLoading] = useState(true)
-  const [creditsError, setCreditsError] = useState<string | null>(null)
+    const stored = safeLocalGet(STORAGE.CHECKOUT_CREDIT);
+    return stored && typeof stored === 'string' ? stored : null;
+  });
+  const [creditsLoading, setCreditsLoading] = useState(true);
+  const [creditsError, setCreditsError] = useState<string | null>(null);
 
   const loadCredits = useCallback(async () => {
-    setCreditsLoading(true)
-    setCreditsError(null)
+    setCreditsLoading(true);
+    setCreditsError(null);
 
     try {
-      const rows = await getAvailableCredits()
-      const clean = (rows ?? []).filter((c) => typeof c?.id === 'string' && c.id.length > 0)
-      setCredits(clean)
+      const rows = await getAvailableCredits();
+      const clean = (rows ?? []).filter((c) => typeof c?.id === 'string' && c.id.length > 0);
+      setCredits(clean);
 
       // If a stored credit no longer exists, clear selection
       if (selectedCredit && !clean.some((c) => c.id === selectedCredit)) {
-        setSelectedCredit(null)
-        safeLocalRemove(STORAGE.CHECKOUT_CREDIT)
+        setSelectedCredit(null);
+        safeLocalRemove(STORAGE.CHECKOUT_CREDIT);
       }
     } catch {
-      setCredits([])
-      setCreditsError('Unable to load credits right now.')
+      setCredits([]);
+      setCreditsError('Unable to load credits right now.');
     } finally {
-      setCreditsLoading(false)
+      setCreditsLoading(false);
     }
-  }, [selectedCredit])
+  }, [selectedCredit]);
 
   useEffect(() => {
-    let alive = true
-    ;(async () => {
-      if (!alive) return
-      await loadCredits()
-    })()
+    let alive = true;
+    void (async () => {
+      if (!alive) return;
+      await loadCredits();
+    })().catch((error: unknown) => {
+      console.error('Failed to load credits on checkout init:', error);
+    });
 
     return () => {
-      alive = false
-    }
-  }, [loadCredits])
+      alive = false;
+    };
+  }, [loadCredits]);
 
   useEffect(() => {
     if (!selectedCredit) {
-      safeLocalRemove(STORAGE.CHECKOUT_CREDIT)
+      safeLocalRemove(STORAGE.CHECKOUT_CREDIT);
     } else {
-      safeLocalSet(STORAGE.CHECKOUT_CREDIT, selectedCredit)
+      safeLocalSet(STORAGE.CHECKOUT_CREDIT, selectedCredit);
     }
-  }, [selectedCredit])
+  }, [selectedCredit]);
 
   const creditsAvailableCents = useMemo(() => {
-    return credits.reduce((sum, c) => sum + safeMoneyCents(c.amount_cents), 0)
-  }, [credits])
+    return credits.reduce((sum, c) => sum + safeMoneyCents(c.amount_cents), 0);
+  }, [credits]);
 
   // ── Helpful actions ─────────────────────────────────────────────────────────
   const copySummary = useCallback(async () => {
-    if (!hasItems) return
+    if (!hasItems) return;
 
-    const lines: string[] = []
-    lines.push(`Sofi's Restaurant — Checkout Summary`)
-    lines.push(`Order type: ${formatOrderTypeLabel(orderDetails.orderType)}`)
-    lines.push(`Items:`)
+    const lines: string[] = [];
+    lines.push(`Sofi's Restaurant — Checkout Summary`);
+    lines.push(`Order type: ${formatOrderTypeLabel(orderDetails.orderType)}`);
+    lines.push(`Items:`);
 
     for (const item of items) {
-      const qty = clampInt(item.quantity, 1, 100)
-      const lineTotal = computeDisplayLineTotalCents(item)
-      lines.push(`- ${item.name} x${qty} — ${formatCents(lineTotal)}`)
+      const qty = clampInt(item.quantity, 1, 100);
+      const lineTotal = computeDisplayLineTotalCents(item);
+      lines.push(`- ${item.name} x${qty} — ${formatCents(lineTotal)}`);
       if (Array.isArray(item.modifiers) && item.modifiers.length) {
         const mods = item.modifiers
           .map((m) => (typeof m?.name === 'string' ? m.name.trim() : ''))
-          .filter(Boolean)
-        if (mods.length) lines.push(`  • ${mods.join(', ')}`)
+          .filter(Boolean);
+        if (mods.length) lines.push(`  • ${mods.join(', ')}`);
       }
-      const notes = safeText(item.notes, 200)
-      if (notes) lines.push(`  note: ${notes}`)
+      const notes = safeText(item.notes, 200);
+      if (notes) lines.push(`  note: ${notes}`);
     }
 
-    lines.push(`Subtotal (estimated): ${formatCents(subtotalCents)}`)
-    if (promo.applied && promo.code) lines.push(`Promo queued: ${promo.code}`)
-    if (selectedCredit) lines.push(`Credit selected: ${selectedCredit.slice(0, 8).toUpperCase()}`)
-    if (orderDetails.notes.trim()) lines.push(`Checkout notes: ${orderDetails.notes.trim()}`)
+    lines.push(`Subtotal (estimated): ${formatCents(subtotalCents)}`);
+    if (promo.applied && promo.code) lines.push(`Promo queued: ${promo.code}`);
+    if (selectedCredit) lines.push(`Credit selected: ${selectedCredit.slice(0, 8).toUpperCase()}`);
+    if (orderDetails.notes.trim()) lines.push(`Checkout notes: ${orderDetails.notes.trim()}`);
 
-    lines.push(`Final total is confirmed by Stripe at payment.`)
+    lines.push(`Final total is confirmed by Stripe at payment.`);
 
     try {
-      await navigator.clipboard.writeText(lines.join('\n'))
+      await navigator.clipboard.writeText(lines.join('\n'));
     } catch {
       // ignore (some browsers block)
     }
-  }, [hasItems, items, subtotalCents, promo.applied, promo.code, selectedCredit, orderDetails])
+  }, [hasItems, items, subtotalCents, promo.applied, promo.code, selectedCredit, orderDetails]);
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Render
@@ -364,7 +380,7 @@ export default function Checkout() {
                 <label className="block text-sm font-semibold text-gray-900">Order type</label>
                 <div className="mt-2 grid grid-cols-3 gap-2">
                   {(['pickup', 'delivery', 'dine_in'] as const).map((t) => {
-                    const active = orderDetails.orderType === t
+                    const active = orderDetails.orderType === t;
                     return (
                       <button
                         key={t}
@@ -380,22 +396,26 @@ export default function Checkout() {
                       >
                         {formatOrderTypeLabel(t)}
                       </button>
-                    )
+                    );
                   })}
                 </div>
               </div>
 
               {/* Notes */}
               <div>
-                <label htmlFor="checkout-notes" className="block text-sm font-semibold text-gray-900">
-                  Notes for the kitchen <span className="text-xs font-normal text-gray-400">(optional)</span>
+                <label
+                  htmlFor="checkout-notes"
+                  className="block text-sm font-semibold text-gray-900"
+                >
+                  Notes for the kitchen{' '}
+                  <span className="text-xs font-normal text-gray-400">(optional)</span>
                 </label>
                 <textarea
                   id="checkout-notes"
                   value={orderDetails.notes}
                   onChange={(e) => {
-                    const next = String(e.target.value ?? '').slice(0, LIMITS.NOTES_MAX)
-                    setOrderDetails((s) => ({ ...s, notes: next }))
+                    const next = String(e.target.value ?? '').slice(0, LIMITS.NOTES_MAX);
+                    setOrderDetails((s) => ({ ...s, notes: next }));
                   }}
                   rows={3}
                   placeholder="Example: no onions, sauce on the side, mild salsa…"
@@ -446,11 +466,14 @@ export default function Checkout() {
 
             <div className="divide-y">
               {items.map((item) => {
-                const notes = safeText(item.notes, 500)
-                const lineTotalCents = computeDisplayLineTotalCents(item)
+                const notes = safeText(item.notes, 500);
+                const lineTotalCents = computeDisplayLineTotalCents(item);
 
                 return (
-                  <div key={stableCartKey(item)} className="flex items-start justify-between gap-4 px-6 py-4">
+                  <div
+                    key={stableCartKey(item)}
+                    className="flex items-start justify-between gap-4 px-6 py-4"
+                  >
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-medium">
                         {item.name}{' '}
@@ -479,10 +502,11 @@ export default function Checkout() {
                       </div>
                     </div>
                   </div>
-                )
+                );
               })}
             </div>
 
+            {/* Totals: only subtotal is client-side; everything else is server/Stripe */}
             {/* Totals: only subtotal is client-side; everything else is server/Stripe */}
             <div className="space-y-2 border-t bg-gray-50 px-6 py-5 text-sm">
               <div className="flex justify-between">
@@ -491,18 +515,15 @@ export default function Checkout() {
               </div>
 
               <div className="flex justify-between text-gray-400">
-                <span>Discount</span>
-                <span className="text-xs italic">Applied at payment</span>
-              </div>
-
-              <div className="flex justify-between text-gray-400">
-                <span>Tax</span>
-                <span className="text-xs italic">Calculated on final total</span>
+                <span>Estimated tax</span>
+                <span className="tabular-nums">{formatCents(estimatedTaxCents)}</span>
               </div>
 
               <div className="flex justify-between border-t pt-3 text-lg font-bold">
                 <span>Total (estimated)</span>
-                <span className="tabular-nums text-primary">{formatCents(subtotalCents)}</span>
+                <span className="tabular-nums text-primary">
+                  {formatCents(estimatedTotalCents)}
+                </span>
               </div>
 
               <p className="pt-1 text-center text-[11px] text-gray-400">
@@ -561,11 +582,13 @@ export default function Checkout() {
                 </div>
               )}
 
-              {promo.error ? <p className="mt-2 text-xs font-medium text-red-600">{promo.error}</p> : null}
+              {promo.error ? (
+                <p className="mt-2 text-xs font-medium text-red-600">{promo.error}</p>
+              ) : null}
 
               <p className="mt-2 text-[11px] text-gray-400">
-                Tip: Press <span className="font-mono">Enter</span> to apply, <span className="font-mono">Esc</span> to
-                clear.
+                Tip: Press <span className="font-mono">Enter</span> to apply,{' '}
+                <span className="font-mono">Esc</span> to clear.
               </p>
             </div>
           </section>
@@ -609,11 +632,14 @@ export default function Checkout() {
               ) : (
                 <div className="divide-y">
                   {credits.map((credit) => {
-                    const amt = safeMoneyCents(credit.amount_cents)
-                    const exp = safeText(credit.expires_at, 64)
+                    const amt = safeMoneyCents(credit.amount_cents);
+                    const exp = safeText(credit.expires_at, 64);
 
                     return (
-                      <label key={credit.id} className="flex cursor-pointer items-center gap-3 py-3">
+                      <label
+                        key={credit.id}
+                        className="flex cursor-pointer items-center gap-3 py-3"
+                      >
                         <input
                           type="radio"
                           name="credit"
@@ -623,7 +649,9 @@ export default function Checkout() {
                           className="h-4 w-4 text-amber-500 focus:ring-amber-500"
                         />
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-semibold text-gray-800 tabular-nums">{formatCents(amt)} credit</p>
+                          <p className="text-sm font-semibold text-gray-800 tabular-nums">
+                            {formatCents(amt)} credit
+                          </p>
                           <p className="text-xs capitalize text-gray-500">
                             {String(credit.source ?? '').replace(/_/g, ' ') || 'credit'}
                             {exp ? (
@@ -642,7 +670,7 @@ export default function Checkout() {
                           <span className="text-xs font-bold text-amber-600">Selected</span>
                         ) : null}
                       </label>
-                    )
+                    );
                   })}
 
                   {selectedCredit ? (
@@ -668,18 +696,22 @@ export default function Checkout() {
               creditId={selectedCredit ?? undefined}
               orderType={orderDetails.orderType}
               notes={orderDetails.notes ? orderDetails.notes : null}
-              onPromoError={(msg: string) => setPromo((prev) => ({ ...prev, error: msg, applied: false }))}
+              onPromoError={(msg: string) =>
+                setPromo((prev) => ({ ...prev, error: msg, applied: false }))
+              }
             />
 
             <p className="text-center text-xs text-gray-500">
-              🔒 Secure payment powered by Stripe. Your card details are never stored on our servers.
+              🔒 Secure payment powered by Stripe. Your card details are never stored on our
+              servers.
             </p>
 
             {/* Customer-happiness footer */}
             <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700">
               <p className="font-semibold">Need help?</p>
               <p className="mt-1 text-xs text-gray-500">
-                If anything looks off after payment, we’ll fix it fast. Save your receipt and include your order ID.
+                If anything looks off after payment, we’ll fix it fast. Save your receipt and
+                include your order ID.
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
                 <a
@@ -706,5 +738,5 @@ export default function Checkout() {
         </div>
       )}
     </main>
-  )
+  );
 }

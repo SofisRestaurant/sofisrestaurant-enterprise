@@ -63,23 +63,25 @@ function getOrCreate(map: Record<string, RateLimitState>, key: string): RateLimi
   // If existing state's window has expired, reset it (but keep lockTier for escalation)
   if (existing && now - existing.windowStart > AUTH_RATE_WINDOW_MS && !existing.lockedUntil) {
     return {
-      emailHash:   key,
-      attempts:    0,
-      failures:    0,
+      emailHash: key,
+      attempts: 0,
+      failures: 0,
       windowStart: now,
       lockedUntil: null,
-      lockTier:    existing.lockTier, // tier persists within session
+      lockTier: existing.lockTier, // tier persists within session
     };
   }
 
-  return existing ?? {
-    emailHash:   key,
-    attempts:    0,
-    failures:    0,
-    windowStart: now,
-    lockedUntil: null,
-    lockTier:    0,
-  };
+  return (
+    existing ?? {
+      emailHash: key,
+      attempts: 0,
+      failures: 0,
+      windowStart: now,
+      lockedUntil: null,
+      lockTier: 0,
+    }
+  );
 }
 
 /** Determine the next lock tier given current failure count */
@@ -109,9 +111,9 @@ export function trackAttempt(email: string, success: boolean): RateLimitState {
 
   if (success) {
     // Success: clear failure count and any active lockout
-    state.failures    = 0;
+    state.failures = 0;
     state.lockedUntil = null;
-    state.lockTier    = 0;
+    state.lockTier = 0;
     state.windowStart = now;
   } else {
     state.failures++;
@@ -121,7 +123,7 @@ export function trackAttempt(email: string, success: boolean): RateLimitState {
     if (tier > state.lockTier || (tier > 0 && state.failures >= AUTH_MAX_FAILURES_BEFORE_LOCK)) {
       // Apply lockout
       const duration = AUTH_LOCKOUT_DURATIONS_MS[tier] ?? AUTH_LOCKOUT_DURATIONS_MS[4];
-      state.lockTier    = tier;
+      state.lockTier = tier;
       state.lockedUntil = now + duration;
     }
   }
@@ -178,7 +180,9 @@ export function clearRateLimitState(email: string): void {
 export function clearAllRateLimitState(): void {
   try {
     sessionStorage.removeItem(AUTH_RATE_LIMIT_KEY);
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 /**
@@ -189,8 +193,9 @@ export function getAttemptsRemaining(email: string): number | null {
   const state = getRateLimitState(email);
   if (state.lockedUntil && Date.now() < state.lockedUntil) return null;
 
-  const nextTierThreshold = AUTH_LOCKOUT_THRESHOLDS[state.lockTier + 1]
-    ?? AUTH_LOCKOUT_THRESHOLDS[AUTH_LOCKOUT_THRESHOLDS.length - 1];
+  const nextTierThreshold =
+    AUTH_LOCKOUT_THRESHOLDS[state.lockTier + 1] ??
+    AUTH_LOCKOUT_THRESHOLDS[AUTH_LOCKOUT_THRESHOLDS.length - 1];
 
   return Math.max(nextTierThreshold - state.failures, 0);
 }

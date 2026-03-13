@@ -17,7 +17,7 @@ import type {
   PinFeaturedPayload,
 } from './actions/campaigns.ts';
 
-import type { TogglePromoPayload } from './actions/promos.ts';
+import type { TogglePromoPayload, CreatePromoPayload } from './actions/promos.ts';
 
 export type {
   ToggleCampaignPayload,
@@ -25,6 +25,7 @@ export type {
   UpdateCampaignPayload,
   PinFeaturedPayload,
   TogglePromoPayload,
+  CreatePromoPayload,
 };
 
 /* -------------------------------------------------------------------------- */
@@ -38,14 +39,18 @@ export type AdminAction =
   | 'orders:list'
   | 'menu:full'
   // Modifier groups
+  | 'menu:modifier-groups:list'
   | 'menu:modifier-groups:list-for-item'
   | 'menu:modifier-groups:get'
+  | 'menu:modifier-groups:item-count'
   | 'menu:modifier-groups:create'
   | 'menu:modifier-groups:update'
   | 'menu:modifier-groups:attach'
   | 'menu:modifier-groups:detach'
   | 'menu:modifier-groups:toggle-active'
+  | 'menu:modifier-groups:reorder'
   | 'menu:modifier-groups:reorder-for-item'
+  | 'menu:modifier-groups:set-item-groups'
   | 'menu:modifier-groups:delete'
   // Modifiers
   | 'menu:modifiers:list-for-group'
@@ -68,7 +73,8 @@ export type AdminAction =
   | 'campaigns:run-rotation'
   // Promos
   | 'promos:list'
-  | 'promos:toggle';
+  | 'promos:toggle'
+  | 'promos:create';
 
 /* -------------------------------------------------------------------------- */
 /* Shared primitives                                                          */
@@ -84,6 +90,10 @@ export type ReorderItem = {
 /* -------------------------------------------------------------------------- */
 
 export type ModifierGroupType = 'radio' | 'checkbox' | 'quantity';
+
+export type ModifierGroupListPayload = {
+  activeOnly?: boolean;
+};
 
 export type ModifierGroupCreatePayload = {
   name: string;
@@ -124,9 +134,26 @@ export type ModifierGroupTogglePayload = {
   active: boolean;
 };
 
+/**
+ * Standalone reorder — reorders modifier_groups rows by their own sort_order.
+ * Does NOT reference a menu_item_id.
+ */
 export type ModifierGroupReorderPayload = {
+  items: ReorderItem[];
+};
+
+/**
+ * Reorder for a specific menu item — updates sort_order in the
+ * menu_item_modifier_groups join table for a given menu_item_id.
+ */
+export type ModifierGroupReorderForItemPayload = {
   menu_item_id: string;
   items: ReorderItem[];
+};
+
+export type ModifierGroupSetItemGroupsPayload = {
+  menu_item_id: string;
+  group_ids: string[];
 };
 
 /* -------------------------------------------------------------------------- */
@@ -187,14 +214,21 @@ export type GatewayRequest =
   | { action: 'orders:list'; payload?: { page?: number } }
   | { action: 'menu:full'; payload?: { page?: number; pageSize?: number } }
   // Modifier groups
+  | { action: 'menu:modifier-groups:list'; payload?: ModifierGroupListPayload }
   | { action: 'menu:modifier-groups:list-for-item'; payload: { menu_item_id: string } }
   | { action: 'menu:modifier-groups:get'; payload: { id: string } }
+  | { action: 'menu:modifier-groups:item-count'; payload: { id: string } }
   | { action: 'menu:modifier-groups:create'; payload: ModifierGroupCreatePayload }
   | { action: 'menu:modifier-groups:update'; payload: ModifierGroupUpdatePayload }
   | { action: 'menu:modifier-groups:attach'; payload: ModifierGroupAttachPayload }
   | { action: 'menu:modifier-groups:detach'; payload: ModifierGroupDetachPayload }
   | { action: 'menu:modifier-groups:toggle-active'; payload: ModifierGroupTogglePayload }
-  | { action: 'menu:modifier-groups:reorder-for-item'; payload: ModifierGroupReorderPayload }
+  | { action: 'menu:modifier-groups:reorder'; payload: ModifierGroupReorderPayload }
+  | {
+      action: 'menu:modifier-groups:reorder-for-item';
+      payload: ModifierGroupReorderForItemPayload;
+    }
+  | { action: 'menu:modifier-groups:set-item-groups'; payload: ModifierGroupSetItemGroupsPayload }
   | { action: 'menu:modifier-groups:delete'; payload: { id: string } }
   // Modifiers
   | { action: 'menu:modifiers:list-for-group'; payload: { group_id: string } }
@@ -204,7 +238,10 @@ export type GatewayRequest =
   | { action: 'menu:modifiers:create-batch'; payload: ModifierCreateBatchPayload }
   | { action: 'menu:modifiers:update'; payload: ModifierUpdatePayload }
   | { action: 'menu:modifiers:toggle-availability'; payload: ModifierTogglePayload }
-  | { action: 'menu:modifiers:toggle-group-availability'; payload: ModifierGroupToggleAvailabilityPayload }
+  | {
+      action: 'menu:modifiers:toggle-group-availability';
+      payload: ModifierGroupToggleAvailabilityPayload;
+    }
   | { action: 'menu:modifiers:delete'; payload: { id: string } }
   | { action: 'menu:modifiers:delete-all-in-group'; payload: { group_id: string } }
   | { action: 'menu:modifiers:reorder'; payload: ModifierReorderPayload }
@@ -217,4 +254,5 @@ export type GatewayRequest =
   | { action: 'campaigns:pin-featured'; payload: PinFeaturedPayload }
   // Promos
   | { action: 'promos:list' }
-  | { action: 'promos:toggle'; payload: TogglePromoPayload };
+  | { action: 'promos:toggle'; payload: TogglePromoPayload }
+  | { action: 'promos:create'; payload: CreatePromoPayload };

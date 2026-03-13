@@ -69,44 +69,41 @@ function RouteLoadError({ title, details }: { title: string; details: string }) 
 
 type AnyModule = Record<string, unknown>;
 
-function pickExport(
-  mod: AnyModule,
-  prefer: string[],
-): React.ComponentType | null {
+function pickExport(mod: AnyModule, prefer: string[]): React.ComponentType | null {
   for (const key of prefer) {
-    const v = (mod as AnyModule)[key];
+    const v = mod[key];
     if (typeof v === 'function') return v as React.ComponentType;
     if (v && typeof v === 'object') {
       // React.memo / forwardRef components can appear as objects with $$typeof
-      const maybe = v as any;
-      if (maybe?.$$typeof) return v as unknown as React.ComponentType;
+      const maybe = v as { $$typeof?: unknown };
+      if (maybe.$$typeof) return v as unknown as React.ComponentType;
     }
   }
   return null;
 }
 
-function lazyPick(
-  importer: () => Promise<AnyModule>,
-  prefer: string[],
-  label: string,
-) {
+function lazyPick(importer: () => Promise<AnyModule>, prefer: string[], label: string) {
   return async () => {
     try {
       const mod = await importer();
       const Cmp = pickExport(mod, prefer);
+
       if (!Cmp) {
         const keys = Object.keys(mod);
         const msg =
           `Missing expected export for "${label}".\n` +
           `Tried: ${prefer.join(', ')}\n` +
           `Available exports: ${keys.length ? keys.join(', ') : '(none)'}`;
+
         return {
           Component: () => <RouteLoadError title={`Missing export: ${label}`} details={msg} />,
         };
       }
+
       return { Component: Cmp };
-    } catch (e) {
-      const msg = e instanceof Error ? e.stack || e.message : String(e);
+    } catch (error) {
+      const msg = error instanceof Error ? error.stack || error.message : String(error);
+
       return {
         Component: () => <RouteLoadError title={`Failed to load: ${label}`} details={msg} />,
       };
@@ -433,6 +430,16 @@ export const router = createBrowserRouter([
             },
           },
 
+          // Taxes
+          {
+            path: 'taxes',
+            lazy: lazyPick(
+              () => import('@/modules/admin/pages/AdminTaxesPage'),
+              ['default', 'AdminTaxesPage'],
+              'AdminTaxesPage (default|AdminTaxesPage)',
+            ),
+          },
+
           // Fraud
           {
             path: 'fraud',
@@ -447,15 +454,6 @@ export const router = createBrowserRouter([
             path: 'notifications',
             lazy: async () => {
               const m = await import('@/pages/Admin/Notifications');
-              return { Component: m.default };
-            },
-          },
-
-          // OPTIONAL: Admin Kitchen route page
-          {
-            path: 'kitchen-page',
-            lazy: async () => {
-              const m = await import('@/pages/Admin/Kitchen');
               return { Component: m.default };
             },
           },

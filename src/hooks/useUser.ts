@@ -1,7 +1,7 @@
-import { useUserContext } from '@/contexts/useUserContext'
+import { useUserContext } from '@/contexts/useUserContext';
 
 export function useUser() {
-  return useUserContext()
+  return useUserContext();
 }
 
-export default useUser
+export default useUser;

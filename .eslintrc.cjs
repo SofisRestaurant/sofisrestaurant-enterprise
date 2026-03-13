@@ -7,9 +7,9 @@ module.exports = {
     'eslint:recommended',
     'plugin:react/recommended',
     'plugin:@typescript-eslint/recommended',
-    'prettier'
+    'prettier',
   ],
   plugins: ['react', '@typescript-eslint'],
   settings: { react: { version: 'detect' } },
-  rules: {}
+  rules: {},
 };

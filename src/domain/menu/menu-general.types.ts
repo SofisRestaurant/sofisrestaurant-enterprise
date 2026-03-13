@@ -12,7 +12,7 @@
 //   domain               →  never imports from UI
 // ============================================================================
 
-import type { MenuCategory } from '@/domain/menu/menu.types'
+import type { MenuCategory } from '@/domain/menu/menu.types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Form state
@@ -24,40 +24,40 @@ import type { MenuCategory } from '@/domain/menu/menu.types'
  * The UI layer owns no validation logic — it delegates entirely to the schema.
  */
 export interface GeneralTabFormState {
-  name:                string
-  category:            MenuCategory
-  price:               string
-  description:         string
-  image_url:           string
-  featured:            boolean
-  available:           boolean
-  is_vegetarian:       boolean
-  is_vegan:            boolean
-  is_gluten_free:      boolean
-  spicy_level:         string
-  sort_order:          string
-  inventory_count:     string
-  low_stock_threshold: string
-  popularity_score:    string
+  name: string;
+  category: MenuCategory;
+  price: string;
+  description: string;
+  image_url: string;
+  featured: boolean;
+  available: boolean;
+  is_vegetarian: boolean;
+  is_vegan: boolean;
+  is_gluten_free: boolean;
+  spicy_level: string;
+  sort_order: string;
+  inventory_count: string;
+  low_stock_threshold: string;
+  popularity_score: string;
 }
 
 export const GENERAL_TAB_EMPTY: GeneralTabFormState = {
-  name:                '',
-  category:            'entrees',
-  price:               '',
-  description:         '',
-  image_url:           '',
-  featured:            false,
-  available:           true,
-  is_vegetarian:       false,
-  is_vegan:            false,
-  is_gluten_free:      false,
-  spicy_level:         '',
-  sort_order:          '',
-  inventory_count:     '',
+  name: '',
+  category: 'entrees',
+  price: '',
+  description: '',
+  image_url: '',
+  featured: false,
+  available: true,
+  is_vegetarian: false,
+  is_vegan: false,
+  is_gluten_free: false,
+  spicy_level: '',
+  sort_order: '',
+  inventory_count: '',
   low_stock_threshold: '',
-  popularity_score:    '',
-}
+  popularity_score: '',
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Field identifiers
@@ -78,13 +78,13 @@ export type MenuItemField =
   | 'sort_order'
   | 'inventory_count'
   | 'low_stock_threshold'
-  | 'popularity_score'
+  | 'popularity_score';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Validation result
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface MenuItemValidationResult {
-  valid:  boolean
-  errors: Partial<Record<MenuItemField, string>>
+  valid: boolean;
+  errors: Partial<Record<MenuItemField, string>>;
 }

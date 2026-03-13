@@ -1,7 +1,11 @@
-/* eslint-disable react-refresh/only-export-components */
-
-import type { CSSProperties, ComponentPropsWithoutRef, ReactNode } from 'react'
-import clsx from 'clsx'
+import type {
+  CSSProperties,
+  ComponentPropsWithoutRef,
+  ReactNode,
+  TableHTMLAttributes,
+} from 'react';
+import { useMemo } from 'react';
+import clsx from 'clsx';
 
 // ======================================================
 // TOKENS
@@ -10,7 +14,7 @@ import clsx from 'clsx'
 export const MONO = {
   label: 'font-mono text-[11px] tracking-[0.16em] uppercase',
   value: 'font-mono tabular-nums',
-} as const
+} as const;
 
 export const TOOLTIP_STYLE: CSSProperties = {
   backgroundColor: '#020617',
@@ -19,6 +23,10 @@ export const TOOLTIP_STYLE: CSSProperties = {
   padding: '8px 10px',
   fontSize: 11,
   color: '#e5e7eb',
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 // ======================================================
@@ -26,13 +34,13 @@ export const TOOLTIP_STYLE: CSSProperties = {
 // ======================================================
 
 export interface PanelProps extends Omit<ComponentPropsWithoutRef<'section'>, 'title'> {
-  title?: ReactNode
-  subtitle?: ReactNode
-  error?: boolean
-  actions?: ReactNode
-  noPad?: boolean
-  className?: string
-  children: ReactNode
+  title?: ReactNode;
+  subtitle?: ReactNode;
+  error?: boolean;
+  actions?: ReactNode;
+  noPad?: boolean;
+  className?: string;
+  children: ReactNode;
 }
 
 export function Panel({
@@ -69,36 +77,35 @@ export function Panel({
               <span
                 className={clsx(
                   'inline-flex h-2 w-2 rounded-full',
-                  error
-                    ? 'bg-red-500 shadow-[0_0_0_4px_rgba(248,113,113,0.35)]'
-                    : 'bg-emerald-400',
+                  error ? 'bg-red-500 shadow-[0_0_0_4px_rgba(248,113,113,0.35)]' : 'bg-emerald-400',
                 )}
                 aria-hidden="true"
               />
             )}
-            {actions && <div className="flex items-center gap-2 text-xs text-zinc-400">{actions}</div>}
+            {actions && (
+              <div className="flex items-center gap-2 text-xs text-zinc-400">{actions}</div>
+            )}
           </div>
         </header>
       )}
 
       <div className={noPad ? '' : 'px-4 py-3'}>{children}</div>
     </section>
-  )
+  );
 }
 
 // ======================================================
 // STAT CARD
 // ======================================================
 
-// IMPORTANT: omit native HTML `title` attribute because we use `title` as ReactNode.
-type StatCardDivProps = Omit<ComponentPropsWithoutRef<'div'>, 'title'>
+type StatCardDivProps = Omit<ComponentPropsWithoutRef<'div'>, 'title'>;
 
 export interface StatCardProps extends StatCardDivProps {
-  title: ReactNode
-  value: ReactNode
-  icon?: ReactNode
-  color?: string
-  subtitle?: ReactNode
+  title: ReactNode;
+  value: ReactNode;
+  icon?: ReactNode;
+  color?: string;
+  subtitle?: ReactNode;
 }
 
 export function StatCard({
@@ -128,7 +135,7 @@ export function StatCard({
           <div
             className={clsx(
               'shrink-0 rounded-xl border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-lg',
-              color ? '' : '',
+              color ? color : '',
             )}
             aria-hidden="true"
           >
@@ -137,7 +144,7 @@ export function StatCard({
         ) : null}
       </div>
     </div>
-  )
+  );
 }
 
 // ======================================================
@@ -145,8 +152,8 @@ export function StatCard({
 // ======================================================
 
 export interface MetricGridProps extends ComponentPropsWithoutRef<'div'> {
-  children: ReactNode
-  columns?: 1 | 2 | 3 | 4
+  children: ReactNode;
+  columns?: 1 | 2 | 3 | 4;
 }
 
 export function MetricGrid({ children, columns = 3, className, ...rest }: MetricGridProps) {
@@ -157,26 +164,26 @@ export function MetricGrid({ children, columns = 3, className, ...rest }: Metric
         ? 'grid-cols-1 sm:grid-cols-2'
         : columns === 3
           ? 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-3'
-          : 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-4'
+          : 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-4';
 
   return (
     <div className={clsx('grid gap-4', colClass, className)} {...rest}>
       {children}
     </div>
-  )
+  );
 }
 
 // ======================================================
 // ALERT
 // ======================================================
 
-export type AlertTone = 'info' | 'success' | 'warning' | 'danger'
+export type AlertTone = 'info' | 'success' | 'warning' | 'danger';
 
 export interface AlertProps extends ComponentPropsWithoutRef<'div'> {
-  tone?: AlertTone
-  title?: string
-  message: string
-  action?: ReactNode
+  tone?: AlertTone;
+  title?: string;
+  message: string;
+  action?: ReactNode;
 }
 
 export function Alert({ tone = 'info', title, message, action, className, ...rest }: AlertProps) {
@@ -185,7 +192,7 @@ export function Alert({ tone = 'info', title, message, action, className, ...res
     success: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-100',
     warning: 'border-amber-500/25 bg-amber-500/10 text-amber-100',
     danger: 'border-red-500/25 bg-red-500/10 text-red-100',
-  }
+  };
 
   return (
     <div
@@ -194,6 +201,7 @@ export function Alert({ tone = 'info', title, message, action, className, ...res
         toneClasses[tone],
         className,
       )}
+      role="alert"
       {...rest}
     >
       <div>
@@ -204,7 +212,7 @@ export function Alert({ tone = 'info', title, message, action, className, ...res
       </div>
       {action ? <div className="shrink-0">{action}</div> : null}
     </div>
-  )
+  );
 }
 
 // ======================================================
@@ -212,7 +220,7 @@ export function Alert({ tone = 'info', title, message, action, className, ...res
 // ======================================================
 
 export interface LoadingSpinnerProps extends ComponentPropsWithoutRef<'div'> {
-  size?: 'sm' | 'md' | 'lg'
+  size?: 'sm' | 'md' | 'lg';
 }
 
 export function LoadingSpinner({ size = 'md', className, ...rest }: LoadingSpinnerProps) {
@@ -221,29 +229,46 @@ export function LoadingSpinner({ size = 'md', className, ...rest }: LoadingSpinn
       ? 'h-4 w-4 border-2'
       : size === 'lg'
         ? 'h-10 w-10 border-4'
-        : 'h-6 w-6 border-[3px]'
+        : 'h-6 w-6 border-[3px]';
 
   return (
-    <div className={clsx('inline-flex items-center justify-center', className)} {...rest}>
+    <div
+      className={clsx('inline-flex items-center justify-center', className)}
+      role="status"
+      aria-live="polite"
+      {...rest}
+    >
       <span
-        className={clsx('animate-spin rounded-full border-zinc-700 border-t-transparent', dimension)}
+        className={clsx(
+          'animate-spin rounded-full border-zinc-700 border-t-transparent',
+          dimension,
+        )}
         aria-label="Loading"
       />
     </div>
-  )
+  );
 }
-export type ProgressColor = 'neutral' | 'success' | 'warning' | 'danger' | 'primary'
+
+export type ProgressColor = 'neutral' | 'success' | 'warning' | 'danger' | 'primary';
 
 export function ProgressBar(props: {
-  value: number
-  max?: number
-  label?: string
-  showPercentage?: boolean
-  color?: ProgressColor
+  value: number;
+  max?: number;
+  label?: string;
+  showPercentage?: boolean;
+  color?: ProgressColor;
 }) {
-  const max = props.max ?? 100
-  const pct = max > 0 ? (props.value / max) * 100 : 0
-  const clamped = Math.max(0, Math.min(100, pct))
+  const max = props.max ?? 100;
+  const pct = max > 0 ? (props.value / max) * 100 : 0;
+  const clamped = Math.max(0, Math.min(100, pct));
+
+  const colorClass: Record<ProgressColor, string> = {
+    neutral: 'bg-white/60',
+    success: 'bg-emerald-400/80',
+    warning: 'bg-amber-400/80',
+    danger: 'bg-red-400/80',
+    primary: 'bg-sky-400/80',
+  };
 
   return (
     <div className="w-full">
@@ -255,15 +280,17 @@ export function ProgressBar(props: {
       ) : null}
 
       <div className="h-2 w-full rounded bg-white/10">
-        <div className="h-2 rounded bg-white/60" style={{ width: `${clamped}%` }} />
+        <div
+          className={clsx('h-2 rounded', colorClass[props.color ?? 'neutral'])}
+          style={{ width: `${clamped}%` }}
+        />
       </div>
     </div>
-  )
+  );
 }
+
 // ======================================================
-// KPI CARD (upgraded for SofisRestaurantV2)
-// - Accepts either simple trend ('up'|'down'|'flat') OR TrendMeta-like objects
-// - Safe runtime normalization (no any required)
+// KPI CARD
 // ======================================================
 
 type TrendLike =
@@ -271,212 +298,249 @@ type TrendLike =
   | 'down'
   | 'flat'
   | {
-      up?: boolean
-      direction?: 'up' | 'down' | 'flat'
-      trend?: 'up' | 'down' | 'flat'
-      value?: number
-      percent?: number
-      label?: string
-    }
+      up?: boolean;
+      direction?: 'up' | 'down' | 'flat';
+      trend?: 'up' | 'down' | 'flat';
+      value?: number;
+      percent?: number;
+      label?: string;
+    };
 
 function normalizeTrend(input: unknown): 'up' | 'down' | 'flat' {
-  if (input === 'up' || input === 'down' || input === 'flat') return input
-
-  if (input && typeof input === 'object') {
-    const r = input as Record<string, unknown>
-
-    const dir =
-      (typeof r['direction'] === 'string' ? r['direction'] : undefined) ??
-      (typeof r['trend'] === 'string' ? r['trend'] : undefined)
-
-    if (dir === 'up' || dir === 'down' || dir === 'flat') return dir
-
-    const up = r['up']
-    if (typeof up === 'boolean') return up ? 'up' : 'down'
+  if (input === 'up' || input === 'down' || input === 'flat') {
+    return input;
   }
 
-  return 'flat'
+  if (isRecord(input)) {
+    const direction = input.direction;
+    if (direction === 'up' || direction === 'down' || direction === 'flat') {
+      return direction;
+    }
+
+    const trend = input.trend;
+    if (trend === 'up' || trend === 'down' || trend === 'flat') {
+      return trend;
+    }
+
+    if (typeof input.up === 'boolean') {
+      return input.up ? 'up' : 'down';
+    }
+  }
+
+  return 'flat';
 }
 
+export const ACCENT = {
+  amber: 'text-amber-400',
+  emerald: 'text-emerald-400',
+  sky: 'text-sky-400',
+  red: 'text-red-400',
+  slate: 'text-slate-300',
+  blue: 'text-sky-400',
+  violet: 'text-violet-400',
+  rose: 'text-rose-400',
+} as const;
+
+export type AccentColor = keyof typeof ACCENT;
+
 export interface KPICardProps {
-  label: string
-  value: ReactNode
-  sub?: string
-  accent?: AccentColor
-  hint?: string
-  delta?: string
-  trend?: TrendLike
-  helperText?: string
-  className?: string
+  label: string;
+  value: ReactNode;
+  sub?: string;
+  accent?: AccentColor;
+  trend?: TrendLike;
+  trendLabel?: string;
+  icon?: ReactNode;
+  className?: string;
 }
 
 export function KPICard({
   label,
   value,
   sub,
-  accent = 'amber',
+  accent = 'slate',
   trend,
-  hint,
-  helperText,
+  trendLabel,
+  icon,
   className,
 }: KPICardProps) {
-  const accentMap: Record<AccentColor, string> = {
-    amber: 'border-amber-500/40 bg-amber-500/5',
-    emerald: 'border-emerald-500/40 bg-emerald-500/5',
-    sky: 'border-sky-500/40 bg-sky-500/5',
-    red: 'border-red-500/40 bg-red-500/5',
-    slate: 'border-slate-500/40 bg-slate-500/5',
-    blue: 'border-sky-500/40 bg-sky-500/5',
-    violet: 'border-violet-500/40 bg-violet-500/5',
-    rose: 'border-rose-500/40 bg-rose-500/5',
-  }
+  const normalizedTrend = normalizeTrend(trend);
+  const trendClass =
+    normalizedTrend === 'up'
+      ? 'text-emerald-400'
+      : normalizedTrend === 'down'
+        ? 'text-red-400'
+        : 'text-zinc-400';
 
-  const t = normalizeTrend(trend)
-
-  const trendIcon = t === 'up' ? '▲' : t === 'down' ? '▼' : '◆'
-  const trendColor = t === 'up' ? 'text-emerald-400' : t === 'down' ? 'text-red-400' : 'text-slate-400'
+  const trendIcon = normalizedTrend === 'up' ? '↗' : normalizedTrend === 'down' ? '↘' : '→';
 
   return (
     <div
-      className={clsx(
-        'flex flex-col justify-between rounded-2xl border px-4 py-3 md:px-5 md:py-4',
-        'border-gray-800 bg-gray-950/60 shadow-[0_0_0_1px_rgba(15,23,42,0.8)]',
-        accentMap[accent],
-        className,
-      )}
+      className={clsx('rounded-2xl border border-zinc-800 bg-zinc-950/40 p-5 shadow-sm', className)}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-gray-400">
-            {label}
-          </div>
-          <div className={clsx('mt-1 text-xl font-semibold text-gray-50 md:text-2xl', MONO.value)}>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="text-xs font-bold uppercase tracking-widest text-zinc-500">{label}</div>
+          <div className={clsx('mt-2 text-2xl font-black tabular-nums', ACCENT[accent])}>
             {value}
           </div>
-          {sub ? <div className="mt-1 text-xs text-gray-400">{sub}</div> : null}
+          {sub ? <div className="mt-1 text-xs text-zinc-500">{sub}</div> : null}
         </div>
 
-        {hint ? (
-          <span className="rounded-full bg-gray-900 px-2 py-0.5 text-[10px] text-gray-400">
-            {hint}
-          </span>
+        {icon ? (
+          <div
+            className="shrink-0 rounded-xl border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-lg"
+            aria-hidden="true"
+          >
+            {icon}
+          </div>
         ) : null}
       </div>
 
-      <div className="mt-2 flex items-center justify-between text-[11px] text-gray-400">
-        {helperText ? <span>{helperText}</span> : <span />}
-        <span className={clsx('inline-flex items-center gap-1', trendColor)}>
-          <span className="text-[10px]">{trendIcon}</span>
-          <span className="text-[10px] uppercase tracking-[0.16em]">
-            {t === 'up' ? 'UP' : t === 'down' ? 'DOWN' : 'FLAT'}
-          </span>
-        </span>
-      </div>
+      {trendLabel ? (
+        <div className={clsx('mt-3 text-xs font-medium', trendClass)}>
+          <span aria-hidden="true">{trendIcon}</span> {trendLabel}
+        </div>
+      ) : null}
     </div>
-  )
+  );
 }
+
 // ======================================================
 // HEALTH BAR
 // ======================================================
 
 export interface HealthBarProps {
-  label: string
-  value: number // 0–100
-  variant?: 'good' | 'warn' | 'bad'
-  helperText?: string
+  label: string;
+  value: number;
+  max?: number;
+  tone?: ProgressColor;
 }
 
-export function HealthBar({ label, value, variant = 'good', helperText }: HealthBarProps) {
-  const clamped = Math.max(0, Math.min(100, value))
-  const color = variant === 'good' ? 'bg-emerald-500' : variant === 'warn' ? 'bg-amber-500' : 'bg-red-500'
-
+export function HealthBar({ label, value, max = 100, tone = 'primary' }: HealthBarProps) {
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between text-xs text-gray-400">
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-xs text-zinc-400">
         <span>{label}</span>
-        <span className={MONO.value}>{clamped.toFixed(0)}%</span>
+        <span className="tabular-nums">{Math.round(value)}</span>
       </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-gray-800">
-        <div className={clsx('h-full rounded-full transition-all duration-500', color)} style={{ width: `${clamped}%` }} />
-      </div>
-      {helperText ? <div className="text-[11px] text-gray-500">{helperText}</div> : null}
+      <ProgressBar value={value} max={max} color={tone} />
     </div>
-  )
-}
-export interface SkeletonBlockProps {
-  className?: string
-  height?: number | string
-  width?: number | string
+  );
 }
 
-export function SkeletonBlock({ className, height, width }: SkeletonBlockProps) {
+// ======================================================
+// SKELETONS
+// ======================================================
+
+export interface SkeletonBlockProps extends ComponentPropsWithoutRef<'div'> {
+  height?: number;
+}
+
+export function SkeletonBlock({ height = 16, className, style, ...rest }: SkeletonBlockProps) {
   return (
     <div
-      className={clsx('animate-pulse rounded-xl bg-gray-800/60', className)}
-      style={{ height: height ?? undefined, width: width ?? undefined }}
+      className={clsx('animate-pulse rounded-xl bg-zinc-800/60', className)}
+      style={{ ...style, height }}
+      {...rest}
     />
-  )
+  );
 }
 
-export interface SkeletonGridProps {
-  rows?: number
-  columns?: number
-  cols?: number // backward-compat
-  height?: number | string
-  className?: string
+export interface SkeletonGridProps extends ComponentPropsWithoutRef<'div'> {
+  count?: number;
+  columns?: 1 | 2 | 3 | 4;
+  itemHeight?: number;
 }
 
 export function SkeletonGrid({
-  rows = 2,
-  columns,
-  cols,
-  height,
+  count = 4,
+  columns = 4,
+  itemHeight = 120,
   className,
+  ...rest
 }: SkeletonGridProps) {
-  const colsCount = columns ?? cols ?? 2
-  const count = Math.max(0, rows) * Math.max(0, colsCount)
+  const colClass =
+    columns === 1
+      ? 'grid-cols-1'
+      : columns === 2
+        ? 'grid-cols-1 sm:grid-cols-2'
+        : columns === 3
+          ? 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-3'
+          : 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-4';
 
   return (
-    <div
-      className={clsx('grid gap-3', className)}
-      style={{ gridTemplateColumns: `repeat(${colsCount}, minmax(0, 1fr))` }}
-    >
-      {Array.from({ length: count }, (_, i) => (
-        // Skeleton placeholders are a safe exception for index keys:
-        // non-interactive, fixed order, no local state.
-        <SkeletonBlock key={`sk_${i}`} className="h-8" height={height} />
-      ))}
+    <div className={clsx('grid gap-4', colClass, className)} {...rest}>
+      {Array.from({ length: count }).map((_, index) => {
+        return <SkeletonBlock key={index} height={itemHeight} className="rounded-2xl" />;
+      })}
     </div>
-  )
+  );
 }
+
+// ======================================================
+// EMPTY CHART
+// ======================================================
 
 export interface EmptyChartProps {
-  message?: string
+  title?: string;
+  description?: string;
+  height?: number;
 }
 
-export function EmptyChart({ message = 'No data available yet' }: EmptyChartProps) {
+export function EmptyChart({
+  title = 'No data yet',
+  description = 'Data will appear here when it becomes available.',
+  height = 280,
+}: EmptyChartProps) {
   return (
-    <div className="flex h-48 flex-col items-center justify-center rounded-xl border border-dashed border-gray-800 bg-gray-950/40">
-      <span className="mb-2 text-xl">📉</span>
-      <p className="text-sm text-gray-400">{message}</p>
+    <div
+      className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/20 text-center"
+      style={{ height }}
+    >
+      <div className="text-3xl" aria-hidden="true">
+        📈
+      </div>
+      <h3 className="mt-3 text-sm font-semibold text-zinc-100">{title}</h3>
+      <p className="mt-1 max-w-md text-xs text-zinc-500">{description}</p>
     </div>
-  )
+  );
 }
-export function Table(props: React.TableHTMLAttributes<HTMLTableElement>) {
+
+// ======================================================
+// TABLE
+// ======================================================
+
+export interface TableProps extends TableHTMLAttributes<HTMLTableElement> {
+  children: ReactNode;
+  dense?: boolean;
+}
+
+export function Table({ children, className, dense = false, ...rest }: TableProps) {
   return (
-    <div className="w-full overflow-x-auto">
-      <table {...props} className={`w-full text-sm ${props.className ?? ''}`} />
+    <div className="overflow-x-auto rounded-2xl border border-zinc-800">
+      <table
+        className={clsx(
+          'min-w-full divide-y divide-zinc-800 text-left text-sm text-zinc-300',
+          dense ? 'text-xs' : '',
+          className,
+        )}
+        {...rest}
+      >
+        {children}
+      </table>
     </div>
-  )
+  );
 }
+
 // ======================================================
 // BADGE
 // ======================================================
 
 export interface BadgeProps {
-  children?: ReactNode
-  tone?: 'neutral' | 'success' | 'warning' | 'danger' | 'info'
-  className?: string
+  children?: ReactNode;
+  tone?: 'neutral' | 'success' | 'warning' | 'danger' | 'info';
+  className?: string;
 }
 
 export function Badge({ children, tone = 'neutral', className }: BadgeProps) {
@@ -486,7 +550,7 @@ export function Badge({ children, tone = 'neutral', className }: BadgeProps) {
     warning: 'bg-amber-900/40 text-amber-300 border-amber-700/60',
     danger: 'bg-red-900/40 text-red-300 border-red-700/60',
     info: 'bg-sky-900/40 text-sky-300 border-sky-700/60',
-  }
+  };
 
   return (
     <span
@@ -499,43 +563,33 @@ export function Badge({ children, tone = 'neutral', className }: BadgeProps) {
     >
       {children}
     </span>
-  )
+  );
 }
-export const ACCENT = {
-  amber: 'text-amber-400',
-  emerald: 'text-emerald-400',
-  sky: 'text-sky-400',
-  red: 'text-red-400',
-  slate: 'text-slate-300',
-
-  // Back-compat aliases used by older admin pages:
-  blue: 'text-sky-400',
-  violet: 'text-violet-400',
-  rose: 'text-rose-400',
-} as const
-
-export type AccentColor = keyof typeof ACCENT
 
 // ======================================================
 // EMPTY STATE + SKELETONS
 // ======================================================
 
 export interface EmptyStateAction {
-  label: string
-  onClick: () => void
+  label: string;
+  onClick: () => void;
 }
 
 export interface EmptyStateProps {
-  title: string
-  description?: string
-  action?: ReactNode | EmptyStateAction
-  icon?: ReactNode
+  title: string;
+  description?: string;
+  action?: ReactNode | EmptyStateAction;
+  icon?: ReactNode;
 }
 
-function isEmptyStateAction(action: ReactNode | EmptyStateAction | undefined): action is EmptyStateAction {
-  if (!action || typeof action !== 'object') return false
-  const maybe = action as Partial<EmptyStateAction>
-  return typeof maybe.label === 'string' && typeof maybe.onClick === 'function'
+function isEmptyStateAction(
+  action: ReactNode | EmptyStateAction | undefined,
+): action is EmptyStateAction {
+  if (!isRecord(action)) {
+    return false;
+  }
+
+  return typeof action.label === 'string' && typeof action.onClick === 'function';
 }
 
 export function EmptyState({ title, description, action, icon }: EmptyStateProps) {
@@ -560,21 +614,24 @@ export function EmptyState({ title, description, action, icon }: EmptyStateProps
         </div>
       ) : null}
     </div>
-  )
+  );
 }
 
 export interface SkeletonProps {
-  rows?: number
-  className?: string
+  rows?: number;
+  className?: string;
 }
 
 export function Skeleton({ rows = 3, className }: SkeletonProps) {
+  const skeletonKeys = useMemo(() => {
+    return Array.from({ length: rows }, () => crypto.randomUUID());
+  }, [rows]);
+
   return (
     <div className={clsx('space-y-3', className)}>
-      {Array.from({ length: rows }).map((_, i) => (
-        // eslint-disable-next-line react/no-array-index-key
-        <div key={i} className="h-8 animate-pulse rounded-xl bg-gray-800/60" />
+      {skeletonKeys.map((key) => (
+        <div key={key} className="h-8 animate-pulse rounded-xl bg-gray-800/60" />
       ))}
     </div>
-  )
+  );
 }

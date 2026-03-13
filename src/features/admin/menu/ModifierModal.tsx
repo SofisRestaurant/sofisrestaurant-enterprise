@@ -6,41 +6,41 @@
 // Schema: modifiers table — confirmed columns Feb 2026.
 // ============================================================================
 
-import { useState, useEffect }   from 'react'
-import { ModalShell }            from '@/components/ui/ModalShell'
-import { AsyncButton }           from '@/components/ui/AsyncButton'
-import { ErrorBanner }           from '@/components/ui/ErrorBanner'
-import { FormSection,} from '@/components/ui/FormSection'
-import { InlineToggle }          from '@/components/ui/InlineToggle'
-import type { AdminModifier, ModifierWritePayload } from '@/types/admin-menu'
-import { validateModifierPayload } from '@/domain/menu/modifier.schema'
-import { PricingEngine }         from '@/domain/pricing/pricing.engine'
-import { formStyles } from '@/components/ui/formStyles'
+import { useState, useEffect } from 'react';
+import { ModalShell } from '@/components/ui/ModalShell';
+import { AsyncButton } from '@/components/ui/AsyncButton';
+import { ErrorBanner } from '@/components/ui/ErrorBanner';
+import { FormSection } from '@/components/ui/FormSection';
+import { InlineToggle } from '@/components/ui/InlineToggle';
+import type { AdminModifier, ModifierWritePayload } from '@/types/admin-menu';
+import { validateModifierPayload } from '@/domain/menu/modifier.schema';
+import { PricingEngine } from '@/domain/pricing/pricing.engine';
+import { formStyles } from '@/components/ui/formStyles';
 // ─────────────────────────────────────────────────────────────────────────────
 // Form state
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface ModifierFormState {
-  name:             string
-  price_adjustment: string
-  available:        boolean
-  sort_order:       string
+  name: string;
+  price_adjustment: string;
+  available: boolean;
+  sort_order: string;
 }
 
 const EMPTY: ModifierFormState = {
-  name:             '',
+  name: '',
   price_adjustment: '0',
-  available:        true,
-  sort_order:       '0',
-}
+  available: true,
+  sort_order: '0',
+};
 
 function toForm(m: AdminModifier): ModifierFormState {
   return {
-    name:             m.name,
+    name: m.name,
     price_adjustment: m.price_adjustment.toString(),
-    available:        m.available,
-    sort_order:       m.sort_order.toString(),
-  }
+    available: m.available,
+    sort_order: m.sort_order.toString(),
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -48,36 +48,30 @@ function toForm(m: AdminModifier): ModifierFormState {
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface ModifierModalProps {
-  isOpen:       boolean
-  onClose:      () => void
-  onSave:       (payload: Omit<ModifierWritePayload, 'modifier_group_id'>) => Promise<void>
-  editing?:     AdminModifier | null
-  groupName?:   string
+  isOpen: boolean;
+  onClose: () => void;
+  onSave: (payload: Omit<ModifierWritePayload, 'modifier_group_id'>) => Promise<void>;
+  editing?: AdminModifier | null;
+  groupName?: string;
 }
 
-export function ModifierModal({
-  isOpen,
-  onClose,
-  onSave,
-  editing,
-  groupName,
-}: ModifierModalProps) {
-  const [form,  setForm]  = useState<ModifierFormState>(EMPTY)
-  const [error, setError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
+export function ModifierModal({ isOpen, onClose, onSave, editing, groupName }: ModifierModalProps) {
+  const [form, setForm] = useState<ModifierFormState>(EMPTY);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   // Reset when modal opens
   useEffect(() => {
-    if (!isOpen) return
-    setForm(editing ? toForm(editing) : EMPTY)
-    setError(null)
-  }, [isOpen, editing])
+    if (!isOpen) return;
+    setForm(editing ? toForm(editing) : EMPTY);
+    setError(null);
+  }, [isOpen, editing]);
 
   function field<K extends keyof ModifierFormState>(key: K, value: ModifierFormState[K]) {
-    setForm((p) => ({ ...p, [key]: value }))
+    setForm((p) => ({ ...p, [key]: value }));
   }
 
-  const priceNum = parseFloat(form.price_adjustment)
+  const priceNum = parseFloat(form.price_adjustment);
   const priceLabel =
     isNaN(priceNum) || priceNum === 0
       ? 'No price change'
@@ -87,36 +81,36 @@ export function ModifierModal({
 
   function buildPayload(): Omit<ModifierWritePayload, 'modifier_group_id'> {
     return {
-      name:             form.name.trim(),
+      name: form.name.trim(),
       price_adjustment: isNaN(priceNum) ? 0 : priceNum,
-      available:        form.available,
-      sort_order:       parseInt(form.sort_order, 10) || 0,
-    }
+      available: form.available,
+      sort_order: parseInt(form.sort_order, 10) || 0,
+    };
   }
 
   function isValid(): boolean {
-    const p = buildPayload()
-    const v = validateModifierPayload(p)
-    return v.valid
+    const p = buildPayload();
+    const v = validateModifierPayload(p);
+    return v.valid;
   }
 
   async function handleSave() {
-    const payload = buildPayload()
-    const v = validateModifierPayload(payload)
+    const payload = buildPayload();
+    const v = validateModifierPayload(payload);
     if (!v.valid) {
-      const msgs = Object.values(v.errors).filter(Boolean)
-      setError(msgs[0] ?? 'Invalid input')
-      return
+      const msgs = Object.values(v.errors).filter(Boolean);
+      setError(msgs[0] ?? 'Invalid input');
+      return;
     }
-    setSaving(true)
-    setError(null)
+    setSaving(true);
+    setError(null);
     try {
-      await onSave(payload)
-      onClose()
+      await onSave(payload);
+      onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save')
+      setError(err instanceof Error ? err.message : 'Failed to save');
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
   }
 
@@ -132,9 +126,7 @@ export function ModifierModal({
           <h2 className="text-base font-semibold text-gray-900">
             {editing ? 'Edit Option' : 'Add Option'}
           </h2>
-          {groupName && (
-            <p className="text-xs text-gray-400 mt-0.5">Group: {groupName}</p>
-          )}
+          {groupName && <p className="text-xs text-gray-400 mt-0.5">Group: {groupName}</p>}
         </div>
 
         <ErrorBanner message={error} onDismiss={() => setError(null)} />
@@ -163,7 +155,11 @@ export function ModifierModal({
               placeholder="0.00"
               className={formStyles.input}
             />
-            <p className={['text-xs mt-1', isNaN(priceNum) ? 'text-red-500' : 'text-gray-400'].join(' ')}>
+            <p
+              className={['text-xs mt-1', isNaN(priceNum) ? 'text-red-500' : 'text-gray-400'].join(
+                ' ',
+              )}
+            >
               {priceLabel}
             </p>
           </div>
@@ -206,5 +202,5 @@ export function ModifierModal({
         </div>
       </div>
     </ModalShell>
-  )
+  );
 }

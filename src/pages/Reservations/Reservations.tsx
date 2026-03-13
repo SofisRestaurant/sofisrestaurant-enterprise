@@ -7,7 +7,11 @@ export default function Reservations() {
         <div className="bg-white rounded-lg shadow-lg p-6">
           <form className="space-y-4">
             <input type="text" placeholder="Name" className="w-full px-4 py-2 border rounded-lg" />
-            <input type="email" placeholder="Email" className="w-full px-4 py-2 border rounded-lg" />
+            <input
+              type="email"
+              placeholder="Email"
+              className="w-full px-4 py-2 border rounded-lg"
+            />
             <input type="tel" placeholder="Phone" className="w-full px-4 py-2 border rounded-lg" />
             <input type="date" className="w-full px-4 py-2 border rounded-lg" />
             <input type="time" className="w-full px-4 py-2 border rounded-lg" />
@@ -17,10 +21,12 @@ export default function Reservations() {
               <option>6 guests</option>
               <option>8+ guests</option>
             </select>
-            <button type="submit" className="btn btn-primary w-full">Reserve Table</button>
+            <button type="submit" className="btn btn-primary w-full">
+              Reserve Table
+            </button>
           </form>
         </div>
       </div>
     </div>
-  )
+  );
 }

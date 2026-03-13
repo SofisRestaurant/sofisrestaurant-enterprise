@@ -1,12 +1,12 @@
-import { useMemo } from 'react'
-import { Search } from 'lucide-react'
+import { useMemo } from 'react';
+import { Search } from 'lucide-react';
 
 type Props = {
-  value: string
-  onChange: (next: string) => void
-  placeholder?: string
-  disabled?: boolean
-}
+  value: string;
+  onChange: (next: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+};
 
 export default function MenuHeaderSearch({
   value,
@@ -14,7 +14,7 @@ export default function MenuHeaderSearch({
   placeholder = 'Search menu…',
   disabled = false,
 }: Props) {
-  const hasValue = useMemo(() => value.trim().length > 0, [value])
+  const hasValue = useMemo(() => value.trim().length > 0, [value]);
 
   return (
     <div className="w-full max-w-xl">
@@ -46,5 +46,5 @@ export default function MenuHeaderSearch({
         />
       </div>
     </div>
-  )
+  );
 }

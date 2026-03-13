@@ -3,8 +3,8 @@
 // Route entry point — delegates to feature layer
 // =============================================================================
 
-import { memo, useCallback } from 'react'
-import { useFinance } from '@/features/admin/finance/useFinance'
+import { memo, useCallback } from 'react';
+import { useFinance } from '@/features/admin/finance/useFinance';
 import {
   Panel,
   KPICard,
@@ -16,8 +16,8 @@ import {
   Badge,
   Skeleton,
   EmptyState,
-} from '@/features/admin/ui'
-import type { FinancePeriod } from '@/pages/Admin/finance/finance.types'
+} from '@/features/admin/ui';
+import type { FinancePeriod } from '@/pages/Admin/finance/finance.types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -28,7 +28,7 @@ const fmt$ = (cents: number) =>
     style: 'currency',
     currency: 'USD',
     maximumFractionDigits: 0,
-  })
+  });
 
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleString('en-US', {
@@ -36,12 +36,12 @@ const fmtDate = (iso: string) =>
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  })
+  });
 
-type BadgeTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info'
+type BadgeTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
 
 function paymentBadge(status: string) {
-  const s = String(status ?? '').toLowerCase()
+  const s = String(status ?? '').toLowerCase();
   const map: Record<string, BadgeTone> = {
     paid: 'success',
     refunded: 'warning',
@@ -50,19 +50,41 @@ function paymentBadge(status: string) {
     requires_payment_method: 'warning',
     requires_action: 'warning',
     canceled: 'danger',
-  }
-  return <Badge tone={map[s] ?? 'neutral'}>{s || 'unknown'}</Badge>
+  };
+
+  return <Badge tone={map[s] ?? 'neutral'}>{s || 'unknown'}</Badge>;
 }
 
 function toTrend(trendPct: number | null | undefined): 'up' | 'down' | 'flat' {
-  const n = Number(trendPct)
-  if (!Number.isFinite(n) || n === 0) return 'flat'
-  return n > 0 ? 'up' : 'down'
+  const n = Number(trendPct);
+  if (!Number.isFinite(n) || n === 0) {
+    return 'flat';
+  }
+
+  return n > 0 ? 'up' : 'down';
 }
 
 function safeInt(n: unknown): number {
-  const v = Number(n)
-  return Number.isFinite(v) ? v : 0
+  const v = Number(n);
+  return Number.isFinite(v) ? v : 0;
+}
+
+function buildRevenueSubtext(
+  metricsAvailable: boolean,
+  orderCount: number,
+  trendPct: number,
+): string | undefined {
+  if (!metricsAvailable) {
+    return undefined;
+  }
+
+  const parts = [`${orderCount.toLocaleString()} orders`];
+
+  if (Number.isFinite(trendPct)) {
+    parts.push(`${Math.abs(trendPct).toFixed(1)}% vs prior`);
+  }
+
+  return parts.join(' • ');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -73,33 +95,33 @@ const PERIODS: { label: string; value: FinancePeriod }[] = [
   { label: 'Today', value: 'today' },
   { label: '7 Days', value: 'week' },
   { label: '30 Days', value: 'month' },
-]
+];
 
 interface PeriodSelectorProps {
-  value: FinancePeriod
-  onChange: (p: FinancePeriod) => void
+  value: FinancePeriod;
+  onChange: (p: FinancePeriod) => void;
 }
 
 function PeriodSelector({ value, onChange }: PeriodSelectorProps) {
   return (
     <div className="flex gap-1 rounded-lg bg-zinc-900/60 p-1 ring-1 ring-zinc-800">
-      {PERIODS.map((p) => (
+      {PERIODS.map((period) => (
         <button
-          key={p.value}
+          key={period.value}
           type="button"
-          onClick={() => onChange(p.value)}
+          onClick={() => onChange(period.value)}
           className={[
             'rounded-md px-3 py-1 text-[11px] font-bold transition-colors',
-            value === p.value
+            value === period.value
               ? 'bg-amber-500 text-black'
               : 'text-zinc-400 hover:text-zinc-200',
           ].join(' ')}
         >
-          {p.label}
+          {period.label}
         </button>
       ))}
     </div>
-  )
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -107,29 +129,22 @@ function PeriodSelector({ value, onChange }: PeriodSelectorProps) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const Finance = memo(function Finance() {
-  const {
-    metrics,
-    ledger,
-    refundTotal,
-    refundCount,
-    loading,
-    error,
-    period,
-    setPeriod,
-    refresh,
-  } = useFinance()
+  const { metrics, ledger, refundTotal, refundCount, loading, error, period, setPeriod, refresh } =
+    useFinance();
 
   const onRefresh = useCallback(() => {
-    void refresh()
-  }, [refresh])
+    void refresh();
+  }, [refresh]);
 
-  const revenueCents = safeInt(metrics?.revenueCents)
-  const orderCount = safeInt(metrics?.orderCount)
-  const avgOrderCents = safeInt(metrics?.avgOrderCents)
-  const taxCents = safeInt(metrics?.taxCents)
-  const grossProfitCents = safeInt(metrics?.grossProfitCents)
-  const netProfitCents = safeInt(metrics?.netProfitCents)
-  const trendPct = Number(metrics?.trendPct)
+  const revenueCents = safeInt(metrics?.revenueCents);
+  const orderCount = safeInt(metrics?.orderCount);
+  const avgOrderCents = safeInt(metrics?.avgOrderCents);
+  const taxCents = safeInt(metrics?.taxCents);
+  const grossProfitCents = safeInt(metrics?.grossProfitCents);
+  const netProfitCents = safeInt(metrics?.netProfitCents);
+  const trendPct = Number(metrics?.trendPct);
+
+  const revenueSub = buildRevenueSubtext(metrics !== null, orderCount, trendPct);
 
   return (
     <div className="space-y-6">
@@ -152,32 +167,18 @@ const Finance = memo(function Finance() {
         </div>
       ) : null}
 
-      {/* KPI Grid */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <KPICard
           label="Revenue"
           value={metrics ? fmt$(revenueCents) : '—'}
-          sub={metrics ? `${orderCount.toLocaleString()} orders` : undefined}
+          sub={revenueSub}
           accent="amber"
           trend={toTrend(trendPct)}
-          helperText={
-            metrics && Number.isFinite(trendPct)
-              ? `${Math.abs(trendPct).toFixed(1)}% vs prior`
-              : undefined
-          }
         />
 
-        <KPICard
-          label="Avg Order"
-          value={metrics ? fmt$(avgOrderCents) : '—'}
-          accent="sky"
-        />
+        <KPICard label="Avg Order" value={metrics ? fmt$(avgOrderCents) : '—'} accent="sky" />
 
-        <KPICard
-          label="Tax Collected"
-          value={metrics ? fmt$(taxCents) : '—'}
-          accent="slate"
-        />
+        <KPICard label="Tax Collected" value={metrics ? fmt$(taxCents) : '—'} accent="slate" />
 
         <KPICard
           label="Refunds"
@@ -187,7 +188,6 @@ const Finance = memo(function Finance() {
         />
       </div>
 
-      {/* Profit row */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <KPICard
           label="Gross Profit (est.)"
@@ -201,7 +201,6 @@ const Finance = memo(function Finance() {
         />
       </div>
 
-      {/* Ledger */}
       <Panel noPad>
         <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
           <div>
@@ -212,9 +211,7 @@ const Finance = memo(function Finance() {
           </div>
 
           <div className="hidden items-center gap-2 lg:flex">
-            {loading ? (
-              <span className="text-xs text-zinc-500">Loading…</span>
-            ) : null}
+            {loading ? <span className="text-xs text-zinc-500">Loading…</span> : null}
           </div>
         </div>
 
@@ -224,10 +221,7 @@ const Finance = memo(function Finance() {
           </div>
         ) : ledger.length === 0 ? (
           <div className="p-8">
-            <EmptyState
-              title="No transactions"
-              description="No orders found for this period."
-            />
+            <EmptyState title="No transactions" description="No orders found for this period." />
           </div>
         ) : (
           <TableWrapper>
@@ -246,9 +240,7 @@ const Finance = memo(function Finance() {
               {ledger.map((row) => (
                 <tr key={row.id} className="transition-colors hover:bg-zinc-800/30">
                   <Td>
-                    <span className="font-mono text-xs text-zinc-500">
-                      {row.id.slice(0, 8)}…
-                    </span>
+                    <span className="font-mono text-xs text-zinc-500">{row.id.slice(0, 8)}…</span>
                   </Td>
 
                   <Td className="text-zinc-300">{fmtDate(row.createdAt)}</Td>
@@ -267,7 +259,7 @@ const Finance = memo(function Finance() {
         )}
       </Panel>
     </div>
-  )
-})
+  );
+});
 
-export default Finance
+export default Finance;

@@ -6,8 +6,8 @@
 // - Safe bearer token extraction
 // =============================================================================
 
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import type { Database } from "./database.types.ts";
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import type { Database } from './database.types.ts';
 
 export type DbClient = SupabaseClient<Database>;
 export type SvcClient = DbClient;
@@ -17,7 +17,7 @@ const BASE_CLIENT_OPTIONS = {
   auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   global: {
     headers: {
-      "X-Application-Name": "sofis-edge",
+      'X-Application-Name': 'sofis-edge',
     },
   },
 } as const;
@@ -34,9 +34,9 @@ function mustEnv(name: string): string {
 
 function env() {
   return {
-    SUPABASE_URL: mustEnv("SUPABASE_URL"),
-    SUPABASE_ANON_KEY: mustEnv("SUPABASE_ANON_KEY"),
-    SUPABASE_SERVICE_ROLE_KEY: mustEnv("SUPABASE_SERVICE_ROLE_KEY"),
+    SUPABASE_URL: mustEnv('SUPABASE_URL'),
+    SUPABASE_ANON_KEY: mustEnv('SUPABASE_ANON_KEY'),
+    SUPABASE_SERVICE_ROLE_KEY: mustEnv('SUPABASE_SERVICE_ROLE_KEY'),
   };
 }
 
@@ -54,7 +54,7 @@ function mergeHeaders(...sets: Array<Record<string, string> | undefined>) {
 // ─────────────────────────────────────────────────────────────
 
 export function readBearerToken(req: Request): string | null {
-  const raw = req.headers.get("authorization") ?? req.headers.get("Authorization");
+  const raw = req.headers.get('authorization') ?? req.headers.get('Authorization');
   if (!raw) return null;
   const m = raw.trim().match(/^bearer\s+(.+)$/i);
   const token = m?.[1]?.trim();
@@ -79,7 +79,7 @@ export function createServiceClient(): SvcClient {
   return createClient<Database>(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     ...BASE_CLIENT_OPTIONS,
     global: {
-      headers: mergeHeaders({ "X-Edge-Role": "service" }),
+      headers: mergeHeaders({ 'X-Edge-Role': 'service' }),
     },
   });
 }
@@ -94,7 +94,7 @@ export function createAnonKeyClient(): AnonClient {
   return createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
     ...BASE_CLIENT_OPTIONS,
     global: {
-      headers: mergeHeaders({ "X-Edge-Role": "anon-key" }),
+      headers: mergeHeaders({ 'X-Edge-Role': 'anon-key' }),
     },
   });
 }
@@ -112,7 +112,7 @@ export function createAnonClient(userJwt: string): AnonClient {
     ...BASE_CLIENT_OPTIONS,
     global: {
       headers: mergeHeaders(
-        { "X-Edge-Role": "anon-jwt" },
+        { 'X-Edge-Role': 'anon-jwt' },
         jwt ? { Authorization: `Bearer ${jwt}` } : undefined,
       ),
     },
@@ -125,5 +125,5 @@ export function createAnonClient(userJwt: string): AnonClient {
  */
 export function createAuthClient(req: Request): AnonClient {
   const jwt = readBearerToken(req);
-  return createAnonClient(jwt ?? "");
+  return createAnonClient(jwt ?? '');
 }

@@ -21,12 +21,12 @@ function extractMenuItem(config: unknown): MenuItemPublic | null {
   if (!isRecord(config)) return null;
 
   const data = config.data;
-  if (isRecord(data) && isMenuItemPublic((data as UnknownRecord).item)) {
-    return (data as UnknownRecord).item as MenuItemPublic;
+  if (isRecord(data) && isMenuItemPublic(data.item)) {
+    return data.item;
   }
 
-  if (isMenuItemPublic((config as UnknownRecord).item)) {
-    return (config as UnknownRecord).item as MenuItemPublic;
+  if (isMenuItemPublic(config.item)) {
+    return config.item;
   }
 
   return null;
@@ -34,29 +34,35 @@ function extractMenuItem(config: unknown): MenuItemPublic | null {
 
 export default function ModalRenderer() {
   const ctx = useContext(ModalContext);
-  if (!ctx) return null;
 
-  const { activeModal, modalConfig, closeModal } = ctx;
+  const activeModal = ctx?.activeModal ?? null;
+  const modalConfig = ctx?.modalConfig ?? null;
+  const closeModal = ctx?.closeModal;
+
+  const isMenuItem = activeModal === ('menu-item' as ModalType);
 
   useEffect(() => {
-    if (!activeModal) return;
+    if (!activeModal || !closeModal) return;
+
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') closeModal();
     };
+
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [activeModal, closeModal]);
 
-  const isMenuItem = activeModal === ('menu-item' as ModalType);
-
   // lock only for modals that this shell actually owns
-  useScrollLock({ enabled: Boolean(activeModal) && !isMenuItem, token: 'modal-renderer' });
+  useScrollLock({
+    enabled: Boolean(activeModal) && !isMenuItem,
+    token: 'modal-renderer',
+  });
 
   const content = useMemo(() => {
-    if (!activeModal) return null;
+    if (!activeModal || !closeModal) return null;
 
     if (isMenuItem) {
-      const item = extractMenuItem(modalConfig as AnyModalConfig);
+      const item = extractMenuItem(modalConfig as AnyModalConfig | null);
       if (!item) return null;
       return <MenuItemModal item={item} onClose={closeModal} />;
     }
@@ -64,7 +70,7 @@ export default function ModalRenderer() {
     return null;
   }, [activeModal, isMenuItem, modalConfig, closeModal]);
 
-  if (!activeModal || !content) return null;
+  if (!ctx || !activeModal || !content) return null;
 
   // MenuItemModal provides its own overlay
   if (isMenuItem) return content;

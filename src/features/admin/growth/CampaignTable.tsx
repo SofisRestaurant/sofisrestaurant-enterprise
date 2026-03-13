@@ -10,9 +10,9 @@ import { Badge, EmptyState, SkeletonBlock } from '@/features/admin/ui/AdminPrimi
 import { formatDollars } from '@/lib/dashboard/formatters';
 import type { Tables } from '@/types/supabase';
 
-type Campaign  = Tables<'growth_campaigns'>;
-type SortKey   = 'name' | 'revenue' | 'roi' | 'spent';
-type SortDir   = 'asc' | 'desc';
+type Campaign = Tables<'growth_campaigns'>;
+type SortKey = 'name' | 'revenue' | 'roi' | 'spent';
+type SortDir = 'asc' | 'desc';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -39,7 +39,9 @@ export function CampaignTable({ campaigns, loading, onEdit, onDelete }: Campaign
   if (loading) {
     return (
       <div className="animate-pulse space-y-2">
-        {[...Array(4)].map((_, i) => <SkeletonBlock key={i} className="h-12 rounded-lg" />)}
+        {[...Array(4)].map((_, i) => (
+          <SkeletonBlock key={i} className="h-12 rounded-lg" />
+        ))}
       </div>
     );
   }
@@ -50,7 +52,9 @@ export function CampaignTable({ campaigns, loading, onEdit, onDelete }: Campaign
         title="No campaigns yet"
         description="Create a campaign to start tracking ROI"
         icon="📣"
-        action={onEdit ? { label: '+ New Campaign', onClick: () => onEdit({} as Campaign) } : undefined}
+        action={
+          onEdit ? { label: '+ New Campaign', onClick: () => onEdit({} as Campaign) } : undefined
+        }
       />
     );
   }
@@ -65,15 +69,25 @@ export function CampaignTable({ campaigns, loading, onEdit, onDelete }: Campaign
   }
 
   const sorted = [...campaigns].sort((a, b) => {
-    let av = 0, bv = 0;
+    let av = 0,
+      bv = 0;
     if (sortKey === 'name') {
       return sortDir === 'asc'
         ? (a.name ?? '').localeCompare(b.name ?? '')
         : (b.name ?? '').localeCompare(a.name ?? '');
     }
-    if (sortKey === 'revenue') { av = a.revenue_cents ?? 0; bv = b.revenue_cents ?? 0; }
-    if (sortKey === 'spent')   { av = a.spent_cents ?? 0;   bv = b.spent_cents ?? 0; }
-    if (sortKey === 'roi')     { av = roiPct(a) ?? -999;    bv = roiPct(b) ?? -999; }
+    if (sortKey === 'revenue') {
+      av = a.revenue_cents ?? 0;
+      bv = b.revenue_cents ?? 0;
+    }
+    if (sortKey === 'spent') {
+      av = a.spent_cents ?? 0;
+      bv = b.spent_cents ?? 0;
+    }
+    if (sortKey === 'roi') {
+      av = roiPct(a) ?? -999;
+      bv = roiPct(b) ?? -999;
+    }
     return sortDir === 'asc' ? av - bv : bv - av;
   });
 
@@ -83,12 +97,12 @@ export function CampaignTable({ campaigns, loading, onEdit, onDelete }: Campaign
   }
 
   const headers: { key: SortKey | null; label: string; sortable: boolean }[] = [
-    { key: 'name',    label: 'Campaign', sortable: true },
-    { key: null,      label: 'Channel',  sortable: false },
-    { key: 'spent',   label: 'Spent',    sortable: true },
-    { key: 'revenue', label: 'Revenue',  sortable: true },
-    { key: 'roi',     label: 'ROI',      sortable: true },
-    { key: null,      label: '',         sortable: false },
+    { key: 'name', label: 'Campaign', sortable: true },
+    { key: null, label: 'Channel', sortable: false },
+    { key: 'spent', label: 'Spent', sortable: true },
+    { key: 'revenue', label: 'Revenue', sortable: true },
+    { key: 'roi', label: 'ROI', sortable: true },
+    { key: null, label: '', sortable: false },
   ];
 
   return (
@@ -110,14 +124,15 @@ export function CampaignTable({ campaigns, loading, onEdit, onDelete }: Campaign
         </thead>
         <tbody className="divide-y divide-zinc-800/50">
           {sorted.map((c) => {
-            const roi    = roiPct(c);
+            const roi = roiPct(c);
             const roiBadge =
-              roi === null      ? null :
-              roi >= 100
-  ? <Badge tone="success">+{roi}%</Badge>
-  : roi >= 0
-    ? <Badge tone="warning">+{roi}%</Badge>
-    : <Badge tone="danger">{roi}%</Badge>;
+              roi === null ? null : roi >= 100 ? (
+                <Badge tone="success">+{roi}%</Badge>
+              ) : roi >= 0 ? (
+                <Badge tone="warning">+{roi}%</Badge>
+              ) : (
+                <Badge tone="danger">{roi}%</Badge>
+              );
             return (
               <tr key={c.id} className="group transition-colors hover:bg-zinc-900/30">
                 <td className="py-3 pr-4 font-semibold text-zinc-200">{c.name ?? '—'}</td>
@@ -125,7 +140,7 @@ export function CampaignTable({ campaigns, loading, onEdit, onDelete }: Campaign
                   {c.channel ? <Badge tone="neutral">{c.channel}</Badge> : '—'}
                 </td>
                 <td className="py-3 pr-4 font-mono text-zinc-500 tabular-nums">
-                  {c.spent_cents  ? formatDollars(c.spent_cents)  : '—'}
+                  {c.spent_cents ? formatDollars(c.spent_cents) : '—'}
                 </td>
                 <td className="py-3 pr-4 font-mono font-bold text-emerald-400 tabular-nums">
                   {c.revenue_cents ? formatDollars(c.revenue_cents) : '—'}
@@ -138,18 +153,39 @@ export function CampaignTable({ campaigns, loading, onEdit, onDelete }: Campaign
                         onClick={() => onEdit(c)}
                         className="rounded-lg p-1.5 text-zinc-600 hover:bg-zinc-800 hover:text-amber-400 transition-colors"
                       >
-                        <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.6">
-                          <path d="M9 1.5l2.5 2.5-7 7H2v-2.5l7-7z" strokeLinecap="round" strokeLinejoin="round" />
+                        <svg
+                          width="13"
+                          height="13"
+                          viewBox="0 0 13 13"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.6"
+                        >
+                          <path
+                            d="M9 1.5l2.5 2.5-7 7H2v-2.5l7-7z"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
                         </svg>
                       </button>
                     )}
                     {onDelete && (
                       <button
-                        onClick={() => onDelete(c.id!)}
+                        onClick={() => onDelete(c.id)}
                         className="rounded-lg p-1.5 text-zinc-600 hover:bg-zinc-800 hover:text-red-400 transition-colors"
                       >
-                        <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.6">
-                          <path d="M2 3.5h9M5 1.5h3M4.5 3.5v7a.5.5 0 00.5.5h3a.5.5 0 00.5-.5v-7" strokeLinecap="round" />
+                        <svg
+                          width="13"
+                          height="13"
+                          viewBox="0 0 13 13"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.6"
+                        >
+                          <path
+                            d="M2 3.5h9M5 1.5h3M4.5 3.5v7a.5.5 0 00.5.5h3a.5.5 0 00.5-.5v-7"
+                            strokeLinecap="round"
+                          />
                         </svg>
                       </button>
                     )}

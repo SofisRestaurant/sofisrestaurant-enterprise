@@ -1,4 +1,1 @@
-export type AuthModalType =
-  | 'login'
-  | 'signup'
-  | 'forgot-password'
+export type AuthModalType = 'login' | 'signup' | 'forgot-password';

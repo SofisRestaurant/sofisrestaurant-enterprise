@@ -15,32 +15,35 @@
 //   direct queries unless/until you add gateway actions for them.
 // =============================================================================
 
-import { supabase } from '@/lib/supabase/supabaseClient'
-import { callAdminGateway, formatAdminGatewayError } from '@/features/admin/api/adminGateway.client'
+import { supabase } from '@/lib/supabase/supabaseClient';
+import {
+  callAdminGateway,
+  formatAdminGatewayError,
+} from '@/features/admin/api/adminGateway.client';
 import type {
   CampaignCreatePayload,
   CampaignUpdatePayload,
   CampaignPinFeaturedPayload,
-} from '@/features/admin/api/adminGateway.types'
+} from '@/features/admin/api/adminGateway.types';
 
-import type { Database } from '@/types/supabase'
+import type { Database } from '@/types/supabase';
 import type {
   Campaign,
   PromoCode,
   AbandonedCartSession,
   AbandonedCartSummary,
   AIInsight,
-} from './growth.types'
+} from './growth.types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DB Row aliases (from generated types)
 // ─────────────────────────────────────────────────────────────────────────────
 
-type GrowthCampaignRow = Database['public']['Tables']['growth_campaigns']['Row']
-type PromotionRow = Database['public']['Tables']['promotions']['Row']
-type PromoRedemptionRow = Database['public']['Tables']['promo_redemptions']['Row']
-type AbandonedSessionRow = Database['public']['Tables']['abandoned_cart_sessions']['Row']
-type AIInsightRow = Database['public']['Tables']['ai_insights']['Row']
+type GrowthCampaignRow = Database['public']['Tables']['growth_campaigns']['Row'];
+type PromotionRow = Database['public']['Tables']['promotions']['Row'];
+type PromoRedemptionRow = Database['public']['Tables']['promo_redemptions']['Row'];
+type AbandonedSessionRow = Database['public']['Tables']['abandoned_cart_sessions']['Row'];
+type AIInsightRow = Database['public']['Tables']['ai_insights']['Row'];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Narrow SELECT types (for read-only non-gateway queries)
@@ -49,68 +52,68 @@ type AIInsightRow = Database['public']['Tables']['ai_insights']['Row']
 type AbandonedSessionSelect = Pick<
   AbandonedSessionRow,
   'id' | 'user_id' | 'email' | 'cart_value_cents' | 'last_activity' | 'recovered' | 'created_at'
->
+>;
 
 type AIInsightSelect = Pick<
   AIInsightRow,
   'id' | 'category' | 'title' | 'body' | 'confidence' | 'impact_pct' | 'applied' | 'created_at'
->
+>;
 
 type PromoRedemptionSelect = Pick<
   PromoRedemptionRow,
   'promotion_id' | 'order_total_cents' | 'discount_cents'
->
+>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Small runtime guards (no any, no unsafe casts)
 // ─────────────────────────────────────────────────────────────────────────────
 
-type UnknownRecord = Record<string, unknown>
+type UnknownRecord = Record<string, unknown>;
 
 function isRecord(v: unknown): v is UnknownRecord {
-  return typeof v === 'object' && v !== null && !Array.isArray(v)
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 function readString(v: unknown): string | null {
-  return typeof v === 'string' ? v : null
+  return typeof v === 'string' ? v : null;
 }
 
 function readNumber(v: unknown): number | null {
-  return typeof v === 'number' && Number.isFinite(v) ? v : null
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
 function readBool(v: unknown): boolean | null {
-  return typeof v === 'boolean' ? v : null
+  return typeof v === 'boolean' ? v : null;
 }
 
 function readNullableStringField(obj: unknown, key: string): string | null {
-  if (!isRecord(obj)) return null
-  const v = obj[key]
-  return v === null ? null : readString(v)
+  if (!isRecord(obj)) return null;
+  const v = obj[key];
+  return v === null ? null : readString(v);
 }
 
 function readNullableNumberField(obj: unknown, key: string): number | null {
-  if (!isRecord(obj)) return null
-  const v = obj[key]
-  return v === null ? null : readNumber(v)
+  if (!isRecord(obj)) return null;
+  const v = obj[key];
+  return v === null ? null : readNumber(v);
 }
 
 function readNullableBoolField(obj: unknown, key: string): boolean | null {
-  if (!isRecord(obj)) return null
-  const v = obj[key]
-  return v === null ? null : readBool(v)
+  if (!isRecord(obj)) return null;
+  const v = obj[key];
+  return v === null ? null : readBool(v);
 }
 
 function clampInt(v: unknown, min: number, max: number, fallback: number): number {
-  const n = readNumber(v)
-  if (n === null) return fallback
-  const x = Math.trunc(n)
-  return Math.max(min, Math.min(max, x))
+  const n = readNumber(v);
+  if (n === null) return fallback;
+  const x = Math.trunc(n);
+  return Math.max(min, Math.min(max, x));
 }
 
 function normalizeError(e: unknown, fallback: string): Error {
-  const msg = formatAdminGatewayError(e)
-  return new Error(msg && msg.trim().length > 0 ? msg : fallback)
+  const msg = formatAdminGatewayError(e);
+  return new Error(msg && msg.trim().length > 0 ? msg : fallback);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -119,72 +122,72 @@ function normalizeError(e: unknown, fallback: string): Error {
 // via intersection types (no unsafe casts; still assignable to Campaign/PromoCode).
 // ─────────────────────────────────────────────────────────────────────────────
 
-type AdminCampaign = Campaign & Partial<Pick<
-  GrowthCampaignRow,
-  | 'campaign_name'
-  | 'placement'
-  | 'menu_item_id'
-  | 'badge'
-  | 'hero_title'
-  | 'hero_subtitle'
-  | 'cta_label'
-  | 'deep_link'
-  | 'starts_at'
-  | 'ends_at'
-  | 'priority'
-  | 'weight'
-  | 'is_featured'
-  | 'eligible_for_rotation'
-  | 'status'
-  | 'updated_at'
-  | 'featured_for_date'
-  | 'promo_id'
->>
+type AdminCampaign = Campaign &
+  Partial<
+    Pick<
+      GrowthCampaignRow,
+      | 'campaign_name'
+      | 'placement'
+      | 'menu_item_id'
+      | 'badge'
+      | 'hero_title'
+      | 'hero_subtitle'
+      | 'cta_label'
+      | 'deep_link'
+      | 'starts_at'
+      | 'ends_at'
+      | 'priority'
+      | 'weight'
+      | 'is_featured'
+      | 'eligible_for_rotation'
+      | 'status'
+      | 'updated_at'
+      | 'featured_for_date'
+      | 'promo_id'
+    >
+  >;
 
-type AdminPromoCode = PromoCode & Partial<Pick<
-  PromotionRow,
-  | 'created_at'
-  | 'updated_at'
-  | 'starts_at'
-  | 'ends_at'
-  | 'expires_at'
-  | 'campaign_id'
-  | 'channel'
-  | 'cost_center'
-  | 'geo_target'
->>
+type AdminPromoCode = PromoCode &
+  Partial<
+    Pick<
+      PromotionRow,
+      | 'created_at'
+      | 'updated_at'
+      | 'starts_at'
+      | 'ends_at'
+      | 'expires_at'
+      | 'campaign_id'
+      | 'channel'
+      | 'cost_center'
+      | 'geo_target'
+    >
+  >;
 
-type PromoType = 'percent' | 'fixed'
+type PromoType = 'percent' | 'fixed';
 
 function normalizePromoType(dbType: unknown): PromoType {
-  return dbType === 'percent' ? 'percent' : 'fixed'
+  return dbType === 'percent' ? 'percent' : 'fixed';
 }
 
 function mapCampaignFromGatewayRow(row: unknown): AdminCampaign | null {
-  if (!isRecord(row)) return null
+  if (!isRecord(row)) return null;
 
-  const id = readString(row.id)
-  if (!id || !id.trim()) return null
+  const id = readString(row.id);
+  if (!id || !id.trim()) return null;
 
   const name =
-    readNullableStringField(row, 'name') ??
-    readNullableStringField(row, 'campaign_name') ??
-    ''
+    readNullableStringField(row, 'name') ?? readNullableStringField(row, 'campaign_name') ?? '';
 
   const channel =
-    readNullableStringField(row, 'channel') ??
-    readNullableStringField(row, 'placement') ??
-    null
+    readNullableStringField(row, 'channel') ?? readNullableStringField(row, 'placement') ?? null;
 
-  const budgetCents = readNullableNumberField(row, 'budget_cents') ?? 0
-  const spentCents = readNullableNumberField(row, 'spent_cents') ?? 0
-  const revenueCents = readNullableNumberField(row, 'revenue_cents') ?? 0
+  const budgetCents = readNullableNumberField(row, 'budget_cents') ?? 0;
+  const spentCents = readNullableNumberField(row, 'spent_cents') ?? 0;
+  const revenueCents = readNullableNumberField(row, 'revenue_cents') ?? 0;
 
-  const active = readNullableBoolField(row, 'active') ?? true
+  const active = readNullableBoolField(row, 'active') ?? true;
   const createdAt =
-    readNullableStringField(row, 'created_at') ??
-    readNullableStringField(row, 'updated_at') ??
-    ''
+    readNullableStringField(row, 'created_at') ?? readNullableStringField(row, 'updated_at') ?? '';
 
   // Optional admin fields (do not assume presence; read safely)
   const adminFields: Partial<AdminCampaign> = {
@@ -206,7 +209,7 @@ function mapCampaignFromGatewayRow(row: unknown): AdminCampaign | null {
     updated_at: readNullableStringField(row, 'updated_at'),
     featured_for_date: readNullableStringField(row, 'featured_for_date'),
     promo_id: readNullableStringField(row, 'promo_id'),
-  }
+  };
 
   // Base Campaign fields (keep existing UX expectations)
   // If Campaign type evolves, these are still safe primitives.
@@ -220,42 +223,42 @@ function mapCampaignFromGatewayRow(row: unknown): AdminCampaign | null {
     active,
     createdAt,
     ...adminFields,
-  }
+  };
 
-  return base
+  return base;
 }
 
 function mapPromoFromGatewayRow(row: unknown): AdminPromoCode | null {
-  if (!isRecord(row)) return null
+  if (!isRecord(row)) return null;
 
-  const id = readString(row.id)
-  const code = readString(row.code)
-  if (!id || !code) return null
+  const id = readString(row.id);
+  const code = readString(row.code);
+  if (!id || !code) return null;
 
-  const type = normalizePromoType(row.type)
-  const value = readNumber(row.value) ?? 0
-  const active = readBool(row.active) ?? false
+  const type = normalizePromoType(row.type);
+  const value = readNumber(row.value) ?? 0;
+  const active = readBool(row.active) ?? false;
 
   // If gateway returns more fields, we pass them through for UI
-  const currentUses = readNumber(row.current_uses) ?? 0
-  const maxUses = (row.max_uses === null ? null : readNumber(row.max_uses)) ?? null
-  const minOrderCents = readNumber(row.min_order_cents) ?? 0
-  const perUserLimit = readNumber(row.per_user_limit) ?? 0
+  const currentUses = readNumber(row.current_uses) ?? 0;
+  const maxUses = (row.max_uses === null ? null : readNumber(row.max_uses)) ?? null;
+  const minOrderCents = readNumber(row.min_order_cents) ?? 0;
+  const perUserLimit = readNumber(row.per_user_limit) ?? 0;
 
-  const startsAt = readNullableStringField(row, 'starts_at')
-  const endsAt = readNullableStringField(row, 'ends_at')
-  const expiresAt = readNullableStringField(row, 'expires_at')
+  const startsAt = readNullableStringField(row, 'starts_at');
+  const endsAt = readNullableStringField(row, 'ends_at');
+  const expiresAt = readNullableStringField(row, 'expires_at');
 
-  const campaignId = readNullableStringField(row, 'campaign_id')
-  const channel = readNullableStringField(row, 'channel')
+  const campaignId = readNullableStringField(row, 'campaign_id');
+  const channel = readNullableStringField(row, 'channel');
 
-  const createdAt = readNullableStringField(row, 'created_at') ?? null
-  const updatedAt = readNullableStringField(row, 'updated_at') ?? null
+  const createdAt = readNullableStringField(row, 'created_at') ?? null;
+  const updatedAt = readNullableStringField(row, 'updated_at') ?? null;
 
   // Revenue attribution requires promo_redemptions; if you later add a
   // gateway endpoint for that, wire it here. For now, keep stable zeros.
-  const revenueCents = 0
-  const redemptionCount = 0
+  const revenueCents = 0;
+  const redemptionCount = 0;
 
   const base: AdminPromoCode = {
     id,
@@ -274,11 +277,11 @@ function mapPromoFromGatewayRow(row: unknown): AdminPromoCode | null {
     channel,
     revenueCents,
     redemptionCount,
-   created_at: createdAt ?? undefined,
-  updated_at: updatedAt ?? undefined,
-  }
+    created_at: createdAt ?? undefined,
+    updated_at: updatedAt ?? undefined,
+  };
 
-  return base
+  return base;
 }
 
 function mapAbandonedSession(row: AbandonedSessionSelect): AbandonedCartSession {
@@ -290,7 +293,7 @@ function mapAbandonedSession(row: AbandonedSessionSelect): AbandonedCartSession 
     lastActivity: row.last_activity ?? null,
     recovered: row.recovered ?? false,
     createdAt: row.created_at ?? '',
-  }
+  };
 }
 
 function mapAIInsight(row: AIInsightSelect): AIInsight {
@@ -303,7 +306,7 @@ function mapAIInsight(row: AIInsightSelect): AIInsight {
     impactPct: row.impact_pct ?? 0,
     applied: row.applied ?? false,
     createdAt: row.created_at ?? '',
-  }
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -312,57 +315,57 @@ function mapAIInsight(row: AIInsightSelect): AIInsight {
 
 export async function fetchCampaigns(): Promise<Campaign[]> {
   try {
-    const rows = await callAdminGateway('campaigns:list')
-    if (!Array.isArray(rows)) return []
+    const rows = await callAdminGateway('campaigns:list');
+    if (!Array.isArray(rows)) return [];
 
-    const out: Campaign[] = []
+    const out: Campaign[] = [];
     for (const r of rows) {
-      const mapped = mapCampaignFromGatewayRow(r)
-      if (mapped) out.push(mapped)
+      const mapped = mapCampaignFromGatewayRow(r);
+      if (mapped) out.push(mapped);
     }
-    return out
+    return out;
   } catch (e) {
-    throw normalizeError(e, 'Failed to load campaigns')
+    throw normalizeError(e, 'Failed to load campaigns');
   }
 }
 
 export async function toggleCampaign(id: string, active: boolean): Promise<void> {
   try {
-    await callAdminGateway('campaigns:toggle', { id, active })
+    await callAdminGateway('campaigns:toggle', { id, active });
   } catch (e) {
-    throw normalizeError(e, 'Failed to update campaign')
+    throw normalizeError(e, 'Failed to update campaign');
   }
 }
 
 export async function runCampaignRotation(): Promise<void> {
   try {
-    await callAdminGateway('campaigns:run-rotation')
+    await callAdminGateway('campaigns:run-rotation');
   } catch (e) {
-    throw normalizeError(e, 'Failed to rotate campaigns')
+    throw normalizeError(e, 'Failed to rotate campaigns');
   }
 }
 
 export async function createCampaign(payload: CampaignCreatePayload): Promise<unknown> {
   try {
-    return await callAdminGateway('campaigns:create', payload)
+    return await callAdminGateway('campaigns:create', payload);
   } catch (e) {
-    throw normalizeError(e, 'Failed to create campaign')
+    throw normalizeError(e, 'Failed to create campaign');
   }
 }
 
 export async function updateCampaign(payload: CampaignUpdatePayload): Promise<unknown> {
   try {
-    return await callAdminGateway('campaigns:update', payload)
+    return await callAdminGateway('campaigns:update', payload);
   } catch (e) {
-    throw normalizeError(e, 'Failed to update campaign')
+    throw normalizeError(e, 'Failed to update campaign');
   }
 }
 
 export async function pinFeaturedCampaign(payload: CampaignPinFeaturedPayload): Promise<unknown> {
   try {
-    return await callAdminGateway('campaigns:pin-featured', payload)
+    return await callAdminGateway('campaigns:pin-featured', payload);
   } catch (e) {
-    throw normalizeError(e, 'Failed to pin featured campaign')
+    throw normalizeError(e, 'Failed to pin featured campaign');
   }
 }
 
@@ -372,25 +375,25 @@ export async function pinFeaturedCampaign(payload: CampaignPinFeaturedPayload): 
 
 export async function fetchPromoCodes(): Promise<PromoCode[]> {
   try {
-    const rows = await callAdminGateway('promos:list')
-    if (!Array.isArray(rows)) return []
+    const rows = await callAdminGateway('promos:list');
+    if (!Array.isArray(rows)) return [];
 
-    const out: PromoCode[] = []
+    const out: PromoCode[] = [];
     for (const r of rows) {
-      const mapped = mapPromoFromGatewayRow(r)
-      if (mapped) out.push(mapped)
+      const mapped = mapPromoFromGatewayRow(r);
+      if (mapped) out.push(mapped);
     }
-    return out
+    return out;
   } catch (e) {
-    throw normalizeError(e, 'Failed to load promo codes')
+    throw normalizeError(e, 'Failed to load promo codes');
   }
 }
 
 export async function togglePromoCode(id: string, active: boolean): Promise<void> {
   try {
-    await callAdminGateway('promos:toggle', { id, active })
+    await callAdminGateway('promos:toggle', { id, active });
   } catch (e) {
-    throw normalizeError(e, 'Failed to update promo code')
+    throw normalizeError(e, 'Failed to update promo code');
   }
 }
 
@@ -404,34 +407,34 @@ export async function fetchAbandonedCarts(): Promise<AbandonedCartSession[]> {
     .select('id,user_id,email,cart_value_cents,last_activity,recovered,created_at')
     .order('created_at', { ascending: false })
     .limit(200)
-    .returns<AbandonedSessionSelect[]>()
+    .returns<AbandonedSessionSelect[]>();
 
-  if (res.error) throw new Error(res.error.message)
-  return (res.data ?? []).map(mapAbandonedSession)
+  if (res.error) throw new Error(res.error.message);
+  return (res.data ?? []).map(mapAbandonedSession);
 }
 
 export async function fetchAbandonedCartSummary(): Promise<AbandonedCartSummary> {
   const res = await supabase
     .from('abandoned_cart_sessions')
     .select('cart_value_cents,recovered')
-    .returns<Array<Pick<AbandonedSessionRow, 'cart_value_cents' | 'recovered'>>>()
+    .returns<Array<Pick<AbandonedSessionRow, 'cart_value_cents' | 'recovered'>>>();
 
-  if (res.error) throw new Error(res.error.message)
+  if (res.error) throw new Error(res.error.message);
 
-  const rows = res.data ?? []
-  const totalAbandoned = rows.length
-  const recoveredRows = rows.filter((r) => r.recovered === true)
-  const totalRecovered = recoveredRows.length
-  const recoveryRate = totalAbandoned > 0 ? totalRecovered / totalAbandoned : 0
+  const rows = res.data ?? [];
+  const totalAbandoned = rows.length;
+  const recoveredRows = rows.filter((r) => r.recovered === true);
+  const totalRecovered = recoveredRows.length;
+  const recoveryRate = totalAbandoned > 0 ? totalRecovered / totalAbandoned : 0;
 
   const lostRevenueCents = rows
     .filter((r) => r.recovered !== true)
-    .reduce((sum, r) => sum + (r.cart_value_cents ?? 0), 0)
+    .reduce((sum, r) => sum + (r.cart_value_cents ?? 0), 0);
 
   const recoveredRevenueCents = recoveredRows.reduce(
     (sum, r) => sum + (r.cart_value_cents ?? 0),
     0,
-  )
+  );
 
   return {
     totalAbandoned,
@@ -439,12 +442,15 @@ export async function fetchAbandonedCartSummary(): Promise<AbandonedCartSummary>
     recoveryRate,
     lostRevenueCents,
     recoveredRevenueCents,
-  }
+  };
 }
 
 export async function markCartRecovered(id: string): Promise<void> {
-  const res = await supabase.from('abandoned_cart_sessions').update({ recovered: true }).eq('id', id)
-  if (res.error) throw new Error(res.error.message)
+  const res = await supabase
+    .from('abandoned_cart_sessions')
+    .update({ recovered: true })
+    .eq('id', id);
+  if (res.error) throw new Error(res.error.message);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -457,15 +463,15 @@ export async function fetchAIInsights(): Promise<AIInsight[]> {
     .select('id,category,title,body,confidence,impact_pct,applied,created_at')
     .order('confidence', { ascending: false })
     .limit(20)
-    .returns<AIInsightSelect[]>()
+    .returns<AIInsightSelect[]>();
 
-  if (res.error) throw new Error(res.error.message)
-  return (res.data ?? []).map(mapAIInsight)
+  if (res.error) throw new Error(res.error.message);
+  return (res.data ?? []).map(mapAIInsight);
 }
 
 export async function applyAIInsight(id: string): Promise<void> {
-  const res = await supabase.from('ai_insights').update({ applied: true }).eq('id', id)
-  if (res.error) throw new Error(res.error.message)
+  const res = await supabase.from('ai_insights').update({ applied: true }).eq('id', id);
+  if (res.error) throw new Error(res.error.message);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -478,8 +484,8 @@ export async function fetchPromoRedemptions(): Promise<PromoRedemptionSelect[]> 
   const res = await supabase
     .from('promo_redemptions')
     .select('promotion_id,order_total_cents,discount_cents')
-    .returns<PromoRedemptionSelect[]>()
+    .returns<PromoRedemptionSelect[]>();
 
-  if (res.error) throw new Error(res.error.message)
-  return res.data ?? []
+  if (res.error) throw new Error(res.error.message);
+  return res.data ?? [];
 }

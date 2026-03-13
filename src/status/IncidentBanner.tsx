@@ -55,14 +55,14 @@ export default function IncidentBanner() {
 
     void fetchIncidents();
     return () => ac.abort();
-  }, [])
+  }, []);
 
   const isDismissed = useMemo(() => {
     if (!incident) return true;
     return dismissedId === incident.id;
   }, [incident, dismissedId]);
 
-  if (!incident || isDismissed) return null
+  if (!incident || isDismissed) return null;
 
   const severityColors: Record<Incident['severity'], string> = {
     info: 'bg-blue-50 border-blue-500 text-blue-900',

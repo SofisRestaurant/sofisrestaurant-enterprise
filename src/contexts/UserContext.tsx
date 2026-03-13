@@ -1,4 +1,4 @@
-import { createContext } from 'react'
-import type { UserContextValue } from '@/contexts/userTypes'
+import { createContext } from 'react';
+import type { UserContextValue } from '@/contexts/userTypes';
 
-export const UserContext = createContext<UserContextValue | undefined>(undefined)
+export const UserContext = createContext<UserContextValue | undefined>(undefined);

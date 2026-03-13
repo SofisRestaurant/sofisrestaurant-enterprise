@@ -139,7 +139,7 @@ export function CartDrawer({ isOpen, onClose }: CartDrawerProps) {
     }
 
     onClose();
-    navigate('/checkout');
+    void navigate('/checkout');
   }, [computed.hasItems, computed.invalidCount, navigate, onClose]);
 
   const handleClear = useCallback(() => {

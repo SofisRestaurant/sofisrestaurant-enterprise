@@ -5,16 +5,23 @@ import { formatCurrency } from '@/utils/currency';
 import { REDEEM_PRESETS } from '@/domain/loyalty/loyalty.types';
 
 interface Props {
-  balance:      number;
+  balance: number;
   redeemPoints: string;
-  errorMsg:     string | null;
-  onChange:     (val: string) => void;
-  onRedeem:     () => void;
-  onCancel:     () => void;
+  errorMsg: string | null;
+  onChange: (val: string) => void;
+  onRedeem: () => void;
+  onCancel: () => void;
 }
 
-export function RedeemSection({ balance, redeemPoints, errorMsg, onChange, onRedeem, onCancel }: Props) {
-  const pts       = parseInt(redeemPoints, 10) || 0;
+export function RedeemSection({
+  balance,
+  redeemPoints,
+  errorMsg,
+  onChange,
+  onRedeem,
+  onCancel,
+}: Props) {
+  const pts = parseInt(redeemPoints, 10) || 0;
   const canRedeem = pts >= 100;
 
   return (
@@ -32,9 +39,10 @@ export function RedeemSection({ balance, redeemPoints, errorMsg, onChange, onRed
               onClick={() => onChange(String(points))}
               disabled={isDisabled}
               className={`rounded-lg border py-2 text-xs font-bold transition
-                ${isSelected
-                  ? 'border-amber-500 bg-amber-500/20 text-amber-300'
-                  : 'border-white/10 bg-white/4 text-gray-400 hover:bg-white/10 disabled:opacity-30'
+                ${
+                  isSelected
+                    ? 'border-amber-500 bg-amber-500/20 text-amber-300'
+                    : 'border-white/10 bg-white/4 text-gray-400 hover:bg-white/10 disabled:opacity-30'
                 }`}
             >
               {label}
@@ -61,14 +69,10 @@ export function RedeemSection({ balance, redeemPoints, errorMsg, onChange, onRed
       {/* Live discount preview */}
       <div className="text-center">
         <p className="text-xs text-gray-500">Discount Applied</p>
-        <p className="mt-1 font-mono text-3xl font-bold text-white">
-          {formatCurrency(pts / 100)}
-        </p>
+        <p className="mt-1 font-mono text-3xl font-bold text-white">{formatCurrency(pts / 100)}</p>
       </div>
 
-      {errorMsg && (
-        <p className="text-center text-xs font-medium text-red-400">{errorMsg}</p>
-      )}
+      {errorMsg && <p className="text-center text-xs font-medium text-red-400">{errorMsg}</p>}
 
       <div className="flex gap-2">
         <button

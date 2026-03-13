@@ -12,51 +12,39 @@
 //   domain         → never imports from pages/
 // ============================================================================
 
-import type { GeneralTabFormState } from '@/domain/menu/menu-general.types'
-import type { MenuCategory } from '@/domain/menu/menu.types'
+import type { GeneralTabFormState } from '@/domain/menu/menu-general.types';
+import type { MenuCategory } from '@/domain/menu/menu.types';
 
-import { InlineToggle } from '@/components/ui/InlineToggle'
-import { FormSection } from '@/components/ui/FormSection'
-import { formStyles } from '@/components/ui/formStyles'
-import { VALID_CATEGORIES } from '@/domain/menu/menu-general.schema'
+import { InlineToggle } from '@/components/ui/InlineToggle';
+import { FormSection } from '@/components/ui/FormSection';
+import { formStyles } from '@/components/ui/formStyles';
+import { VALID_CATEGORIES } from '@/domain/menu/menu-general.schema';
 
 // Re-export domain types for upstream consumers
-export type { GeneralTabFormState } from '@/domain/menu/menu-general.types'
-export { GENERAL_TAB_EMPTY } from '@/domain/menu/menu-general.types'
+export type { GeneralTabFormState } from '@/domain/menu/menu-general.types';
+export { GENERAL_TAB_EMPTY } from '@/domain/menu/menu-general.types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Props
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface MenuGeneralTabProps {
-  form: GeneralTabFormState
-  onChange: <K extends keyof GeneralTabFormState>(
-    key: K,
-    value: GeneralTabFormState[K],
-  ) => void
-  disabled?: boolean
+  form: GeneralTabFormState;
+  onChange: <K extends keyof GeneralTabFormState>(key: K, value: GeneralTabFormState[K]) => void;
+  disabled?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Component
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function MenuGeneralTab({
-  form,
-  onChange,
-  disabled = false,
-}: MenuGeneralTabProps) {
-
-  function field<K extends keyof GeneralTabFormState>(
-    key: K,
-    value: GeneralTabFormState[K],
-  ) {
-    onChange(key, value)
+export function MenuGeneralTab({ form, onChange, disabled = false }: MenuGeneralTabProps) {
+  function field<K extends keyof GeneralTabFormState>(key: K, value: GeneralTabFormState[K]) {
+    onChange(key, value);
   }
 
   return (
     <div className="space-y-8">
-
       {/* ── Item Info ─────────────────────────────────────────────────────── */}
       <FormSection title="Item Info">
         <div>
@@ -81,9 +69,7 @@ export function MenuGeneralTab({
             <select
               id="menu-category"
               value={form.category}
-              onChange={(e) =>
-                field('category', e.target.value as MenuCategory)
-              }
+              onChange={(e) => field('category', e.target.value as MenuCategory)}
               className={formStyles.select}
               disabled={disabled}
             >
@@ -147,7 +133,7 @@ export function MenuGeneralTab({
               alt="Menu preview"
               className="mt-3 h-20 w-20 rounded-lg object-cover border border-gray-100"
               onError={(e) => {
-                (e.target as HTMLImageElement).style.display = 'none'
+                (e.target as HTMLImageElement).style.display = 'none';
               }}
             />
           )}
@@ -193,7 +179,6 @@ export function MenuGeneralTab({
       {/* ── Details ───────────────────────────────────────────────────────── */}
       <FormSection title="Details">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-
           <div>
             <label className={formStyles.label} htmlFor="menu-sort">
               Sort Order
@@ -279,7 +264,6 @@ export function MenuGeneralTab({
           </p>
         </div>
       </FormSection>
-
     </div>
-  )
+  );
 }

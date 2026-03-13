@@ -5,21 +5,21 @@ export async function fetcher<T>(url: string, options?: RequestInit): Promise<T>
       'Content-Type': 'application/json',
       ...options?.headers,
     },
-  })
+  });
 
   if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`)
+    throw new Error(`HTTP error! status: ${response.status}`);
   }
 
-  return response.json()
+  return response.json();
 }
 
 export class APIError extends Error {
   constructor(
     public status: number,
-    message: string
+    message: string,
   ) {
-    super(message)
-    this.name = 'APIError'
+    super(message);
+    this.name = 'APIError';
   }
 }

@@ -1,21 +1,21 @@
 // src/lib/supabase/db/profile.api.ts
-import { supabase } from '@/lib/supabase/supabaseClient'
-import type { Profile } from '@/types/profile'
+import { supabase } from '@/lib/supabase/supabaseClient';
+import type { Profile } from '@/types/profile';
 
 export async function getMyProfile(userId: string): Promise<Profile> {
   const { data, error } = await supabase
     .from('profiles')
     .select('id, role, full_name, phone, created_at, updated_at')
     .eq('id', userId)
-    .single()
+    .single();
 
-  if (error) throw error
-  return data as Profile
+  if (error) throw error;
+  return data as Profile;
 }
 
 export async function updateMyProfile(
   userId: string,
-  input: Pick<Profile, 'full_name' | 'phone'>
+  input: Pick<Profile, 'full_name' | 'phone'>,
 ): Promise<Profile> {
   const { data, error } = await supabase
     .from('profiles')
@@ -26,8 +26,8 @@ export async function updateMyProfile(
     })
     .eq('id', userId)
     .select('id, role, full_name, phone, created_at, updated_at')
-    .single()
+    .single();
 
-  if (error) throw error
-  return data as Profile
+  if (error) throw error;
+  return data as Profile;
 }

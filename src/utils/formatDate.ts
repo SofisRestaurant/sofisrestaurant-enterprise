@@ -3,7 +3,7 @@
  */
 export function formatDate(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;
-  
+
   return new Intl.DateTimeFormat('en-US', {
     year: 'numeric',
     month: 'long',
@@ -16,7 +16,7 @@ export function formatDate(date: Date | string): string {
  */
 export function formatDateTime(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;
-  
+
   return new Intl.DateTimeFormat('en-US', {
     year: 'numeric',
     month: 'short',
@@ -61,7 +61,7 @@ export function formatTimeAgo(date: Date | string): string {
  */
 export function formatTime(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;
-  
+
   return new Intl.DateTimeFormat('en-US', {
     hour: 'numeric',
     minute: '2-digit',
@@ -75,7 +75,7 @@ export function formatTime(date: Date | string): string {
 export function isToday(date: Date | string): boolean {
   const d = typeof date === 'string' ? new Date(date) : date;
   const today = new Date();
-  
+
   return (
     d.getDate() === today.getDate() &&
     d.getMonth() === today.getMonth() &&

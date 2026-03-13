@@ -21,7 +21,7 @@
 //   • Writing `resolved` back into metadata
 // =============================================================================
 
-import type { Json, Tables } from '@/types/supabase'
+import type { Json, Tables } from '@/types/supabase';
 import { supabase } from '@/lib/supabase/supabaseClient';
 import type { FraudEvent, FraudFilters } from './fraud.types';
 
@@ -29,10 +29,7 @@ type FraudLogRow = Tables<'fraud_logs'>;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function assertNoError(
-  error: { message: string } | null,
-  context: string,
-): asserts error is null {
+function assertNoError(error: { message: string } | null, context: string): asserts error is null {
   if (error) {
     throw new Error(`${context}: ${error.message}`);
   }
@@ -44,11 +41,11 @@ function assertNoError(
  * 100 → extreme mismatch
  */
 function computeRiskScore(row: FraudLogRow): number {
-  const stripe   = row.stripe_total ?? 0;
-  const server   = row.server_total ?? stripe;
+  const stripe = row.stripe_total ?? 0;
+  const server = row.server_total ?? stripe;
   const frontend = row.frontend_total ?? server;
 
-  const diffStripeServer   = Math.abs(stripe - server);
+  const diffStripeServer = Math.abs(stripe - server);
   const diffServerFrontend = Math.abs(server - frontend);
   const diffStripeFrontend = Math.abs(stripe - frontend);
 
@@ -72,9 +69,7 @@ function mapRowToFraudEvent(row: FraudLogRow): FraudEvent {
   const meta = (row.metadata ?? {}) as Record<string, unknown>;
 
   const ipAddress =
-    (meta.ipAddress as string | undefined) ??
-    (meta.ip_address as string | undefined) ??
-    null;
+    (meta.ipAddress as string | undefined) ?? (meta.ip_address as string | undefined) ?? null;
 
   const deviceFingerprint =
     (meta.deviceFingerprint as string | undefined) ??

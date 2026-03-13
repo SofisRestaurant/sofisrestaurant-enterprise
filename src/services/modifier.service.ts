@@ -1,33 +1,40 @@
 // src/services/modifier.service.ts
 // ============================================================================
-// MODIFIER SERVICE (Domain-Aligned)
+// MODIFIER SERVICE — Gateway-Aligned (2026)
 // ============================================================================
-// CRUD for modifiers table.
+// All reads and writes go through the admin-gateway Edge Function.
+// No supabase.from('modifiers') calls exist anywhere in this file.
 //
-// Returns DOMAIN type `Modifier`.
-// No admin DTO leakage.
-// Maps DB → Domain only.
+// Why: The `modifiers` table is RLS-protected (service-role only for writes).
+// The admin-gateway Edge Function holds the service-role key and owns all
+// modifier mutations. Browser anon/user tokens cannot write to this table,
+// which caused the 403 Forbidden errors on /rest/v1/modifiers.
 //
-// Verified schema (database.types.ts Feb 2026):
-//   modifiers: id, modifier_group_id, name, price_adjustment,
-//              available, sort_order, created_at, updated_at
+// Gateway action map (src/supabase/functions/admin-gateway/index.ts):
+//   menu:modifiers:list-for-group           → { group_id }
+//   menu:modifiers:list-available-for-group → { group_id }
+//   menu:modifiers:get                      → { id }
+//   menu:modifiers:create                   → ModifierCreatePayload
+//   menu:modifiers:create-batch             → { group_id, modifiers[] }
+//   menu:modifiers:update                   → { id, ...patch }
+//   menu:modifiers:toggle-availability      → { id, available }
+//   menu:modifiers:toggle-group-availability→ { group_id, available }
+//   menu:modifiers:delete                   → { id }
+//   menu:modifiers:delete-all-in-group      → { group_id }
+//   menu:modifiers:reorder                  → { items: { id, sort_order }[] }
+//
+// Return contracts:
+//   Read-many  → Modifier[]       (domain type from menu.types.ts)
+//   Read-one   → Modifier | null
+//   Mutations  → AdminModifier    (includes created_at / updated_at)
+//   Void ops   → void
 // ============================================================================
-import type { AdminModifier } from '@/types/admin-menu'
-import { supabase } from '@/lib/supabase/supabaseClient'
-import type { Modifier } from '@/domain/menu/menu.types'
-import type {
-  ModifierWritePayload,
-  ReorderPayload,
-} from '@/types/admin-menu'
-import { validateModifierPayload } from '@/domain/menu/modifier.schema'
-import type { Database } from '@/types/supabase'
-// ─────────────────────────────────────────────────────────────────────────────
-// DB Types
-// ─────────────────────────────────────────────────────────────────────────────
 
-type ModifierRow = Database['public']['Tables']['modifiers']['Row']
-type ModifierInsert = Database['public']['Tables']['modifiers']['Insert']
-type ModifierUpdate = Database['public']['Tables']['modifiers']['Update']
+import { invokeEdge } from '@/lib/supabase/invoke';
+import type { AdminModifier } from '@/types/admin-menu';
+import type { Modifier } from '@/domain/menu/menu.types';
+import type { ModifierWritePayload, ReorderPayload } from '@/types/admin-menu';
+import { validateModifierPayload } from '@/domain/menu/modifier.schema';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Error
@@ -36,19 +43,54 @@ type ModifierUpdate = Database['public']['Tables']['modifiers']['Update']
 export class ModifierServiceError extends Error {
   constructor(
     message: string,
-    public code?: string,
-    public details?: unknown,
+    public readonly code?: string,
+    public readonly details?: unknown,
   ) {
-    super(message)
-    this.name = 'ModifierServiceError'
+    super(message);
+    this.name = 'ModifierServiceError';
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Mapper (DB → Domain)
+// Gateway response shapes (matches what the Edge Function returns)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function rowToModifier(row: ModifierRow): Modifier {
+// The gateway returns raw DB rows. We keep these types private to this file;
+// consumers always receive the domain Modifier / AdminModifier types.
+
+interface RawModifierRow {
+  id: string;
+  modifier_group_id: string;
+  name: string;
+  price_adjustment: number;
+  available: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Type guards
+// ─────────────────────────────────────────────────────────────────────────────
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function isRawModifierRow(v: unknown): v is RawModifierRow {
+  return (
+    isRecord(v) &&
+    typeof v.id === 'string' &&
+    typeof v.modifier_group_id === 'string' &&
+    typeof v.name === 'string'
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mappers  (raw gateway row → domain type)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function rawToModifier(row: RawModifierRow): Modifier {
   return {
     id: row.id,
     modifier_group_id: row.modifier_group_id,
@@ -56,9 +98,10 @@ function rowToModifier(row: ModifierRow): Modifier {
     price_adjustment: Number(row.price_adjustment ?? 0),
     available: row.available,
     sort_order: row.sort_order,
-  }
+  };
 }
-function rowToAdminModifier(row: ModifierRow): AdminModifier {
+
+function rawToAdminModifier(row: RawModifierRow): AdminModifier {
   return {
     id: row.id,
     modifier_group_id: row.modifier_group_id,
@@ -68,75 +111,129 @@ function rowToAdminModifier(row: ModifierRow): AdminModifier {
     sort_order: row.sort_order,
     created_at: row.created_at,
     updated_at: row.updated_at,
-  }
+  };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Gateway call helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+// invokeEdge returns the unwrapped `data` field from the gateway Ok envelope.
+// All calls below use this; error handling propagates via invokeEdge's throw.
+
+async function callGateway<T>(body: Record<string, unknown>): Promise<T> {
+  return invokeEdge<T>('admin-gateway', body);
+}
+
+function gatewayError(message: string, cause?: unknown): ModifierServiceError {
+  const code =
+    isRecord(cause) && typeof cause.code === 'string' ? cause.code : 'GATEWAY_ERROR';
+  return new ModifierServiceError(message, code, cause);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Row coercers with safe fallback
+// ─────────────────────────────────────────────────────────────────────────────
+
+function coerceToModifierArray(raw: unknown, context: string): Modifier[] {
+  if (!Array.isArray(raw)) {
+    throw new ModifierServiceError(`Unexpected response for ${context}`, 'UNEXPECTED_RESPONSE');
+  }
+  return raw.filter(isRawModifierRow).map(rawToModifier);
+}
+
+function coerceToAdminModifier(raw: unknown, context: string): AdminModifier {
+  if (!isRawModifierRow(raw)) {
+    throw new ModifierServiceError(`Unexpected response for ${context}`, 'UNEXPECTED_RESPONSE');
+  }
+  return rawToAdminModifier(raw);
+}
+
+function coerceToAdminModifierArray(raw: unknown, context: string): AdminModifier[] {
+  if (!Array.isArray(raw)) {
+    throw new ModifierServiceError(`Unexpected response for ${context}`, 'UNEXPECTED_RESPONSE');
+  }
+  return raw.filter(isRawModifierRow).map(rawToAdminModifier);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Service
 // ─────────────────────────────────────────────────────────────────────────────
 
 export class ModifierService {
-
   // ─────────────────────────────────────────────────────────────
   // READ
   // ─────────────────────────────────────────────────────────────
 
-  /** All modifiers for a group (includes unavailable) */
+  /** All modifiers for a group, including unavailable (admin view). */
   static async getForGroup(groupId: string): Promise<Modifier[]> {
-    const { data, error } = await supabase
-      .from('modifiers')
-      .select('*')
-      .eq('modifier_group_id', groupId)
-      .order('sort_order', { ascending: true })
-      .order('name', { ascending: true })
-
-    if (error) {
-      throw new ModifierServiceError(
-        'Failed to load modifiers',
-        error.code,
-        error,
-      )
+    // Hard guard: an empty groupId would reach the gateway as { group_id: '' }
+    // which the parser correctly rejects with a 400. Fail fast here instead.
+    if (!groupId || !groupId.trim()) {
+      throw new ModifierServiceError('Modifier group id is required.', 'INVALID_GROUP_ID');
     }
 
-    return (data ?? []).map(rowToModifier)
+    let raw: unknown;
+
+    try {
+      console.log(
+        'MODIFIER_GET_FOR_GROUP_REQUEST',
+        JSON.stringify({
+          action: 'menu:modifiers:list-for-group',
+          payload: { group_id: groupId },
+        }),
+      );
+
+      raw = await callGateway({
+        action: 'menu:modifiers:list-for-group',
+        payload: { group_id: groupId },
+      });
+    } catch (e) {
+      throw gatewayError('Failed to load modifiers', e);
+    }
+
+    return coerceToModifierArray(raw, 'getForGroup');
   }
 
-  /** Available modifiers only (customer-facing) */
+  /** Available modifiers only (customer-facing). */
   static async getAvailableForGroup(groupId: string): Promise<Modifier[]> {
-    const { data, error } = await supabase
-      .from('modifiers')
-      .select('*')
-      .eq('modifier_group_id', groupId)
-      .eq('available', true)
-      .order('sort_order', { ascending: true })
-
-    if (error) {
-      throw new ModifierServiceError(
-        'Failed to load modifiers',
-        error.code,
-        error,
-      )
+    if (!groupId || !groupId.trim()) {
+      throw new ModifierServiceError('Modifier group id is required.', 'INVALID_GROUP_ID');
     }
 
-    return (data ?? []).map(rowToModifier)
+    let raw: unknown;
+
+    try {
+      raw = await callGateway({
+        action: 'menu:modifiers:list-available-for-group',
+        payload: { group_id: groupId },
+      });
+    } catch (e) {
+      throw gatewayError('Failed to load available modifiers', e);
+    }
+
+    return coerceToModifierArray(raw, 'getAvailableForGroup');
   }
 
-  /** Single modifier */
+  /** Single modifier by id. Returns null if not found. */
   static async getById(id: string): Promise<Modifier | null> {
-    const { data, error } = await supabase
-      .from('modifiers')
-      .select('*')
-      .eq('id', id)
-      .maybeSingle()
+    let raw: unknown;
 
-    if (error) {
-      throw new ModifierServiceError(
-        'Failed to load modifier',
-        error.code,
-        error,
-      )
+    try {
+      raw = await callGateway({
+        action: 'menu:modifiers:get',
+        payload: { id },
+      });
+    } catch (e) {
+      throw gatewayError('Failed to load modifier', e);
     }
 
-    return data ? rowToModifier(data) : null
+    if (raw === null || raw === undefined) return null;
+    if (!isRawModifierRow(raw)) {
+      throw new ModifierServiceError('Unexpected response for getById', 'UNEXPECTED_RESPONSE');
+    }
+
+    return rawToModifier(raw);
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -144,70 +241,63 @@ export class ModifierService {
   // ─────────────────────────────────────────────────────────────
 
   static async create(payload: ModifierWritePayload): Promise<AdminModifier> {
-    const validation = validateModifierPayload(payload)
+    const validation = validateModifierPayload(payload);
 
     if (!validation.valid) {
-      const message = Object.values(validation.errors)
-        .filter(Boolean)
-        .join('; ')
-      throw new ModifierServiceError(`Validation failed: ${message}`)
+      const message = Object.values(validation.errors).filter(Boolean).join('; ');
+      throw new ModifierServiceError(`Validation failed: ${message}`);
     }
 
-    const insert: ModifierInsert = {
-      modifier_group_id: payload.modifier_group_id,
-      name: payload.name.trim(),
-      price_adjustment: payload.price_adjustment,
-      available: payload.available ?? true,
-      sort_order: payload.sort_order ?? 0,
+    let raw: unknown;
+
+    try {
+      raw = await callGateway({
+        action: 'menu:modifiers:create',
+        payload: {
+          modifier_group_id: payload.modifier_group_id,
+          name: payload.name.trim(),
+          price_adjustment: payload.price_adjustment,
+          available: payload.available ?? true,
+          sort_order: payload.sort_order ?? 0,
+        },
+      });
+    } catch (e) {
+      throw gatewayError('Failed to create modifier', e);
     }
 
-    const { data, error } = await supabase
-      .from('modifiers')
-      .insert(insert)
-      .select()
-      .single()
-
-    if (error) {
-      throw new ModifierServiceError(
-        'Failed to create modifier',
-        error.code,
-        error,
-      )
-    }
-
-    return rowToAdminModifier(data)
+    return coerceToAdminModifier(raw, 'create');
   }
 
-  /** Batch create */
+  /**
+   * Batch create modifiers in a single gateway round-trip.
+   * Returns an empty array when modifiers is empty (no gateway call made).
+   */
   static async createBatch(
     groupId: string,
     modifiers: Omit<ModifierWritePayload, 'modifier_group_id'>[],
   ): Promise<AdminModifier[]> {
+    if (modifiers.length === 0) return [];
 
-    if (modifiers.length === 0) return []
+    let raw: unknown;
 
-    const inserts: ModifierInsert[] = modifiers.map((m) => ({
-      modifier_group_id: groupId,
-      name: m.name.trim(),
-      price_adjustment: m.price_adjustment,
-      available: m.available ?? true,
-      sort_order: m.sort_order ?? 0,
-    }))
-
-    const { data, error } = await supabase
-      .from('modifiers')
-      .insert(inserts)
-      .select()
-
-    if (error) {
-      throw new ModifierServiceError(
-        'Failed to batch create modifiers',
-        error.code,
-        error,
-      )
+    try {
+      raw = await callGateway({
+        action: 'menu:modifiers:create-batch',
+        payload: {
+          group_id: groupId,
+          modifiers: modifiers.map((m) => ({
+            name: m.name.trim(),
+            price_adjustment: m.price_adjustment,
+            available: m.available ?? true,
+            sort_order: m.sort_order ?? 0,
+          })),
+        },
+      });
+    } catch (e) {
+      throw gatewayError('Failed to batch create modifiers', e);
     }
 
-    return (data ?? []).map(rowToAdminModifier)
+    return coerceToAdminModifierArray(raw, 'createBatch');
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -218,83 +308,54 @@ export class ModifierService {
     id: string,
     payload: Partial<Omit<ModifierWritePayload, 'modifier_group_id'>>,
   ): Promise<AdminModifier> {
-
-    const validation = validateModifierPayload(payload)
+    const validation = validateModifierPayload(payload);
 
     if (!validation.valid) {
-      const message = Object.values(validation.errors)
-        .filter(Boolean)
-        .join('; ')
-      throw new ModifierServiceError(`Validation failed: ${message}`)
+      const message = Object.values(validation.errors).filter(Boolean).join('; ');
+      throw new ModifierServiceError(`Validation failed: ${message}`);
     }
 
-    const update: ModifierUpdate = {}
+    // Build the patch — only include fields that were explicitly provided so
+    // the gateway's `'field' in payload` checks work correctly.
+    const patch: Record<string, unknown> = { id };
 
-    if (payload.name !== undefined)
-      update.name = payload.name.trim()
+    if (payload.name !== undefined) patch.name = payload.name.trim();
+    if (payload.price_adjustment !== undefined) patch.price_adjustment = payload.price_adjustment;
+    if (payload.available !== undefined) patch.available = payload.available;
+    if (payload.sort_order !== undefined) patch.sort_order = payload.sort_order;
 
-    if (payload.price_adjustment !== undefined)
-      update.price_adjustment = payload.price_adjustment
+    let raw: unknown;
 
-    if (payload.available !== undefined)
-      update.available = payload.available
-
-    if (payload.sort_order !== undefined)
-      update.sort_order = payload.sort_order
-
-    const { data, error } = await supabase
-      .from('modifiers')
-      .update(update)
-      .eq('id', id)
-      .select()
-      .single()
-
-    if (error) {
-      throw new ModifierServiceError(
-        'Failed to update modifier',
-        error.code,
-        error,
-      )
+    try {
+      raw = await callGateway({ action: 'menu:modifiers:update', payload: patch });
+    } catch (e) {
+      throw gatewayError('Failed to update modifier', e);
     }
 
-    return rowToAdminModifier(data)
+    return coerceToAdminModifier(raw, 'update');
   }
 
-  static async toggleAvailability(
-    id: string,
-    available: boolean,
-  ): Promise<void> {
-
-    const { error } = await supabase
-      .from('modifiers')
-      .update({ available })
-      .eq('id', id)
-
-    if (error) {
-      throw new ModifierServiceError(
-        'Failed to toggle availability',
-        error.code,
-        error,
-      )
+  /** Toggle a single modifier's availability. */
+  static async toggleAvailability(id: string, available: boolean): Promise<void> {
+    try {
+      await callGateway({
+        action: 'menu:modifiers:toggle-availability',
+        payload: { id, available },
+      });
+    } catch (e) {
+      throw gatewayError('Failed to toggle modifier availability', e);
     }
   }
 
-  static async toggleGroupAvailability(
-    groupId: string,
-    available: boolean,
-  ): Promise<void> {
-
-    const { error } = await supabase
-      .from('modifiers')
-      .update({ available })
-      .eq('modifier_group_id', groupId)
-
-    if (error) {
-      throw new ModifierServiceError(
-        'Failed to bulk toggle availability',
-        error.code,
-        error,
-      )
+  /** Toggle availability for every modifier in a group in one call. */
+  static async toggleGroupAvailability(groupId: string, available: boolean): Promise<void> {
+    try {
+      await callGateway({
+        action: 'menu:modifiers:toggle-group-availability',
+        payload: { group_id: groupId, available },
+      });
+    } catch (e) {
+      throw gatewayError('Failed to bulk toggle modifier availability', e);
     }
   }
 
@@ -303,32 +364,21 @@ export class ModifierService {
   // ─────────────────────────────────────────────────────────────
 
   static async delete(id: string): Promise<void> {
-    const { error } = await supabase
-      .from('modifiers')
-      .delete()
-      .eq('id', id)
-
-    if (error) {
-      throw new ModifierServiceError(
-        'Failed to delete modifier',
-        error.code,
-        error,
-      )
+    try {
+      await callGateway({ action: 'menu:modifiers:delete', payload: { id } });
+    } catch (e) {
+      throw gatewayError('Failed to delete modifier', e);
     }
   }
 
   static async deleteAllInGroup(groupId: string): Promise<void> {
-    const { error } = await supabase
-      .from('modifiers')
-      .delete()
-      .eq('modifier_group_id', groupId)
-
-    if (error) {
-      throw new ModifierServiceError(
-        'Failed to delete group modifiers',
-        error.code,
-        error,
-      )
+    try {
+      await callGateway({
+        action: 'menu:modifiers:delete-all-in-group',
+        payload: { group_id: groupId },
+      });
+    } catch (e) {
+      throw gatewayError('Failed to delete group modifiers', e);
     }
   }
 
@@ -337,15 +387,17 @@ export class ModifierService {
   // ─────────────────────────────────────────────────────────────
 
   static async reorder(items: ReorderPayload[]): Promise<void> {
-    if (items.length === 0) return
+    if (items.length === 0) return;
 
-    await Promise.all(
-      items.map(({ id, sort_order }) =>
-        supabase
-          .from('modifiers')
-          .update({ sort_order })
-          .eq('id', id),
-      ),
-    )
+    try {
+      await callGateway({
+        action: 'menu:modifiers:reorder',
+        payload: {
+          items: items.map(({ id, sort_order }) => ({ id, sort_order })),
+        },
+      });
+    } catch (e) {
+      throw gatewayError('Failed to reorder modifiers', e);
+    }
   }
 }

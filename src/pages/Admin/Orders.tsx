@@ -1,730 +1,1154 @@
-// src/pages/Admin/Orders.tsx
-// =============================================================================
-// ADMIN ORDERS — 2026 Production (FULLY HARDENED)
-// =============================================================================
-//
-// SECURITY MODEL:
-//   ✅ Reads: supabase.from('orders') — RLS policy: is_admin() for full access
-//   ✅ Writes: update_order_status_secure() RPC — server-enforced admin check
-//             Never UPDATE orders directly from client
-//   ✅ Realtime: single supabase channel, cleaned up on unmount
-//   ✅ No admin_* materialized view queries
-//
-// FEATURES:
-//   • Real-time order updates (INSERT + UPDATE)
-//   • Status filter tabs with live counts
-//   • Search by order#, name, email, phone
-//   • Order detail drawer (expand in place)
-//   • Status advance via RPC with optimistic UI
-//   • Sound notification toggle
-//   • Auto-refresh every 20s as fallback
-//   • Priority badges (urgent/high) based on wait time
-//   • Formatted cart items with quantities
-//   • Payment & fulfillment status badges
-//   • Responsive dark theme
-// =============================================================================
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { supabase } from '@/lib/supabase/supabaseClient';
+import {
+  Alert,
+  Badge,
+  EmptyState,
+  LoadingSpinner,
+  MetricGrid,
+  Panel,
+  StatCard,
+} from '@/features/admin/ui/AdminPrimitives';
+import {
+  ORDERS_FILTER_TABS,
+  matchesOrderSearch,
+  type OrderRow,
+  type OrdersFilterTab,
+} from '@/modules/orders/types';
+import {
+  getNextOrderStatus,
+  isOrderStatus,
+  ORDER_STATUS_LABELS,
+  OrderStatus,
+} from '@/domain/orders/order.types';
+import {
+  fetchAdminMetrics,
+  fetchAdminOrderRows,
+  updateOrderStatusRow,
+} from '@/modules/orders/api/orders.admin.api';
+import { useOrdersRealtime } from '@/modules/orders/hooks/useOrdersRealtime';
 import { formatCurrency } from '@/utils/currency';
-import type { Database } from '@/types/supabase'
-// ─────────────────────────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────────────────────────
-
-type OrderRow = Database['public']['Tables']['orders']['Row'];
-type FilterTab = 'all' | 'pending' | 'preparing' | 'ready' | 'delivered' | 'cancelled';
-
-interface CartItem {
-  name: string;
-  quantity: number;
-  price: number;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Config
-// ─────────────────────────────────────────────────────────────────────────────
 
 const AUTO_REFRESH_MS = 20_000;
-const URGENT_MINUTES = 20;
-const HIGH_MINUTES = 12;
+const MAX_ORDERS = 500;
+const HIGH_PRIORITY_MINUTES = 12;
+const URGENT_PRIORITY_MINUTES = 20;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
+type OrderPriority = 'normal' | 'high' | 'urgent';
+type MetricsState = Awaited<ReturnType<typeof fetchAdminMetrics>>;
+type MetricTone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
 
-function minutesAgo(dateStr: string): number {
-  return Math.floor((Date.now() - new Date(dateStr).getTime()) / 60_000);
+type CartItemView = {
+  key: string;
+  name: string;
+  quantity: number;
+  notes: string | null;
+  menuItemId: string | null;
+  lineTotalCents: number | null;
+  unitPriceCents: number | null;
+  hasResolvedPrice: boolean;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function getPriority(order: OrderRow): 'urgent' | 'high' | 'normal' {
-  if (['delivered', 'cancelled'].includes(order.status)) return 'normal';
-  const mins = minutesAgo(order.created_at);
-  if (mins >= URGENT_MINUTES) return 'urgent';
-  if (mins >= HIGH_MINUTES) return 'high';
+function asTrimmedString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const normalized = value.trim();
+
+    if (normalized.length === 0) {
+      return null;
+    }
+
+    const parsed = Number(normalized);
+
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function readString(record: Record<string, unknown>, keys: readonly string[]): string | null {
+  for (const key of keys) {
+    const value = asTrimmedString(record[key]);
+
+    if (value !== null) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function readNumber(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+  fallback: number | null = null,
+): number | null {
+  for (const key of keys) {
+    const value = asFiniteNumber(record[key]);
+
+    if (value !== null) {
+      return value;
+    }
+  }
+
+  return fallback;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Unable to load orders.';
+}
+
+function toOrderStatus(value: string): OrderStatus | null {
+  return isOrderStatus(value) ? value : null;
+}
+
+function normalizeStatusValue(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function matchesAdminTab(order: OrderRow, tab: OrdersFilterTab): boolean {
+  if (tab === 'all') {
+    return true;
+  }
+
+  const status = normalizeStatusValue(order.status);
+
+  switch (tab) {
+    case 'new':
+      return status === 'new' || status === 'pending';
+    case 'confirmed':
+      return status === 'confirmed';
+    case 'preparing':
+      return status === 'preparing';
+    case 'ready':
+      return status === 'ready';
+    case 'out_for_delivery':
+      return status === 'out_for_delivery';
+    case 'completed':
+      return status === 'completed' || status === 'delivered';
+    case 'canceled':
+      return status === 'canceled' || status === 'cancelled';
+    default:
+      return false;
+  }
+}
+
+function getMetricsNumber(
+  metrics: MetricsState | null,
+  keys: readonly string[],
+  fallback = 0,
+): number {
+  if (!isRecord(metrics)) {
+    return fallback;
+  }
+
+  const value = readNumber(metrics, keys, fallback);
+  return value ?? fallback;
+}
+
+function getMetricsSummary(metrics: MetricsState | null) {
+  const totalOrders = getMetricsNumber(metrics, ['totalOrders', 'total']);
+  const openOrders = getMetricsNumber(metrics, ['openOrders', 'active']);
+  const totalRevenue = getMetricsNumber(metrics, ['totalRevenue']);
+  const todayRevenue = getMetricsNumber(metrics, ['todayRevenue']);
+  const todayOrders = getMetricsNumber(metrics, ['todayOrders']);
+  const averageOrderValue =
+    totalOrders > 0
+      ? getMetricsNumber(metrics, ['averageOrderValue'], Math.round(totalRevenue / totalOrders))
+      : getMetricsNumber(metrics, ['averageOrderValue']);
+
+  const newOrders = getMetricsNumber(metrics, ['newOrders', 'new']);
+  const confirmedOrders = getMetricsNumber(metrics, ['confirmedOrders', 'confirmed']);
+  const preparingOrders = getMetricsNumber(metrics, ['preparingOrders', 'preparing']);
+  const readyOrders = getMetricsNumber(metrics, ['readyOrders', 'ready']);
+
+  return {
+    totalOrders,
+    openOrders,
+    totalRevenue,
+    todayRevenue,
+    todayOrders,
+    averageOrderValue,
+    newOrders,
+    confirmedOrders,
+    preparingOrders,
+    readyOrders,
+  };
+}
+
+function buildCartItemName(
+  record: Record<string, unknown>,
+  fallbackOrdinal: number,
+): { name: string; menuItemId: string | null } {
+  const explicitName = readString(record, ['name', 'title']);
+
+  if (explicitName !== null) {
+    return {
+      name: explicitName,
+      menuItemId: readString(record, ['menuItemId', 'menu_item_id', 'id']),
+    };
+  }
+
+  const menuItemId = readString(record, ['menuItemId', 'menu_item_id', 'id']);
+
+  if (menuItemId !== null) {
+    return {
+      name: `Item ${menuItemId.slice(0, 8)}`,
+      menuItemId,
+    };
+  }
+
+  return {
+    name: `Item ${fallbackOrdinal}`,
+    menuItemId: null,
+  };
+}
+
+function buildCartItemBaseSignature(
+  name: string,
+  quantity: number,
+  notes: string | null,
+  menuItemId: string | null,
+  lineTotalCents: number | null,
+  unitPriceCents: number | null,
+): string {
+  return [
+    'item',
+    menuItemId ?? 'na',
+    name.trim().toLowerCase(),
+    String(quantity),
+    notes?.trim().toLowerCase() ?? '',
+    lineTotalCents === null ? 'na' : String(lineTotalCents),
+    unitPriceCents === null ? 'na' : String(unitPriceCents),
+  ].join(':');
+}
+
+function parseCartItems(value: OrderRow['cart_items']): CartItemView[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const items: CartItemView[] = [];
+  const signatureCounts = new Map<string, number>();
+  let fallbackOrdinal = 1;
+
+  for (const rawItem of value) {
+    if (!isRecord(rawItem)) {
+      continue;
+    }
+
+    const quantityValue = readNumber(rawItem, ['quantity', 'qty'], 1) ?? 1;
+    const quantity = Math.max(1, Math.trunc(quantityValue));
+    const notes = readString(rawItem, [
+      'notes',
+      'note',
+      'specialInstructions',
+      'special_instructions',
+    ]);
+    const { name, menuItemId } = buildCartItemName(rawItem, fallbackOrdinal);
+
+    const lineTotalCents = readNumber(rawItem, ['lineTotalCents', 'line_total_cents']);
+    const unitPriceRaw = readNumber(rawItem, [
+      'unitPriceCents',
+      'unit_price_cents',
+      'unitPrice',
+      'unit_price',
+      'price_cents',
+      'price',
+    ]);
+
+    const unitPriceCents =
+      typeof unitPriceRaw === 'number' && Number.isFinite(unitPriceRaw)
+        ? Math.round(unitPriceRaw)
+        : null;
+
+    const resolvedLineTotalCents =
+      typeof lineTotalCents === 'number' && Number.isFinite(lineTotalCents)
+        ? Math.round(lineTotalCents)
+        : null;
+
+    const hasResolvedPrice = resolvedLineTotalCents !== null || unitPriceCents !== null;
+
+    const baseSignature = buildCartItemBaseSignature(
+      name,
+      quantity,
+      notes,
+      menuItemId,
+      resolvedLineTotalCents,
+      unitPriceCents,
+    );
+
+    const nextOccurrence = (signatureCounts.get(baseSignature) ?? 0) + 1;
+    signatureCounts.set(baseSignature, nextOccurrence);
+
+    items.push({
+      key: `${baseSignature}:dup-${nextOccurrence}`,
+      name,
+      quantity,
+      notes,
+      menuItemId,
+      lineTotalCents: resolvedLineTotalCents,
+      unitPriceCents,
+      hasResolvedPrice,
+    });
+
+    fallbackOrdinal += 1;
+  }
+
+  return items;
+}
+
+function getCartItemDisplayTotalCents(item: CartItemView): number | null {
+  if (item.lineTotalCents !== null) {
+    return item.lineTotalCents;
+  }
+
+  if (item.unitPriceCents !== null) {
+    return item.unitPriceCents * item.quantity;
+  }
+
+  return null;
+}
+
+function getCartItemPriceLabel(item: CartItemView): string {
+  const total = getCartItemDisplayTotalCents(item);
+
+  if (total === null) {
+    return 'Included in subtotal';
+  }
+
+  return formatCurrency(total / 100);
+}
+
+function getMinutesAgo(createdAt: string): number {
+  const createdAtMs = Date.parse(createdAt);
+
+  if (!Number.isFinite(createdAtMs)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor((Date.now() - createdAtMs) / 60_000));
+}
+
+function getPriority(order: OrderRow): OrderPriority {
+  const status = toOrderStatus(order.status);
+  const normalizedStatus = normalizeStatusValue(order.status);
+
+  if (
+    status === OrderStatus.DELIVERED ||
+    status === OrderStatus.CANCELLED ||
+    normalizedStatus === 'completed'
+  ) {
+    return 'normal';
+  }
+
+  const minutes = getMinutesAgo(order.created_at);
+
+  if (minutes >= URGENT_PRIORITY_MINUTES) {
+    return 'urgent';
+  }
+
+  if (minutes >= HIGH_PRIORITY_MINUTES) {
+    return 'high';
+  }
+
   return 'normal';
 }
 
-function parseCartItems(cartItems: OrderRow['cart_items']): CartItem[] {
-  if (!cartItems || !Array.isArray(cartItems)) return [];
-  return cartItems.map((item: unknown) => {
-    const i = item as Record<string, unknown>;
-    return {
-      name: (i.name as string) ?? 'Item',
-      quantity: (i.quantity as number) ?? 1,
-      price: (i.price as number) ?? 0,
-    };
+function getPriorityTone(priority: OrderPriority): MetricTone {
+  if (priority === 'urgent') {
+    return 'danger';
+  }
+
+  if (priority === 'high') {
+    return 'warning';
+  }
+
+  return 'neutral';
+}
+
+function getStatusTone(status: string): MetricTone {
+  const normalized = normalizeStatusValue(status);
+
+  if (normalized === 'confirmed' || normalized === 'new' || normalized === 'pending') {
+    return 'warning';
+  }
+
+  if (normalized === 'preparing' || normalized === 'out_for_delivery') {
+    return 'info';
+  }
+
+  if (normalized === 'ready') {
+    return 'success';
+  }
+
+  if (normalized === 'completed' || normalized === 'delivered') {
+    return 'neutral';
+  }
+
+  if (normalized === 'canceled' || normalized === 'cancelled') {
+    return 'danger';
+  }
+
+  return 'neutral';
+}
+
+function getPaymentTone(status: string): MetricTone {
+  switch (status.trim().toLowerCase()) {
+    case 'paid':
+      return 'success';
+    case 'unpaid':
+    case 'pending':
+      return 'warning';
+    case 'failed':
+      return 'danger';
+    case 'refunded':
+    case 'partially_refunded':
+      return 'neutral';
+    case 'disputed':
+      return 'danger';
+    default:
+      return 'neutral';
+  }
+}
+
+function formatOrderStatus(status: string): string {
+  const normalizedStatus = normalizeStatusValue(status);
+  const enumStatus = toOrderStatus(status);
+
+  if (enumStatus !== null) {
+    return ORDER_STATUS_LABELS[enumStatus];
+  }
+
+  if (normalizedStatus === 'completed') {
+    return 'Completed';
+  }
+
+  if (normalizedStatus === 'canceled') {
+    return 'Canceled';
+  }
+
+  return status.replace(/_/g, ' ');
+}
+
+function formatFilterLabel(value: string): string {
+  return value.replace(/_/g, ' ');
+}
+
+function formatTimeLabel(value: Date | null): string {
+  if (value === null) {
+    return 'Never';
+  }
+
+  return value.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
   });
 }
 
-function matchesSearch(order: OrderRow, q: string): boolean {
-  if (!q.trim()) return true;
-  const lower = q.toLowerCase();
-  return (
-    String(order.order_number ?? '').includes(q) ||
-    (order.customer_name?.toLowerCase().includes(lower) ?? false) ||
-    (order.customer_email?.toLowerCase().includes(lower) ?? false) ||
-    (order.customer_phone?.includes(q) ?? false)
-  );
+function getCustomerLabel(order: OrderRow): string {
+  return order.customer_name ?? order.customer_email ?? order.customer_phone ?? 'Guest';
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Status helpers
-// ─────────────────────────────────────────────────────────────────────────────
+function getOrderKeyLabel(order: OrderRow): string {
+  return order.order_number !== null ? `#${order.order_number}` : order.id.slice(0, 8);
+}
 
-const STATUS_NEXT: Record<string, string | null> = {
-  confirmed: 'preparing',
-  preparing: 'ready',
-  ready: 'delivered',
-  delivered: null,
-  cancelled: null,
-};
+function sortOrders(rows: readonly OrderRow[]): OrderRow[] {
+  return [...rows].sort((left, right) => {
+    const leftTs = Date.parse(left.created_at);
+    const rightTs = Date.parse(right.created_at);
 
-const STATUS_LABEL: Record<string, string> = {
-  confirmed: 'New',
-  preparing: 'Cooking',
-  ready: 'Ready',
-  delivered: 'Delivered',
-  cancelled: 'Cancelled',
-};
+    if (!Number.isFinite(leftTs) && !Number.isFinite(rightTs)) {
+      return 0;
+    }
 
-const STATUS_COLORS: Record<string, string> = {
-  confirmed: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
-  preparing: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
-  ready: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
-  delivered: 'bg-zinc-700/50 text-zinc-500 border-zinc-700',
-  cancelled: 'bg-red-500/10 text-red-500 border-red-500/20',
-};
+    if (!Number.isFinite(leftTs)) {
+      return 1;
+    }
 
-const PAYMENT_COLORS: Record<string, string> = {
-  paid: 'text-emerald-400',
-  unpaid: 'text-amber-400',
-  refunded: 'text-zinc-400',
-  disputed: 'text-red-400',
-  failed: 'text-red-500',
-};
+    if (!Number.isFinite(rightTs)) {
+      return -1;
+    }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Component
-// ─────────────────────────────────────────────────────────────────────────────
+    return rightTs - leftTs;
+  });
+}
+
+function upsertOrderRow(rows: readonly OrderRow[], nextRow: OrderRow): OrderRow[] {
+  const index = rows.findIndex((row) => row.id === nextRow.id);
+
+  if (index === -1) {
+    return sortOrders([nextRow, ...rows]);
+  }
+
+  const nextRows = [...rows];
+  nextRows[index] = nextRow;
+
+  return sortOrders(nextRows);
+}
+
+function removeOrderRow(rows: readonly OrderRow[], rowId: string): OrderRow[] {
+  return rows.filter((row) => row.id !== rowId);
+}
+
+function getShippingSummary(order: OrderRow): string | null {
+  const parts = [order.shipping_name, order.shipping_phone].filter(
+    (value): value is string => typeof value === 'string' && value.trim().length > 0,
+  );
+
+  if (parts.length === 0) {
+    return null;
+  }
+
+  return parts.join(' • ');
+}
+
+function getAriaSummary(metrics: MetricsState | null, visibleCount: number): string {
+  const summary = getMetricsSummary(metrics);
+  return `${summary.totalOrders} total orders, ${visibleCount} visible, ${summary.openOrders} open.`;
+}
+
+function getTabCount(orders: readonly OrderRow[], tab: OrdersFilterTab): number {
+  if (tab === 'all') {
+    return orders.length;
+  }
+
+  return orders.filter((order) => matchesAdminTab(order, tab)).length;
+}
+
+function getOrderItemsPricingNotice(
+  items: readonly CartItemView[],
+  amountSubtotal: number,
+): string | null {
+  if (items.length === 0) {
+    return null;
+  }
+
+  const missingPricingCount = items.filter((item) => !item.hasResolvedPrice).length;
+
+  if (missingPricingCount === 0) {
+    return null;
+  }
+
+  if (amountSubtotal <= 0) {
+    return 'Line-item pricing is unavailable for this order snapshot.';
+  }
+
+  if (missingPricingCount === items.length) {
+    return 'This order subtotal is accurate, but this snapshot does not include per-item pricing details.';
+  }
+
+  return 'Some line items in this order snapshot do not include stored pricing details.';
+}
 
 export default function AdminOrders() {
   const [orders, setOrders] = useState<OrderRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [metrics, setMetrics] = useState<MetricsState | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<FilterTab>('all');
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState<string>('');
+  const [activeTab, setActiveTab] = useState<OrdersFilterTab>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
-  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
-  const [soundOn, setSoundOn] = useState(true);
+  const [lastRefreshAt, setLastRefreshAt] = useState<Date | null>(null);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
+  const [announcement, setAnnouncement] = useState<string>('');
 
-  const mountedRef = useRef(true);
+  const mountedRef = useRef<boolean>(true);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // ── Load orders ───────────────────────────────────────────────────────────
-
-  const loadOrders = useCallback(async () => {
+  const refreshMetrics = useCallback(async (): Promise<void> => {
     try {
-      setError(null);
-      const { data, error: qErr } = await supabase
-        .from('orders')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(500);
+      const nextMetrics = await fetchAdminMetrics();
 
-      if (qErr) throw qErr;
-      if (mountedRef.current) {
-        setOrders(data ?? []);
-        setLastRefresh(new Date());
+      if (!mountedRef.current) {
+        return;
       }
-    } catch (e) {
-      if (mountedRef.current) setError(e instanceof Error ? e.message : 'Failed to load orders');
+
+      setMetrics(nextMetrics);
+    } catch {
+      // Background metric refresh failures should not interrupt the page.
+    }
+  }, []);
+
+  const refreshOrders = useCallback(async (background = false): Promise<void> => {
+    if (mountedRef.current) {
+      if (background) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
+
+      setError(null);
+    }
+
+    try {
+      const [rows, nextMetrics] = await Promise.all([
+        fetchAdminOrderRows({ limit: MAX_ORDERS }),
+        fetchAdminMetrics(),
+      ]);
+
+      if (!mountedRef.current) {
+        return;
+      }
+
+      setOrders(sortOrders(rows));
+      setMetrics(nextMetrics);
+      setLastRefreshAt(new Date());
+    } catch (loadError: unknown) {
+      if (!mountedRef.current) {
+        return;
+      }
+
+      setError(getErrorMessage(loadError));
     } finally {
-      if (mountedRef.current) setLoading(false);
+      if (mountedRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
   useEffect(() => {
-    loadOrders();
-  }, [loadOrders]);
-
-  // ── Auto-refresh fallback ────────────────────────────────────────────────
-
-  useEffect(() => {
-    const interval = setInterval(loadOrders, AUTO_REFRESH_MS);
-    return () => clearInterval(interval);
-  }, [loadOrders]);
-
-  // ── Realtime ─────────────────────────────────────────────────────────────
-
-  useEffect(() => {
     mountedRef.current = true;
-
-    const channel = supabase
-      .channel('admin-orders-rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
-        const newRow = payload.new as OrderRow | undefined;
-        const oldRow = payload.old as Partial<OrderRow> | undefined;
-
-        if (payload.eventType === 'INSERT' && newRow) {
-          if (soundOn && audioRef.current) {
-            audioRef.current.play().catch(() => {});
-          }
-          setOrders((prev) => [newRow, ...prev]);
-        }
-
-        if (payload.eventType === 'UPDATE' && newRow) {
-          setOrders((prev) => prev.map((o) => (o.id === newRow.id ? newRow : o)));
-        }
-
-        if (payload.eventType === 'DELETE' && oldRow?.id) {
-          setOrders((prev) => prev.filter((o) => o.id !== oldRow.id));
-        }
-      })
-      .subscribe();
+    void refreshOrders();
 
     return () => {
       mountedRef.current = false;
-      supabase.removeChannel(channel);
     };
-  }, [soundOn]);
+  }, [refreshOrders]);
 
-  // ── Status update via RPC (never direct UPDATE) ──────────────────────────
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      void refreshOrders(true);
+    }, AUTO_REFRESH_MS);
 
-  async function advanceStatus(order: OrderRow) {
-    const nextStatus = STATUS_NEXT[order.status];
-    if (!nextStatus || updatingId) return;
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [refreshOrders]);
 
-    setUpdatingId(order.id);
-
-    // Optimistic update
-    setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, status: nextStatus } : o)));
-
-    try {
-      // ✅ update_order_status_secure() — server-side admin check + audit log
-      const { error: rpcErr } = await supabase.rpc('update_order_status_secure', {
-        order_id: order.id,
-        new_status: nextStatus,
-      });
-
-      if (rpcErr) throw rpcErr;
-    } catch {
-      // Rollback optimistic update
-      setOrders((prev) =>
-        prev.map((o) => (o.id === order.id ? { ...o, status: order.status } : o)),
-      );
-      setError('Status update failed. Please try again.');
-    } finally {
-      setUpdatingId(null);
+  useEffect(() => {
+    if (announcement.length === 0) {
+      return undefined;
     }
-  }
 
-  async function cancelOrder(order: OrderRow) {
-    if (updatingId) return;
-    setUpdatingId(order.id);
-    setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, status: 'cancelled' } : o)));
-    try {
-      const { error: rpcErr } = await supabase.rpc('update_order_status_secure', {
-        order_id: order.id,
-        new_status: 'cancelled',
-      });
-      if (rpcErr) throw rpcErr;
-    } catch {
-      setOrders((prev) =>
-        prev.map((o) => (o.id === order.id ? { ...o, status: order.status } : o)),
-      );
-      setError('Cancel failed.');
-    } finally {
-      setUpdatingId(null);
+    const timeoutId = window.setTimeout(() => {
+      setAnnouncement('');
+    }, 4_000);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [announcement]);
+
+  const playNotification = useCallback((): void => {
+    if (!soundEnabled) {
+      return;
     }
-  }
 
-  // ── Counts per tab ────────────────────────────────────────────────────────
+    const element = audioRef.current;
 
-  const counts = {
-    all: orders.length,
-    pending: orders.filter((o) => o.status === 'confirmed').length,
-    preparing: orders.filter((o) => o.status === 'preparing').length,
-    ready: orders.filter((o) => o.status === 'ready').length,
-    delivered: orders.filter((o) => o.status === 'delivered').length,
-    cancelled: orders.filter((o) => o.status === 'cancelled').length,
-  };
+    if (element === null) {
+      return;
+    }
 
-  // ── Filtered list ─────────────────────────────────────────────────────────
+    void element.play().catch(() => {
+      // Browsers can block autoplay.
+    });
+  }, [soundEnabled]);
 
-  const filtered = orders.filter((o) => {
-    if (!matchesSearch(o, search)) return false;
-    if (activeTab === 'all') return true;
-    if (activeTab === 'pending') return o.status === 'confirmed';
-    return o.status === activeTab;
+  const realtime = useOrdersRealtime({
+    channelName: 'admin-orders-rt',
+    onInsert: (row) => {
+      setOrders((current) => upsertOrderRow(current, row));
+      setAnnouncement(`New order ${getOrderKeyLabel(row)} received.`);
+      playNotification();
+      void refreshMetrics();
+    },
+    onUpdate: (row) => {
+      setOrders((current) => upsertOrderRow(current, row));
+      setAnnouncement(
+        `Order ${getOrderKeyLabel(row)} updated to ${formatOrderStatus(row.status)}.`,
+      );
+      void refreshMetrics();
+    },
+    onDelete: (row) => {
+      setOrders((current) => removeOrderRow(current, row.id));
+      setAnnouncement(`Order ${getOrderKeyLabel(row)} removed.`);
+      void refreshMetrics();
+    },
   });
 
-  // ── Revenue total for header ──────────────────────────────────────────────
+  const tabCounts = useMemo(() => {
+    const counts = new Map<OrdersFilterTab, number>();
 
-  const paidTotal = orders
-    .filter((o) => o.payment_status === 'paid')
-    .reduce((s, o) => s + o.amount_total, 0);
+    for (const tab of ORDERS_FILTER_TABS) {
+      counts.set(tab, getTabCount(orders, tab));
+    }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Render
-  // ─────────────────────────────────────────────────────────────────────────
+    return counts;
+  }, [orders]);
+
+  const filteredOrders = useMemo(
+    () =>
+      orders.filter(
+        (order) => matchesAdminTab(order, activeTab) && matchesOrderSearch(order, search),
+      ),
+    [activeTab, orders, search],
+  );
+
+  const metricsSummary = useMemo(() => getMetricsSummary(metrics), [metrics]);
+
+  const visibleSummary = useMemo(
+    () => getAriaSummary(metrics, filteredOrders.length),
+    [filteredOrders.length, metrics],
+  );
+
+  const handleManualRefresh = useCallback((): void => {
+    void refreshOrders(true);
+  }, [refreshOrders]);
+
+  const handleAdvanceStatus = useCallback(
+    async (order: OrderRow): Promise<void> => {
+      if (updatingId !== null) {
+        return;
+      }
+
+      const currentStatus = toOrderStatus(order.status);
+
+      if (currentStatus === null) {
+        setError(`Unsupported order status: ${order.status}`);
+        return;
+      }
+
+      const nextStatus = getNextOrderStatus(currentStatus);
+
+      if (nextStatus === null) {
+        return;
+      }
+
+      setUpdatingId(order.id);
+      setError(null);
+
+      const previousOrder = order;
+
+      setOrders((current) =>
+        current.map((row) => {
+          if (row.id !== order.id) {
+            return row;
+          }
+
+          return {
+            ...row,
+            status: nextStatus,
+          };
+        }),
+      );
+
+      try {
+        const updated = await updateOrderStatusRow(order.id, nextStatus);
+
+        if (!mountedRef.current) {
+          return;
+        }
+
+        setOrders((current) => upsertOrderRow(current, updated));
+        setAnnouncement(
+          `Order ${getOrderKeyLabel(updated)} moved to ${formatOrderStatus(updated.status)}.`,
+        );
+        void refreshMetrics();
+      } catch (statusError: unknown) {
+        if (!mountedRef.current) {
+          return;
+        }
+
+        setOrders((current) =>
+          current.map((row) => (row.id === previousOrder.id ? previousOrder : row)),
+        );
+        setError(statusError instanceof Error ? statusError.message : 'Unable to update order.');
+      } finally {
+        if (mountedRef.current) {
+          setUpdatingId(null);
+        }
+      }
+    },
+    [refreshMetrics, updatingId],
+  );
+
+  const handleCancelOrder = useCallback(
+    async (order: OrderRow): Promise<void> => {
+      if (updatingId !== null) {
+        return;
+      }
+
+      setUpdatingId(order.id);
+      setError(null);
+
+      const previousOrder = order;
+
+      setOrders((current) =>
+        current.map((row) => {
+          if (row.id !== order.id) {
+            return row;
+          }
+
+          return {
+            ...row,
+            status: OrderStatus.CANCELLED,
+          };
+        }),
+      );
+
+      try {
+        const updated = await updateOrderStatusRow(order.id, OrderStatus.CANCELLED);
+
+        if (!mountedRef.current) {
+          return;
+        }
+
+        setOrders((current) => upsertOrderRow(current, updated));
+        setAnnouncement(`Order ${getOrderKeyLabel(updated)} cancelled.`);
+        void refreshMetrics();
+      } catch (statusError: unknown) {
+        if (!mountedRef.current) {
+          return;
+        }
+
+        setOrders((current) =>
+          current.map((row) => (row.id === previousOrder.id ? previousOrder : row)),
+        );
+        setError(statusError instanceof Error ? statusError.message : 'Unable to cancel order.');
+      } finally {
+        if (mountedRef.current) {
+          setUpdatingId(null);
+        }
+      }
+    },
+    [refreshMetrics, updatingId],
+  );
 
   return (
     <div className="space-y-5">
       <audio ref={audioRef} src="/notification.mp3" preload="auto" />
-
-      {/* ── Header ──────────────────────────────────────────────────────── */}
-      <div className="flex items-start justify-between flex-wrap gap-4">
-        <div>
-          <h1 className="text-xl font-black text-white tracking-tight">Orders</h1>
-          <p className="text-xs text-zinc-500 mt-0.5">
-            {paidTotal > 0 && (
-              <span className="text-amber-400 font-bold">
-                {formatCurrency(paidTotal / 100)} collected
-              </span>
-            )}
-            {lastRefresh && (
-              <span className="ml-2">
-                · {lastRefresh.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-              </span>
-            )}
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {/* Sound toggle */}
-          <button
-            onClick={() => setSoundOn((v) => !v)}
-            className={[
-              'px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors',
-              soundOn
-                ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
-                : 'bg-zinc-800 border-zinc-700 text-zinc-500',
-            ].join(' ')}
-            title={soundOn ? 'Sound on' : 'Sound off'}
-          >
-            {soundOn ? '🔔 Sound' : '🔕 Muted'}
-          </button>
-
-          {/* Manual refresh */}
-          <button
-            onClick={loadOrders}
-            className="px-3 py-1.5 rounded-lg border border-zinc-700 bg-zinc-800 text-xs font-semibold text-zinc-300 hover:bg-zinc-700 hover:text-white transition-colors"
-          >
-            ↻ Refresh
-          </button>
-        </div>
+      <div className="sr-only" aria-live="polite" aria-atomic="true">
+        {announcement}
       </div>
 
-      {/* Error banner */}
-      {error && (
-        <div className="rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 flex items-center justify-between">
-          <span className="text-xs text-red-400">{error}</span>
-          <button
-            onClick={() => setError(null)}
-            className="text-xs text-zinc-600 hover:text-white ml-4"
-          >
-            ✕
-          </button>
-        </div>
-      )}
-
-      {/* ── Status tabs ───────────────────────────────────────────────────── */}
-      <div className="flex flex-wrap gap-1.5">
-        {(
-          [
-            ['all', 'All'],
-            ['pending', 'New'],
-            ['preparing', 'Cooking'],
-            ['ready', 'Ready'],
-            ['delivered', 'Delivered'],
-            ['cancelled', 'Cancelled'],
-          ] as [FilterTab, string][]
-        ).map(([tab, label]) => {
-          const count = counts[tab];
-          const isActive = activeTab === tab;
-          const isUrgent = tab === 'pending' && count > 0;
-          return (
+      <Panel
+        title="Orders"
+        subtitle={`Last refresh: ${formatTimeLabel(lastRefreshAt)}`}
+        actions={
+          <div className="flex items-center gap-2">
+            <Badge tone={realtime.isSubscribed ? 'success' : 'warning'}>
+              {realtime.isSubscribed ? 'Live' : 'Polling'}
+            </Badge>
             <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={[
-                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all',
-                isActive
-                  ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
-                  : 'bg-zinc-800/60 text-zinc-400 border border-zinc-700/50 hover:bg-zinc-800 hover:text-zinc-200',
-              ].join(' ')}
+              type="button"
+              className="rounded-full border border-zinc-700 px-3 py-1 text-[11px] font-semibold uppercase tracking-caps[0.12em] text-zinc-200 transition hover:border-zinc-500 hover:text-white"
+              onClick={() => {
+                setSoundEnabled((current) => !current);
+              }}
+              aria-pressed={soundEnabled}
             >
-              {label}
-              {count > 0 && (
-                <span
-                  className={[
-                    'text-[10px] font-black px-1.5 py-0.5 rounded-full min-w-18px text-center',
-                    isActive
-                      ? 'bg-amber-500/20 text-amber-300'
-                      : isUrgent
-                        ? 'bg-red-500/20 text-red-400'
-                        : 'bg-zinc-700 text-zinc-400',
-                  ].join(' ')}
-                >
-                  {count}
-                </span>
-              )}
+              {soundEnabled ? 'Sound on' : 'Muted'}
             </button>
-          );
-        })}
-      </div>
+            <button
+              type="button"
+              className="rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-caps[0.12em] text-amber-300 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={handleManualRefresh}
+              disabled={refreshing}
+            >
+              {refreshing ? 'Refreshing…' : 'Refresh'}
+            </button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <p className="text-xs text-zinc-400">{visibleSummary}</p>
 
-      {/* ── Search ────────────────────────────────────────────────────────── */}
-      <div className="relative">
-        <svg
-          className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600"
-          width="13"
-          height="13"
-          viewBox="0 0 13 13"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-        >
-          <circle cx="5.5" cy="5.5" r="4.5" />
-          <path d="M9 9l3 3" />
-        </svg>
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by order #, name, email, phone…"
-          className="w-full pl-9 pr-4 py-2.5 bg-zinc-800/60 border border-zinc-700/50 rounded-xl text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-amber-500/50 focus:bg-zinc-800 transition-colors"
-        />
-        {search && (
-          <button
-            onClick={() => setSearch('')}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400"
-          >
-            ✕
-          </button>
-        )}
-      </div>
+          {error !== null ? <Alert tone="danger" title="Orders" message={error} /> : null}
 
-      {/* ── Orders list ───────────────────────────────────────────────────── */}
-      {loading ? (
-        <div className="space-y-3">
-          {[...Array(5)].map((_, i) => (
-            <div key={i} className="h-20 rounded-2xl bg-zinc-800/40 animate-pulse" />
-          ))}
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 gap-3">
-          <span className="text-3xl">📋</span>
-          <p className="text-sm text-zinc-500">
-            {search ? 'No orders match your search' : 'No orders in this category'}
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {filtered.map((order) => {
-            const priority = getPriority(order);
-            const isExpanded = expandedId === order.id;
-            const isUpdating = updatingId === order.id;
-            const nextStatus = STATUS_NEXT[order.status];
-            const cartItems = parseCartItems(order.cart_items);
-            const mins = minutesAgo(order.created_at);
+          <MetricGrid columns={4}>
+            <StatCard
+              title="Open Orders"
+              value={metricsSummary.openOrders}
+              subtitle={`${metricsSummary.newOrders} new • ${metricsSummary.preparingOrders} preparing • ${metricsSummary.readyOrders} ready`}
+            />
+            <StatCard
+              title="Revenue"
+              value={formatCurrency(metricsSummary.totalRevenue / 100)}
+              subtitle={`${metricsSummary.totalOrders} lifetime orders`}
+            />
+            <StatCard
+              title="Today"
+              value={formatCurrency(metricsSummary.todayRevenue / 100)}
+              subtitle={`${metricsSummary.todayOrders} orders today`}
+            />
+            <StatCard
+              title="Average Ticket"
+              value={formatCurrency(metricsSummary.averageOrderValue / 100)}
+              subtitle={`Updated ${formatTimeLabel(lastRefreshAt)}`}
+            />
+          </MetricGrid>
 
-            return (
-              <div
-                key={order.id}
-                className={[
-                  'rounded-2xl border transition-all',
-                  priority === 'urgent'
-                    ? 'border-red-500/30 bg-red-500/5'
-                    : priority === 'high'
-                      ? 'border-amber-500/20 bg-amber-500/5'
-                      : 'border-zinc-800 bg-zinc-900/60',
-                ].join(' ')}
-              >
-                {/* ── Main row ──────────────────────────────────────────── */}
-                <div className="flex items-center gap-3 px-4 py-3.5">
-                  {/* Priority indicator */}
-                  <div
-                    className={[
-                      'w-1 h-10 rounded-full shrink-0',
-                      priority === 'urgent'
-                        ? 'bg-red-500'
-                        : priority === 'high'
-                          ? 'bg-amber-500'
-                          : 'bg-zinc-700',
-                    ].join(' ')}
-                  />
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                Search
+              </span>
+              <input
+                type="search"
+                value={search}
+                onChange={(event) => {
+                  setSearch(event.currentTarget.value);
+                }}
+                placeholder="Order #, customer name, email, or phone"
+                className="w-full rounded-2xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-amber-500/50 focus:ring-2 focus:ring-amber-500/20"
+                aria-label="Search orders"
+              />
+            </label>
 
-                  {/* Order # + time */}
-                  <div className="shrink-0 w-16">
-                    <p className="text-xs font-black text-white">#{order.order_number ?? '—'}</p>
-                    <p
-                      className={[
-                        'text-[10px] font-semibold',
-                        priority === 'urgent'
-                          ? 'text-red-400'
-                          : priority === 'high'
-                            ? 'text-amber-400'
-                            : 'text-zinc-600',
-                      ].join(' ')}
-                    >
-                      {mins < 1 ? 'just now' : `${mins}m ago`}
-                    </p>
-                  </div>
+            <div className="flex flex-wrap items-end gap-2">
+              {ORDERS_FILTER_TABS.map((tab) => {
+                const count = tabCounts.get(tab) ?? 0;
 
-                  {/* Customer */}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-zinc-200 truncate">
-                      {order.customer_name || order.customer_email || 'Guest'}
-                    </p>
-                    {order.customer_email && order.customer_name && (
-                      <p className="text-[10px] text-zinc-600 truncate">{order.customer_email}</p>
-                    )}
-                  </div>
-
-                  {/* Amount */}
-                  <div className="text-right shrink-0">
-                    <p className="text-sm font-black text-white">
-                      {formatCurrency(order.amount_total / 100)}
-                    </p>
-                    <p
-                      className={[
-                        'text-[10px] font-semibold capitalize',
-                        PAYMENT_COLORS[order.payment_status] ?? 'text-zinc-500',
-                      ].join(' ')}
-                    >
-                      {order.payment_status}
-                    </p>
-                  </div>
-
-                  {/* Fulfillment status badge */}
-                  <div className="shrink-0">
-                    <span
-                      className={[
-                        'text-[10px] font-bold px-2.5 py-1 rounded-full border',
-                        STATUS_COLORS[order.status] ?? 'bg-zinc-800 text-zinc-500 border-zinc-700',
-                      ].join(' ')}
-                    >
-                      {STATUS_LABEL[order.status] ?? order.status}
-                    </span>
-                  </div>
-
-                  {/* Next status button */}
-                  {nextStatus && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        advanceStatus(order);
-                      }}
-                      disabled={isUpdating || !!updatingId}
-                      className={[
-                        'shrink-0 text-[10px] font-black px-3 py-1.5 rounded-lg border transition-all',
-                        isUpdating
-                          ? 'opacity-40 cursor-not-allowed bg-zinc-800 border-zinc-700 text-zinc-500'
-                          : 'bg-amber-500/15 border-amber-500/30 text-amber-400 hover:bg-amber-500/25 active:scale-95',
-                      ].join(' ')}
-                    >
-                      {isUpdating ? '…' : `→ ${STATUS_LABEL[nextStatus]}`}
-                    </button>
-                  )}
-
-                  {/* Expand toggle */}
+                return (
                   <button
-                    onClick={() => setExpandedId(isExpanded ? null : order.id)}
-                    className="shrink-0 text-zinc-600 hover:text-zinc-300 transition-colors p-1"
-                    aria-label={isExpanded ? 'Collapse' : 'Expand'}
+                    key={tab}
+                    type="button"
+                    aria-pressed={activeTab === tab}
+                    onClick={() => {
+                      setActiveTab(tab);
+                    }}
+                    className={[
+                      'rounded-full border px-3 py-2 text-[11px] font-semibold uppercase tracking-caps[0.12em] transition',
+                      activeTab === tab
+                        ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+                        : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200',
+                    ].join(' ')}
                   >
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 12 12"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                      className={isExpanded ? 'rotate-180' : 'rotate-0'}
-                      style={{ transition: 'transform 200ms' }}
-                    >
-                      <polyline points="2,4 6,8 10,4" />
-                    </svg>
+                    {formatFilterLabel(tab)} <span className="ml-1 text-zinc-500">{count}</span>
                   </button>
-                </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </Panel>
 
-                {/* ── Expanded detail ───────────────────────────────────── */}
-                {isExpanded && (
-                  <div className="border-t border-zinc-800 px-4 py-4 space-y-4">
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      <InfoField label="Order Type" value={order.order_type} />
-                      <InfoField label="Order ID" value={order.id.split('-')[0] + '…'} mono />
-                      <InfoField label="Phone" value={order.customer_phone ?? '—'} />
-                      <InfoField
-                        label="Created"
-                        value={new Date(order.created_at).toLocaleString('en-US', {
-                          month: 'short',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      />
-                    </div>
+      {loading ? (
+        <Panel title="Loading orders">
+          <div className="flex items-center gap-3 text-sm text-zinc-400">
+            <LoadingSpinner />
+            <span>Fetching the latest orders and metrics…</span>
+          </div>
+        </Panel>
+      ) : filteredOrders.length === 0 ? (
+        <Panel title="Orders">
+          <EmptyState
+            title="No orders found"
+            description="Try a different search or filter, or refresh to sync the latest orders."
+            action={{
+              label: 'Refresh',
+              onClick: handleManualRefresh,
+            }}
+            icon="🧾"
+          />
+        </Panel>
+      ) : (
+        <Panel title="Active queue" subtitle={`${filteredOrders.length} visible orders`} noPad>
+          <div className="divide-y divide-zinc-900">
+            {filteredOrders.map((order) => {
+              const priority = getPriority(order);
+              const items = parseCartItems(order.cart_items);
+              const pricingNotice = getOrderItemsPricingNotice(items, order.amount_subtotal);
+              const currentStatus = toOrderStatus(order.status);
+              const nextStatus = currentStatus === null ? null : getNextOrderStatus(currentStatus);
+              const isExpanded = expandedId === order.id;
+              const isUpdating = updatingId === order.id;
+              const shippingSummary = getShippingSummary(order);
 
-                    {/* Cart items */}
-                    {cartItems.length > 0 && (
-                      <div>
-                        <p className="text-[10px] uppercase tracking-wider text-zinc-600 mb-2 font-semibold">
-                          Items
+              return (
+                <article key={order.id} className="px-4 py-4">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0 space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="text-base font-semibold text-zinc-100">
+                          {getOrderKeyLabel(order)}
+                        </h2>
+                        <Badge tone={getStatusTone(order.status)}>
+                          {formatOrderStatus(order.status)}
+                        </Badge>
+                        <Badge tone={getPaymentTone(order.payment_status)}>
+                          {order.payment_status}
+                        </Badge>
+                        {priority !== 'normal' ? (
+                          <Badge tone={getPriorityTone(priority)}>{priority}</Badge>
+                        ) : null}
+                      </div>
+
+                      <div className="space-y-1 text-sm text-zinc-300">
+                        <p>{getCustomerLabel(order)}</p>
+                        <p className="text-zinc-500">
+                          {new Date(order.created_at).toLocaleString()} •{' '}
+                          {getMinutesAgo(order.created_at)}m ago
                         </p>
-                        <div className="space-y-1.5">
-                          {cartItems.map((item, i) => (
-                            <div
-                              key={i}
-                              className="flex items-center justify-between rounded-lg bg-zinc-800/40 px-3 py-2"
-                            >
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs font-black text-zinc-400 w-5 text-center">
-                                  {item.quantity}×
+                        {shippingSummary !== null ? (
+                          <p className="text-zinc-500">{shippingSummary}</p>
+                        ) : null}
+                      </div>
+
+                      {items.length > 0 ? (
+                        <div className="space-y-2">
+                          <ul className="space-y-1 text-sm text-zinc-400">
+                            {items.slice(0, isExpanded ? items.length : 2).map((item) => (
+                              <li
+                                key={`${order.id}:${item.key}`}
+                                className="flex items-start justify-between gap-3"
+                              >
+                                <span className="min-w-0">
+                                  <span className="font-medium text-zinc-300">
+                                    {item.quantity}×
+                                  </span>{' '}
+                                  {item.name}
+                                  {item.notes !== null ? (
+                                    <span className="block text-xs text-zinc-500">
+                                      {item.notes}
+                                    </span>
+                                  ) : null}
                                 </span>
-                                <span className="text-xs text-zinc-300">{item.name}</span>
-                              </div>
-                              <span className="text-xs font-semibold text-zinc-400">
-                                {formatCurrency((item.price * item.quantity) / 100)}
-                              </span>
-                            </div>
-                          ))}
+                                <span className="shrink-0 text-zinc-500">
+                                  {getCartItemPriceLabel(item)}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+
+                          {pricingNotice !== null ? (
+                            <p className="text-xs text-amber-300/90">{pricingNotice}</p>
+                          ) : null}
                         </div>
-                      </div>
-                    )}
-
-                    {/* Notes */}
-                    {order.notes && (
-                      <div className="rounded-xl bg-amber-500/8 border border-amber-500/15 px-3 py-2.5">
-                        <p className="text-[10px] uppercase tracking-wider text-amber-500/70 mb-0.5 font-semibold">
-                          Notes
-                        </p>
-                        <p className="text-xs text-amber-300">{order.notes}</p>
-                      </div>
-                    )}
-
-                    {/* Financials */}
-                    <div className="grid grid-cols-3 gap-3">
-                      <FinanceField
-                        label="Subtotal"
-                        value={formatCurrency(order.amount_subtotal / 100)}
-                      />
-                      <FinanceField label="Tax" value={formatCurrency(order.amount_tax / 100)} />
-                      <FinanceField
-                        label="Total"
-                        value={formatCurrency(order.amount_total / 100)}
-                        highlight
-                      />
+                      ) : null}
                     </div>
 
-                    {/* Footer actions */}
-                    <div className="flex items-center justify-between pt-1">
-                      <div className="text-[10px] text-zinc-600">
-                        {order.stripe_payment_intent_id && (
-                          <span>PI: {order.stripe_payment_intent_id.slice(-8)}</span>
-                        )}
+                    <div className="flex min-w-13.75rem flex-col items-start gap-3 lg:items-end">
+                      <div className="text-right">
+                        <div className="text-xl font-black text-zinc-100">
+                          {formatCurrency(order.amount_total / 100)}
+                        </div>
+                        <div className="text-xs text-zinc-500">{order.currency.toUpperCase()}</div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        {order.status !== 'cancelled' && order.status !== 'delivered' && (
+
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <button
+                          type="button"
+                          className="rounded-full border border-zinc-700 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-caps[0.12em] text-zinc-200 transition hover:border-zinc-500 hover:text-white"
+                          onClick={() => {
+                            setExpandedId((current) => (current === order.id ? null : order.id));
+                          }}
+                          aria-expanded={isExpanded}
+                          aria-controls={`order-panel-${order.id}`}
+                        >
+                          {isExpanded ? 'Collapse' : 'Details'}
+                        </button>
+
+                        {nextStatus !== null ? (
                           <button
-                            onClick={() => cancelOrder(order)}
-                            disabled={isUpdating || !!updatingId}
-                            className="text-[10px] font-semibold text-red-500 hover:text-red-400 border border-red-500/20 hover:border-red-500/40 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40"
+                            type="button"
+                            className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-caps[0.12em] text-emerald-200 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={isUpdating}
+                            onClick={() => {
+                              void handleAdvanceStatus(order);
+                            }}
                           >
-                            Cancel Order
+                            {isUpdating ? 'Saving…' : `Move to ${ORDER_STATUS_LABELS[nextStatus]}`}
                           </button>
-                        )}
-                        {nextStatus && (
+                        ) : null}
+
+                        {currentStatus !== null &&
+                        currentStatus !== OrderStatus.CANCELLED &&
+                        currentStatus !== OrderStatus.DELIVERED ? (
                           <button
-                            onClick={() => advanceStatus(order)}
-                            disabled={isUpdating || !!updatingId}
-                            className="text-[10px] font-black text-white bg-amber-500/80 hover:bg-amber-500 px-4 py-1.5 rounded-lg transition-colors disabled:opacity-40 active:scale-95"
+                            type="button"
+                            className="rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-caps[0.12em] text-red-200 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={isUpdating}
+                            onClick={() => {
+                              void handleCancelOrder(order);
+                            }}
                           >
-                            {isUpdating ? 'Updating…' : `Mark as ${STATUS_LABEL[nextStatus]}`}
+                            Cancel
                           </button>
-                        )}
+                        ) : null}
                       </div>
                     </div>
                   </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+
+                  {isExpanded ? (
+                    <div
+                      id={`order-panel-${order.id}`}
+                      className="mt-4 grid gap-4 rounded-2xl border border-zinc-900 bg-zinc-950/40 p-4 md:grid-cols-2"
+                    >
+                      <div className="space-y-2">
+                        <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                          Customer
+                        </h3>
+                        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-sm">
+                          <dt className="text-zinc-500">Name</dt>
+                          <dd className="text-zinc-200">{order.customer_name ?? '—'}</dd>
+                          <dt className="text-zinc-500">Email</dt>
+                          <dd className="text-zinc-200">{order.customer_email ?? '—'}</dd>
+                          <dt className="text-zinc-500">Phone</dt>
+                          <dd className="text-zinc-200">{order.customer_phone ?? '—'}</dd>
+                          <dt className="text-zinc-500">Assigned</dt>
+                          <dd className="text-zinc-200">{order.assigned_to ?? '—'}</dd>
+                        </dl>
+                      </div>
+
+                      <div className="space-y-2">
+                        <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                          Order details
+                        </h3>
+                        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-sm">
+                          <dt className="text-zinc-500">Subtotal</dt>
+                          <dd className="text-zinc-200">
+                            {formatCurrency(order.amount_subtotal / 100)}
+                          </dd>
+                          <dt className="text-zinc-500">Tax</dt>
+                          <dd className="text-zinc-200">
+                            {formatCurrency(order.amount_tax / 100)}
+                          </dd>
+                          <dt className="text-zinc-500">Shipping</dt>
+                          <dd className="text-zinc-200">
+                            {formatCurrency(order.amount_shipping / 100)}
+                          </dd>
+                          <dt className="text-zinc-500">Notes</dt>
+                          <dd className="text-zinc-200">{order.notes ?? '—'}</dd>
+                        </dl>
+                      </div>
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        </Panel>
       )}
-
-      {/* Result count */}
-      {!loading && (
-        <p className="text-[10px] text-zinc-700 text-center py-2">
-          Showing {filtered.length} of {orders.length} orders
-        </p>
-      )}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Sub-components
-// ─────────────────────────────────────────────────────────────────────────────
-
-function InfoField({
-  label,
-  value,
-  mono = false,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
-  return (
-    <div>
-      <p className="text-[9px] uppercase tracking-wider text-zinc-600 mb-0.5 font-semibold">
-        {label}
-      </p>
-      <p className={['text-xs text-zinc-300', mono ? 'font-mono' : ''].join(' ')}>{value}</p>
-    </div>
-  );
-}
-
-function FinanceField({
-  label,
-  value,
-  highlight = false,
-}: {
-  label: string;
-  value: string;
-  highlight?: boolean;
-}) {
-  return (
-    <div className="rounded-xl bg-zinc-800/40 border border-zinc-700/50 px-3 py-2 text-center">
-      <p className="text-[9px] uppercase tracking-wider text-zinc-600 mb-0.5">{label}</p>
-      <p className={['text-sm font-black', highlight ? 'text-white' : 'text-zinc-400'].join(' ')}>
-        {value}
-      </p>
     </div>
   );
 }

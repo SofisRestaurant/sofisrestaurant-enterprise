@@ -1,0 +1,145 @@
+import {
+  RATE_LIMIT_BLOCK_MS,
+  RATE_LIMIT_MAX_ATTEMPTS,
+  RATE_LIMIT_WINDOW_MS,
+} from "./env.ts";
+import { asErr, log, nowIso, prefix } from "./logging.ts";
+import type {
+  CheckoutRateLimitInsert,
+  CheckoutRateLimitUpdate,
+  DbClient,
+  RateLimitResult,
+} from "./types.ts";
+
+export async function checkRateLimit(
+  db: DbClient,
+  userId: string,
+  ip: string | null,
+  requestId: string,
+): Promise<RateLimitResult> {
+  try {
+    const { data: row, error } = await db
+      .from("checkout_rate_limits")
+      .select(
+        "id, attempts, blocked_until, last_attempt_at, created_at, ip, user_id",
+      )
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      log("warn", "checkout_rate_limit_lookup_failed", {
+        requestId,
+        userId: prefix(userId),
+        error: error.message,
+      });
+      return { allowed: true };
+    }
+
+    const now = Date.now();
+
+    if (row?.blocked_until) {
+      const blockedUntilMs = new Date(row.blocked_until).getTime();
+      if (Number.isFinite(blockedUntilMs) && blockedUntilMs > now) {
+        return {
+          allowed: false,
+          retryAfterMs: blockedUntilMs - now,
+          reason:
+            "Too many checkout attempts. Please wait before trying again.",
+        };
+      }
+    }
+
+    const inWindow = row?.last_attempt_at
+      ? now - new Date(row.last_attempt_at).getTime() <= RATE_LIMIT_WINDOW_MS
+      : false;
+
+    const nextAttempts = row ? (inWindow ? row.attempts + 1 : 1) : 1;
+
+    if (!row) {
+      const insert: CheckoutRateLimitInsert = {
+        user_id: userId,
+        attempts: 1,
+        blocked_until: null,
+        last_attempt_at: nowIso(),
+        ip,
+      };
+
+      const { error: insertError } = await db
+        .from("checkout_rate_limits")
+        .insert(insert);
+
+      if (insertError) {
+        log("warn", "checkout_rate_limit_insert_failed", {
+          requestId,
+          userId: prefix(userId),
+          error: insertError.message,
+        });
+      }
+
+      return { allowed: true };
+    }
+
+    if (nextAttempts > RATE_LIMIT_MAX_ATTEMPTS) {
+      const blockedUntil = new Date(now + RATE_LIMIT_BLOCK_MS).toISOString();
+
+      const update: CheckoutRateLimitUpdate = {
+        attempts: nextAttempts,
+        blocked_until: blockedUntil,
+        last_attempt_at: nowIso(),
+        ip,
+      };
+
+      const { error: updateError } = await db
+        .from("checkout_rate_limits")
+        .update(update)
+        .eq("id", row.id);
+
+      if (updateError) {
+        log("warn", "checkout_rate_limit_block_update_failed", {
+          requestId,
+          userId: prefix(userId),
+          rowId: prefix(row.id),
+          error: updateError.message,
+        });
+      }
+
+      return {
+        allowed: false,
+        retryAfterMs: RATE_LIMIT_BLOCK_MS,
+        reason: "Too many checkout attempts. Please wait before trying again.",
+      };
+    }
+
+    const update: CheckoutRateLimitUpdate = {
+      attempts: nextAttempts,
+      blocked_until: null,
+      last_attempt_at: nowIso(),
+      ip,
+    };
+
+    const { error: updateError } = await db
+      .from("checkout_rate_limits")
+      .update(update)
+      .eq("id", row.id);
+
+    if (updateError) {
+      log("warn", "checkout_rate_limit_update_failed", {
+        requestId,
+        userId: prefix(userId),
+        rowId: prefix(row.id),
+        error: updateError.message,
+      });
+    }
+
+    return { allowed: true };
+  } catch (error) {
+    log("warn", "checkout_rate_limit_exception", {
+      requestId,
+      userId: prefix(userId),
+      error: asErr(error),
+    });
+    return { allowed: true };
+  }
+}

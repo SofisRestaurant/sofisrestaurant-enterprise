@@ -4,7 +4,14 @@
 // All monetary inputs are in cents. All outputs are locale-formatted strings.
 // =============================================================================
 
-import type { TrendMeta, HeatmapRow, HeatmapChartPoint, RevenueRow, RevenueChartPoint, PeakHour } from '@/types/dashboard.types';
+import type {
+  TrendMeta,
+  HeatmapRow,
+  HeatmapChartPoint,
+  RevenueRow,
+  RevenueChartPoint,
+  PeakHour,
+} from '@/types/dashboard.types';
 
 // ── Money ─────────────────────────────────────────────────────────────────────
 

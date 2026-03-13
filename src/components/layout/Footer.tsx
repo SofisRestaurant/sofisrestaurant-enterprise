@@ -1,12 +1,12 @@
 // src/components/layout/Footer.tsx
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router-dom';
 
-const PHONE_DISPLAY = '(623) 555-0000'
-const PHONE_TEL = '+16235550000'
-const SUPPORT_EMAIL = 'sofisrestaurante@gmail.com'
+const PHONE_DISPLAY = '(623) 555-0000';
+const PHONE_TEL = '+16235550000';
+const SUPPORT_EMAIL = 'sofisrestaurante@gmail.com';
 
 export default function Footer() {
-  const currentYear = new Date().getFullYear()
+  const currentYear = new Date().getFullYear();
 
   return (
     <footer className="relative mt-auto overflow-hidden border-t border-white/10 bg-linear-to-b from-gray-950 to-black text-white">
@@ -28,18 +28,14 @@ export default function Footer() {
               </div>
 
               <div className="min-w-0">
-                <h3 className="truncate text-lg font-bold">
-                  Sofi&apos;s Restaurant
-                </h3>
-                <p className="text-xs text-gray-400">
-                  Surprise, Arizona • Mexican &amp; American
-                </p>
+                <h3 className="truncate text-lg font-bold">Sofi&apos;s Restaurant</h3>
+                <p className="text-xs text-gray-400">Surprise, Arizona • Mexican &amp; American</p>
               </div>
             </div>
 
             <p className="max-w-md text-sm leading-relaxed text-gray-300">
-              Fresh tortillas, real plates, and the kind of comfort food you’ll
-              come back for. Dine-in, call-in, and to-go.
+              Fresh tortillas, real plates, and the kind of comfort food you’ll come back for.
+              Dine-in, call-in, and to-go.
             </p>
 
             {/* CTA */}
@@ -76,9 +72,7 @@ export default function Footer() {
           {/* QUICK LINKS */}
           {/* ===================================================== */}
           <nav className="min-w-0 xl:col-span-3" aria-label="Footer navigation">
-            <h4 className="mb-5 text-sm font-semibold tracking-wide text-white">
-              Quick Links
-            </h4>
+            <h4 className="mb-5 text-sm font-semibold tracking-wide text-white">Quick Links</h4>
 
             <ul className="space-y-3 text-sm">
               {[
@@ -104,9 +98,7 @@ export default function Footer() {
           {/* LEGAL */}
           {/* ===================================================== */}
           <nav className="min-w-0 xl:col-span-2" aria-label="Legal">
-            <h4 className="mb-5 text-sm font-semibold tracking-wide text-white">
-              Legal
-            </h4>
+            <h4 className="mb-5 text-sm font-semibold tracking-wide text-white">Legal</h4>
 
             <ul className="space-y-3 text-sm">
               {[
@@ -130,9 +122,7 @@ export default function Footer() {
           {/* CONTACT */}
           {/* ===================================================== */}
           <div className="min-w-0 space-y-4 xl:col-span-3">
-            <h4 className="text-sm font-semibold tracking-wide text-white">
-              Contact
-            </h4>
+            <h4 className="text-sm font-semibold tracking-wide text-white">Contact</h4>
 
             <div className="space-y-3 text-sm">
               <a
@@ -187,5 +177,5 @@ export default function Footer() {
         </div>
       </div>
     </footer>
-  )
+  );
 }

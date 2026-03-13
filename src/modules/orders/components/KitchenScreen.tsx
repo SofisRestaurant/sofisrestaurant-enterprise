@@ -1,246 +1,359 @@
-// ============================================================================
-// KITCHEN SCREEN — ENTERPRISE REALTIME + FAILSAFE VERSION
-// ============================================================================
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { useEffect, useState, useRef, useCallback } from "react"
-import { supabase } from "@/lib/supabase/supabaseClient"
-import {
-  Order,
-  OrderStatus,
-  PaymentStatus,
-  KitchenOrder,
-} from "@/domain/orders/order.types"
-import { mapOrderRowToDomain } from "@/domain/orders/order.mapper"
-import { useOrdersRealtime } from "@/modules/orders/hooks/useOrdersRealtime"
-import { updateOrderStatus } from "@/modules/orders/api/orders.api"
+import { OrderStatus, PaymentStatus } from '@/domain/orders/order.types';
+import { updateOrderStatus } from '@/modules/orders/api/orders.api';
+import { writeFulfillmentEvidence } from '@/modules/orders/api/order-evidence.api';
+import { useOrdersRealtime } from '@/modules/orders/hooks/useOrdersRealtime';
+import { mapOrderRowToDomain } from '@/modules/orders/mappers';
+import { supabase } from '@/lib/supabase/supabaseClient';
 import type { Database } from '@/types/supabase';
-// ============================================================================
-// TYPES
-// ============================================================================
 
-type OrderRow = Database["public"]["Tables"]["orders"]["Row"]
+import { KitchenColumn } from './kitchen/KitchenColumn';
+import { KitchenHandoffModal } from './kitchen/KitchenHandoffModal';
+import { playNotification } from './kitchen/kitchen.audio';
+import { CONFIG } from './kitchen/kitchen.constants';
+import {
+  isPaidPaymentStatus,
+  normalizeOrderType,
+  resolveStaffId,
+  sortOrdersByCreatedAtDesc,
+} from './kitchen/kitchen.helpers';
+import { mapToKitchenOrder } from './kitchen/kitchen.order-mappers';
+import type { HandoffContext, KitchenOrderWithType } from './kitchen/kitchen.types';
 
-// ============================================================================
-// CONFIG
-// ============================================================================
+type OrderRow = Database['public']['Tables']['orders']['Row'];
 
-const CONFIG = {
-  AUTO_REFRESH_INTERVAL: 20_000,
-  DEFAULT_SOUND_ENABLED: true,
+function getTimeSince(timestamp: string): string {
+  const minutes = Math.floor((Date.now() - new Date(timestamp).getTime()) / 60_000);
+
+  if (minutes < 1) {
+    return 'Just now';
+  }
+
+  if (minutes === 1) {
+    return '1 min ago';
+  }
+
+  return `${minutes} mins ago`;
 }
-
-// ============================================================================
-// COMPONENT
-// ============================================================================
 
 export default function KitchenScreen() {
-  const [orders, setOrders] = useState<KitchenOrder[]>([])
-  const [loading, setLoading] = useState(true)
-  const [soundEnabled, setSoundEnabled] = useState<boolean>(
-    CONFIG.DEFAULT_SOUND_ENABLED
-  )
+  const [orders, setOrders] = useState<KitchenOrderWithType[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(CONFIG.DEFAULT_SOUND_ENABLED);
+  const [handoffContext, setHandoffContext] = useState<HandoffContext | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [lastRefreshAt, setLastRefreshAt] = useState<Date | null>(null);
 
-  const audioRef = useRef<HTMLAudioElement | null>(null)
-useEffect(() => {
-  const unlock = () => {
-    if (audioRef.current) {
-      audioRef.current
-        .play()
-        .then(() => {
-          audioRef.current?.pause();
-          audioRef.current!.currentTime = 0;
-        })
-        .catch(() => {});
-    }
-
-    window.removeEventListener('touchstart', unlock);
-    window.removeEventListener('click', unlock);
-  };
-
-  window.addEventListener('touchstart', unlock);
-  window.addEventListener('click', unlock);
-
-  return () => {
-    window.removeEventListener('touchstart', unlock);
-    window.removeEventListener('click', unlock);
-  };
-}, []);
-  // ============================================================================
-  // LOAD ORDERS
-  // ============================================================================
-
- const loadOrders = useCallback(async () => {
-  try {
-    const { data, error } = await supabase
-      .from("orders")
-      .select("id,created_at,customer_name,customer_phone,amount_total,status,cart_items,assigned_to,payment_status")
-      .eq("payment_status", PaymentStatus.PAID)
-      .in("status", [
-        OrderStatus.CONFIRMED,
-        OrderStatus.PREPARING,
-        OrderStatus.READY,
-      ])
-      .order("created_at", { ascending: false })
-
-    if (error) throw error
-
-    const kitchenOrders =
-      (data ?? [])
-        .map(row => mapOrderRowToDomain(row as unknown as OrderRow))
-        .map(mapToKitchenOrder)
-
-    setOrders(kitchenOrders)
-
-  } catch (err) {
-    console.error("❌ Load orders failed:", err)
-  } finally {
-    setLoading(false)
-  }
-}, [])
-  // ============================================================================
-  // REALTIME (CLEAN — SINGLE SOURCE)
-  // ============================================================================
-
-  const handleRealtime = (row: OrderRow) => {
-    const order = mapOrderRowToDomain(row)
-
-    if (order.payment_status !== PaymentStatus.PAID) return
-
-    setOrders(prev => {
-      if (
-        order.status === OrderStatus.DELIVERED ||
-        order.status === OrderStatus.CANCELLED
-      ) {
-        return prev.filter(o => o.id !== order.id)
-      }
-
-      const mapped = mapToKitchenOrder(order)
-      const exists = prev.some(o => o.id === order.id)
-
-      if (!exists) {
-        if (soundEnabled && audioRef.current) {
-          audioRef.current.play().catch(() => {})
-        }
-        return [mapped, ...prev]
-      }
-
-      return prev.map(o =>
-        o.id === order.id ? mapped : o
-      )
-    })
-  }
-
-  useOrdersRealtime({
-    channelName: "admin-kitchen",
-    onInsert: handleRealtime,
-    onUpdate: handleRealtime,
-  })
-
-  // ============================================================================
-  // FAILSAFE REFRESH
-  // ============================================================================
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      loadOrders()
-    }, CONFIG.AUTO_REFRESH_INTERVAL)
+    const unlock = (): void => {
+      const audio = audioRef.current;
 
-    const onVisible = () => {
-      if (document.visibilityState === "visible") {
-        loadOrders()
+      if (audio !== null) {
+        void audio
+          .play()
+          .then(() => {
+            audio.pause();
+            audio.currentTime = 0;
+          })
+          .catch(() => {
+            // Best-effort unlock only.
+          });
       }
-    }
 
-    const onReconnect = () => {
-      loadOrders()
-    }
+      window.removeEventListener('touchstart', unlock);
+      window.removeEventListener('click', unlock);
+    };
 
-    document.addEventListener("visibilitychange", onVisible)
-    window.addEventListener("online", onReconnect)
+    window.addEventListener('touchstart', unlock);
+    window.addEventListener('click', unlock);
 
     return () => {
-      clearInterval(interval)
-      document.removeEventListener("visibilitychange", onVisible)
-      window.removeEventListener("online", onReconnect)
+      window.removeEventListener('touchstart', unlock);
+      window.removeEventListener('click', unlock);
+    };
+  }, []);
+
+  const loadOrders = useCallback(async (): Promise<void> => {
+    try {
+      setErrorMessage(null);
+
+      const { data, error } = await supabase
+        .from('orders')
+        .select(
+          'id,created_at,updated_at,currency,order_type,payment_status,status,stripe_session_id,amount_shipping,amount_subtotal,amount_tax,amount_total,assigned_to,cart_items,customer_email,customer_name,customer_phone,customer_uid,notes,shipping_name,shipping_phone,stripe_payment_intent_id,metadata,order_number,shipping_address',
+        )
+        .eq('payment_status', PaymentStatus.PAID)
+        .in('status', [OrderStatus.CONFIRMED, OrderStatus.PREPARING, OrderStatus.READY])
+        .order('created_at', { ascending: false })
+        .returns<OrderRow[]>();
+
+      if (error !== null) {
+        throw error;
+      }
+
+      const kitchenOrders = (data ?? []).map((row) =>
+        mapToKitchenOrder(mapOrderRowToDomain(row), row.order_type),
+      );
+
+      setOrders(sortOrdersByCreatedAtDesc(kitchenOrders));
+      setLastRefreshAt(new Date());
+    } catch (error: unknown) {
+      setErrorMessage(error instanceof Error ? error.message : 'Unable to load kitchen orders.');
+    } finally {
+      setLoading(false);
     }
-  }, [loadOrders])
+  }, []);
 
-  // ============================================================================
-  // UPDATE STATUS
-  // ============================================================================
+  useEffect(() => {
+    void loadOrders();
+  }, [loadOrders]);
 
- const updateStatus = async (id: string, status: OrderStatus) => {
-  try {
-    const updated = await updateOrderStatus(id, status)
+  const handleRealtime = useCallback(
+    (row: OrderRow): void => {
+      const order = mapOrderRowToDomain(row);
 
-    setOrders(prev =>
-      prev.map(o =>
-        o.id === id ? { ...o, status: updated.status } : o
-      )
-    )
+      if (!isPaidPaymentStatus(order.payment_status)) {
+        return;
+      }
 
-  } catch (err) {
-    console.error("❌ Update failed:", err)
-  }
-}
-  // ============================================================================
-  // HELPERS
-  // ============================================================================
+      setOrders((previous) => {
+        if (order.status === OrderStatus.DELIVERED || order.status === OrderStatus.CANCELLED) {
+          return previous.filter((entry) => entry.id !== order.id);
+        }
 
-  const group = (status: OrderStatus) =>
-    orders.filter(o => o.status === status)
+        const mapped = mapToKitchenOrder(order, row.order_type);
+        const exists = previous.some((entry) => entry.id === order.id);
 
-  const getTimeSince = (timestamp: string) => {
-    const minutes = Math.floor(
-      (Date.now() - new Date(timestamp).getTime()) / 60000
-    )
-    if (minutes < 1) return "Just now"
-    if (minutes === 1) return "1 min ago"
-    return `${minutes} mins ago`
-  }
+        if (!exists) {
+          if (soundEnabled) {
+            playNotification(audioRef.current);
+          }
 
-  // ============================================================================
-  // LOADING
-  // ============================================================================
+          return sortOrdersByCreatedAtDesc([mapped, ...previous]);
+        }
+
+        return sortOrdersByCreatedAtDesc(
+          previous.map((entry) => (entry.id === order.id ? mapped : entry)),
+        );
+      });
+    },
+    [soundEnabled],
+  );
+
+  useOrdersRealtime({
+    channelName: 'admin-kitchen',
+    onInsert: handleRealtime,
+    onUpdate: handleRealtime,
+  });
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      void loadOrders();
+    }, CONFIG.AUTO_REFRESH_INTERVAL);
+
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') {
+        void loadOrders();
+      }
+    };
+
+    const onReconnect = (): void => {
+      void loadOrders();
+    };
+
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('online', onReconnect);
+
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('online', onReconnect);
+    };
+  }, [loadOrders]);
+
+  const updateStatus = useCallback(async (id: string, status: OrderStatus): Promise<void> => {
+    try {
+      setErrorMessage(null);
+
+      const updated = await updateOrderStatus(id, status);
+
+      setOrders((previous) =>
+        sortOrdersByCreatedAtDesc(
+          previous.map((entry) => (entry.id === id ? { ...entry, status: updated.status } : entry)),
+        ),
+      );
+    } catch (error: unknown) {
+      setErrorMessage(error instanceof Error ? error.message : 'Unable to update order status.');
+    }
+  }, []);
+
+  const requestHandoff = useCallback(
+    async (id: string): Promise<void> => {
+      const staffId = await resolveStaffId();
+
+      if (staffId === null) {
+        setErrorMessage('Cannot complete handoff: no authenticated staff session.');
+        return;
+      }
+
+      const order = orders.find((entry) => entry.id === id);
+      const orderType = normalizeOrderType(order?.order_type);
+
+      setHandoffContext({
+        orderId: id,
+        orderType,
+        nextStatus: OrderStatus.DELIVERED,
+        staffId,
+      });
+    },
+    [orders],
+  );
+
+  const confirmHandoff = useCallback(
+    async (
+      context: HandoffContext,
+      recipientName: string,
+      handoffNotes: string,
+      pinVerified: boolean,
+    ): Promise<void> => {
+      setHandoffContext(null);
+      setErrorMessage(null);
+
+      try {
+        const updated = await updateOrderStatus(context.orderId, context.nextStatus);
+
+        setOrders((previous) =>
+          sortOrdersByCreatedAtDesc(
+            previous.map((entry) =>
+              entry.id === context.orderId ? { ...entry, status: updated.status } : entry,
+            ),
+          ),
+        );
+      } catch (error: unknown) {
+        setErrorMessage(
+          error instanceof Error ? error.message : 'Unable to mark order handoff complete.',
+        );
+        return;
+      }
+
+      const safeRecipient = recipientName.trim() || undefined;
+      const safeNotes = handoffNotes.trim() || undefined;
+
+      if (context.orderType === 'delivery') {
+        const evidenceResult = await writeFulfillmentEvidence({
+          type: 'delivery',
+          orderId: context.orderId,
+          staffId: context.staffId,
+          recipientName: safeRecipient,
+          handoffNotes: safeNotes,
+        });
+
+        if (!evidenceResult.ok) {
+          setErrorMessage(evidenceResult.error);
+        }
+
+        return;
+      }
+
+      if (context.orderType === 'dine_in') {
+        const evidenceResult = await writeFulfillmentEvidence({
+          type: 'dine_in',
+          orderId: context.orderId,
+          staffId: context.staffId,
+          handoffNotes: safeNotes,
+        });
+
+        if (!evidenceResult.ok) {
+          setErrorMessage(evidenceResult.error);
+        }
+
+        return;
+      }
+
+      const evidenceResult = await writeFulfillmentEvidence({
+        type: 'pickup',
+        orderId: context.orderId,
+        staffId: context.staffId,
+        recipientName: safeRecipient,
+        pickedUpByName: safeRecipient,
+        handoffNotes: safeNotes,
+        pinVerified,
+      });
+
+      if (!evidenceResult.ok) {
+        setErrorMessage(evidenceResult.error);
+      }
+    },
+    [],
+  );
+
+  const confirmedOrders = useMemo(
+    () => orders.filter((entry) => entry.status === OrderStatus.CONFIRMED),
+    [orders],
+  );
+
+  const preparingOrders = useMemo(
+    () => orders.filter((entry) => entry.status === OrderStatus.PREPARING),
+    [orders],
+  );
+
+  const readyOrders = useMemo(
+    () => orders.filter((entry) => entry.status === OrderStatus.READY),
+    [orders],
+  );
 
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center bg-neutral-950 text-white">
         Loading kitchen...
       </div>
-    )
+    );
   }
 
-  // ============================================================================
-  // UI
-  // ============================================================================
-
   return (
-    <div className="min-h-screen bg-neutral-950 p-6 text-white">
+    <div className="min-h-screen bg-neutral-950 p-4 text-white sm:p-6">
       <audio ref={audioRef} src="/notification.mp3" preload="auto" />
 
-      <div className="mb-6 flex items-center justify-between">
+      {handoffContext !== null ? (
+        <KitchenHandoffModal
+          context={handoffContext}
+          onConfirm={confirmHandoff}
+          onCancel={() => setHandoffContext(null)}
+        />
+      ) : null}
+
+      <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h1 className="text-3xl font-bold">Kitchen</h1>
-          <p className="text-sm text-neutral-400">
-            {orders.length} active orders
-          </p>
+          <p className="text-sm text-neutral-400">{orders.length} active orders</p>
+          {lastRefreshAt !== null ? (
+            <p className="mt-1 text-xs text-neutral-500">
+              Last refresh: {lastRefreshAt.toLocaleTimeString()}
+            </p>
+          ) : null}
         </div>
 
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
           <button
-            onClick={() => setSoundEnabled(s => !s)}
+            type="button"
+            onClick={() => setSoundEnabled((current) => !current)}
             className={`rounded-lg px-4 py-2 text-sm font-medium ${
               soundEnabled
-                ? "bg-green-600 hover:bg-green-700"
-                : "bg-neutral-800 hover:bg-neutral-700"
+                ? 'bg-green-600 hover:bg-green-700'
+                : 'bg-neutral-800 hover:bg-neutral-700'
             }`}
           >
-            {soundEnabled ? "🔔 Sound On" : "🔕 Sound Off"}
+            {soundEnabled ? '🔔 Sound On' : '🔕 Sound Off'}
           </button>
 
           <button
-            onClick={loadOrders}
+            type="button"
+            onClick={() => {
+              void loadOrders();
+            }}
             className="rounded-lg bg-neutral-800 px-4 py-2 text-sm font-medium hover:bg-neutral-700"
           >
             🔄 Refresh
@@ -248,147 +361,52 @@ useEffect(() => {
         </div>
       </div>
 
+      {errorMessage !== null ? (
+        <div
+          role="alert"
+          className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200"
+        >
+          {errorMessage}
+        </div>
+      ) : null}
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <Column
+        <KitchenColumn
           title="NEW"
           color="bg-red-600"
-          orders={group(OrderStatus.CONFIRMED)}
-          onAction={(id: string) =>
-            updateStatus(id, OrderStatus.PREPARING)
-          }
-          actionLabel="Start"
+          orders={confirmedOrders}
+          onAction={(id: string) => {
+            void updateStatus(id, OrderStatus.PREPARING);
+          }}
+          actionLabel="Start Preparing"
           actionColor="bg-yellow-500 hover:bg-yellow-400 text-black"
           getTimeSince={getTimeSince}
         />
 
-        <Column
+        <KitchenColumn
           title="PREPARING"
           color="bg-yellow-500"
-          orders={group(OrderStatus.PREPARING)}
-          onAction={(id: string) =>
-            updateStatus(id, OrderStatus.READY)
-          }
-          actionLabel="Ready"
+          orders={preparingOrders}
+          onAction={(id: string) => {
+            void updateStatus(id, OrderStatus.READY);
+          }}
+          actionLabel="Mark Ready"
           actionColor="bg-green-600 hover:bg-green-500"
           getTimeSince={getTimeSince}
         />
 
-        <Column
+        <KitchenColumn
           title="READY"
           color="bg-green-600"
-          orders={group(OrderStatus.READY)}
-          onAction={(id: string) =>
-            updateStatus(id, OrderStatus.DELIVERED)
-          }
-          actionLabel="Complete"
-          actionColor="bg-neutral-700 hover:bg-neutral-600"
+          orders={readyOrders}
+          onAction={(id: string) => {
+            void requestHandoff(id);
+          }}
+          actionLabel="Complete Handoff"
+          actionColor="bg-orange-600 hover:bg-orange-500"
           getTimeSince={getTimeSince}
         />
       </div>
     </div>
-  )
-}
-
-// ============================================================================
-// MAPPER
-// ============================================================================
-
-function mapToKitchenOrder(o: Order): KitchenOrder {
-  return {
-    id: o.id,
-    created_at: o.created_at,
-    customer_name: o.customer_name,
-    customer_phone: o.customer_phone,
-    amount_total: o.amount_total,
-    status: o.status,
-    cart_items: o.cart_items ?? [],
-    assigned_to: o.assigned_to ?? null,
-  }
-}
-
-// ============================================================================
-// COLUMN
-// ============================================================================
-
-interface ColumnProps {
-  title: string
-  color: string
-  orders: KitchenOrder[]
-  onAction?: (id: string) => void
-  actionLabel?: string
-  actionColor?: string
-  getTimeSince: (timestamp: string) => string
-}
-
-function Column({
-  title,
-  color,
-  orders,
-  onAction,
-  actionLabel,
-  actionColor,
-  getTimeSince,
-}: ColumnProps) {
-  return (
-    <div>
-      <div className={`${color} mb-4 rounded-lg p-3 font-bold`}>
-        {title} ({orders.length})
-      </div>
-
-      <div className="space-y-4">
-        {orders.length === 0 && (
-          <div className="rounded-lg border-2 border-dashed border-neutral-800 p-8 text-center text-neutral-600">
-            No orders
-          </div>
-        )}
-
-        {orders.map(o => (
-          <div
-            key={o.id}
-            className="rounded-lg border border-neutral-800 bg-neutral-900 p-4"
-          >
-            <div className="mb-2 flex items-start justify-between">
-              <div>
-                <div className="font-semibold">
-                  {o.customer_name || "Guest"}
-                </div>
-                {o.customer_phone && (
-                  <div className="text-xs text-neutral-500">
-                    {o.customer_phone}
-                  </div>
-                )}
-              </div>
-
-              <div className="text-right">
-                <div className="text-sm font-semibold text-green-400">
-                  ${(o.amount_total / 100).toFixed(2)}
-                </div>
-                <div className="text-xs text-neutral-500">
-                  {getTimeSince(o.created_at)}
-                </div>
-              </div>
-            </div>
-
-            {o.cart_items.map((item, i) => (
-              <div key={i} className="text-sm">
-                <span className="font-medium text-orange-400">
-                  {item.quantity} ×
-                </span>{" "}
-                {item.name}
-              </div>
-            ))}
-
-            {onAction && actionLabel && (
-              <button
-                onClick={() => onAction(o.id)}
-                className={`mt-3 w-full rounded py-2 font-bold ${actionColor}`}
-              >
-                {actionLabel}
-              </button>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  )
+  );
 }

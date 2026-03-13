@@ -50,7 +50,7 @@ function safeBool(v: unknown, fallback = false): boolean {
 function readArrayItems(raw: unknown): unknown[] {
   if (Array.isArray(raw)) return raw;
   if (isRecord(raw)) {
-    const items = (raw as UnknownRecord).items;
+    const items = raw.items;
     if (Array.isArray(items)) return items as unknown[];
   }
   return [];
@@ -59,13 +59,13 @@ function readArrayItems(raw: unknown): unknown[] {
 function normalizeMenuItemPublic(v: unknown): MenuItemPublic | null {
   if (!isRecord(v)) return null;
 
-  const id = safeStr((v as UnknownRecord).id, '', 128);
-  const name = safeStr((v as UnknownRecord).name, '', 180);
-  const category = safeStr((v as UnknownRecord).category, '', 80);
+  const id = safeStr(v.id, '', 128);
+  const name = safeStr(v.name, '', 180);
+  const category = safeStr(v.category, '', 80);
 
   if (!id || !name || !category) return null;
 
-  const merged: UnknownRecord = { ...(v as UnknownRecord), id, name, category };
+  const merged: UnknownRecord = { ...v, id, name, category };
   return merged as unknown as MenuItemPublic;
 }
 

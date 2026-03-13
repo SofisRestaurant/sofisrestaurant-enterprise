@@ -1,17 +1,17 @@
 // src/features/restaurant/location.ts
 export interface Location {
-  name: string
-  address: string
-  city: string
-  state: string
-  zip: string
-  country: string
-  phone: string
-  email: string
+  name: string;
+  address: string;
+  city: string;
+  state: string;
+  zip: string;
+  country: string;
+  phone: string;
+  email: string;
   coordinates?: {
-    lat: number
-    lng: number
-  }
+    lat: number;
+    lng: number;
+  };
 }
 
 export const restaurantLocation: Location = {
@@ -25,17 +25,17 @@ export const restaurantLocation: Location = {
   email: 'info@sofisrestaurant.com',
   coordinates: {
     lat: 33.4484,
-    lng: -112.0740,
+    lng: -112.074,
   },
-}
+};
 
 export function getGoogleMapsUrl(): string {
-  const { address, city, state, zip } = restaurantLocation
-  const query = encodeURIComponent(`${address}, ${city}, ${state} ${zip}`)
-  return `https://www.google.com/maps/search/?api=1&query=${query}`
+  const { address, city, state, zip } = restaurantLocation;
+  const query = encodeURIComponent(`${address}, ${city}, ${state} ${zip}`);
+  return `https://www.google.com/maps/search/?api=1&query=${query}`;
 }
 
 export function getFullAddress(): string {
-  const { address, city, state, zip } = restaurantLocation
-  return `${address}, ${city}, ${state} ${zip}`
+  const { address, city, state, zip } = restaurantLocation;
+  return `${address}, ${city}, ${state} ${zip}`;
 }

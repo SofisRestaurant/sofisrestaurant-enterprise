@@ -22,9 +22,9 @@
 //   - Fail-closed for admin authorization
 // =============================================================================
 
-import type { Database } from "./database.types.ts";
-import type { AnonClient, SvcClient } from "./supabase.ts";
-import { createAnonClient, createServiceClient, readBearerToken } from "./supabase.ts";
+import type { Database } from './database.types.ts';
+import type { AnonClient, SvcClient } from './supabase.ts';
+import { createAnonClient, createServiceClient, readBearerToken } from './supabase.ts';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -38,11 +38,11 @@ export type AuthUser = {
 export type RequireAuthResult = AuthUser;
 
 export type AdminAuthReason =
-  | "missing_bearer"
-  | "empty_token"
-  | "invalid_token"
-  | "not_admin"
-  | "admin_check_failed";
+  | 'missing_bearer'
+  | 'empty_token'
+  | 'invalid_token'
+  | 'not_admin'
+  | 'admin_check_failed';
 
 export type AuthenticateAdminResult =
   | { ok: true; userId: string; email: string | null }
@@ -59,7 +59,7 @@ export class AuthError extends Error {
 
   constructor(code: string, message: string, status = 401, reason?: string) {
     super(message);
-    this.name = "AuthError";
+    this.name = 'AuthError';
     this.code = code;
     this.status = status;
     this.reason = reason;
@@ -83,9 +83,9 @@ export function anonClient(jwt: string): AnonClient {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function isProd(): boolean {
-  const a = (Deno.env.get("APP_ENV") ?? "").trim().toLowerCase();
-  const n = (Deno.env.get("NODE_ENV") ?? "").trim().toLowerCase();
-  return a === "production" || n === "production";
+  const a = (Deno.env.get('APP_ENV') ?? '').trim().toLowerCase();
+  const n = (Deno.env.get('NODE_ENV') ?? '').trim().toLowerCase();
+  return a === 'production' || n === 'production';
 }
 
 function safeMsgProd(prodMsg: string, devMsg: string): string {
@@ -93,7 +93,7 @@ function safeMsgProd(prodMsg: string, devMsg: string): string {
 }
 
 function hasBearerHeader(req: Request): boolean {
-  const raw = req.headers.get("authorization") ?? req.headers.get("Authorization") ?? "";
+  const raw = req.headers.get('authorization') ?? req.headers.get('Authorization') ?? '';
   return /^bearer\s+/i.test(raw.trim());
 }
 
@@ -109,8 +109,8 @@ export async function requireAuth(req: Request): Promise<RequireAuthResult> {
   const token = readBearerToken(req);
 
   if (!token) {
-    const reason: AdminAuthReason = hasBearerHeader(req) ? "empty_token" : "missing_bearer";
-    throw new AuthError("AUTH_MISSING", "Missing Authorization Bearer token", 401, reason);
+    const reason: AdminAuthReason = hasBearerHeader(req) ? 'empty_token' : 'missing_bearer';
+    throw new AuthError('AUTH_MISSING', 'Missing Authorization Bearer token', 401, reason);
   }
 
   const anon = createAnonClient(token);
@@ -118,7 +118,7 @@ export async function requireAuth(req: Request): Promise<RequireAuthResult> {
   // Server-side validation of JWT
   const { data, error } = await anon.auth.getUser();
   if (error || !data?.user?.id) {
-    throw new AuthError("AUTH_INVALID", "Invalid or expired token", 401, "invalid_token");
+    throw new AuthError('AUTH_INVALID', 'Invalid or expired token', 401, 'invalid_token');
   }
 
   return {
@@ -139,21 +139,17 @@ export function authenticate(req: Request): Promise<RequireAuthResult> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function checkAdminByRpc(svc: SvcClient, uid: string): Promise<boolean> {
-  const { data, error } = await svc.rpc("is_admin", { uid });
+  const { data, error } = await svc.rpc('is_admin', { uid });
   if (error) throw new Error(error.message);
   return Boolean(data);
 }
 
 async function checkAdminByProfilesRole(svc: SvcClient, uid: string): Promise<boolean> {
-  const { data, error } = await svc
-    .from("profiles")
-    .select("role")
-    .eq("id", uid)
-    .maybeSingle();
+  const { data, error } = await svc.from('profiles').select('role').eq('id', uid).maybeSingle();
 
   if (error) throw new Error(error.message);
-  const role = (data?.role ?? "").toLowerCase();
-  return role === "admin";
+  const role = (data?.role ?? '').toLowerCase();
+  return role === 'admin';
 }
 
 /**
@@ -161,15 +157,15 @@ async function checkAdminByProfilesRole(svc: SvcClient, uid: string): Promise<bo
  */
 export async function authenticateAdmin(req: Request): Promise<AuthenticateAdminResult> {
   if (!hasBearerHeader(req)) {
-    return { ok: false, reason: "missing_bearer", message: "Missing Bearer token" };
+    return { ok: false, reason: 'missing_bearer', message: 'Missing Bearer token' };
   }
 
   let user: RequireAuthResult;
   try {
     user = await requireAuth(req);
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Unauthorized";
-    return { ok: false, reason: "invalid_token", message: safeMsgProd("Unauthorized", msg) };
+    const msg = e instanceof Error ? e.message : 'Unauthorized';
+    return { ok: false, reason: 'invalid_token', message: safeMsgProd('Unauthorized', msg) };
   }
 
   const svc = createServiceClient();
@@ -183,14 +179,18 @@ export async function authenticateAdmin(req: Request): Promise<AuthenticateAdmin
     } catch {
       return {
         ok: false,
-        reason: "admin_check_failed",
-        message: safeMsgProd("Forbidden", "Unable to verify admin role"),
+        reason: 'admin_check_failed',
+        message: safeMsgProd('Forbidden', 'Unable to verify admin role'),
       };
     }
   }
 
   if (!isAdmin) {
-    return { ok: false, reason: "not_admin", message: safeMsgProd("Forbidden", "User is not admin") };
+    return {
+      ok: false,
+      reason: 'not_admin',
+      message: safeMsgProd('Forbidden', 'User is not admin'),
+    };
   }
 
   return { ok: true, userId: user.id, email: user.email };
@@ -199,16 +199,18 @@ export async function authenticateAdmin(req: Request): Promise<AuthenticateAdmin
 /**
  * Admin auth (throws AuthError).
  */
-export async function requireAdmin(req: Request): Promise<{ userId: string; email: string | null }> {
+export async function requireAdmin(
+  req: Request,
+): Promise<{ userId: string; email: string | null }> {
   const res = await authenticateAdmin(req);
   if (!res.ok) {
-    const status = res.reason === "not_admin" ? 403 : 401;
+    const status = res.reason === 'not_admin' ? 403 : 401;
     const code =
-      res.reason === "not_admin"
-        ? "AUTH_FORBIDDEN"
-        : res.reason === "missing_bearer" || res.reason === "empty_token"
-          ? "AUTH_MISSING"
-          : "AUTH_INVALID";
+      res.reason === 'not_admin'
+        ? 'AUTH_FORBIDDEN'
+        : res.reason === 'missing_bearer' || res.reason === 'empty_token'
+          ? 'AUTH_MISSING'
+          : 'AUTH_INVALID';
 
     throw new AuthError(code, res.message, status, res.reason);
   }

@@ -9,7 +9,7 @@
 // - Cache headers + ETag
 // =============================================================================
 
-import { createServiceClient } from "../_shared/supabase.ts";
+import { createServiceClient } from '../_shared/supabase.ts';
 
 type CampaignPublic = {
   id: string;
@@ -41,8 +41,8 @@ type ParseSuccess<T> = { ok: true; value: T };
 type ParseFailure = { ok: false; status: number; code: string; error: string };
 type ParseResult<T> = ParseSuccess<T> | ParseFailure;
 
-const FUNCTION_NAME = "get-active-campaigns";
-const DEFAULT_PLACEMENT = "menu_deals_rail";
+const FUNCTION_NAME = 'get-active-campaigns';
+const DEFAULT_PLACEMENT = 'menu_deals_rail';
 const DEFAULT_LIMIT = 12;
 const MAX_LIMIT = 50;
 const MAX_DB_FETCH_LIMIT = 150;
@@ -50,21 +50,21 @@ const DB_FETCH_MULTIPLIER = 3;
 const MAX_POST_BODY_BYTES = 8_192;
 
 const CACHE_CONTROL_SUCCESS =
-  "public, max-age=30, s-maxage=60, stale-while-revalidate=300, stale-if-error=600";
-const CACHE_CONTROL_ERROR = "public, max-age=5, s-maxage=10, stale-while-revalidate=30";
+  'public, max-age=30, s-maxage=60, stale-while-revalidate=300, stale-if-error=600';
+const CACHE_CONTROL_ERROR = 'public, max-age=5, s-maxage=10, stale-while-revalidate=30';
 
 const ALLOWED_HEADERS =
-  "authorization, apikey, content-type, x-client-info, x-application-name, x-request-id, x-idempotency-key";
+  'authorization, apikey, content-type, x-client-info, x-application-name, x-request-id, x-idempotency-key';
 
 const PLACEMENT_PATTERN = /^[a-z0-9](?:[a-z0-9:_-]{0,63})$/i;
 
 const ALLOWED_ORIGINS = new Set<string>([
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
-  "http://localhost:5173",
-  "https://sofislegacy.com",
-  "https://www.sofislegacy.com",
-  "https://sofisrestaurant.netlify.app",
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:5173',
+  'https://sofislegacy.com',
+  'https://www.sofislegacy.com',
+  'https://sofisrestaurant.netlify.app',
 ]);
 
 // ─────────────────────────────────────────────────────────────
@@ -74,22 +74,22 @@ const ALLOWED_ORIGINS = new Set<string>([
 // ─────────────────────────────────────────────────────────────
 
 function corsHeadersFor(req: Request): HeadersInit | null {
-  const originRaw = req.headers.get("origin");
-  const origin = (originRaw ?? "").trim();
+  const originRaw = req.headers.get('origin');
+  const origin = (originRaw ?? '').trim();
 
   if (!origin) {
-    return { Vary: "Origin" };
+    return { Vary: 'Origin' };
   }
 
   if (!ALLOWED_ORIGINS.has(origin)) return null;
 
   return {
-    "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Headers": ALLOWED_HEADERS,
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Credentials": "true",
-    "Access-Control-Max-Age": "86400",
-    Vary: "Origin",
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Headers': ALLOWED_HEADERS,
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Credentials': 'true',
+    'Access-Control-Max-Age': '86400',
+    Vary: 'Origin',
   };
 }
 
@@ -98,20 +98,25 @@ function corsHeadersFor(req: Request): HeadersInit | null {
 // ─────────────────────────────────────────────────────────────
 
 function makeRequestId(): string {
-  return crypto.randomUUID().replaceAll("-", "").slice(0, 16);
+  return crypto.randomUUID().replaceAll('-', '').slice(0, 16);
 }
 
 function withStandardHeaders(headersInit: HeadersInit, requestId: string): Headers {
   const headers = new Headers(headersInit);
-  if (!headers.has("Vary")) headers.set("Vary", "Origin");
-  headers.set("X-Content-Type-Options", "nosniff");
-  headers.set("X-Request-Id", requestId);
+  if (!headers.has('Vary')) headers.set('Vary', 'Origin');
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('X-Request-Id', requestId);
   return headers;
 }
 
-function jsonResponse(body: unknown, status: number, headersInit: HeadersInit, requestId: string): Response {
+function jsonResponse(
+  body: unknown,
+  status: number,
+  headersInit: HeadersInit,
+  requestId: string,
+): Response {
   const headers = withStandardHeaders(headersInit, requestId);
-  headers.set("Content-Type", "application/json; charset=utf-8");
+  headers.set('Content-Type', 'application/json; charset=utf-8');
   return new Response(JSON.stringify(body), { status, headers });
 }
 
@@ -129,16 +134,11 @@ function errorResponse(
   cacheControl: string,
 ): Response {
   const headers = new Headers(headersInit);
-  if (!headers.has("Vary")) headers.set("Vary", "Origin");
-  headers.set("Cache-Control", cacheControl);
-  headers.set("X-Request-Id", requestId);
+  if (!headers.has('Vary')) headers.set('Vary', 'Origin');
+  headers.set('Cache-Control', cacheControl);
+  headers.set('X-Request-Id', requestId);
 
-  return jsonResponse(
-    { ok: false, code, error, requestId },
-    status,
-    headers,
-    requestId,
-  );
+  return jsonResponse({ ok: false, code, error, requestId }, status, headers, requestId);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -152,17 +152,17 @@ function clampInt(value: number, min: number, max: number): number {
 }
 
 function isRecord(value: unknown): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function asNullableString(value: unknown): string | null {
   if (value === null) return null;
-  return typeof value === "string" ? value : null;
+  return typeof value === 'string' ? value : null;
 }
 
 function asNumber(value: unknown, fallback: number): number {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && /^-?\d+(?:\.\d+)?$/.test(value.trim())) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && /^-?\d+(?:\.\d+)?$/.test(value.trim())) {
     const parsed = Number(value);
     if (Number.isFinite(parsed)) return parsed;
   }
@@ -170,23 +170,23 @@ function asNumber(value: unknown, fallback: number): number {
 }
 
 function asBoolean(value: unknown, fallback: boolean): boolean {
-  return typeof value === "boolean" ? value : fallback;
+  return typeof value === 'boolean' ? value : fallback;
 }
 
 function sanitizePlainText(value: unknown, maxLength: number): string | null {
-  if (typeof value !== "string") return null;
+  if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
 
   // Strip ASCII control chars WITHOUT regex ranges
-  let cleaned = "";
+  let cleaned = '';
   for (let i = 0; i < trimmed.length; i += 1) {
     const code = trimmed.charCodeAt(i);
     const isControl = (code >= 0x00 && code <= 0x1f) || code === 0x7f;
-    cleaned += isControl ? " " : trimmed[i]!;
+    cleaned += isControl ? ' ' : trimmed[i]!;
   }
 
-  cleaned = cleaned.replace(/\s+/g, " ").trim();
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
   if (!cleaned) return null;
 
   return cleaned.length <= maxLength ? cleaned : cleaned.slice(0, maxLength).trim();
@@ -201,7 +201,7 @@ function sanitizePlacement(value: unknown): string | null {
 
 function sanitizeDeepLink(value: unknown): string | null {
   if (value === null) return null;
-  if (typeof value !== "string") return null;
+  if (typeof value !== 'string') return null;
 
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -210,14 +210,14 @@ function sanitizeDeepLink(value: unknown): string | null {
   for (let i = 0; i < trimmed.length; i += 1) {
     const ch = trimmed[i]!;
     const code = trimmed.charCodeAt(i);
-    if (ch === "\\" || (code >= 0x00 && code <= 0x1f) || code === 0x7f) return null;
+    if (ch === '\\' || (code >= 0x00 && code <= 0x1f) || code === 0x7f) return null;
   }
 
-  if (trimmed.startsWith("/")) return trimmed;
+  if (trimmed.startsWith('/')) return trimmed;
 
   try {
     const url = new URL(trimmed);
-    if (url.protocol === "https:" || url.protocol === "http:") {
+    if (url.protocol === 'https:' || url.protocol === 'http:') {
       return url.toString();
     }
     return null;
@@ -228,48 +228,90 @@ function sanitizeDeepLink(value: unknown): string | null {
 
 function parseBooleanStrict(value: unknown): ParseResult<boolean | null> {
   if (value === null || value === undefined) return { ok: true, value: null };
-  if (typeof value === "boolean") return { ok: true, value };
+  if (typeof value === 'boolean') return { ok: true, value };
 
-  if (typeof value !== "string") {
-    return { ok: false, status: 400, code: "INVALID_BOOLEAN", error: "Boolean parameter must be true or false." };
+  if (typeof value !== 'string') {
+    return {
+      ok: false,
+      status: 400,
+      code: 'INVALID_BOOLEAN',
+      error: 'Boolean parameter must be true or false.',
+    };
   }
 
   const normalized = value.trim().toLowerCase();
   if (!normalized) return { ok: true, value: null };
 
-  if (normalized === "1" || normalized === "true" || normalized === "t" || normalized === "yes" || normalized === "y") {
+  if (
+    normalized === '1' ||
+    normalized === 'true' ||
+    normalized === 't' ||
+    normalized === 'yes' ||
+    normalized === 'y'
+  ) {
     return { ok: true, value: true };
   }
-  if (normalized === "0" || normalized === "false" || normalized === "f" || normalized === "no" || normalized === "n") {
+  if (
+    normalized === '0' ||
+    normalized === 'false' ||
+    normalized === 'f' ||
+    normalized === 'no' ||
+    normalized === 'n'
+  ) {
     return { ok: true, value: false };
   }
 
-  return { ok: false, status: 400, code: "INVALID_BOOLEAN", error: "Boolean parameter must be true or false." };
+  return {
+    ok: false,
+    status: 400,
+    code: 'INVALID_BOOLEAN',
+    error: 'Boolean parameter must be true or false.',
+  };
 }
 
 function parseLimitStrict(value: unknown): ParseResult<number | null> {
-  if (value === null || value === undefined || value === "") return { ok: true, value: null };
+  if (value === null || value === undefined || value === '') return { ok: true, value: null };
 
-  if (typeof value === "number") {
+  if (typeof value === 'number') {
     if (!Number.isInteger(value)) {
-      return { ok: false, status: 400, code: "INVALID_LIMIT", error: "Limit must be an integer between 1 and 50." };
+      return {
+        ok: false,
+        status: 400,
+        code: 'INVALID_LIMIT',
+        error: 'Limit must be an integer between 1 and 50.',
+      };
     }
     return { ok: true, value: clampInt(value, 1, MAX_LIMIT) };
   }
 
-  if (typeof value !== "string") {
-    return { ok: false, status: 400, code: "INVALID_LIMIT", error: "Limit must be an integer between 1 and 50." };
+  if (typeof value !== 'string') {
+    return {
+      ok: false,
+      status: 400,
+      code: 'INVALID_LIMIT',
+      error: 'Limit must be an integer between 1 and 50.',
+    };
   }
 
   const trimmed = value.trim();
   if (!trimmed) return { ok: true, value: null };
   if (!/^-?\d+$/.test(trimmed)) {
-    return { ok: false, status: 400, code: "INVALID_LIMIT", error: "Limit must be an integer between 1 and 50." };
+    return {
+      ok: false,
+      status: 400,
+      code: 'INVALID_LIMIT',
+      error: 'Limit must be an integer between 1 and 50.',
+    };
   }
 
   const parsed = Number.parseInt(trimmed, 10);
   if (!Number.isInteger(parsed)) {
-    return { ok: false, status: 400, code: "INVALID_LIMIT", error: "Limit must be an integer between 1 and 50." };
+    return {
+      ok: false,
+      status: 400,
+      code: 'INVALID_LIMIT',
+      error: 'Limit must be an integer between 1 and 50.',
+    };
   }
 
   return { ok: true, value: clampInt(parsed, 1, MAX_LIMIT) };
@@ -333,8 +375,8 @@ function sortCampaigns(a: CampaignPublic, b: CampaignPublic): number {
   if (a.priority !== b.priority) return b.priority - a.priority;
   if (a.weight !== b.weight) return b.weight - a.weight;
 
-  const aStarts = a.starts_at ?? "";
-  const bStarts = b.starts_at ?? "";
+  const aStarts = a.starts_at ?? '';
+  const bStarts = b.starts_at ?? '';
   if (aStarts !== bStarts) return aStarts < bStarts ? 1 : -1;
 
   return a.id.localeCompare(b.id);
@@ -345,10 +387,10 @@ function sortCampaigns(a: CampaignPublic, b: CampaignPublic): number {
 // ─────────────────────────────────────────────────────────────
 
 async function sha256Hex(input: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
   return Array.from(new Uint8Array(digest))
-    .map((value) => value.toString(16).padStart(2, "0"))
-    .join("");
+    .map((value) => value.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -356,45 +398,65 @@ async function sha256Hex(input: string): Promise<string> {
 // ─────────────────────────────────────────────────────────────
 
 async function readJsonObjectBody(req: Request): Promise<ParseResult<JsonObject>> {
-  const contentType = (req.headers.get("content-type") ?? "").toLowerCase();
-  if (!contentType.includes("application/json")) {
-    return { ok: false, status: 415, code: "UNSUPPORTED_CONTENT_TYPE", error: "Content-Type must be application/json." };
+  const contentType = (req.headers.get('content-type') ?? '').toLowerCase();
+  if (!contentType.includes('application/json')) {
+    return {
+      ok: false,
+      status: 415,
+      code: 'UNSUPPORTED_CONTENT_TYPE',
+      error: 'Content-Type must be application/json.',
+    };
   }
 
-  let rawBody = "";
+  let rawBody = '';
   try {
     rawBody = await req.text();
   } catch {
-    return { ok: false, status: 400, code: "INVALID_JSON_BODY", error: "Unable to read request body." };
+    return {
+      ok: false,
+      status: 400,
+      code: 'INVALID_JSON_BODY',
+      error: 'Unable to read request body.',
+    };
   }
 
   if (!rawBody.trim()) {
-    return { ok: false, status: 400, code: "EMPTY_BODY", error: "Request body is required." };
+    return { ok: false, status: 400, code: 'EMPTY_BODY', error: 'Request body is required.' };
   }
 
   const bodyBytes = new TextEncoder().encode(rawBody).length;
   if (bodyBytes > MAX_POST_BODY_BYTES) {
-    return { ok: false, status: 413, code: "BODY_TOO_LARGE", error: "Request body is too large." };
+    return { ok: false, status: 413, code: 'BODY_TOO_LARGE', error: 'Request body is too large.' };
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawBody);
   } catch {
-    return { ok: false, status: 400, code: "INVALID_JSON_BODY", error: "Request body must be valid JSON." };
+    return {
+      ok: false,
+      status: 400,
+      code: 'INVALID_JSON_BODY',
+      error: 'Request body must be valid JSON.',
+    };
   }
 
   if (!isRecord(parsed)) {
-    return { ok: false, status: 400, code: "INVALID_JSON_BODY", error: "JSON body must be an object." };
+    return {
+      ok: false,
+      status: 400,
+      code: 'INVALID_JSON_BODY',
+      error: 'JSON body must be an object.',
+    };
   }
 
   return { ok: true, value: parsed };
 }
 
 function resolveRequestParams(url: URL, body: JsonObject | null): ParseResult<RequestParams> {
-  const queryPlacementRaw = url.searchParams.get("placement");
-  const queryLimitRaw = url.searchParams.get("limit");
-  const queryFeaturedRaw = url.searchParams.get("featured");
+  const queryPlacementRaw = url.searchParams.get('placement');
+  const queryLimitRaw = url.searchParams.get('limit');
+  const queryFeaturedRaw = url.searchParams.get('featured');
 
   const bodyPlacementRaw = body?.placement;
   const bodyLimitRaw = body?.limit;
@@ -403,7 +465,7 @@ function resolveRequestParams(url: URL, body: JsonObject | null): ParseResult<Re
   const placementCandidate = bodyPlacementRaw ?? queryPlacementRaw ?? DEFAULT_PLACEMENT;
   const placement = sanitizePlacement(placementCandidate);
   if (!placement) {
-    return { ok: false, status: 400, code: "INVALID_PLACEMENT", error: "Placement is invalid." };
+    return { ok: false, status: 400, code: 'INVALID_PLACEMENT', error: 'Placement is invalid.' };
   }
 
   const limitResult = parseLimitStrict(bodyLimitRaw ?? queryLimitRaw);
@@ -425,39 +487,39 @@ Deno.serve(async (req: Request) => {
   const requestId = makeRequestId();
 
   const cors = corsHeadersFor(req);
-  const origin = (req.headers.get("origin") ?? "").trim();
+  const origin = (req.headers.get('origin') ?? '').trim();
 
   // If Origin exists, it must be allowlisted
   if (origin && !cors) {
     return errorResponse(
       403,
-      "ORIGIN_NOT_ALLOWED",
-      "Origin not allowed.",
+      'ORIGIN_NOT_ALLOWED',
+      'Origin not allowed.',
       requestId,
-      { Vary: "Origin" },
-      "no-store",
+      { Vary: 'Origin' },
+      'no-store',
     );
   }
 
   // Preflight
-  if (req.method === "OPTIONS") {
+  if (req.method === 'OPTIONS') {
     // If no origin, allow but don't set ACAO
-    return emptyResponse(204, cors ?? { Vary: "Origin" }, requestId);
+    return emptyResponse(204, cors ?? { Vary: 'Origin' }, requestId);
   }
 
-  if (req.method !== "GET" && req.method !== "POST") {
+  if (req.method !== 'GET' && req.method !== 'POST') {
     return errorResponse(
       405,
-      "METHOD_NOT_ALLOWED",
-      "Method not allowed.",
+      'METHOD_NOT_ALLOWED',
+      'Method not allowed.',
       requestId,
-      cors ?? { Vary: "Origin" },
+      cors ?? { Vary: 'Origin' },
       CACHE_CONTROL_ERROR,
     );
   }
 
   let body: JsonObject | null = null;
-  if (req.method === "POST") {
+  if (req.method === 'POST') {
     const bodyResult = await readJsonObjectBody(req);
     if (!bodyResult.ok) {
       return errorResponse(
@@ -465,7 +527,7 @@ Deno.serve(async (req: Request) => {
         bodyResult.code,
         bodyResult.error,
         requestId,
-        cors ?? { Vary: "Origin" },
+        cors ?? { Vary: 'Origin' },
         CACHE_CONTROL_ERROR,
       );
     }
@@ -481,7 +543,7 @@ Deno.serve(async (req: Request) => {
         paramsResult.code,
         paramsResult.error,
         requestId,
-        cors ?? { Vary: "Origin" },
+        cors ?? { Vary: 'Origin' },
         CACHE_CONTROL_ERROR,
       );
     }
@@ -493,24 +555,24 @@ Deno.serve(async (req: Request) => {
 
     const supabase = createServiceClient();
     const { data, error } = await supabase
-      .from("active_campaigns_now")
+      .from('active_campaigns_now')
       .select(
-        "id,campaign_name,placement,promo_id,starts_at,ends_at,badge,hero_title,hero_subtitle,cta_label,deep_link,menu_item_id,priority,weight,is_featured",
+        'id,campaign_name,placement,promo_id,starts_at,ends_at,badge,hero_title,hero_subtitle,cta_label,deep_link,menu_item_id,priority,weight,is_featured',
       )
-      .eq("placement", placement)
-      .order("is_featured", { ascending: false })
-      .order("priority", { ascending: false })
-      .order("weight", { ascending: false })
-      .order("starts_at", { ascending: false })
+      .eq('placement', placement)
+      .order('is_featured', { ascending: false })
+      .order('priority', { ascending: false })
+      .order('weight', { ascending: false })
+      .order('starts_at', { ascending: false })
       .limit(fetchLimit);
 
     if (error) {
       return errorResponse(
         503,
-        "SERVICE_UNAVAILABLE",
-        "Service unavailable.",
+        'SERVICE_UNAVAILABLE',
+        'Service unavailable.',
         requestId,
-        { ...(cors ?? { Vary: "Origin" }), "Cache-Control": CACHE_CONTROL_ERROR },
+        { ...(cors ?? { Vary: 'Origin' }), 'Cache-Control': CACHE_CONTROL_ERROR },
         CACHE_CONTROL_ERROR,
       );
     }
@@ -535,7 +597,7 @@ Deno.serve(async (req: Request) => {
 
     const limitedCampaigns = campaigns.slice(0, limit);
     const featured = featuredRequested
-      ? limitedCampaigns.find((campaign) => campaign.is_featured) ?? null
+      ? (limitedCampaigns.find((campaign) => campaign.is_featured) ?? null)
       : null;
 
     const responseBody = {
@@ -560,11 +622,11 @@ Deno.serve(async (req: Request) => {
     });
 
     const etag = `W/"${await sha256Hex(responseFingerprint)}"`;
-    const requestEtag = req.headers.get("if-none-match")?.trim();
+    const requestEtag = req.headers.get('if-none-match')?.trim();
 
     const successHeaders: HeadersInit = {
-      ...(cors ?? { Vary: "Origin" }),
-      "Cache-Control": CACHE_CONTROL_SUCCESS,
+      ...(cors ?? { Vary: 'Origin' }),
+      'Cache-Control': CACHE_CONTROL_SUCCESS,
       ETag: etag,
     };
 
@@ -576,10 +638,10 @@ Deno.serve(async (req: Request) => {
   } catch {
     return errorResponse(
       503,
-      "SERVICE_UNAVAILABLE",
-      "Service unavailable.",
+      'SERVICE_UNAVAILABLE',
+      'Service unavailable.',
       requestId,
-      { ...(cors ?? { Vary: "Origin" }), "Cache-Control": CACHE_CONTROL_ERROR },
+      { ...(cors ?? { Vary: 'Origin' }), 'Cache-Control': CACHE_CONTROL_ERROR },
       CACHE_CONTROL_ERROR,
     );
   }

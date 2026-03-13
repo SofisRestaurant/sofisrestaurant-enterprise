@@ -1,16 +1,17 @@
 // src/ai/faq/faq.data.ts
 export interface FAQItem {
-  id: string
-  question: string
-  answer: string
-  category: string
+  id: string;
+  question: string;
+  answer: string;
+  category: string;
 }
 
 export const faqData: FAQItem[] = [
   {
     id: '1',
     question: 'What are your hours of operation?',
-    answer: 'We are open Monday-Thursday 11am-10pm, Friday-Saturday 11am-11pm, and Sunday 10am-9pm.',
+    answer:
+      'We are open Monday-Thursday 11am-10pm, Friday-Saturday 11am-11pm, and Sunday 10am-9pm.',
     category: 'General',
   },
   {
@@ -25,4 +26,4 @@ export const faqData: FAQItem[] = [
     answer: 'Absolutely! We have many vegetarian and vegan options clearly marked on our menu.',
     category: 'Menu',
   },
-]
+];

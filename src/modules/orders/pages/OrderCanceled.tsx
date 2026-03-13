@@ -16,130 +16,177 @@
 // - Provides support-friendly copy (session prefix only)
 // =============================================================================
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { AlertCircle, Clock, RefreshCw, ShieldCheck, XCircle, Copy, Mail, ShoppingBag } from 'lucide-react'
-import { Button } from '@/components/ui/Button'
-import { invokeEdge } from '@/lib/supabase/invoke'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import {
+  AlertCircle,
+  Clock,
+  RefreshCw,
+  ShieldCheck,
+  XCircle,
+  Copy,
+  Mail,
+  ShoppingBag,
+} from 'lucide-react';
+import { Button } from '@/components/ui/Button';
+import { invokeEdge } from '@/lib/supabase/invoke';
 
-type StripeSessionStatus = 'open' | 'complete' | 'expired' | null
-type StripePaymentStatus = 'paid' | 'unpaid' | 'no_payment_required' | null
+type StripeSessionStatus = 'open' | 'complete' | 'expired' | null;
+type StripePaymentStatus = 'paid' | 'unpaid' | 'no_payment_required' | null;
 
 type GetCheckoutSessionResp = {
-  id: string
-  status: StripeSessionStatus
-  payment_status: StripePaymentStatus
-  amount_total: number | null
-  currency: string | null
-  customer_email: string | null
-  created: number | null
-  expires_at: number | null
-}
+  id: string;
+  status: StripeSessionStatus;
+  payment_status: StripePaymentStatus;
+  amount_total: number | null;
+  currency: string | null;
+  customer_email: string | null;
+  created: number | null;
+  expires_at: number | null;
+};
 
 type ViewState =
   | { kind: 'idle' }
   | { kind: 'loading' }
   | { kind: 'ready'; session: GetCheckoutSessionResp | null }
-  | { kind: 'error'; message: string }
+  | { kind: 'error'; message: string };
 
-const STRIPE_SESSION_RE = /^cs_(test|live)_[a-zA-Z0-9]+$/
+const STRIPE_SESSION_RE = /^cs_(test|live)_[a-zA-Z0-9]+$/;
 
 function prefix(id: string | null | undefined, n = 8): string | null {
-  if (!id) return null
-  return id.slice(0, n)
+  if (!id) {
+    return null;
+  }
+
+  return id.slice(0, n);
 }
 
 function safeSessionId(raw: string | null): string | null {
-  const s = (raw ?? '').trim()
-  if (!s) return null
-  if (s.length > 200) return null
-  if (!STRIPE_SESSION_RE.test(s)) return null
-  return s
+  const s = (raw ?? '').trim();
+
+  if (!s) {
+    return null;
+  }
+
+  if (s.length > 200) {
+    return null;
+  }
+
+  if (!STRIPE_SESSION_RE.test(s)) {
+    return null;
+  }
+
+  return s;
 }
 
 function formatMoney(cents: number | null, currency: string | null): string {
-  if (cents == null || !Number.isFinite(cents)) return ''
-  const cur = (currency ?? 'usd').toUpperCase()
+  if (cents == null || !Number.isFinite(cents)) {
+    return '';
+  }
+
+  const cur = (currency ?? 'usd').toUpperCase();
+
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: cur,
-  }).format(cents / 100)
+  }).format(cents / 100);
 }
 
 function formatWhen(unixSeconds: number | null): string {
-  if (!unixSeconds || !Number.isFinite(unixSeconds)) return ''
+  if (!unixSeconds || !Number.isFinite(unixSeconds)) {
+    return '';
+  }
+
   return new Date(unixSeconds * 1000).toLocaleString('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
-  })
+  });
 }
 
 export default function OrderCanceled() {
-  const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
-  const rawSessionId = useMemo(() => searchParams.get('session_id'), [searchParams])
-  const sessionId = useMemo(() => safeSessionId(rawSessionId), [rawSessionId])
+  const rawSessionId = useMemo(() => searchParams.get('session_id'), [searchParams]);
+  const sessionId = useMemo(() => safeSessionId(rawSessionId), [rawSessionId]);
 
-  const [view, setView] = useState<ViewState>({ kind: 'idle' })
-  const [copied, setCopied] = useState(false)
+  const [view, setView] = useState<ViewState>({ kind: 'idle' });
+  const [copied, setCopied] = useState(false);
 
-  // Avoid state updates after unmount
-  const aliveRef = useRef(true)
+  const aliveRef = useRef(true);
+
   useEffect(() => {
-    aliveRef.current = true
+    aliveRef.current = true;
+
     return () => {
-      aliveRef.current = false
-    }
-  }, [])
+      aliveRef.current = false;
+    };
+  }, []);
 
-  const loadSession = useCallback(async () => {
+  const loadSession = useCallback(async (): Promise<void> => {
     if (!sessionId) {
-      setView({ kind: 'ready', session: null })
-      return
+      setView({ kind: 'ready', session: null });
+      return;
     }
 
-    setView({ kind: 'loading' })
+    setView({ kind: 'loading' });
+
     try {
-      // Your edge function already enforces ownership + rate limiting.
-      const data = await invokeEdge<GetCheckoutSessionResp>('get-checkout-session', { session_id: sessionId })
-      if (!aliveRef.current) return
-      setView({ kind: 'ready', session: data ?? null })
+      const data = await invokeEdge<GetCheckoutSessionResp>('get-checkout-session', {
+        session_id: sessionId,
+      });
+
+      if (!aliveRef.current) {
+        return;
+      }
+
+      setView({ kind: 'ready', session: data ?? null });
     } catch {
-      if (!aliveRef.current) return
-      setView({ kind: 'error', message: 'Unable to check the payment session. Please try again.' })
+      if (!aliveRef.current) {
+        return;
+      }
+
+      setView({
+        kind: 'error',
+        message: 'Unable to check the payment session. Please try again.',
+      });
     }
-  }, [sessionId])
+  }, [sessionId]);
 
   useEffect(() => {
-    void loadSession()
-  }, [loadSession])
+    void loadSession();
+  }, [loadSession]);
 
-  const retry = useCallback(() => {
-    // Best recovery path: return to checkout (cart is still local)
-    navigate('/checkout')
-  }, [navigate])
+  const retry = useCallback((): void => {
+    void navigate('/checkout');
+  }, [navigate]);
 
-  const goMenu = useCallback(() => navigate('/menu'), [navigate])
+  const goMenu = useCallback((): void => {
+    void navigate('/menu');
+  }, [navigate]);
 
-  const copySupportId = useCallback(async () => {
-    const id = sessionId ? `checkout_session:${sessionId}` : 'checkout_session:missing'
+  const copySupportId = useCallback(async (): Promise<void> => {
+    const id = sessionId ? `checkout_session:${sessionId}` : 'checkout_session:missing';
+
     try {
-      await navigator.clipboard.writeText(id)
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 1200)
+      await navigator.clipboard.writeText(id);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
     } catch {
       // ignore
     }
-  }, [sessionId])
+  }, [sessionId]);
 
   const derived = useMemo(() => {
-    if (view.kind !== 'ready') return null
+    if (view.kind !== 'ready') {
+      return null;
+    }
 
-    const s = view.session
+    const s = view.session;
+
     if (!sessionId) {
       return {
         title: 'Checkout canceled',
@@ -147,7 +194,7 @@ export default function OrderCanceled() {
         detail: 'Return to checkout to try again.',
         icon: 'warn' as const,
         badge: null as string | null,
-      }
+      };
     }
 
     if (!s) {
@@ -157,15 +204,13 @@ export default function OrderCanceled() {
         detail: 'Return to checkout to try again.',
         icon: 'warn' as const,
         badge: `Session ${prefix(sessionId)?.toUpperCase() ?? ''}`,
-      }
+      };
     }
 
-    // Paid + complete usually means user should be on success page,
-    // but sometimes the client navigates weirdly or finalize is still running.
-    const isPaid = s.payment_status === 'paid'
-    const isExpired = s.status === 'expired'
-    const isOpen = s.status === 'open'
-    const isComplete = s.status === 'complete'
+    const isPaid = s.payment_status === 'paid';
+    const isExpired = s.status === 'expired';
+    const isOpen = s.status === 'open';
+    const isComplete = s.status === 'complete';
 
     if (isPaid && isComplete) {
       return {
@@ -174,7 +219,7 @@ export default function OrderCanceled() {
         detail: 'If you don’t see it in Order History within a minute, refresh or contact support.',
         icon: 'ok' as const,
         badge: `Paid ${formatMoney(s.amount_total, s.currency)}`,
-      }
+      };
     }
 
     if (isExpired) {
@@ -184,7 +229,7 @@ export default function OrderCanceled() {
         detail: 'No charge was made. Please try again.',
         icon: 'time' as const,
         badge: s.expires_at ? `Expired ${formatWhen(s.expires_at)}` : 'Expired',
-      }
+      };
     }
 
     if (isOpen && !isPaid) {
@@ -194,65 +239,84 @@ export default function OrderCanceled() {
         detail: 'You can try again — your cart is still here.',
         icon: 'cancel' as const,
         badge: s.amount_total ? `Attempted ${formatMoney(s.amount_total, s.currency)}` : null,
-      }
+      };
     }
 
-    // Fallback
     return {
       title: 'Checkout canceled',
       subtitle: 'Your payment wasn’t completed.',
       detail: 'You can return to checkout to try again.',
       icon: 'cancel' as const,
       badge: s.amount_total ? `Attempted ${formatMoney(s.amount_total, s.currency)}` : null,
-    }
-  }, [view, sessionId])
+    };
+  }, [view, sessionId]);
 
   const Icon = useMemo(() => {
-    const k = derived?.icon
-    if (k === 'ok') return ShieldCheck
-    if (k === 'time') return Clock
-    if (k === 'warn') return AlertCircle
-    return XCircle
-  }, [derived?.icon])
+    const k = derived?.icon;
+
+    if (k === 'ok') {
+      return ShieldCheck;
+    }
+
+    if (k === 'time') {
+      return Clock;
+    }
+
+    if (k === 'warn') {
+      return AlertCircle;
+    }
+
+    return XCircle;
+  }, [derived?.icon]);
 
   const iconColor = useMemo(() => {
-    const k = derived?.icon
-    if (k === 'ok') return 'text-emerald-600'
-    if (k === 'time') return 'text-amber-600'
-    if (k === 'warn') return 'text-amber-600'
-    return 'text-red-600'
-  }, [derived?.icon])
+    const k = derived?.icon;
+
+    if (k === 'ok') {
+      return 'text-emerald-600';
+    }
+
+    if (k === 'time') {
+      return 'text-amber-600';
+    }
+
+    if (k === 'warn') {
+      return 'text-amber-600';
+    }
+
+    return 'text-red-600';
+  }, [derived?.icon]);
 
   return (
     <main
-      className="min-h-screen bg-neutral-50 flex items-center justify-center px-4 py-16"
+      className="flex min-h-screen items-center justify-center bg-neutral-50 px-4 py-16"
       role="main"
       aria-labelledby="order-canceled-title"
     >
-      <section className="w-full max-w-xl rounded-2xl bg-white shadow-lg border border-neutral-200 p-10 text-center">
-        {/* Header */}
+      <section className="w-full max-w-xl rounded-2xl border border-neutral-200 bg-white p-10 text-center shadow-lg">
         <div className="mb-6 flex justify-center">
           <div className="flex h-16 w-16 items-center justify-center rounded-full bg-neutral-100 ring-1 ring-neutral-200">
             <Icon className={`h-9 w-9 ${iconColor}`} aria-hidden="true" />
           </div>
         </div>
 
-        <h1 id="order-canceled-title" className="text-3xl font-bold text-neutral-900 mb-3">
-          {view.kind === 'loading' ? 'Checking your payment…' : derived?.title ?? 'Checkout canceled'}
+        <h1 id="order-canceled-title" className="mb-3 text-3xl font-bold text-neutral-900">
+          {view.kind === 'loading'
+            ? 'Checking your payment…'
+            : (derived?.title ?? 'Checkout canceled')}
         </h1>
 
         {view.kind === 'error' ? (
-          <p className="text-neutral-600 mb-6">{view.message}</p>
+          <p className="mb-6 text-neutral-600">{view.message}</p>
         ) : view.kind === 'loading' ? (
-          <p className="text-neutral-600 mb-6">Hang tight — verifying the Stripe session.</p>
+          <p className="mb-6 text-neutral-600">Hang tight — verifying the Stripe session.</p>
         ) : (
           <>
-            <p className="text-neutral-700 font-semibold">{derived?.subtitle}</p>
-            <p className="text-neutral-600 mt-2 mb-6">{derived?.detail}</p>
+            <p className="font-semibold text-neutral-700">{derived?.subtitle}</p>
+            <p className="mb-6 mt-2 text-neutral-600">{derived?.detail}</p>
           </>
         )}
 
-        {/* Session badge */}
         {sessionId ? (
           <div className="mb-6 inline-flex items-center gap-2 rounded-full bg-neutral-100 px-3 py-1 text-xs text-neutral-700 ring-1 ring-neutral-200">
             <span className="font-mono">cs_…{prefix(sessionId)?.toUpperCase()}</span>
@@ -260,8 +324,7 @@ export default function OrderCanceled() {
           </div>
         ) : null}
 
-        {/* Actions */}
-        <div className="flex flex-col sm:flex-row gap-3 justify-center">
+        <div className="flex flex-col justify-center gap-3 sm:flex-row">
           <Button variant="secondary" onClick={retry}>
             <span className="inline-flex items-center gap-2">
               <RefreshCw className="h-4 w-4" />
@@ -277,11 +340,12 @@ export default function OrderCanceled() {
           </Button>
         </div>
 
-        {/* Secondary row */}
-        <div className="mt-5 flex flex-col sm:flex-row items-center justify-center gap-3 text-sm">
+        <div className="mt-5 flex flex-col items-center justify-center gap-3 text-sm sm:flex-row">
           <button
             type="button"
-            onClick={() => void copySupportId()}
+            onClick={() => {
+              void copySupportId();
+            }}
             className="inline-flex items-center gap-2 text-neutral-600 hover:text-neutral-900"
           >
             <Copy className="h-4 w-4" />
@@ -301,25 +365,26 @@ export default function OrderCanceled() {
           </Link>
         </div>
 
-        {/* Trust copy */}
         <p className="mt-6 text-xs text-neutral-500">
-          🔒 Secure checkout by Stripe. If your card was declined, Stripe lets you update payment details on the checkout
-          screen. If you canceled or the session expired, no charge was made.
+          🔒 Secure checkout by Stripe. If your card was declined, Stripe lets you update payment
+          details on the checkout screen. If you canceled or the session expired, no charge was
+          made.
         </p>
 
-        {/* Debug-only safe retry */}
-        {view.kind === 'ready' && (
+        {view.kind === 'ready' ? (
           <div className="mt-4">
             <button
               type="button"
-              onClick={() => void loadSession()}
+              onClick={() => {
+                void loadSession();
+              }}
               className="text-[11px] text-neutral-400 underline underline-offset-2 hover:text-neutral-600"
             >
               Re-check session status
             </button>
           </div>
-        )}
+        ) : null}
       </section>
     </main>
-  )
+  );
 }

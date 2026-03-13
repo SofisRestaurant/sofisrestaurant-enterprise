@@ -1,36 +1,34 @@
 export interface HeatmapData {
-  x: number
-  y: number
-  clicks: number
-  timestamp: number
+  x: number;
+  y: number;
+  clicks: number;
+  timestamp: number;
 }
 
 class HeatmapTracker {
-  private data: HeatmapData[] = []
+  private data: HeatmapData[] = [];
 
   trackClick(x: number, y: number): void {
-    const existing = this.data.find(
-      (d) => Math.abs(d.x - x) < 10 && Math.abs(d.y - y) < 10
-    )
+    const existing = this.data.find((d) => Math.abs(d.x - x) < 10 && Math.abs(d.y - y) < 10);
 
     if (existing) {
-      existing.clicks++
+      existing.clicks++;
     } else {
-      this.data.push({ x, y, clicks: 1, timestamp: Date.now() })
+      this.data.push({ x, y, clicks: 1, timestamp: Date.now() });
     }
   }
 
   getData(): HeatmapData[] {
-    return [...this.data]
+    return [...this.data];
   }
 
   getHotspots(minClicks: number = 5): HeatmapData[] {
-    return this.data.filter((d) => d.clicks >= minClicks)
+    return this.data.filter((d) => d.clicks >= minClicks);
   }
 
   reset(): void {
-    this.data = []
+    this.data = [];
   }
 }
 
-export const heatmapTracker = new HeatmapTracker()
+export const heatmapTracker = new HeatmapTracker();

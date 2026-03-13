@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState } from 'react';
 import {
   getCampaignAutomationStatus,
   setAutoRotateDaily,
   runCampaignRotation,
-} from "@/features/admin/growth/campaigns.admin.service";
+} from '@/features/admin/growth/campaigns.admin.service';
 
 type Status = {
   autoRotate: boolean;
@@ -49,10 +49,8 @@ export default function CampaignAutomation() {
         </div>
 
         <div className="text-xs text-gray-500">
-          Last rotation:{" "}
-          {status.lastRotationAt
-            ? new Date(status.lastRotationAt).toLocaleString()
-            : "never"}
+          Last rotation:{' '}
+          {status.lastRotationAt ? new Date(status.lastRotationAt).toLocaleString() : 'never'}
         </div>
 
         <button

@@ -24,13 +24,13 @@ import { supabase } from '@/lib/supabase/supabaseClient';
 import { UserContext } from '@/contexts/UserContext';
 import type { AppUser, UserContextValue, UserRole } from '@/contexts/userTypes';
 
-import { SessionManager } from '@/security/SessionManager'
-import { ActivityTracker } from '@/security/ActivityTracker'
-import { subscribeToForceLogout } from '@/security/ForceLogoutListener'
+import { SessionManager } from '@/security/SessionManager';
+import { ActivityTracker } from '@/security/ActivityTracker';
+import { subscribeToForceLogout } from '@/security/ForceLogoutListener';
 
-import { mapSupabaseUser } from '@/utils/mapSupabaseUserToAppUser'
-import { getMyProfile, updateMyProfile } from '@/lib/supabase/db/profile.api'
-import type { Profile } from '@/types/profile'
+import { mapSupabaseUser } from '@/utils/mapSupabaseUserToAppUser';
+import { getMyProfile, updateMyProfile } from '@/lib/supabase/db/profile.api';
+import type { Profile } from '@/types/profile';
 import { authAPI } from '@/lib/supabase/auth.api';
 
 import { loadProfileCache, saveProfileCache, clearProfileCache } from '@/lib/cache/profileCache';
@@ -40,7 +40,7 @@ import { loadProfileCache, saveProfileCache, clearProfileCache } from '@/lib/cac
 // ============================================================================
 
 interface UserProviderProps {
-  children: ReactNode
+  children: ReactNode;
 }
 
 type SignOutReason =
@@ -84,10 +84,13 @@ function mergeUser(authUser: SupabaseUser | null, profile: Profile | null): AppU
 }
 
 // Events that imply “new user identity applied” (good moment to hydrate cache, refresh profile)
-const SIGN_IN_EVENTS = new Set<AuthChangeEvent>(['SIGNED_IN', 'USER_UPDATED'])
+const SIGN_IN_EVENTS = new Set<AuthChangeEvent>(['SIGNED_IN', 'USER_UPDATED']);
 
 // Events that are “session churn only” — do not touch profile/user besides sessionRef
-const SESSION_ONLY_EVENTS = new Set<AuthChangeEvent>(['TOKEN_REFRESHED', 'SIGNED_IN' /* already in SIGN_IN_EVENTS but ok */])
+const SESSION_ONLY_EVENTS = new Set<AuthChangeEvent>([
+  'TOKEN_REFRESHED',
+  'SIGNED_IN' /* already in SIGN_IN_EVENTS but ok */,
+]);
 
 // ============================================================================
 // PROVIDER
@@ -460,4 +463,4 @@ export function UserProvider({ children }: UserProviderProps) {
   return <UserContext.Provider value={value}>{children}</UserContext.Provider>;
 }
 
-export default UserProvider
+export default UserProvider;

@@ -8,26 +8,26 @@ import {
   createServiceClient,
   readBearerToken,
   type SvcClient,
-} from "../_shared/supabase.ts";
+} from '../_shared/supabase.ts';
 
 // ─────────────────────────────────────────────────────────────
 // Config
 // ─────────────────────────────────────────────────────────────
 
 const CONFIG = {
-  SERVICE: "loyalty-account",
+  SERVICE: 'loyalty-account',
   MAX_BODY_BYTES: 6_000,
   LEDGER_LIMIT: 50,
 
   ALLOWED_ORIGINS: [
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "https://sofislegacy.com",
-    "https://www.sofislegacy.com",
-    "https://sofisrestaurant.netlify.app",
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'https://sofislegacy.com',
+    'https://www.sofislegacy.com',
+    'https://sofisrestaurant.netlify.app',
   ] as const,
 
-  REQUEST_ID_HEADER: "x-request-id",
+  REQUEST_ID_HEADER: 'x-request-id',
 } as const;
 
 const ORIGINS = new Set<string>(CONFIG.ALLOWED_ORIGINS);
@@ -99,7 +99,7 @@ function nowIso(): string {
 }
 
 function makeRequestId(req: Request): string {
-  const h = (req.headers.get(CONFIG.REQUEST_ID_HEADER) ?? "").trim();
+  const h = (req.headers.get(CONFIG.REQUEST_ID_HEADER) ?? '').trim();
   if (h) return h.slice(0, 128);
   try {
     return crypto.randomUUID();
@@ -113,16 +113,16 @@ function mkMeta(requestId: string): Meta {
 }
 
 function isRecord(v: unknown): v is JsonRecord {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-function asStr(v: unknown, fallback = ""): string {
-  return typeof v === "string" ? v : fallback;
+function asStr(v: unknown, fallback = ''): string {
+  return typeof v === 'string' ? v : fallback;
 }
 
 function asNum(v: unknown, fallback = 0): number {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string") {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') {
     const n = Number(v);
     if (Number.isFinite(n)) return n;
   }
@@ -130,21 +130,21 @@ function asNum(v: unknown, fallback = 0): number {
 }
 
 function asNullableStr(v: unknown): string | null {
-  return typeof v === "string" && v.trim() ? v : null;
+  return typeof v === 'string' && v.trim() ? v : null;
 }
 
 function corsHeaders(req: Request): Record<string, string> | null {
-  const origin = (req.headers.get("origin") ?? "").trim();
+  const origin = (req.headers.get('origin') ?? '').trim();
   if (!origin || !ORIGINS.has(origin)) return null;
 
   return {
-    "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-application-name, x-request-id, x-idempotency-key",
-    "Access-Control-Allow-Credentials": "true",
-    "Access-Control-Max-Age": "86400",
-    Vary: "Origin",
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers':
+      'authorization, x-client-info, apikey, content-type, x-application-name, x-request-id, x-idempotency-key',
+    'Access-Control-Allow-Credentials': 'true',
+    'Access-Control-Max-Age': '86400',
+    Vary: 'Origin',
   };
 }
 
@@ -153,8 +153,8 @@ function json(cors: Record<string, string>, body: Envelope, status = 200): Respo
     status,
     headers: {
       ...cors,
-      "Content-Type": "application/json",
-      "Cache-Control": "no-store",
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
     },
   });
 }
@@ -169,9 +169,9 @@ function fail(
   // No secrets in logs.
   console.warn(
     JSON.stringify({
-      level: status >= 500 ? "error" : "warn",
+      level: status >= 500 ? 'error' : 'warn',
       service: CONFIG.SERVICE,
-      event: "fail",
+      event: 'fail',
       code,
       status,
       requestId: meta.requestId,
@@ -187,17 +187,17 @@ function fail(
  * Accepts empty body — treat as {} (Supabase invoke sometimes sends none).
  */
 async function readJsonWithLimit(req: Request, maxBytes: number): Promise<JsonRecord> {
-  const ct = (req.headers.get("content-type") ?? "").toLowerCase();
+  const ct = (req.headers.get('content-type') ?? '').toLowerCase();
 
   // If there is no JSON content-type, allow ONLY when body is empty.
-  if (!ct.includes("application/json")) {
+  if (!ct.includes('application/json')) {
     const ab0 = await req.arrayBuffer();
     if (ab0.byteLength === 0) return {};
-    throw new Error("UNSUPPORTED_CONTENT_TYPE");
+    throw new Error('UNSUPPORTED_CONTENT_TYPE');
   }
 
   const ab = await req.arrayBuffer();
-  if (ab.byteLength > maxBytes) throw new Error("PAYLOAD_TOO_LARGE");
+  if (ab.byteLength > maxBytes) throw new Error('PAYLOAD_TOO_LARGE');
   if (ab.byteLength === 0) return {};
 
   const text = new TextDecoder().decode(ab);
@@ -207,10 +207,10 @@ async function readJsonWithLimit(req: Request, maxBytes: number): Promise<JsonRe
   try {
     parsed = JSON.parse(text) as unknown;
   } catch {
-    throw new Error("INVALID_JSON");
+    throw new Error('INVALID_JSON');
   }
 
-  if (!isRecord(parsed)) throw new Error("BAD_BODY");
+  if (!isRecord(parsed)) throw new Error('BAD_BODY');
   return parsed;
 }
 
@@ -232,16 +232,16 @@ async function authenticate(req: Request): Promise<{ userId: string } | null> {
 function normalizeAccount(row: unknown): LoyaltyAccountOut | null {
   if (!isRecord(row)) return null;
 
-  const id = asStr(row.id, "");
+  const id = asStr(row.id, '');
   if (!id) return null;
 
   return {
     id,
     balance: asNum(row.balance, 0),
     lifetime_earned: asNum(row.lifetime_earned, 0),
-    tier: asStr(row.tier, "bronze"),
+    tier: asStr(row.tier, 'bronze'),
     streak: asNum(row.streak, 0),
-    status: asStr(row.status, "active"),
+    status: asStr(row.status, 'active'),
     last_activity: asNullableStr(row.last_activity),
     last_award_at: asNullableStr(row.last_award_at),
     last_redeem_at: asNullableStr(row.last_redeem_at),
@@ -266,20 +266,20 @@ function normalizeLedger(rows: unknown): LedgerRow[] {
   for (const r of rows) {
     if (!isRecord(r)) continue;
 
-    const id = asStr(r.id, "");
-    const created_at = asStr(r.created_at, "");
+    const id = asStr(r.id, '');
+    const created_at = asStr(r.created_at, '');
     if (!id || !created_at) continue;
 
     out.push({
       id,
-      entry_type: asStr(r.entry_type, "adjusted"),
+      entry_type: asStr(r.entry_type, 'adjusted'),
       amount: asNum(r.amount, 0),
       balance_after: asNum(r.balance_after, 0),
-      tier_at_time: asStr(r.tier_at_time, "bronze"),
+      tier_at_time: asStr(r.tier_at_time, 'bronze'),
       streak_at_time: asNum(r.streak_at_time, 0),
       created_at,
       metadata: r.metadata ?? null,
-      source: asStr(r.source, "unknown"),
+      source: asStr(r.source, 'unknown'),
       reference_id: asNullableStr(r.reference_id),
     });
   }
@@ -291,20 +291,23 @@ function normalizeLedger(rows: unknown): LedgerRow[] {
 // DB loader (service role)
 // ─────────────────────────────────────────────────────────────
 
-async function loadLoyaltyBundle(db: SvcClient, userId: string): Promise<{
+async function loadLoyaltyBundle(
+  db: SvcClient,
+  userId: string,
+): Promise<{
   account: LoyaltyAccountOut | null;
   profile: ProfileOut | null;
   ledger: LedgerRow[];
 }> {
   const [acctRes, profRes] = await Promise.all([
     db
-      .from("loyalty_accounts")
+      .from('loyalty_accounts')
       .select(
-        "id,balance,lifetime_earned,tier,streak,status,last_activity,last_award_at,last_redeem_at,updated_at",
+        'id,balance,lifetime_earned,tier,streak,status,last_activity,last_award_at,last_redeem_at,updated_at',
       )
-      .eq("user_id", userId)
+      .eq('user_id', userId)
       .maybeSingle(),
-    db.from("profiles").select("loyalty_public_id,full_name").eq("id", userId).maybeSingle(),
+    db.from('profiles').select('loyalty_public_id,full_name').eq('id', userId).maybeSingle(),
   ]);
 
   const account = normalizeAccount(acctRes.data ?? null);
@@ -313,12 +316,12 @@ async function loadLoyaltyBundle(db: SvcClient, userId: string): Promise<{
   if (!account?.id) return { account, profile, ledger: [] };
 
   const ledRes = await db
-    .from("loyalty_ledger")
+    .from('loyalty_ledger')
     .select(
-      "id,entry_type,amount,balance_after,tier_at_time,streak_at_time,created_at,metadata,source,reference_id",
+      'id,entry_type,amount,balance_after,tier_at_time,streak_at_time,created_at,metadata,source,reference_id',
     )
-    .eq("account_id", account.id)
-    .order("created_at", { ascending: false })
+    .eq('account_id', account.id)
+    .order('created_at', { ascending: false })
     .limit(CONFIG.LEDGER_LIMIT);
 
   const ledger = normalizeLedger(ledRes.data ?? []);
@@ -335,40 +338,46 @@ Deno.serve(async (req) => {
   const meta = mkMeta(requestId);
 
   const cors = corsHeaders(req);
-  if (!cors) return new Response("Origin not allowed", { status: 403 });
+  if (!cors) return new Response('Origin not allowed', { status: 403 });
 
   // ✅ Preflight BEFORE auth
-  if (req.method === "OPTIONS") {
+  if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: cors });
   }
 
-  if (req.method !== "POST") {
-    return fail(cors, meta, "METHOD_NOT_ALLOWED", "Method not allowed", 405);
+  if (req.method !== 'POST') {
+    return fail(cors, meta, 'METHOD_NOT_ALLOWED', 'Method not allowed', 405);
   }
 
   // Optional body
   try {
     await readJsonWithLimit(req, CONFIG.MAX_BODY_BYTES);
   } catch (e) {
-    const m = e instanceof Error ? e.message : "BAD_REQUEST";
+    const m = e instanceof Error ? e.message : 'BAD_REQUEST';
 
-    if (m === "PAYLOAD_TOO_LARGE") {
-      return fail(cors, meta, "PAYLOAD_TOO_LARGE", "Payload too large", 413);
+    if (m === 'PAYLOAD_TOO_LARGE') {
+      return fail(cors, meta, 'PAYLOAD_TOO_LARGE', 'Payload too large', 413);
     }
-    if (m === "UNSUPPORTED_CONTENT_TYPE") {
-      return fail(cors, meta, "UNSUPPORTED_CONTENT_TYPE", "Content-Type must be application/json", 415);
+    if (m === 'UNSUPPORTED_CONTENT_TYPE') {
+      return fail(
+        cors,
+        meta,
+        'UNSUPPORTED_CONTENT_TYPE',
+        'Content-Type must be application/json',
+        415,
+      );
     }
-    if (m === "INVALID_JSON" || m === "BAD_BODY") {
-      return fail(cors, meta, "INVALID_BODY", "Invalid request body", 400);
+    if (m === 'INVALID_JSON' || m === 'BAD_BODY') {
+      return fail(cors, meta, 'INVALID_BODY', 'Invalid request body', 400);
     }
 
-    return fail(cors, meta, "INVALID_BODY", "Invalid request body", 400);
+    return fail(cors, meta, 'INVALID_BODY', 'Invalid request body', 400);
   }
 
   // Auth
   const auth = await authenticate(req);
   if (!auth?.userId) {
-    return fail(cors, meta, "AUTH_INVALID", "Unauthorized", 401);
+    return fail(cors, meta, 'AUTH_INVALID', 'Unauthorized', 401);
   }
 
   try {
@@ -389,15 +398,15 @@ Deno.serve(async (req) => {
 
     console.error(
       JSON.stringify({
-        level: "error",
+        level: 'error',
         service: CONFIG.SERVICE,
-        event: "crash",
+        event: 'crash',
         requestId,
         ts: meta.ts,
         error: msg,
       }),
     );
 
-    return fail(cors, meta, "INTERNAL", "Internal server error", 500);
+    return fail(cors, meta, 'INTERNAL', 'Internal server error', 500);
   }
 });
