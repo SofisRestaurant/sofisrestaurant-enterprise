@@ -1,0 +1,172 @@
+/* =============================================================================
+   SOFIS — typography.css
+   Editorial luxury typography system.
+   
+   Scale philosophy: display type is large and dramatic (Michelin-star menus,
+   Aman collateral). Body type is airy and spacious (Aesop, Apple). 
+   Labels are tight and uppercase with wide tracking.
+   
+   All font-size values use clamp() for smooth fluid scaling.
+   ============================================================================= */
+
+/* ── Base body ───────────────────────────────────────────────────────────── */
+body {
+  font-family: var(--font-sans);
+  font-weight: 400;
+  font-size: var(--text-base, 1rem);
+  line-height: var(--leading-relaxed, 1.75);
+  letter-spacing: -0.01em;
+  color: var(--color-ink-900, #1c1c1c);
+}
+
+/* ── Display headings ────────────────────────────────────────────────────── */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  font-weight: 400;                /* Playfair looks best at regular weight */
+  letter-spacing: var(--tracking-tight, -0.02em);
+  line-height: var(--leading-tight, 1.2);
+  color: var(--color-ink-900, #1c1c1c);
+}
+
+h1 {
+  font-size: clamp(2.75rem, 5.5vw, 4.5rem);
+  letter-spacing: var(--tracking-tighter, -0.03em);
+  line-height: 1.05;
+}
+
+h2 {
+  font-size: clamp(2rem, 3.5vw, 3.25rem);
+  letter-spacing: var(--tracking-tight, -0.02em);
+  line-height: 1.15;
+}
+
+h3 {
+  font-size: clamp(1.5rem, 2.5vw, 2.25rem);
+  line-height: 1.25;
+}
+
+h4 {
+  font-size: clamp(1.2rem, 1.8vw, 1.6rem);
+  line-height: 1.3;
+}
+
+h5 {
+  font-size: 1.125rem;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+h6 {
+  font-size: 1rem;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+/* ── Paragraphs ──────────────────────────────────────────────────────────── */
+p {
+  font-size: var(--text-base, 1rem);
+  line-height: var(--leading-relaxed, 1.75);
+  color: var(--color-ink-700, #4e3e34);
+}
+
+p + p { margin-top: 1.25em; }
+
+/* ── Links ────────────────────────────────────────────────────────────────── */
+a {
+  color: var(--color-ember-500, #a96840);
+  text-underline-offset: 3px;
+  transition: color var(--duration-base, 200ms) var(--ease-luxury);
+}
+
+a:hover { color: var(--color-gold-400, #d4af37); }
+
+/* ── Serif body text — editorial long-form ──────────────────────────────── */
+.prose-serif {
+  font-family: var(--font-serif);
+  font-size: clamp(1rem, 1.2vw, 1.15rem);
+  line-height: var(--leading-loose, 1.9);
+  font-weight: 300;
+  color: var(--color-ink-700, #4e3e34);
+}
+
+/* ── Blockquote ──────────────────────────────────────────────────────────── */
+blockquote {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: clamp(1.15rem, 1.5vw, 1.4rem);
+  line-height: var(--leading-relaxed, 1.75);
+  padding-left: 1.5rem;
+  border-left: 2px solid var(--color-gold-400, #d4af37);
+  color: var(--color-ink-700, #4e3e34);
+  margin: 2rem 0;
+}
+
+blockquote cite {
+  display: block;
+  margin-top: 0.75rem;
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-size: var(--text-xs, 0.75rem);
+  letter-spacing: var(--tracking-caps, 0.18em);
+  text-transform: uppercase;
+  color: var(--color-ink-400, #a89888);
+}
+
+/* ── Small / Caption ─────────────────────────────────────────────────────── */
+small, .text-caption {
+  font-size: var(--text-xs, 0.75rem);
+  line-height: 1.5;
+  color: var(--color-ink-500, #8a7a6a);
+}
+
+/* ── Label / Eyebrow ─────────────────────────────────────────────────────── */
+/* The small uppercase labels used above section headings */
+.text-label,
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs, 0.625rem);
+  font-weight: 500;
+  letter-spacing: var(--tracking-loose, 0.22em);
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+/* ── Section title ────────────────────────────────────────────────────────── */
+.section-title {
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 3.5vw, 3.25rem);
+  letter-spacing: var(--tracking-tighter, -0.03em);
+  line-height: 1.1;
+  font-weight: 400;
+}
+
+/* ── Hero display ─────────────────────────────────────────────────────────── */
+/* The very large headline text used in the hero */
+.text-display {
+  font-family: var(--font-display);
+  font-size: clamp(3rem, 11vw, 6.5rem);
+  letter-spacing: var(--tracking-tightest, -0.04em);
+  line-height: 0.92;
+  font-weight: 400;
+}
+
+/* ── Italic accent span — used inside headlines ──────────────────────────── */
+.text-accent-italic {
+  font-family: var(--font-display);
+  font-style: italic;
+  color: var(--color-gold-300, #e8c46a);
+}
+
+/* ── Numeric figures ──────────────────────────────────────────────────────── */
+/* For prices, stats, years — tabular, well-spaced */
+.text-numeric {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  letter-spacing: 0.02em;
+}
+
+/* ── Balance long text ────────────────────────────────────────────────────── */
+/* Prevents awkward orphans in headings */
+h1, h2, h3, .section-title {
+  text-wrap: balance;
+}

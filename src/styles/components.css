@@ -1,0 +1,466 @@
+/* =============================================================================
+   SOFIS — components.css
+   Reusable component styles that are genuinely multi-element or require
+   ::before/::after pseudo-elements not expressible in JSX/Tailwind.
+   
+   Rule: Components here are minimal CSS layers.
+   The component's Tailwind classes handle most styling.
+   This file handles: pseudo-elements, multi-child relationships,
+   complex :focus-within, and non-Tailwind-expressible patterns.
+   
+   Component index:
+   1.  Buttons
+   2.  Navigation
+   3.  Cards
+   4.  Form elements
+   5.  Badges & Pills
+   6.  Section headers
+   7.  Marquee strip
+   8.  Slide dots
+   9.  Dividers & ornaments
+   10. Loading / Skeleton states
+   ============================================================================= */
+
+/* ── 1. BUTTONS ──────────────────────────────────────────────────────────── */
+
+/* Primary CTA — solid gold */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-family: var(--font-sans);
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: var(--tracking-label, 0.12em);
+  text-transform: uppercase;
+  line-height: 1;
+  white-space: nowrap;
+  border-radius: var(--radius-pill, 9999px);
+  padding: 0.875rem 1.75rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  outline: none;
+  transition:
+    color            var(--duration-base) var(--ease-luxury),
+    background-color var(--duration-base) var(--ease-luxury),
+    border-color     var(--duration-base) var(--ease-luxury),
+    box-shadow       var(--duration-slow) var(--ease-luxury),
+    transform        var(--duration-fast) var(--ease-spring);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--color-gold-400, #d4af37);
+  outline-offset: 3px;
+}
+
+.btn:active { transform: scale(0.97); }
+
+/* Gold fill */
+.btn-primary {
+  background: var(--color-gold-400, #d4af37);
+  color: var(--color-stone-900, #1c1915);
+  border-color: var(--color-gold-400, #d4af37);
+}
+
+.btn-primary:hover {
+  background: var(--color-gold-300, #e8c46a);
+  border-color: var(--color-gold-300, #e8c46a);
+  box-shadow: var(--shadow-gold, 0 0 32px rgb(212 175 55 / 0.22));
+}
+
+/* Ghost (outline) — on dark bg */
+.btn-ghost-dark {
+  background: transparent;
+  color: rgb(255 255 255 / 0.85);
+  border-color: rgb(255 255 255 / 0.28);
+}
+
+.btn-ghost-dark:hover {
+  border-color: var(--color-gold-400, #d4af37);
+  color: var(--color-gold-300, #e8c46a);
+}
+
+/* Ghost — on light bg */
+.btn-ghost-light {
+  background: transparent;
+  color: var(--color-ink-900, #1c1c1c);
+  border-color: var(--color-ink-200, #ddd4c8);
+}
+
+.btn-ghost-light:hover {
+  border-color: var(--color-gold-400, #d4af37);
+  color: var(--color-gold-500, #b8961f);
+}
+
+/* Text only link button */
+.btn-text {
+  background: transparent;
+  border-color: transparent;
+  color: var(--color-ink-700, #4e3e34);
+  padding-inline: 0.25rem;
+  letter-spacing: var(--tracking-label, 0.12em);
+  text-transform: uppercase;
+}
+
+.btn-text:hover { color: var(--color-gold-400, #d4af37); }
+
+/* Size variants */
+.btn-sm {
+  font-size: 0.68rem;
+  padding: 0.625rem 1.25rem;
+  letter-spacing: var(--tracking-caps, 0.18em);
+}
+
+.btn-lg {
+  font-size: 0.875rem;
+  padding: 1.125rem 2.25rem;
+}
+
+/* Icon-only pill */
+.btn-icon {
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border-radius: var(--radius-pill, 9999px);
+}
+
+/* ── 2. NAVIGATION ───────────────────────────────────────────────────────── */
+
+/* Nav link — base */
+.nav-link {
+  position: relative;
+  font-family: var(--font-sans);
+  font-size: var(--text-xs, 0.75rem);
+  font-weight: 500;
+  letter-spacing: var(--tracking-label, 0.12em);
+  text-transform: uppercase;
+  color: rgb(255 255 255 / 0.70);
+  transition: color var(--duration-base) var(--ease-luxury);
+  text-decoration: none;
+}
+
+.nav-link:hover { color: rgb(255 255 255 / 1); }
+
+.nav-link.active {
+  color: var(--color-gold-300, #e8c46a);
+}
+
+/* Active underline accent */
+.nav-link::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  left: 0;
+  width: 0;
+  height: 1px;
+  background: var(--color-gold-400, #d4af37);
+  transition: width var(--duration-slow, 350ms) var(--ease-luxury);
+}
+
+.nav-link:hover::after,
+.nav-link.active::after { width: 100%; }
+
+/* ── 3. CARDS ────────────────────────────────────────────────────────────── */
+
+/* Base card */
+.card {
+  position: relative;
+  border-radius: var(--radius-card, 1.25rem);
+  overflow: hidden;
+  background: var(--color-surface, #ffffff);
+  box-shadow: var(--shadow-card-sm);
+  transition:
+    transform   var(--duration-slow) var(--ease-luxury),
+    box-shadow  var(--duration-slow) var(--ease-luxury);
+}
+
+.card:hover {
+  transform: translateY(-5px);
+  box-shadow: var(--shadow-card-lg);
+}
+
+/* Card on dark background */
+.card-dark {
+  background: var(--color-stone-800, #2e2a24);
+  box-shadow: 0 4px 24px rgb(0 0 0 / 0.20);
+  border: 1px solid rgb(255 255 255 / 0.05);
+}
+
+.card-dark:hover {
+  box-shadow: 0 16px 48px rgb(0 0 0 / 0.35);
+  border-color: rgb(212 175 55 / 0.16);
+}
+
+/* Glass card — for dark-bg feature panels */
+.card-glass {
+  background: var(--glass-bg, rgb(255 255 255 / 0.06));
+  border: 1px solid var(--glass-border-mid, rgb(255 255 255 / 0.16));
+  backdrop-filter: blur(14px) saturate(1.6);
+  -webkit-backdrop-filter: blur(14px) saturate(1.6);
+  border-radius: var(--radius-card, 1.25rem);
+  overflow: hidden;
+  transition:
+    border-color var(--duration-base) var(--ease-luxury),
+    box-shadow   var(--duration-slow) var(--ease-luxury);
+}
+
+.card-glass:hover {
+  border-color: rgb(212 175 55 / 0.22);
+  box-shadow: 0 0 32px rgb(212 175 55 / 0.10);
+}
+
+/* ── 4. FORM ELEMENTS ────────────────────────────────────────────────────── */
+
+.input {
+  width: 100%;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm, 0.875rem);
+  font-weight: 400;
+  color: var(--color-ink-900, #1c1c1c);
+  background: var(--color-surface, #ffffff);
+  border: 1px solid var(--color-cream-400, #e3d0b8);
+  border-radius: var(--radius-input, 0.5rem);
+  padding: 0.75rem 1rem;
+  outline: none;
+  transition:
+    border-color var(--duration-base) var(--ease-luxury),
+    box-shadow   var(--duration-base) var(--ease-luxury);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.input::placeholder {
+  color: var(--color-ink-300, #c8b8a8);
+}
+
+.input:focus {
+  border-color: var(--color-gold-400, #d4af37);
+  box-shadow: 0 0 0 3px rgb(212 175 55 / 0.12);
+}
+
+.input:hover:not(:focus) {
+  border-color: var(--color-ink-300, #c8b8a8);
+}
+
+/* Input on dark background */
+.input-dark {
+  background: rgb(255 255 255 / 0.06);
+  border-color: rgb(255 255 255 / 0.14);
+  color: rgb(255 255 255 / 0.90);
+}
+
+.input-dark::placeholder { color: rgb(255 255 255 / 0.30); }
+
+.input-dark:focus {
+  border-color: var(--color-gold-400, #d4af37);
+  box-shadow: 0 0 0 3px rgb(212 175 55 / 0.14);
+}
+
+/* Label */
+.input-label {
+  display: block;
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs, 0.625rem);
+  font-weight: 500;
+  letter-spacing: var(--tracking-caps, 0.18em);
+  text-transform: uppercase;
+  color: var(--color-ink-500, #8a7a6a);
+  margin-bottom: 0.5rem;
+}
+
+/* Error state */
+.input-error {
+  border-color: var(--color-error, #c0392b);
+}
+
+.input-error:focus {
+  box-shadow: 0 0 0 3px rgb(192 57 43 / 0.12);
+}
+
+/* Error message */
+.input-error-msg {
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--color-error, #c0392b);
+  margin-top: 0.375rem;
+}
+
+/* ── 5. BADGES & PILLS ───────────────────────────────────────────────────── */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs, 0.625rem);
+  font-weight: 500;
+  letter-spacing: var(--tracking-caps, 0.18em);
+  text-transform: uppercase;
+  line-height: 1;
+  padding: 0.375rem 0.75rem;
+  border-radius: var(--radius-badge, 9999px);
+}
+
+.badge-gold {
+  background: rgb(212 175 55 / 0.12);
+  color: var(--color-gold-500, #b8961f);
+  border: 1px solid rgb(212 175 55 / 0.25);
+}
+
+.badge-cream {
+  background: var(--color-cream-200, #f5ede0);
+  color: var(--color-ink-600, #6a5a4e);
+}
+
+.badge-dark {
+  background: rgb(255 255 255 / 0.08);
+  color: rgb(255 255 255 / 0.65);
+  border: 1px solid rgb(255 255 255 / 0.12);
+}
+
+/* ── 6. SECTION HEADERS ──────────────────────────────────────────────────── */
+
+/* Eyebrow label above section titles */
+.section-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs, 0.625rem);
+  font-weight: 500;
+  letter-spacing: var(--tracking-loose, 0.22em);
+  text-transform: uppercase;
+  color: var(--color-gold-400, #d4af37);
+}
+
+/* The decorative line before the eyebrow text */
+.section-eyebrow::before {
+  content: '';
+  display: block;
+  width: 1.5rem;
+  height: 1px;
+  background: var(--color-gold-400, #d4af37);
+  flex-shrink: 0;
+}
+
+/* Eyebrow on dark background */
+.section-eyebrow-light {
+  color: var(--color-gold-300, #e8c46a);
+}
+
+.section-eyebrow-light::before {
+  background: var(--color-gold-300, #e8c46a);
+}
+
+/* ── 7. MARQUEE STRIP ────────────────────────────────────────────────────── */
+
+/* Outer mask — fades edges of the scrolling strip */
+.marquee-wrap {
+  position: relative;
+  overflow: hidden;
+}
+
+.marquee-wrap::before,
+.marquee-wrap::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6rem;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.marquee-wrap::before {
+  left: 0;
+  background: linear-gradient(to right, var(--color-stone-900, #1c1915), transparent);
+}
+
+.marquee-wrap::after {
+  right: 0;
+  background: linear-gradient(to left, var(--color-stone-900, #1c1915), transparent);
+}
+
+/* Cream-bg variant */
+.marquee-wrap-cream::before {
+  background: linear-gradient(to right, var(--color-cream-100, #faf6ef), transparent);
+}
+
+.marquee-wrap-cream::after {
+  background: linear-gradient(to left, var(--color-cream-100, #faf6ef), transparent);
+}
+
+/* ── 8. SLIDE DOTS ───────────────────────────────────────────────────────── */
+
+/* Container */
+.slide-dots {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Individual dot button — dimensions set in JS (Framer Motion animate) */
+.slide-dot {
+  height: 3px;
+  border-radius: 9999px;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+  background: rgb(255 255 255 / 0.28);
+  transition: background-color 200ms ease;
+}
+
+.slide-dot:focus-visible {
+  outline: 2px solid var(--color-gold-400, #d4af37);
+  outline-offset: 3px;
+}
+
+/* ── 9. DIVIDERS & ORNAMENTS ─────────────────────────────────────────────── */
+
+/* Centered decorative ornament between sections */
+.ornament {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  color: var(--color-gold-400, #d4af37);
+  opacity: 0.55;
+}
+
+.ornament::before,
+.ornament::after {
+  content: '';
+  height: 1px;
+  width: 3rem;
+  background: var(--color-gold-400, #d4af37);
+}
+
+/* ── 10. SKELETON / LOADING STATES ──────────────────────────────────────── */
+
+.skeleton {
+  border-radius: var(--radius-md, 0.5rem);
+  background: linear-gradient(
+    105deg,
+    var(--color-cream-200, #f5ede0) 0%,
+    var(--color-cream-100, #faf6ef) 40%,
+    var(--color-cream-200, #f5ede0) 60%,
+    var(--color-cream-100, #faf6ef) 100%
+  );
+  background-size: 200% auto;
+  animation: shimmer 1.6s linear infinite;
+}
+
+.skeleton-dark {
+  background: linear-gradient(
+    105deg,
+    rgb(255 255 255 / 0.04) 0%,
+    rgb(255 255 255 / 0.08) 40%,
+    rgb(255 255 255 / 0.04) 60%,
+    rgb(255 255 255 / 0.08) 100%
+  );
+  background-size: 200% auto;
+  animation: shimmer 1.6s linear infinite;
+}

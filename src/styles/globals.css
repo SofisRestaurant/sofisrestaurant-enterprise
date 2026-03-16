@@ -1,156 +1,161 @@
-/* ================================
-   GLOBAL DESIGN TOKENS
-================================ */
+/* =============================================================================
+   SOFIS — globals.css
+   Base resets, accessibility defaults, and Framer Motion compatibility layer.
+   
+   ⚠  CRITICAL: This file previously contained `opacity: 1 !important` on all
+   elements as a fallback for whileInView. That rule has been REMOVED because
+   it prevents Framer Motion from controlling opacity on animated elements
+   (cross-fades, entrance reveals, etc. all broke silently).
+   
+   The correct fix for whileInView environments is to set initial state on each
+   component explicitly and use viewport={{ once: true }} — not a global override.
+   ============================================================================= */
 
-:root {
-  --color-primary: 239 68 68;
-  --color-secondary: 59 130 246;
-  --color-accent: 251 191 36;
-  --color-bg-hero: 17 24 39;
-}
-
-/* ================================
-   BASE RESET (SAFE)
-================================ */
-
+/* ── Box sizing ──────────────────────────────────────────────────────────── */
 *,
 *::before,
 *::after {
   box-sizing: border-box;
 }
 
+/* ── Scroll & a11y ───────────────────────────────────────────────────────── */
 html {
   scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  /* Prevent layout shifts from scrollbar appearing/disappearing */
+  scrollbar-gutter: stable;
 }
 
+/* ── Body defaults ───────────────────────────────────────────────────────── */
 body {
   margin: 0;
-  min-height: 100vh;
-  font-family: var(--font-sans, system-ui, -apple-system, sans-serif);
-  background-color: #f9fafb; /* light gray */
-  color: #111827; /* dark gray */
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  min-height: 100dvh;
+  overflow-x: clip;
+  /* Background & color come from app.css — not repeated here */
 }
 
-/* ================================
-   TYPOGRAPHY BASE
-================================ */
+/* ── Element resets ──────────────────────────────────────────────────────── */
+h1, h2, h3, h4, h5, h6 { margin: 0; line-height: var(--leading-tight, 1.2); }
+p  { margin: 0; }
+a  { color: inherit; text-decoration: none; }
+ul, ol { list-style: none; margin: 0; padding: 0; }
+img, video, svg, canvas { display: block; max-width: 100%; }
+button { cursor: pointer; border: none; background: none; padding: 0; font: inherit; }
+input, textarea, select { font: inherit; }
+fieldset { border: none; margin: 0; padding: 0; }
+table { border-collapse: collapse; }
+[hidden] { display: none !important; }
 
-h1,
-h2,
-h3,
-h4,
-h5,
-h6 {
-  margin: 0;
-  font-weight: 700;
+/* ── Focus visible ───────────────────────────────────────────────────────── */
+/* Only show focus ring for keyboard navigation, not mouse clicks */
+:focus { outline: none; }
+:focus-visible {
+  outline: 2px solid var(--color-gold-400, #D4AF37);
+  outline-offset: 3px;
+  border-radius: 2px;
 }
 
-p {
-  margin: 0;
+/* ── Selection ───────────────────────────────────────────────────────────── */
+::selection {
+  background-color: rgb(212 175 55 / 0.22);
+  color: inherit;
 }
 
-/* ================================
-   HERO SECTION
-================================ */
-
-.hero {
-  background: linear-gradient(
-    135deg,
-    rgb(var(--color-primary)) 0%,
-    rgb(var(--color-secondary)) 100%
-  );
-  color: white;
-  text-align: center;
-  padding: 6rem 2rem;
+/* ── Tap highlight (mobile) ──────────────────────────────────────────────── */
+a, button, [role='button'] {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
-.hero h1 {
-  font-size: clamp(2.5rem, 5vw, 4rem);
-  margin-bottom: 1rem;
-}
+/* ── Scrollbar ───────────────────────────────────────────────────────────── */
+/* Styled scrollbar for Webkit — minimal, brand-appropriate */
+::-webkit-scrollbar               { width: 6px; height: 6px; }
+::-webkit-scrollbar-track         { background: var(--color-cream-100, #faf6ef); }
+::-webkit-scrollbar-thumb         { background: var(--color-ink-200, #ddd4c8); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover   { background: var(--color-ink-300, #c8b8a8); }
 
-.hero p {
-  font-size: 1.25rem;
-  margin-bottom: 2rem;
-}
+.scrollbar-none                    { scrollbar-width: none; -ms-overflow-style: none; }
+.scrollbar-none::-webkit-scrollbar { display: none; }
 
-/* ================================
-   MENU CARD
-================================ */
-
-.menu-card {
-  background: white;
-  border-radius: 1rem;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
-  padding: 1.5rem;
-  transition:
-    transform 0.25s ease,
-    box-shadow 0.25s ease;
-}
-
-.menu-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.12);
-}
-
-/* ================================
-   BUTTON PRIMARY
-================================ */
-
-.button-primary {
-  background-color: rgb(var(--color-primary));
-  color: white;
-  padding: 0.75rem 2rem;
-  border-radius: 0.75rem;
-  font-weight: 600;
-  transition: all 0.2s ease;
-}
-
-.button-primary:hover {
-  background-color: rgba(var(--color-primary), 0.85);
-  transform: translateY(-2px);
-}
-
-/* ================================
-   FEATURED SECTION
-================================ */
-
-.featured-section {
-  background-color: rgb(var(--color-bg-hero));
-  color: white;
-  padding: 4rem 2rem;
-  border-radius: 1rem;
-}
-/* =============================================================================
-   MODAL SYSTEM — animations
-   Add to globals.css / index.css
-   ============================================================================= */
-
-@keyframes modalCardIn {
-  from {
-    opacity: 0;
-    transform: scale(0.95) translateY(20px) translateZ(0);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1) translateY(0) translateZ(0);
-  }
-}
-
-/* Background page scale — Apple depth effect.
-   Wrap your <Routes> root in <div id="app-root">.
-   :has() supported in all modern browsers. */
-
+/* ── Modal depth system ──────────────────────────────────────────────────── */
+/*
+   When a dialog is open the page behind scales and blurs slightly —
+   creates a cinematic layering effect.
+*/
 #app-root {
   transition:
-    transform 0.3s cubic-bezier(0.16, 1, 0.3, 1),
-    filter 0.3s ease;
+    transform 0.35s var(--ease-luxury, cubic-bezier(0.16, 1, 0.3, 1)),
+    filter 0.35s var(--ease-luxury, cubic-bezier(0.16, 1, 0.3, 1));
   transform-origin: top center;
+  will-change: transform, filter;
 }
 
-body:has([role='dialog']) #app-root {
-  transform: scale(0.975);
-  filter: blur(1px);
+body:has([role='dialog'][data-state='open']) #app-root,
+body:has(.modal-open) #app-root {
+  transform: scale(0.972) translateY(-8px);
+  filter: blur(1.5px) brightness(0.92);
+}
+
+/* ── Print ────────────────────────────────────────────────────────────────── */
+@media print {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    box-shadow: none !important;
+  }
+
+  body {
+    background: white;
+    color: black;
+  }
+}
+/* =============================================================================
+   NEWSLETTER — globals.css additions
+   ============================================================================= */
+
+@keyframes newsletter-gradient-shift {
+  0%   { background-position: 0%   50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0%   50%; }
+}
+
+.newsletter-gradient-text {
+  background: linear-gradient(
+    90deg,
+    var(--color-gold-400,  #d4af37)  0%,
+    var(--color-ember-500, #a96840)  40%,
+    var(--color-gold-300,  #e8c46a)  70%,
+    var(--color-gold-400,  #d4af37)  100%
+  );
+  background-size: 200% 200%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: newsletter-gradient-shift 3s ease infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .newsletter-gradient-text {
+    animation: none;
+    background: var(--color-gold-400, #d4af37);
+    background-clip: text;
+    -webkit-background-clip: text;
+  }
+}
+
+/* sr-only — already in Tailwind; add only if using custom CSS setup */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
 }

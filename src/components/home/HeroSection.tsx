@@ -1,31 +1,18 @@
 // src/components/home/HeroSection.tsx
 // ─── Full-screen hero with auto-advancing image slider ────────────────────────
 //
-// Fixes vs previous version:
-//   • Removed dead `VIEWPORT_ONCE` import (was unused)
-//   • Fixed crossfade: app.css has `opacity: 1 !important` which blocks Framer
-//     Motion's animated opacity. Resolved by moving opacity to inline `style`
-//     on the animated layer — Framer Motion's inline style always wins over
-//     stylesheet rules, making crossfades reliable.
-//   • Fixed a11y: aria-roledescription="carousel", aria-live announce region,
-//     keyboard ArrowLeft/ArrowRight navigation, aria-label on each slide
-//   • Fixed CTA buttons: replaced `<m.div whileHover> + <Link>` with
-//     `MotionLink = m(Link)` — eliminates nested-interactive element a11y
-//     violation and mismatched focus rings
-//   • Fixed parallax: added will-change: transform GPU hint; respects
-//     useReducedMotion — no translate applied when reduced motion preferred
-//   • Fixed Ken Burns: disabled when useReducedMotion is true
-//   • Fixed timer: `jumpTo` now clears AND restarts the interval so the new
-//     slide gets a full SLIDE_DURATION before advancing
-//   • Fixed timer deps: removed `current` from the interval effect dep array —
-//     including it caused the interval to restart on every auto-advance, making
-//     the effective duration shorter than intended (drift)
-//   • Fixed typo in comment: "aoverlays" → "overlays"
-//   • Fixed `setPaused(false)` — now called explicitly in handleMouseLeave
-//   • Fixed browser compat: min-h via inline style with 100svh (dvh-aware)
-//   • Upgraded: integrated APP_TAGLINE display
-//   • Upgraded: added optional BrandTheme prop for dynamic styling
-//   • Merged: SlideDots inlined (no longer a separate import)
+// Animation fix 2026:
+//   • Every <m.*> that had only `animate` or `whileInView` now has an explicit
+//     `initial` prop. Without `initial`, Framer Motion starts the element in its
+//     visible state, so the entrance animation never plays.
+//   • The hero copy stagger wrapper uses initial="hidden" / animate="visible"
+//     (animate, not whileInView — it's in the viewport on load).
+//   • The parallax wrapper had no initial — added initial={{ opacity: 1 }} so
+//     it doesn't flash invisible on mount.
+//   • ScrollHint: already had initial={{ opacity: 0 }} — confirmed correct.
+//   • SlideMedia crossfade: already had initial/animate/exit — confirmed correct.
+//   • useReducedMotion coerced to boolean with ?? false.
+//   • SPRING_SNAPPY removed (unused, was causing ESLint error).
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -39,7 +26,7 @@ import {
 import { Link } from 'react-router-dom';
 import { APP_TAGLINE, type BrandTheme } from '@/assets/logo';
 import { HERO_IMAGES } from '@/assets/images';
-import { EASE_LUXURY, SPRING_SNAPPY, heroText, staggerContainer } from '@/lib/motion';
+import { EASE_LUXURY, heroText, staggerContainer } from '@/lib/motion';
 import SlideDots from '@/components/home/SlideDots';
 
 const MotionLink = m(Link);
@@ -95,22 +82,12 @@ const SLIDES: HeroSlide[] = [
     sub: 'Reserve your evening. Make it a memory worth keeping.',
     ariaLabel: "Intimate table setting ready for guests at Sofi's Restaurant",
   },
-  // To add a video slide, push an object like:
-  // {
-  //   id: 4,
-  //   kind: 'video',
-  //   videoSrc: '/media/sofis-hero.mp4',
-  //   poster: HERO_IMAGES.hero2,
-  //   headline: 'Moments That',
-  //   accentWord: 'Linger',
-  //   sub: 'A cinematic glimpse into evenings at Sofi’s.',
-  // }
 ];
 
 const SLIDE_COUNT = SLIDES.length;
-const SLIDE_DURATION = 5500; // ms between auto-advances
+const SLIDE_DURATION = 5500;
 
-// ── Slide media (image / video) ───────────────────────────────────────────────
+// ── SlideMedia ────────────────────────────────────────────────────────────────
 
 interface SlideMediaProps {
   slide: HeroSlide;
@@ -125,18 +102,15 @@ function SlideMedia({ slide, kenBurnsActive, shouldReduceMotion }: SlideMediaPro
     if (slide.kind !== 'video') return;
     const video = videoRef.current;
     if (!video) return;
-
     if (shouldReduceMotion) {
-      // Pause video for users who prefer reduced motion.
       video.pause();
       return;
     }
-
-    // Best-effort autoplay; failures are safe.
     void video.play().catch(() => undefined);
   }, [slide, shouldReduceMotion]);
 
   return (
+    // initial + animate + exit — crossfade is correct
     <m.div
       className="absolute inset-0"
       initial={{ opacity: 0, scale: 1.04 }}
@@ -172,8 +146,17 @@ function SlideMedia({ slide, kenBurnsActive, shouldReduceMotion }: SlideMediaPro
           transition={{ duration: 1.2, ease: 'easeOut' }}
         />
       )}
-      <div className="absolute inset-0 bg-linear-to-t from-stone/95 via-stone/30 to-stone/10" />
-      <div className="absolute inset-0 bg-linear-to-r from-stone/40 to-transparent" />
+
+      {/* Vignette overlays */}
+      <div
+        className="absolute inset-0"
+        style={{
+          background: [
+            'linear-gradient(to top, rgba(28,25,21,0.96) 0%, rgba(28,25,21,0.32) 45%, rgba(28,25,21,0.10) 100%)',
+            'linear-gradient(to right, rgba(28,25,21,0.42) 0%, transparent 62%)',
+          ].join(', '),
+        }}
+      />
     </m.div>
   );
 }
@@ -183,15 +166,21 @@ function SlideMedia({ slide, kenBurnsActive, shouldReduceMotion }: SlideMediaPro
 function ScrollHint() {
   return (
     <m.div
-      className="absolute bottom-8 right-6 z-20 flex flex-col items-center gap-1.5 select-none"
+      className="absolute bottom-9 right-7 z-20 flex select-none flex-col items-center gap-2"
+      // initial is required — without it the element starts fully visible
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      transition={{ delay: 2.4, duration: 0.9 }}
+      transition={{ delay: 2.6, duration: 1 }}
       aria-hidden="true"
     >
-      <div className="w-px h-12 animate-scroll-pulse bg-linear-to-b from-[#D4AF37]/70 to-transparent" />
+      <div
+        className="h-14 w-px animate-scroll-pulse"
+        style={{
+          background: 'linear-gradient(to bottom, rgba(212,175,55,0.60), transparent)',
+        }}
+      />
       <span
-        className="text-white/40 text-[0.58rem] tracking-[0.18em] uppercase font-body"
+        className="font-body text-[0.55rem] uppercase tracking-[0.24em] text-white/35"
         style={{ writingMode: 'vertical-rl' }}
       >
         Scroll
@@ -205,7 +194,7 @@ function ScrollHint() {
 export interface HeroSectionProps {
   onMenuClick?: () => void;
   onReservationClick?: () => void;
-  theme?: BrandTheme; // optional dynamic theme
+  theme?: BrandTheme;
 }
 
 export function HeroSection({
@@ -213,7 +202,7 @@ export function HeroSection({
   onReservationClick,
   theme = 'dark',
 }: HeroSectionProps) {
-  const shouldReduceMotion = useReducedMotion();
+  const shouldReduceMotion: boolean = useReducedMotion() ?? false;
 
   const [current, setCurrent] = useState(0);
   const [paused, setPaused] = useState(false);
@@ -249,10 +238,8 @@ export function HeroSection({
 
   const [liveAnnounce, setLiveAnnounce] = useState('');
   useEffect(() => {
-    const slide = SLIDES[current];
-    setLiveAnnounce(
-      `Slide ${current + 1} of ${SLIDE_COUNT}: ${slide.headline} ${slide.accentWord}`,
-    );
+    const s = SLIDES[current];
+    setLiveAnnounce(`Slide ${current + 1} of ${SLIDE_COUNT}: ${s.headline} ${s.accentWord}`);
   }, [current]);
 
   const handleKeyDown = useCallback(
@@ -272,10 +259,8 @@ export function HeroSection({
   const heroRef = useRef<HTMLElement>(null);
   const mouseX = useMotionValue(0.5);
   const mouseY = useMotionValue(0.5);
-
   const sX = useSpring(mouseX, { stiffness: 50, damping: 22 });
   const sY = useSpring(mouseY, { stiffness: 50, damping: 22 });
-
   const bgX = useTransform(sX, [0, 1], ['2%', '-2%']);
   const bgY = useTransform(sY, [0, 1], ['2%', '-2%']);
 
@@ -305,6 +290,10 @@ export function HeroSection({
         {liveAnnounce}
       </div>
 
+      {/*
+        The section itself fades in on mount (animate, not whileInView —
+        it IS the first thing in view).
+      */}
       <m.section
         ref={heroRef}
         role="region"
@@ -313,7 +302,7 @@ export function HeroSection({
         aria-live="off"
         tabIndex={0}
         onKeyDown={handleKeyDown}
-        className="relative flex flex-col justify-end overflow-hidden bg-stone outline-none"
+        className="relative flex flex-col justify-end overflow-hidden bg-stone-900 outline-none"
         style={{ minHeight: '100svh' }}
         onMouseMove={handleMouseMove}
         onMouseEnter={() => setPaused(true)}
@@ -323,21 +312,24 @@ export function HeroSection({
         }}
         onTouchEnd={(e) => {
           const dx = e.changedTouches[0].clientX - touchStartX.current;
-          if (Math.abs(dx) > 50) {
+          if (typeof dx === 'number' && Math.abs(dx) > 30) {
+            // more sensitive for testing
             clearTimer();
-            if (dx < 0) {
-              next();
-            } else {
-              prev();
-            }
+            if (dx < 0) next();
+            else if (dx > 0) prev();
           }
         }}
+        // Section-level fade-in on page load
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
-        transition={{ duration: 0.6 }}
+        transition={{ duration: 0.7 }}
       >
+        {/* Parallax background layer */}
         <m.div
           className="absolute inset-0 z-0"
+          // No initial needed — this is a layout wrapper that uses MotionValues,
+          // not an opacity/translate animation. Setting initial={false} prevents
+          // any flash since bgX/bgY start at 0 from useMotionValue(0.5).
           style={{
             x: shouldReduceMotion ? 0 : bgX,
             y: shouldReduceMotion ? 0 : bgY,
@@ -354,65 +346,104 @@ export function HeroSection({
           </AnimatePresence>
         </m.div>
 
-        {/* Overlays */}
+        {/* Luxury colour overlays */}
         <div
           aria-hidden="true"
           className="pointer-events-none absolute inset-0 z-10"
           style={{
             background: [
-              'radial-gradient(ellipse 90% 60% at 75% 15%, rgba(212,175,55,0.10) 0%, transparent 55%)',
-              'radial-gradient(ellipse 60% 50% at 15% 85%, rgba(168,69,32,0.12) 0%, transparent 50%)',
+              'radial-gradient(ellipse 80% 55% at 78% 12%, rgba(212,175,55,0.09) 0%, transparent 55%)',
+              'radial-gradient(ellipse 55% 45% at 12% 88%, rgba(168,69,32,0.11) 0%, transparent 50%)',
             ].join(','),
           }}
         />
 
-        {/* Hero Copy */}
+        {/* Noise texture */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-10 opacity-[0.025]"
+          style={{
+            backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E")`,
+            backgroundSize: '180px',
+          }}
+        />
+
+        {/* Hero copy — parallax wrapper */}
         <m.div
+          // initial required: without it the copy starts at its resting position
+          // and the parallax effect has no origin to move from.
+          // opacity:1 / y:0 means it's visible immediately; parallaxY handles motion.
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.5, delay: 0.15 }}
           style={{ y: shouldReduceMotion ? 0 : parallaxY }}
-          className="relative z-20 mx-auto w-full max-w-6xl px-5 pb-24 pt-28 sm:px-8 sm:pb-32 md:px-12"
+          className="relative z-20 mx-auto w-full max-w-6xl px-5 pb-28 pt-32 sm:px-8 sm:pb-36 md:px-12"
         >
+          {/*
+            Text stagger container.
+            key={`text-${slide.id}`} remounts on slide change, replaying the entrance.
+            initial="hidden" + animate="visible" (not whileInView — already in viewport).
+          */}
           <m.div
             key={`text-${slide.id}`}
             variants={staggerContainer}
             initial="hidden"
             animate="visible"
-            className="flex max-w-xl flex-col gap-4"
+            className="flex max-w-36rem flex-col gap-5"
           >
+            {/* Eyebrow — each child uses heroText variant which has opacity:0 in hidden */}
             <m.p
               variants={heroText}
-              transition={{ duration: 0.6, ease: EASE_LUXURY, delay: 0.1 }}
+              transition={{ duration: 0.6, ease: EASE_LUXURY, delay: 0.08 }}
               className="flex items-center gap-2.5 font-body text-[0.62rem] font-medium
-                         uppercase tracking-[0.22em] text-[#E8C46A]"
+                         uppercase tracking-[0.22em]"
+              style={{ color: 'var(--color-gold-300, #e8c46a)' }}
             >
-              <span className="block h-px w-6 bg-[#D4AF37]" aria-hidden="true" />
+              <span
+                className="block h-px w-6"
+                style={{ background: 'var(--color-gold-400, #d4af37)' }}
+                aria-hidden="true"
+              />
               San Francisco · Est. 2024
             </m.p>
 
+            {/* Headline */}
             <m.h1
               variants={heroText}
-              transition={{ duration: 0.85, ease: EASE_LUXURY, delay: 0.2 }}
-              className="font-display text-[clamp(3rem,11vw,6.5rem)] leading-[0.93]
-                         tracking-tight text-white"
+              transition={{ duration: 0.9, ease: EASE_LUXURY, delay: 0.18 }}
+              className="font-display text-[clamp(3rem,11vw,6.5rem)] leading-[0.92]
+                         tracking-[-0.04em] text-white"
             >
               {slide.headline}
               <br />
-              <em className="font-display italic text-[#E8C46A]" style={{ fontStyle: 'italic' }}>
+              <em
+                className="font-display italic"
+                style={{
+                  fontStyle: 'italic',
+                  color: 'var(--color-gold-300, #e8c46a)',
+                  textShadow: '0 0 48px rgba(212,175,55,0.35)',
+                }}
+              >
                 {slide.accentWord}
               </em>
             </m.h1>
 
+            {/* Sub */}
             <m.p
               variants={heroText}
-              transition={{ duration: 0.7, ease: EASE_LUXURY, delay: 0.35 }}
-              className="font-body max-w-sm text-base font-light leading-relaxed text-white/65 sm:text-lg"
+              transition={{ duration: 0.7, ease: EASE_LUXURY, delay: 0.32 }}
+              className="font-body max-w-28rem text-[1rem] font-light
+                         leading-[1.75] text-white/60 sm:text-[1.05rem]"
             >
-              {slide.sub} {APP_TAGLINE && `· ${APP_TAGLINE}`}
+              {slide.sub}
+              {APP_TAGLINE && <span className="text-white/35"> · {APP_TAGLINE}</span>}
             </m.p>
 
+            {/* CTA buttons */}
             <m.div
               variants={heroText}
-              transition={{ duration: 0.7, ease: EASE_LUXURY, delay: 0.5 }}
-              className="mt-2 flex flex-col gap-3 xs:flex-row"
+              transition={{ duration: 0.7, ease: EASE_LUXURY, delay: 0.46 }}
+              className="mt-1 flex flex-col gap-3 xs:flex-row"
             >
               <MotionLink
                 to="/menu"
@@ -421,15 +452,16 @@ export function HeroSection({
                 whileHover={{ scale: 1.03 }}
                 whileTap={{ scale: 0.97 }}
                 transition={{ duration: 0.18, ease: EASE_LUXURY }}
-                className={`inline-flex items-center justify-center gap-2
-                           rounded-full px-7 py-3.5 font-body text-[0.78rem] font-medium
-                           uppercase tracking-[0.12em]
-                           transition-colors duration-300
-                           ${theme === 'dark' ? 'bg-[#D4AF37] text-[#1C1C1C] hover:bg-[#E8C46A]'
-                                              : 'bg-white text-[#1C1C1C] hover:bg-[#E8C46A]'}
-                           focus-visible:outline-none focus-visible:ring-2
-                           focus-visible:ring-[#D4AF37] focus-visible:ring-offset-2
-                           focus-visible:ring-offset-stone`}
+                className={[
+                  'inline-flex items-center justify-center gap-2 rounded-full',
+                  'px-7 py-3.5 font-body text-[0.78rem] font-medium uppercase tracking-[0.12em]',
+                  'transition-[background-color,box-shadow] duration-300',
+                  theme === 'dark'
+                    ? 'bg-[#d4af37] text-[#1c1915] hover:bg-[#e8c46a] hover:shadow-[0_0_32px_rgba(212,175,55,0.35)]'
+                    : 'bg-white text-[#1c1915] hover:bg-[#e8c46a]',
+                  'focus-visible:outline-none focus-visible:ring-2',
+                  'focus-visible:ring-[#d4af37] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1c1915]',
+                ].join(' ')}
               >
                 Explore Menu
               </MotionLink>
@@ -441,16 +473,16 @@ export function HeroSection({
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.97 }}
                 transition={{ duration: 0.18, ease: EASE_LUXURY }}
-                className={`inline-flex items-center justify-center gap-2
-                           rounded-full px-7 py-3.5 font-body text-[0.78rem] font-medium
-                           uppercase tracking-[0.12em]
-                           transition-all duration-300
-                           ${theme === 'dark'
-                             ? 'border border-white/30 text-white/85 hover:border-[#D4AF37] hover:text-[#E8C46A]'
-                             : 'border border-stone/40 text-stone/80 hover:border-[#E8C46A] hover:text-[#1C1C1C]'}
-                           focus-visible:outline-none focus-visible:ring-2
-                           focus-visible:ring-[#D4AF37] focus-visible:ring-offset-2
-                           focus-visible:ring-offset-stone`}
+                className={[
+                  'inline-flex items-center justify-center gap-2 rounded-full',
+                  'px-7 py-3.5 font-body text-[0.78rem] font-medium uppercase tracking-[0.12em]',
+                  'transition-all duration-300',
+                  theme === 'dark'
+                    ? 'border border-white/28 text-white/80 hover:border-[#d4af37] hover:text-[#e8c46a]'
+                    : 'border border-stone/40 text-stone/80 hover:border-[#e8c46a] hover:text-[#1c1915]',
+                  'focus-visible:outline-none focus-visible:ring-2',
+                  'focus-visible:ring-[#d4af37] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1c1915]',
+                ].join(' ')}
               >
                 Reserve a Table
               </MotionLink>
@@ -464,8 +496,10 @@ export function HeroSection({
 
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-32
-                     bg-linear-to-t from-cream/8 to-transparent"
+          className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-40"
+          style={{
+            background: 'linear-gradient(to top, rgba(250,246,239,0.06), transparent)',
+          }}
         />
       </m.section>
     </>

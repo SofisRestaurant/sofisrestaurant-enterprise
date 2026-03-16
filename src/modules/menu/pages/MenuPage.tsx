@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { m, AnimatePresence } from 'framer-motion';
 
 import { MenuPublicService } from '@/domain/menu/menu.service.public';
 import type { MenuCategory, MenuItemPublic } from '@/domain/menu/menu.types';
@@ -20,6 +21,28 @@ import MenuItemModal from '@/modules/menu/components/MenuItemModal';
 
 import { useActiveCampaigns } from '@/modules/menu/hooks/useActiveCampaigns';
 import { campaignsToDeals } from '@/modules/menu/mappers/campaignsToDeals.mapper';
+
+// ── Animation constants ───────────────────────────────────────────────────────
+
+const EL = [0.16, 1, 0.3, 1] as const;
+const VP = { once: true, amount: 0.1 } as const;
+
+const fadeUp = {
+  hidden:  { opacity: 0, y: 22 },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.65, ease: EL } },
+};
+
+const fadeIn = {
+  hidden:  { opacity: 0 },
+  visible: { opacity: 1, transition: { duration: 0.5, ease: EL } },
+};
+
+const staggerSection = {
+  hidden:  {},
+  visible: { transition: { staggerChildren: 0.12, delayChildren: 0.05 } },
+};
+
+// ── All business logic helpers preserved exactly ──────────────────────────────
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -58,13 +81,10 @@ function readArrayItems(raw: unknown): unknown[] {
 
 function normalizeMenuItemPublic(v: unknown): MenuItemPublic | null {
   if (!isRecord(v)) return null;
-
   const id = safeStr(v.id, '', 128);
   const name = safeStr(v.name, '', 180);
   const category = safeStr(v.category, '', 80);
-
   if (!id || !name || !category) return null;
-
   const merged: UnknownRecord = { ...v, id, name, category };
   return merged as unknown as MenuItemPublic;
 }
@@ -99,15 +119,12 @@ function readImageUrl(item: MenuItemPublic): string | null {
 
 function readPriceCents(item: MenuItemPublic): number {
   const r: UnknownRecord = isRecord(item) ? (item as UnknownRecord) : {};
-
   const centsRaw =
     (typeof r.price_cents === 'number' ? r.price_cents : undefined) ??
     (typeof r.unit_price_cents === 'number' ? r.unit_price_cents : undefined);
-
   if (typeof centsRaw === 'number' && Number.isFinite(centsRaw) && centsRaw >= 0) {
     return Math.max(0, Math.round(centsRaw));
   }
-
   const dollars = safeNum(r.price, 0);
   return Math.max(0, Math.round(dollars * 100));
 }
@@ -123,7 +140,6 @@ function readAvailable(item: MenuItemPublic): boolean {
 function readTagsRaw(item: MenuItemPublic): string[] {
   const r: UnknownRecord = isRecord(item) ? (item as UnknownRecord) : {};
   const raw = r.tags;
-
   if (Array.isArray(raw)) {
     const out: string[] = [];
     for (const t of raw) {
@@ -135,7 +151,6 @@ function readTagsRaw(item: MenuItemPublic): string[] {
     }
     return out;
   }
-
   if (typeof raw === 'string') {
     return raw
       .split(',')
@@ -143,7 +158,6 @@ function readTagsRaw(item: MenuItemPublic): string[] {
       .filter(Boolean)
       .slice(0, 36);
   }
-
   return [];
 }
 
@@ -159,7 +173,6 @@ function hasTag(item: MenuItemPublic, tag: string): boolean {
 
 function matchesTagKey(item: MenuItemPublic, key: MenuTagKey): boolean {
   const r: UnknownRecord = isRecord(item) ? (item as UnknownRecord) : {};
-
   if (key === 'spicy')
     return safeBool(r.spicy, false) || safeBool(r.is_spicy, false) || hasTag(item, 'spicy');
   if (key === 'vegetarian') return safeBool(r.vegetarian, false) || hasTag(item, 'vegetarian');
@@ -188,9 +201,7 @@ function readPopularityScore(item: MenuItemPublic): number {
     safeNum(r.popularityScore, NaN) ||
     safeNum(r.popularity, NaN) ||
     safeNum(r.rank, NaN);
-
   if (Number.isFinite(score)) return Math.max(0, score);
-
   if (safeBool(r.is_popular, false) || safeBool(r.isPopular, false) || hasTag(item, 'popular'))
     return 1000;
   return 0;
@@ -210,7 +221,6 @@ function readIsDeal(item: MenuItemPublic): boolean {
     safeBool(r.promo, false) ||
     safeBool(r.is_promo, false) ||
     safeBool(r.isPromo, false);
-
   if (flagged) return true;
   return hasTag(item, 'deal') || hasTag(item, 'promo') || hasTag(item, 'special');
 }
@@ -218,12 +228,10 @@ function readIsDeal(item: MenuItemPublic): boolean {
 function matchesSearch(item: MenuItemPublic, q: string): boolean {
   const query = q.trim().toLowerCase();
   if (!query) return true;
-
   const name = readName(item).toLowerCase();
   const desc = readDescription(item).toLowerCase();
   const cat = String(readCategory(item)).toLowerCase();
   const tags = readTagsRaw(item).join(' ').toLowerCase();
-
   return (
     name.includes(query) || desc.includes(query) || cat.includes(query) || tags.includes(query)
   );
@@ -241,33 +249,25 @@ function matchesPriceRange(priceCents: number, range: MenuPriceRangeKey): boolea
 function stableSorted(items: MenuItemPublic[], sort: MenuSortKey): MenuItemPublic[] {
   const key = String(sort);
   const copy = [...items];
-
   copy.sort((a, b) => {
     const an = readName(a);
     const bn = readName(b);
-
     const ap = readPriceCents(a);
     const bp = readPriceCents(b);
-
-    const as = readPopularityScore(a);
-    const bs = readPopularityScore(b);
-
+    const as_ = readPopularityScore(a);
+    const bs_ = readPopularityScore(b);
     if (key === 'price_low') return ap - bp || an.localeCompare(bn);
     if (key === 'price_high') return bp - ap || an.localeCompare(bn);
     if (key === 'name_az') return an.localeCompare(bn);
     if (key === 'name_za') return bn.localeCompare(an);
-
     if (key === 'featured') {
       const af = readIsPopular(a) ? 1 : 0;
       const bf = readIsPopular(b) ? 1 : 0;
-      return bf - af || bs - as || an.localeCompare(bn);
+      return bf - af || bs_ - as_ || an.localeCompare(bn);
     }
-
-    if (key === 'popular') return bs - as || an.localeCompare(bn);
-
-    return bs - as || an.localeCompare(bn);
+    if (key === 'popular') return bs_ - as_ || an.localeCompare(bn);
+    return bs_ - as_ || an.localeCompare(bn);
   });
-
   return copy;
 }
 
@@ -281,7 +281,6 @@ function toDealCard(item: MenuItemPublic): DealCard {
         : null;
   const endsAt =
     typeof r.ends_at === 'string' ? r.ends_at : typeof r.endsAt === 'string' ? r.endsAt : null;
-
   return {
     id: readId(item),
     title: readName(item),
@@ -303,6 +302,8 @@ type FilterState = {
 type ModalState = { open: false } | { open: true; item: MenuItemPublic };
 
 const MENU_OPEN_FILTERS_EVENT = 'menu:open-filters';
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 function MenuPage() {
   const [items, setItems] = useState<MenuItemPublic[]>([]);
@@ -331,22 +332,19 @@ function MenuPage() {
   const loadMenu = useCallback(async () => {
     setError(null);
     setLoading(true);
-
     try {
       const raw = await MenuPublicService.getMenuItems();
       const arr = readArrayItems(raw);
-
       const next: MenuItemPublic[] = [];
       for (const v of arr) {
         const it = normalizeMenuItemPublic(v);
         if (!it) continue;
         next.push(it);
       }
-
       setItems(next);
     } catch (_e: unknown) {
       setItems([]);
-      setError('We couldn’t load the menu right now.');
+      setError("We couldn't load the menu right now.");
     } finally {
       setLoading(false);
     }
@@ -364,7 +362,6 @@ function MenuPage() {
           : null;
       setFiltersOpen(true);
     };
-
     window.addEventListener(MENU_OPEN_FILTERS_EVENT, onOpen as EventListener);
     return () => window.removeEventListener(MENU_OPEN_FILTERS_EVENT, onOpen as EventListener);
   }, []);
@@ -383,7 +380,6 @@ function MenuPage() {
     if (!categoriesWithItems.has(selectedCategory)) setSelectedCategory('all');
   }, [categoriesWithItems, selectedCategory]);
 
-  // ✅ Campaign-powered deals (Edge Function → campaigns → mapper → DealsRail)
   const campaigns = useActiveCampaigns('menu_deals_rail');
 
   const campaignDealItemIds = useMemo(() => {
@@ -394,31 +390,27 @@ function MenuPage() {
     return s;
   }, [campaigns]);
 
-  // Legacy fallback deals (from menu items), used if campaigns are empty
   const dealItems = useMemo<MenuItemPublic[]>(() => {
     const out = items.filter((it) => readIsDeal(it) || campaignDealItemIds.has(readId(it)));
+
     out.sort((a, b) => {
       const ai = readImageUrl(a) ? 1 : 0;
       const bi = readImageUrl(b) ? 1 : 0;
       return bi - ai || readName(a).localeCompare(readName(b));
     });
+
     return out.slice(0, 12);
-  }, [items]);
+  }, [items, campaignDealItemIds]);
 
   const deals = useMemo<DealCard[]>(() => {
     if (Array.isArray(campaigns) && campaigns.length > 0) {
-      // IMPORTANT: DealsRail selection must map to a MenuItem id for applyDeal()
-      // We keep the campaign mapping, but override `id` to `menu_item_id` when present.
       const mapped = campaignsToDeals(campaigns).map((d) => {
         const c = campaigns.find((x) => x.id === d.id) ?? null;
         const menuItemId = c?.menu_item_id ?? null;
         return { ...d, id: menuItemId ?? d.id };
       });
-
-      // Keep featured/priority/weight ordering (campaignsToDeals preserves input order)
       const byKey = new Map<string, (typeof campaigns)[number]>();
       for (const c of campaigns) byKey.set(c.menu_item_id ?? c.id, c);
-
       mapped.sort((a, b) => {
         const ac = byKey.get(a.id) ?? null;
         const bc = byKey.get(b.id) ?? null;
@@ -433,10 +425,8 @@ function MenuPage() {
         if (aw !== bw) return bw - aw;
         return a.title.localeCompare(b.title);
       });
-
       return mapped.slice(0, 12);
     }
-
     return dealItems.map(toDealCard);
   }, [campaigns, dealItems]);
 
@@ -444,16 +434,12 @@ function MenuPage() {
     const scored = items
       .map((it) => ({ it, score: readPopularityScore(it) }))
       .filter((x) => x.score > 0);
-
     scored.sort((a, b) => b.score - a.score || readName(a.it).localeCompare(readName(b.it)));
     const primary = scored.map((x) => x.it).slice(0, 12);
-
     if (primary.length >= 6) return primary;
-
     const withImages = items.filter((it) => Boolean(readImageUrl(it)));
     withImages.sort((a, b) => readName(a).localeCompare(readName(b)));
     const deduped = withImages.filter((it) => !primary.some((p) => readId(p) === readId(it)));
-
     return [...primary, ...deduped.slice(0, Math.max(0, 12 - primary.length))];
   }, [items]);
 
@@ -461,12 +447,10 @@ function MenuPage() {
     const q = searchText;
     const selectedTags = Array.from(filters.tags.values());
     const out: MenuItemPublic[] = [];
-
     for (const it of items) {
       if (selectedCategory !== 'all' && readCategory(it) !== selectedCategory) continue;
       if (!matchesSearch(it, q)) continue;
       if (filters.promoOnly && !(readIsDeal(it) || campaignDealItemIds.has(readId(it)))) continue;
-
       let ok = true;
       for (const k of selectedTags) {
         if (!matchesTagKey(it, k)) {
@@ -475,13 +459,10 @@ function MenuPage() {
         }
       }
       if (!ok) continue;
-
       const price = readPriceCents(it);
       if (!matchesPriceRange(price, filters.priceRange)) continue;
-
       out.push(it);
     }
-
     return stableSorted(out, filters.sort);
   }, [
     filters.priceRange,
@@ -491,11 +472,11 @@ function MenuPage() {
     items,
     searchText,
     selectedCategory,
+    campaignDealItemIds,
   ]);
 
   const resultsCountText = useMemo(() => {
     const n = filteredSortedItems.length;
-
     const hasSearch = searchText.trim().length > 0;
     const hasCategory = selectedCategory !== 'all';
     const hasFilters =
@@ -503,9 +484,7 @@ function MenuPage() {
       filters.priceRange !== 'any' ||
       filters.promoOnly ||
       String(filters.sort) !== 'recommended';
-
     if (!hasSearch && !hasCategory && !hasFilters) return '';
-
     if (n === 0) return 'No matches — try clearing filters';
     return `Showing ${n} match${n === 1 ? '' : 'es'}`;
   }, [filteredSortedItems.length, searchText, selectedCategory, filters]);
@@ -552,7 +531,6 @@ function MenuPage() {
     (dealId: string) => {
       const hit = items.find((it) => readId(it) === dealId) ?? null;
       if (!hit) return;
-
       const c = readCategory(hit);
       setSelectedCategory(c ? c : 'all');
       setFilters((prev) => ({ ...prev, promoOnly: true }));
@@ -561,132 +539,194 @@ function MenuPage() {
     [items, openItem],
   );
 
+  // ── Render ─────────────────────────────────────────────────────────────────
+
   return (
     <main className="mx-auto w-full max-w-7xl px-4 pb-10 pt-4">
-      {loading ? (
-        <div className="flex flex-col items-center gap-4 py-16 text-gray-500">
-          <Spinner />
-          <p className="text-sm">Loading the menu…</p>
-        </div>
-      ) : error ? (
-        <div className="py-16">
-          <div className="mx-auto max-w-lg rounded-2xl border border-red-200 bg-red-50 p-6 text-center text-red-800">
-            <p className="text-sm font-semibold">{error}</p>
-            <div className="mt-5 flex justify-center">
-              <button
-                type="button"
-                onClick={loadMenu}
-                className="inline-flex h-11 items-center justify-center rounded-2xl bg-orange-600 px-5 text-sm font-semibold text-white hover:opacity-95 focus:outline-none focus:ring-2 focus:ring-orange-500/40"
-              >
-                Retry
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <>
-          <div className="mt-6 space-y-6">
-            <DealsRail deals={deals} onSelect={(dealId) => applyDeal(dealId)} />
+      {/* Loading state */}
+      <AnimatePresence mode="wait">
+        {loading && (
+          <m.div
+            key="loading"
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.4, ease: EL }}
+            className="flex flex-col items-center gap-4 py-24 text-zinc-500"
+          >
+            <Spinner />
+            <p className="text-sm">Loading the menu…</p>
+          </m.div>
+        )}
 
-            <PopularRail
-              items={popular}
-              onOpenItem={openItem}
-              getPriceCents={readPriceCents}
-              getAvailable={readAvailable}
-              emptyHintActionLabel="Clear all"
-              onEmptyHintAction={clearAll}
+        {/* Error state */}
+        {!loading && error && (
+          <m.div
+            key="error"
+            initial={{ opacity: 0, scale: 0.97 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.45, ease: EL }}
+            className="py-16"
+          >
+            <div className="mx-auto max-w-lg rounded-2xl border border-red-200 bg-red-50 p-6 text-center text-red-800">
+              <p className="text-sm font-semibold">{error}</p>
+              <div className="mt-5 flex justify-center">
+                <button
+                  type="button"
+                  onClick={loadMenu}
+                  className="inline-flex h-11 items-center justify-center rounded-2xl bg-orange-600 px-5 text-sm font-semibold text-white hover:opacity-95 focus:outline-none focus:ring-2 focus:ring-orange-500/40"
+                >
+                  Retry
+                </button>
+              </div>
+            </div>
+          </m.div>
+        )}
+
+        {/* Main content */}
+        {!loading && !error && (
+          <m.div key="content" variants={staggerSection} initial="hidden" animate="visible">
+            {/* Deals + Popular rails */}
+            <m.div variants={fadeUp} className="mt-6 space-y-6">
+              {deals.length > 0 && (
+                <DealsRail deals={deals} onSelect={(dealId) => applyDeal(dealId)} />
+              )}
+              <PopularRail
+                items={popular}
+                onOpenItem={openItem}
+                getPriceCents={readPriceCents}
+                getAvailable={readAvailable}
+                emptyHintActionLabel="Clear all"
+                onEmptyHintAction={clearAll}
+              />
+            </m.div>
+
+            {/* Browse header + filter buttons */}
+            <m.div variants={fadeUp} className="mt-8 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-gray-900">Browse categories</p>
+                <p className="mt-0.5 text-xs text-gray-500">
+                  Want deals only? Open filters and turn on "Promo only".
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <m.button
+                  type="button"
+                  onClick={() => setFiltersOpen(true)}
+                  whileHover={{ scale: 1.03, y: -1 }}
+                  whileTap={{ scale: 0.97 }}
+                  transition={{ duration: 0.18, ease: EL }}
+                  className="inline-flex h-10 items-center justify-center rounded-xl border border-gray-200 bg-white px-4 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-orange-500/40"
+                  aria-label="Open filters"
+                >
+                  Filters
+                </m.button>
+
+                <m.button
+                  type="button"
+                  onClick={() => {
+                    setFilters((prev) => ({ ...prev, promoOnly: true }));
+                    setFiltersOpen(true);
+                  }}
+                  whileHover={{ scale: 1.03, y: -1 }}
+                  whileTap={{ scale: 0.97 }}
+                  transition={{ duration: 0.18, ease: EL }}
+                  className="inline-flex h-10 items-center justify-center rounded-xl border border-gray-200 bg-white px-4 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-orange-500/40"
+                  aria-label="Open filters and show deals only"
+                >
+                  Deals
+                </m.button>
+              </div>
+            </m.div>
+
+            {/* Category tabs */}
+            <m.div variants={fadeIn} className="mt-6">
+              <CategoryTabs
+                selectedCategory={selectedCategory}
+                onSelectCategory={setSelectedCategory}
+                availableCategories={categoriesWithItems}
+              />
+            </m.div>
+
+            {/* Results count */}
+            <AnimatePresence>
+              {resultsCountText ? (
+                <m.p
+                  key="results-count"
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.3, ease: EL }}
+                  className="mt-2 text-xs text-zinc-500"
+                >
+                  {resultsCountText}
+                </m.p>
+              ) : null}
+            </AnimatePresence>
+
+            {/* Empty state */}
+            <AnimatePresence>
+              {filteredSortedItems.length === 0 && (
+                <m.div
+                  key="empty"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.35, ease: EL }}
+                  className="mt-4 rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700"
+                >
+                  No matches for your current filters.
+                  <button
+                    type="button"
+                    onClick={clearAll}
+                    className="ml-2 font-semibold text-orange-700 underline underline-offset-4 hover:text-orange-800"
+                  >
+                    Clear all
+                  </button>
+                </m.div>
+              )}
+            </AnimatePresence>
+
+            {/* Menu grid */}
+            <m.div variants={fadeUp} className="mt-5">
+              <MenuGrid
+                items={filteredSortedItems}
+                onOpenItem={openItem}
+                getPriceCents={readPriceCents}
+                getAvailable={readAvailable}
+                emptyHintActionLabel="Clear all"
+                onEmptyHintAction={clearAll}
+              />
+            </m.div>
+
+            {/* Filters panel */}
+            <MenuFilters
+              open={filtersOpen}
+              onOpenChange={handleFiltersOpenChange}
+              searchText={searchText}
+              onSearchTextChange={setSearchText}
+              selectedTags={filters.tags}
+              onSelectedTagsChange={(next: Set<MenuTagKey>) =>
+                setFilters((prev) => ({ ...prev, tags: next }))
+              }
+              priceRange={filters.priceRange}
+              onPriceRangeChange={(next: MenuPriceRangeKey) =>
+                setFilters((prev) => ({ ...prev, priceRange: next }))
+              }
+              sort={filters.sort}
+              onSortChange={(next: MenuSortKey) => setFilters((prev) => ({ ...prev, sort: next }))}
+              promoOnly={filters.promoOnly}
+              onPromoOnlyChange={(next: boolean) =>
+                setFilters((prev) => ({ ...prev, promoOnly: Boolean(next) }))
+              }
+              onClearAll={clearAll}
             />
-          </div>
 
-          <div className="mt-8 flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-gray-900">Browse categories</p>
-              <p className="mt-0.5 text-xs text-gray-500">
-                Want deals only? Open filters and turn on “Promo only”.
-              </p>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setFiltersOpen(true)}
-                className="inline-flex h-10 items-center justify-center rounded-xl border border-gray-200 bg-white px-4 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-orange-500/40"
-                aria-label="Open filters"
-              >
-                Filters
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setFilters((prev) => ({ ...prev, promoOnly: true }));
-                  setFiltersOpen(true);
-                }}
-                className="inline-flex h-10 items-center justify-center rounded-xl border border-gray-200 bg-white px-4 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-orange-500/40"
-                aria-label="Open filters and show deals only"
-              >
-                Deals
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-6">
-            <CategoryTabs
-              selectedCategory={selectedCategory}
-              onSelectCategory={setSelectedCategory}
-              availableCategories={categoriesWithItems}
-            />
-          </div>
-
-          {filteredSortedItems.length === 0 ? (
-            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
-              No matches for your current filters.
-              <button
-                type="button"
-                onClick={clearAll}
-                className="ml-2 font-semibold text-orange-700 underline underline-offset-4 hover:text-orange-800"
-              >
-                Clear all
-              </button>
-            </div>
-          ) : null}
-
-          <div className="mt-5">
-            <MenuGrid
-              items={filteredSortedItems}
-              onOpenItem={openItem}
-              getPriceCents={readPriceCents}
-              getAvailable={readAvailable}
-              emptyHintActionLabel="Clear all"
-              onEmptyHintAction={clearAll}
-            />
-          </div>
-
-          <MenuFilters
-            open={filtersOpen}
-            onOpenChange={handleFiltersOpenChange}
-            searchText={searchText}
-            onSearchTextChange={setSearchText}
-            selectedTags={filters.tags}
-            onSelectedTagsChange={(next: Set<MenuTagKey>) =>
-              setFilters((prev) => ({ ...prev, tags: next }))
-            }
-            priceRange={filters.priceRange}
-            onPriceRangeChange={(next: MenuPriceRangeKey) =>
-              setFilters((prev) => ({ ...prev, priceRange: next }))
-            }
-            sort={filters.sort}
-            onSortChange={(next: MenuSortKey) => setFilters((prev) => ({ ...prev, sort: next }))}
-            promoOnly={filters.promoOnly}
-            onPromoOnlyChange={(next: boolean) =>
-              setFilters((prev) => ({ ...prev, promoOnly: Boolean(next) }))
-            }
-            onClearAll={clearAll}
-          />
-
-          {modal.open ? <MenuItemModal item={modal.item} onClose={closeItem} /> : null}
-        </>
-      )}
+            {modal.open ? <MenuItemModal item={modal.item} onClose={closeItem} /> : null}
+          </m.div>
+        )}
+      </AnimatePresence>
     </main>
   );
 }

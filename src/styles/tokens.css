@@ -1,93 +1,250 @@
-@theme {
-  /* ── TYPEFACES ───────────────────────────────────────────── */
-  --font-display: 'Cormorant Garamond', Georgia, serif;
-  --font-sans: 'DM Sans', -apple-system, sans-serif;
+/* =============================================================================
+   SOFIS — tokens.css
+   Runtime CSS custom properties. Single source of truth for all design tokens.
 
-  /* ── COLOR — Clay (Primary brand) ───────────────────────── */
-  --color-brand-50: #fdf8f4;
-  --color-brand-100: #f5ebe0;
-  --color-brand-200: #e8d2b8;
-  --color-brand-300: #d4a97a;
-  --color-brand-400: #c08455;
-  --color-brand: #a96840;
-  --color-brand-600: #8a4f2e;
-  --color-brand-700: #6b3820;
+   ── WHY :root AND NOT @theme ────────────────────────────────────────────────
+   Tailwind v4 only processes @theme blocks in the file that contains
+   `@import "tailwindcss"` (i.e. app.css). An @theme block in any @import-ed
+   child file is silently ignored by the Tailwind scanner, which means:
+     • Tailwind utility classes like `bg-gold-400` stop working.
+     • Worse: the duplicate @theme can cause PostCSS to emit an empty stylesheet,
+       breaking ALL styles in the entire app.
 
-  /* ── COLOR — Forest (Success / Confirmation only) ────────── */
-  --color-success-50: #f2f6f2;
-  --color-success-100: #d8e8d8;
-  --color-success-300: #6a9e6a;
-  --color-success: #1f5c1f;
-  --color-success-600: #154015;
+   The correct split is:
+     tokens.css  → :root { }   (runtime CSS vars, available to all CSS + JS)
+     app.css     → @theme { }  (Tailwind build-time scan, duplicate of tokens)
 
-  /* ── COLOR — Gold (Accent / premium CTA only) ────────────── */
-  --color-accent-300: #e8c97a;
-  --color-accent: #d4aa40;
-  --color-accent-600: #b8912a;
+   Both blocks contain the same values. If you update a token, update both.
+   ============================================================================= */
 
-  /* ── COLOR — Ink (All text + UI neutrals) ────────────────── */
-  --color-ink-50: #fdf8f4;
-  --color-ink-100: #c8b8a8;
-  --color-ink-300: #8a7a6a;
-  --color-ink-500: #5a4a3a;
-  --color-ink-700: #2d2520;
-  --color-ink-900: #1a1512;
+:root {
 
-  /* ── COLOR — Semantic surfaces ───────────────────────────── */
-  --color-cream: #fdf8f4;
-  --color-surface: #ffffff;
-  --color-surface-alt: #fdf8f4;
-  --color-border: #f5ebe0;
-  --color-border-mid: #e8d2b8;
+  /* ── Typefaces ─────────────────────────────────────────────────────────── */
+  --font-display: 'Playfair Display', 'SofiDisplay', Georgia, serif;
+  --font-serif:   'Cormorant Garamond', Georgia, serif;
+  --font-sans:    'DM Sans', 'SofiBody', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono:    'SF Mono', 'Fira Code', Menlo, monospace;
 
-  /* ── COLOR — State ───────────────────────────────────────── */
-  --color-error: #c0392b;
-  --color-error-50: #fdf2f2;
-  --color-warning: #d4aa40;
+  /* ── Gold / Accent ─────────────────────────────────────────────────────── */
+  --color-gold-50:   #fdf8e8;
+  --color-gold-100:  #f9efc4;
+  --color-gold-200:  #f2dc87;
+  --color-gold-300:  #e8c46a;
+  --color-gold-400:  #d4af37;
+  --color-gold-500:  #b8961f;
+  --color-gold-600:  #9a7a0e;
+  --color-gold-700:  #7a5f08;
+  --color-gold-800:  #5a4506;
+  --color-gold-900:  #3a2d04;
 
-  /* ── SPACING — semantic additions to Tailwind's scale ────── */
-  /* Use standard Tailwind spacing (4, 6, 8...) for everything */
-  /* These names are for section-level rhythm only             */
-  --spacing-section: 5rem; /* 80px  — vertical section gap */
-  --spacing-card: 1.25rem; /* 20px  — card internal padding */
+  --color-accent:       var(--color-gold-400);
+  --color-accent-light: var(--color-gold-300);
+  --color-accent-deep:  var(--color-gold-600);
+  --color-accent-pale:  var(--color-gold-50);
 
-  /* ── BORDER RADIUS ───────────────────────────────────────── */
-  --radius-card: 0.75rem; /* 12px — menu cards, checkout    */
-  --radius-btn: 9999px; /* pill — all buttons             */
-  --radius-input: 0.5rem; /* 8px  — form inputs             */
-  --radius-badge: 9999px; /* pill — status badges           */
+  /* ── Ember / Primary ───────────────────────────────────────────────────── */
+  --color-ember-50:  #fdf4ef;
+  --color-ember-100: #f8e2d4;
+  --color-ember-200: #eebfa0;
+  --color-ember-300: #d9906a;
+  --color-ember-400: #c07040;
+  --color-ember-500: #a96840;
+  --color-ember-600: #8a4f2e;
+  --color-ember-700: #6b3820;
+  --color-ember-800: #4e2414;
+  --color-ember-900: #32140a;
 
-  /* ── SHADOWS ─────────────────────────────────────────────── */
-  --shadow-sm: 0 1px 3px rgb(26 21 18 / 0.06), 0 1px 2px rgb(26 21 18 / 0.04);
-  --shadow-card: 0 4px 12px rgb(26 21 18 / 0.08), 0 2px 4px rgb(26 21 18 / 0.04);
-  --shadow-card-hover: 0 16px 40px rgb(26 21 18 / 0.14);
-  --shadow-lg: 0 12px 32px rgb(26 21 18 / 0.1), 0 4px 8px rgb(26 21 18 / 0.06);
-  --shadow-brand: 0 8px 24px rgb(169 104 64 / 0.25);
-  --shadow-brand-lg: 0 12px 32px rgb(169 104 64 / 0.35);
-  --shadow-gold: 0 8px 24px rgb(212 170 64 / 0.3);
-  --shadow-popover: 0 24px 48px rgb(26 21 18 / 0.14), 0 8px 16px rgb(26 21 18 / 0.08);
+  --color-primary:     var(--color-ember-500);
+  --color-primary-600: var(--color-ember-600);
 
-  /* ── MOTION ─────────────────────────────────────────────── */
-  --ease-standard: cubic-bezier(0.25, 0.46, 0.45, 0.94);
-  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
-  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+  /* ── Crimson ───────────────────────────────────────────────────────────── */
+  --color-crimson-400: #c45a2a;
+  --color-crimson-500: #a84520;
+  --color-crimson-600: #8c3418;
 
-  --duration-fast: 120ms;
-  --duration-base: 200ms;
-  --duration-slow: 350ms;
-  --duration-enter: 450ms;
+  /* ── Ink / Text ─────────────────────────────────────────────────────────── */
+  --color-ink-50:  #faf8f5;
+  --color-ink-100: #f0ebe4;
+  --color-ink-200: #ddd4c8;
+  --color-ink-300: #c8b8a8;
+  --color-ink-400: #a89888;
+  --color-ink-500: #8a7a6a;
+  --color-ink-600: #6a5a4e;
+  --color-ink-700: #4e3e34;
+  --color-ink-800: #2d2520;
+  --color-ink-900: #1c1c1c;
 
-  /* Shorthand used in className for transition-[...] */
-  --transition-base: 200ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --color-ink:       var(--color-ink-900);
+  --color-ink-soft:  var(--color-ink-500);
+  --color-ink-muted: var(--color-ink-300);
 
-  /* ── TYPOGRAPHY — letter spacing ─────────────────────────── */
-  --tracking-display: -0.03em;
-  --tracking-ui: 0.04em;
-  --tracking-label: 0.1em;
-  --tracking-caps: 0.12em;
+  /* ── Cream / Light Surfaces ─────────────────────────────────────────────── */
+  --color-cream-50:  #fefcf9;
+  --color-cream-100: #faf6ef;
+  --color-cream-200: #f5ede0;
+  --color-cream-300: #ede0ce;
+  --color-cream-400: #e3d0b8;
+  --color-cream-500: #d4bfa0;
 
-  /* ── GLASS (dark surface overlay variant) ────────────────── */
-  --glass-bg: rgb(255 255 255 / 0.07);
-  --glass-border: rgb(255 255 255 / 0.12);
-  --glass-blur: 12px;
+  --color-cream:      var(--color-cream-100);
+  --color-cream-deep: var(--color-cream-300);
+  --color-parchment:  var(--color-cream-400);
+  --color-surface:    #ffffff;
+
+  /* ── Stone / Dark Surfaces ──────────────────────────────────────────────── */
+  --color-stone-950: #0d0c0a;
+  --color-stone-900: #1c1915;
+  --color-stone-800: #2e2a24;
+  --color-stone-700: #3e3830;
+  --color-stone-600: #504840;
+  --color-stone-500: #625a50;
+
+  --color-stone:       var(--color-stone-900);
+  --color-stone-mid:   var(--color-stone-800);
+  --color-stone-light: var(--color-stone-700);
+
+  /* ── Border ─────────────────────────────────────────────────────────────── */
+  --color-border:      var(--color-cream-200);
+  --color-border-mid:  var(--color-cream-400);
+  --color-border-dark: rgb(255 255 255 / 0.10);
+
+  /* ── Status ─────────────────────────────────────────────────────────────── */
+  --color-success:    #1f5c1f;
+  --color-success-bg: #f2f6f2;
+  --color-error:      #c0392b;
+  --color-error-bg:   #fdf2f2;
+  --color-warning:    #d4aa40;
+
+  /* ── Border radius ──────────────────────────────────────────────────────── */
+  --radius-xs:    0.25rem;
+  --radius-sm:    0.375rem;
+  --radius-md:    0.5rem;
+  --radius-lg:    0.75rem;
+  --radius-xl:    1rem;
+  --radius-2xl:   1.25rem;
+  --radius-3xl:   1.75rem;
+  --radius-pill:  9999px;
+
+  --radius-card:  var(--radius-2xl);
+  --radius-btn:   var(--radius-pill);
+  --radius-input: var(--radius-md);
+  --radius-badge: var(--radius-pill);
+
+  /* ── Spacing scale ──────────────────────────────────────────────────────── */
+  --space-section-xs: 3rem;
+  --space-section-sm: 4rem;
+  --space-section:    5rem;
+  --space-section-lg: 7rem;
+  --space-section-xl: 10rem;
+
+  /* ── Shadows ────────────────────────────────────────────────────────────── */
+  --shadow-xs:       0 1px 2px rgb(26 18 9 / 0.05);
+  --shadow-sm:       0 2px 6px rgb(26 18 9 / 0.06), 0 1px 3px rgb(26 18 9 / 0.04);
+  --shadow-md:       0 4px 16px rgb(26 18 9 / 0.08);
+  --shadow-lg:       0 8px 32px rgb(26 18 9 / 0.12);
+  --shadow-xl:       0 16px 56px rgb(26 18 9 / 0.16);
+  --shadow-2xl:      0 28px 80px rgb(26 18 9 / 0.22);
+
+  --shadow-card-sm:  var(--shadow-md);
+  --shadow-card:     var(--shadow-lg);
+  --shadow-card-lg:  var(--shadow-xl);
+  --shadow-popover:  0 24px 48px rgb(26 18 9 / 0.14), 0 8px 16px rgb(26 18 9 / 0.08);
+
+  --shadow-gold:     0 0 32px rgb(212 175 55 / 0.22), 0 4px 16px rgb(212 175 55 / 0.14);
+  --shadow-gold-lg:  0 0 64px rgb(212 175 55 / 0.28), 0 8px 32px rgb(212 175 55 / 0.18);
+  --shadow-brand:    0 8px 24px rgb(169 104 64 / 0.25);
+  --shadow-brand-lg: 0 16px 56px rgb(169 104 64 / 0.35);
+
+  /* ── Easing ─────────────────────────────────────────────────────────────── */
+  --ease-luxury:    cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out:       cubic-bezier(0.0, 0, 0.2, 1);
+  --ease-spring:    cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-standard:  cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-in-out:    cubic-bezier(0.45, 0, 0.55, 1);
+  --ease-cinematic: cubic-bezier(0.12, 0, 0.39, 0);
+
+  /* ── Duration ───────────────────────────────────────────────────────────── */
+  --duration-instant: 80ms;
+  --duration-fast:    140ms;
+  --duration-base:    200ms;
+  --duration-slow:    350ms;
+  --duration-enter:   500ms;
+  --duration-scene:   800ms;
+
+  /* ── Transitions (pre-composed) ─────────────────────────────────────────── */
+  --transition-colors: color var(--duration-base) var(--ease-luxury),
+                       background-color var(--duration-base) var(--ease-luxury),
+                       border-color var(--duration-base) var(--ease-luxury);
+  --transition-hover:  transform var(--duration-slow) var(--ease-luxury),
+                       box-shadow var(--duration-slow) var(--ease-luxury);
+  --transition-opacity: opacity var(--duration-base) var(--ease-out);
+
+  /* ── Typography scale ───────────────────────────────────────────────────── */
+  --text-2xs:  0.625rem;
+  --text-xs:   0.75rem;
+  --text-sm:   0.875rem;
+  --text-base: 1rem;
+  --text-lg:   1.125rem;
+  --text-xl:   1.25rem;
+  --text-2xl:  1.5rem;
+  --text-3xl:  2rem;
+  --text-4xl:  2.5rem;
+  --text-5xl:  3rem;
+  --text-6xl:  3.75rem;
+  --text-7xl:  4.5rem;
+
+  /* ── Letter spacing ─────────────────────────────────────────────────────── */
+  --tracking-tightest: -0.04em;
+  --tracking-tighter:  -0.03em;
+  --tracking-tight:    -0.02em;
+  --tracking-normal:   0em;
+  --tracking-wide:     0.04em;
+  --tracking-wider:    0.08em;
+  --tracking-label:    0.12em;
+  --tracking-caps:     0.18em;
+  --tracking-loose:    0.22em;
+
+  /* ── Line height ────────────────────────────────────────────────────────── */
+  --leading-none:    1;
+  --leading-tight:   1.2;
+  --leading-snug:    1.35;
+  --leading-base:    1.55;
+  --leading-relaxed: 1.75;
+  --leading-loose:   1.9;
+
+  /* ── Glass / Overlay ────────────────────────────────────────────────────── */
+  --glass-bg:           rgb(255 255 255 / 0.06);
+  --glass-bg-mid:       rgb(255 255 255 / 0.10);
+  --glass-bg-strong:    rgb(255 255 255 / 0.14);
+  --glass-border:       rgb(255 255 255 / 0.10);
+  --glass-border-mid:   rgb(255 255 255 / 0.16);
+  --glass-blur:         14px;
+  --glass-blur-heavy:   24px;
+
+  --glass-dark-bg:     rgb(28 25 21 / 0.65);
+  --glass-dark-border: rgb(28 25 21 / 0.12);
+
+  /* ── Gradients (brand card placeholders) ────────────────────────────────── */
+  --gradient-1: radial-gradient(ellipse at 40% 40%, #7A4020 0%, #3A1A08 55%, #1C0E04 100%);
+  --gradient-2: radial-gradient(ellipse at 55% 38%, #C07830 0%, #7A3C0A 50%, #2E1404 100%);
+  --gradient-3: radial-gradient(ellipse at 45% 48%, #6A5530 0%, #3E2E0E 50%, #1E1406 100%);
+  --gradient-4: radial-gradient(ellipse at 50% 44%, #3A2010 0%, #1A0C06 55%, #100804 100%);
+  --gradient-5: radial-gradient(ellipse at 42% 36%, #8A4818 0%, #4E2006 50%, #200E04 100%);
+  --gradient-6: radial-gradient(ellipse at 50% 40%, #C03820 0%, #7A1606 50%, #3A0604 100%);
+
+  --gradient-hero-vignette:
+    radial-gradient(ellipse 90% 60% at 75% 15%, rgb(212 175 55 / 0.08) 0%, transparent 55%),
+    radial-gradient(ellipse 60% 50% at 15% 85%, rgb(168 69 32 / 0.10) 0%, transparent 50%);
+
+  --gradient-section-fade-top:    linear-gradient(to bottom, rgb(250 246 239 / 1) 0%, transparent 100%);
+  --gradient-section-fade-bottom: linear-gradient(to top,   rgb(250 246 239 / 1) 0%, transparent 100%);
+
+  /* ── Z-index scale ──────────────────────────────────────────────────────── */
+  --z-base:    0;
+  --z-raised:  10;
+  --z-overlay: 20;
+  --z-sticky:  30;
+  --z-modal:   40;
+  --z-toast:   50;
+  --z-cursor:  60;
 }

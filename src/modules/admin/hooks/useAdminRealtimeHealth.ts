@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
-
+import { isOrderRow } from '@/modules/orders/utils/orderValidators';
 import {
   REALTIME_SUBSCRIBE_STATES,
   isRealtimeSubscribeState,
@@ -71,10 +71,6 @@ function isSubscribedRealtimeState(
   status: RealtimeSubscribeState,
 ): status is typeof REALTIME_SUBSCRIBE_STATES.SUBSCRIBED {
   return status === 'SUBSCRIBED';
-}
-
-function isOrderRow(value: unknown): value is OrderRow {
-  return typeof value === 'object' && value !== null && 'id' in value && typeof value.id === 'string';
 }
 
 function deriveHealth(

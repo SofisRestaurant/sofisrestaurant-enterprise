@@ -1,19 +1,36 @@
-// =============================================================================
 // src/app/router.tsx — 2026 Enterprise Router (production-hardened)
 // =============================================================================
 //
-// Fixes:
-// - ✅ Prevents "leaf route has no element" by ensuring every matched leaf returns a Component.
-// - ✅ Handles modules that do NOT have a default export (e.g. PromoManager named export).
-// - ✅ Fails loudly + visibly in UI if a route module is missing the expected export,
-//      instead of silently rendering a blank page.
-// - ✅ Keeps /menu deterministic (no lazy) per your prior fix.
+// Architecture:
+//   • All public routes are lazy-loaded for optimal bundle splitting
+//   • /menu is kept synchronous (no lazy) — it's the highest-traffic route
+//   • Auth-protected routes use AuthGuard / RoleGuard wrappers
+//   • lazyPick() handles modules with non-default exports gracefully
+//   • Every load failure renders a visible RouteLoadError instead of blank page
+//   • HydrateFallback covers the initial load state before React hydrates
 //
-// NOTE (from your console):
-//   import("/src/pages/Admin/Marketing/CampaignManager.tsx") only exports ["PromoManager"].
-//   That means CampaignManager.tsx currently does NOT export CampaignManager at all.
-//   This router will now show a clear error page for /admin/marketing/campaigns until that file is corrected.
-// =============================================================================
+// Route tree:
+//   /                    → HomePage (lazy)
+//   /menu                → MenuPage (sync — no lazy)
+//   /about               → About (lazy)
+//   /contact             → Contact (lazy)
+//   /gallery             → Gallery (lazy)
+//   /catering            → Catering (lazy)
+//   /reservations        → Reservations (lazy)
+//   /reviews             → Reviews (lazy)
+//   /account/*           → AccountLayout (auth required, lazy)
+//   /checkout            → CheckoutPage (auth required, lazy)
+//   /order-success       → OrderSuccess (lazy)
+//   /order-canceled      → OrderCanceled (lazy)
+//   /order-status/:id    → OrderStatus (lazy)
+//   /update-password     → UpdatePassword (lazy)
+//   /privacy-policy      → PrivacyPolicy (lazy)
+//   /terms-of-service    → TermsOfService (lazy)
+//   /refund-policy       → RefundPolicy (lazy)
+//   /kitchen             → KitchenScreen (admin|staff role, lazy)
+//   /expo                → ExpoCommandCenter (admin|staff role, lazy)
+//   /admin/*             → AdminLayout (admin required, lazy)
+//   /*                   → NotFound (lazy)
 
 import React from 'react';
 import { createBrowserRouter } from 'react-router-dom';
@@ -22,12 +39,12 @@ import RootLayout from '@/app/RootLayout';
 import { Providers } from '@/app/Providers';
 import { AuthGuard, RoleGuard } from '@/components/auth/AuthGuard';
 
-// ✅ /menu deterministic (no lazy)
+// ✅ /menu kept synchronous — highest-traffic route, no lazy penalty
 import MenuPage from '@/modules/menu/pages/MenuPage';
 
-// ─────────────────────────────────────────────────────────────
-// Wrappers
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Auth / Role wrappers
+// ─────────────────────────────────────────────────────────────────────────────
 
 const withAuth = (Cmp: React.ComponentType) => () => (
   <AuthGuard requireAuth>
@@ -47,15 +64,16 @@ const withRole = (roles: Array<'admin' | 'staff' | 'customer'>, Cmp: React.Compo
   </RoleGuard>
 );
 
-// ─────────────────────────────────────────────────────────────
-// Lazy helpers (NO blank pages)
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Graceful lazy loader — surfaces missing exports as visible UI errors
+// instead of blank pages or cryptic console noise.
+// ─────────────────────────────────────────────────────────────────────────────
 
 function RouteLoadError({ title, details }: { title: string; details: string }) {
   return (
     <div className="flex min-h-[60vh] items-center justify-center px-6">
       <div className="w-full max-w-xl rounded-2xl border border-red-500/20 bg-[#0d0d10] p-6">
-        <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-600">
+        <p className="font-mono text-10px uppercase tracking-[0.2em] text-zinc-600">
           Route Load Error
         </p>
         <h1 className="mt-2 text-lg font-black text-red-300">{title}</h1>
@@ -74,7 +92,6 @@ function pickExport(mod: AnyModule, prefer: string[]): React.ComponentType | nul
     const v = mod[key];
     if (typeof v === 'function') return v as React.ComponentType;
     if (v && typeof v === 'object') {
-      // React.memo / forwardRef components can appear as objects with $$typeof
       const maybe = v as { $$typeof?: unknown };
       if (maybe.$$typeof) return v as unknown as React.ComponentType;
     }
@@ -102,8 +119,7 @@ function lazyPick(importer: () => Promise<AnyModule>, prefer: string[], label: s
 
       return { Component: Cmp };
     } catch (error) {
-      const msg = error instanceof Error ? error.stack || error.message : String(error);
-
+      const msg = error instanceof Error ? (error.stack ?? error.message) : String(error);
       return {
         Component: () => <RouteLoadError title={`Failed to load: ${label}`} details={msg} />,
       };
@@ -111,9 +127,9 @@ function lazyPick(importer: () => Promise<AnyModule>, prefer: string[], label: s
   };
 }
 
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // Router
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
 export const router = createBrowserRouter([
   {
@@ -124,18 +140,48 @@ export const router = createBrowserRouter([
       </Providers>
     ),
 
+    // Shown while React is hydrating on first paint
     HydrateFallback: () => (
-      <div className="flex min-h-screen items-center justify-center bg-gray-950">
-        <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-700 border-t-amber-500" />
+      <div
+        className="flex min-h-screen items-center justify-center"
+        style={{ background: 'var(--color-stone-900, #1c1915)' }}
+      >
+        <div
+          className="h-6 w-6 animate-spin rounded-full border-2"
+          style={{ borderColor: 'rgba(212,175,55,0.2)', borderTopColor: '#d4af37' }}
+          aria-label="Loading…"
+          role="status"
+        />
       </div>
     ),
 
-    errorElement: <div>Loading...</div>,
+    errorElement: (
+      <div
+        className="flex min-h-screen items-center justify-center px-6 text-center"
+        style={{ background: 'var(--color-cream-100, #faf6ef)' }}
+      >
+        <div>
+          <h1
+            className="font-display text-3xl"
+            style={{ color: 'var(--color-ember-500, #a96840)' }}
+          >
+            Something went wrong
+          </h1>
+          <p className="mt-3 font-body text-sm" style={{ color: 'var(--color-ink-500, #8a7a6a)' }}>
+            Please refresh the page or{' '}
+            <a href="/" style={{ color: 'var(--color-gold-400, #d4af37)' }}>
+              return home
+            </a>
+            .
+          </p>
+        </div>
+      </div>
+    ),
 
     children: [
-      // ==================================================
+      // ────────────────────────────────────────────────────────
       // PUBLIC ROUTES
-      // ==================================================
+      // ────────────────────────────────────────────────────────
       {
         index: true,
         lazy: async () => {
@@ -143,12 +189,10 @@ export const router = createBrowserRouter([
           return { Component: m.default };
         },
       },
-
       {
         path: 'menu',
         element: <MenuPage />,
       },
-
       {
         path: 'about',
         lazy: async () => {
@@ -192,9 +236,9 @@ export const router = createBrowserRouter([
         },
       },
 
-      // ==================================================
-      // ACCOUNT (AUTH REQUIRED)
-      // ==================================================
+      // ────────────────────────────────────────────────────────
+      // ACCOUNT (auth required)
+      // ────────────────────────────────────────────────────────
       {
         path: 'account',
         lazy: async () => {
@@ -226,9 +270,9 @@ export const router = createBrowserRouter([
         ],
       },
 
-      // ==================================================
-      // CHECKOUT (AUTH REQUIRED)
-      // ==================================================
+      // ────────────────────────────────────────────────────────
+      // CHECKOUT (auth required)
+      // ────────────────────────────────────────────────────────
       {
         path: 'checkout',
         lazy: async () => {
@@ -237,9 +281,9 @@ export const router = createBrowserRouter([
         },
       },
 
-      // ==================================================
+      // ────────────────────────────────────────────────────────
       // STRIPE RESULTS
-      // ==================================================
+      // ────────────────────────────────────────────────────────
       {
         path: 'order-success',
         lazy: async () => {
@@ -254,10 +298,6 @@ export const router = createBrowserRouter([
           return { Component: m.default };
         },
       },
-
-      // ==================================================
-      // ORDER TRACKING
-      // ==================================================
       {
         path: 'order-status/:orderId',
         lazy: async () => {
@@ -266,9 +306,9 @@ export const router = createBrowserRouter([
         },
       },
 
-      // ==================================================
+      // ────────────────────────────────────────────────────────
       // PASSWORD
-      // ==================================================
+      // ────────────────────────────────────────────────────────
       {
         path: 'update-password',
         lazy: async () => {
@@ -277,9 +317,9 @@ export const router = createBrowserRouter([
         },
       },
 
-      // ==================================================
+      // ────────────────────────────────────────────────────────
       // LEGAL
-      // ==================================================
+      // ────────────────────────────────────────────────────────
       {
         path: 'privacy-policy',
         lazy: async () => {
@@ -302,9 +342,9 @@ export const router = createBrowserRouter([
         },
       },
 
-      // ==================================================
-      // KITCHEN + EXPO (ROLE PROTECTED)
-      // ==================================================
+      // ────────────────────────────────────────────────────────
+      // KITCHEN + EXPO (role protected)
+      // ────────────────────────────────────────────────────────
       {
         path: 'kitchen',
         lazy: async () => {
@@ -320,9 +360,9 @@ export const router = createBrowserRouter([
         },
       },
 
-      // ==================================================
-      // ADMIN (AUTH + ADMIN REQUIRED)
-      // ==================================================
+      // ────────────────────────────────────────────────────────
+      // ADMIN (admin auth required)
+      // ────────────────────────────────────────────────────────
       {
         path: 'admin',
         lazy: async () => {
@@ -330,7 +370,6 @@ export const router = createBrowserRouter([
           return { Component: withAdmin(layout.default) };
         },
         children: [
-          // Dashboard
           {
             index: true,
             lazy: async () => {
@@ -338,8 +377,6 @@ export const router = createBrowserRouter([
               return { Component: m.default };
             },
           },
-
-          // Operations
           {
             path: 'orders',
             lazy: async () => {
@@ -368,12 +405,9 @@ export const router = createBrowserRouter([
               return { Component: m.default };
             },
           },
-
-          // Marketing
           {
             path: 'marketing',
             children: [
-              // /admin/marketing
               {
                 index: true,
                 lazy: lazyPick(
@@ -382,7 +416,6 @@ export const router = createBrowserRouter([
                   'CampaignManager (default|CampaignManager)',
                 ),
               },
-              // /admin/marketing/campaigns
               {
                 path: 'campaigns',
                 lazy: lazyPick(
@@ -391,7 +424,6 @@ export const router = createBrowserRouter([
                   'CampaignManager (default|CampaignManager)',
                 ),
               },
-              // /admin/marketing/promos
               {
                 path: 'promos',
                 lazy: lazyPick(
@@ -400,7 +432,6 @@ export const router = createBrowserRouter([
                   'PromoManager (PromoManager|default)',
                 ),
               },
-              // /admin/marketing/abandoned
               {
                 path: 'abandoned',
                 lazy: lazyPick(
@@ -409,7 +440,6 @@ export const router = createBrowserRouter([
                   'AbandonedCartAnalytics (AbandonedCartAnalytics|default)',
                 ),
               },
-              // /admin/marketing/optimizer
               {
                 path: 'optimizer',
                 lazy: lazyPick(
@@ -420,8 +450,6 @@ export const router = createBrowserRouter([
               },
             ],
           },
-
-          // Finance
           {
             path: 'finance',
             lazy: async () => {
@@ -429,8 +457,6 @@ export const router = createBrowserRouter([
               return { Component: m.default };
             },
           },
-
-          // Taxes
           {
             path: 'taxes',
             lazy: lazyPick(
@@ -439,8 +465,6 @@ export const router = createBrowserRouter([
               'AdminTaxesPage (default|AdminTaxesPage)',
             ),
           },
-
-          // Fraud
           {
             path: 'fraud',
             lazy: async () => {
@@ -448,8 +472,6 @@ export const router = createBrowserRouter([
               return { Component: m.default };
             },
           },
-
-          // Notifications
           {
             path: 'notifications',
             lazy: async () => {
@@ -457,8 +479,6 @@ export const router = createBrowserRouter([
               return { Component: m.default };
             },
           },
-
-          // OPTIONAL: Admin Orders page
           {
             path: 'orders-page',
             lazy: async () => {
@@ -466,8 +486,6 @@ export const router = createBrowserRouter([
               return { Component: m.default };
             },
           },
-
-          // OPTIONAL: Admin menu editor alias
           {
             path: 'menu-editor',
             lazy: async () => {
@@ -478,9 +496,9 @@ export const router = createBrowserRouter([
         ],
       },
 
-      // ==================================================
+      // ────────────────────────────────────────────────────────
       // FALLBACK
-      // ==================================================
+      // ────────────────────────────────────────────────────────
       {
         path: '*',
         lazy: async () => {

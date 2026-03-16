@@ -1,25 +1,119 @@
-/* ============================================================
-   SOFIS — UTILITIES
-   Animation keyframes + pseudo-state utilities ONLY.
-   ─────────────────────────────────────────────────────────────
-   RULE: Only put something here if it is IMPOSSIBLE to express
-   in a Tailwind className. This means:
-     ✅ Keyframe @keyframes blocks
-     ✅ Multi-child state changes driven by a parent class
-     ✅ ::before / ::after content that can't live in JSX
-   ─────────────────────────────────────────────────────────────
-   ❌ NOT for colors. ❌ NOT for spacing. ❌ NOT for components.
-   ============================================================ */
+/* =============================================================================
+   SOFIS — utilities.css
+   Structural utilities, layout helpers, scroll containers, and GPU hints.
+   
+   Rule: Only add here what Tailwind cannot express cleanly:
+   ✅ Multi-step state machines (cart add, etc.)
+   ✅ ::before / ::after pseudoelements with content
+   ✅ Scroll/overflow containers with vendor prefixes
+   ✅ Performance GPU hints that must apply globally
+   ✅ Complex selectors (parent-controls-child patterns)
+   
+   ❌ NOT for one-off color values — use Tailwind utilities
+   ❌ NOT for anything already in effects.css or components.css
+   ============================================================================= */
 
-/* ── Cart button — multi-child state swap ────────────────── */
-/* JS toggles .btn-cart-added on the <button>.               */
-/* Children .btn-cart-label and .btn-cart-check respond.     */
-/* Impossible in Tailwind because it requires sibling state. */
+/* =============================================================================
+   LAYOUT CONTAINERS
+   ============================================================================= */
+
+/* ── Site-width container ─────────────────────────────────────────────────── */
+.container-site {
+  width: 100%;
+  max-width: 1280px;
+  margin-inline: auto;
+  padding-inline: clamp(1.25rem, 4vw, 3rem);
+}
+
+.container-narrow {
+  width: 100%;
+  max-width: 860px;
+  margin-inline: auto;
+  padding-inline: clamp(1.25rem, 4vw, 3rem);
+}
+
+.container-wide {
+  width: 100%;
+  max-width: 1440px;
+  margin-inline: auto;
+  padding-inline: clamp(1.25rem, 4vw, 3rem);
+}
+
+/* ── Section spacing ─────────────────────────────────────────────────────── */
+.section-py {
+  padding-block: var(--space-section, 5rem);
+}
+
+.section-py-sm {
+  padding-block: var(--space-section-sm, 4rem);
+}
+
+.section-py-lg {
+  padding-block: var(--space-section-lg, 7rem);
+}
+
+.section-py-xl {
+  padding-block: var(--space-section-xl, 10rem);
+}
+
+/* ── Section relative wrapper (for absolute positioned children) ─────────── */
+.section-wrap {
+  position: relative;
+  overflow: clip;
+}
+
+/* =============================================================================
+   SCROLL CONTAINERS
+   ============================================================================= */
+
+.scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+
+.scroll-x::-webkit-scrollbar { display: none; }
+
+.scroll-y {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  overscroll-behavior-y: contain;
+}
+
+/* Snap scrolling (image carousels, horizontal decks) */
+.scroll-snap-x {
+  scroll-snap-type: x mandatory;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.scroll-snap-x > * { scroll-snap-align: start; }
+
+.scroll-snap-x::-webkit-scrollbar { display: none; }
+
+/* =============================================================================
+   CARD IMAGE ZOOM (parent-controls-child)
+   ============================================================================= */
+
+.card-zoom-target {
+  transition: transform var(--duration-scene, 800ms) var(--ease-luxury);
+  will-change: transform;
+}
+
+.group:hover .card-zoom-target { transform: scale(1.04); }
+
+/* =============================================================================
+   CART / ADD-TO-CART BUTTON STATE MACHINE
+   Parent class .btn-cart-added controls child visibility swap.
+   ============================================================================= */
 
 .btn-cart-label {
   transition:
-    opacity var(--duration-base) var(--ease-standard),
-    transform var(--duration-base) var(--ease-standard);
+    opacity   var(--duration-base, 200ms) var(--ease-standard),
+    transform var(--duration-base, 200ms) var(--ease-standard);
 }
 
 .btn-cart-check {
@@ -29,15 +123,15 @@
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transform: scale(0.6);
+  transform: scale(0.55);
   transition:
-    opacity var(--duration-slow) var(--ease-spring),
-    transform var(--duration-slow) var(--ease-spring);
+    opacity   var(--duration-slow, 350ms) var(--ease-spring),
+    transform var(--duration-slow, 350ms) var(--ease-spring);
 }
 
 .btn-cart-added .btn-cart-label {
   opacity: 0;
-  transform: scale(0.6);
+  transform: scale(0.55);
 }
 
 .btn-cart-added .btn-cart-check {
@@ -45,126 +139,114 @@
   transform: scale(1);
 }
 
-/* ── Scroll containers ───────────────────────────────────── */
-.scroll-x {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
-}
-.scroll-x::-webkit-scrollbar {
-  display: none;
-}
+/* =============================================================================
+   SR-ONLY / ACCESSIBILITY
+   ============================================================================= */
 
-/* ── Card image hover zoom (child responds to parent hover) ─ */
-/* group-hover:scale-[1.04] in Tailwind works for this.      */
-/* Using a class here only as a fallback for non-React HTML. */
-.group:hover .card-zoom {
-  transform: scale(1.04);
-}
-.card-zoom {
-  transition: transform var(--duration-slow) var(--ease-standard);
-}
-
-/* ── Keyframes ───────────────────────────────────────────── */
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes fade-up {
-  from {
-    transform: translateY(12px);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-@keyframes confirm-pop {
-  0% {
-    transform: scale(0.5);
-    opacity: 0;
-  }
-  70% {
-    transform: scale(1.08);
-  }
-  100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
-
-@keyframes ripple {
-  from {
-    transform: scale(0);
-    opacity: 0.2;
-  }
-  to {
-    transform: scale(2.5);
-    opacity: 0;
-  }
-}
-
-@keyframes toast-in {
-  from {
-    transform: translateY(16px) scale(0.94);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0) scale(1);
-    opacity: 1;
-  }
-}
-
-@keyframes step-done {
-  0% {
-    transform: scale(0.7);
-    opacity: 0;
-  }
-  100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
-
-/* ── Animation utility classes ───────────────────────────── */
-/* Only applied via JS or conditional className in React.    */
-
-.animate-confirm-pop {
-  animation: confirm-pop 0.45s var(--ease-spring) both;
-}
-.animate-toast-in {
-  animation: toast-in 0.35s var(--ease-spring) both;
-}
-.animate-step-done {
-  animation: step-done 0.35s var(--ease-spring) both;
-}
-
-/* Staggered fade-ups for confirmation screen */
-.animate-fade-up-1 {
-  animation: fade-up 0.5s 0.08s var(--ease-out) both;
-}
-.animate-fade-up-2 {
-  animation: fade-up 0.5s 0.16s var(--ease-out) both;
-}
-.animate-fade-up-3 {
-  animation: fade-up 0.5s 0.24s var(--ease-out) both;
-}
-.animate-fade-up-4 {
-  animation: fade-up 0.5s 0.32s var(--ease-out) both;
-}
-
-/* One-shot ripple (added via JS, removed after 400ms) */
-.animate-ripple::after {
-  content: '';
+/* Visually hidden but accessible to screen readers */
+.sr-only {
   position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: rgb(255 255 255 / 0.2);
-  animation: ripple 0.4s var(--ease-out) both;
-  pointer-events: none;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* Reveal on focus (skip nav links) */
+.sr-only:focus,
+.sr-only:focus-within {
+  position: static;
+  width: auto;
+  height: auto;
+  padding: 0.5rem 1rem;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+}
+
+/* =============================================================================
+   TRUNCATION
+   ============================================================================= */
+
+.truncate-1 {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.truncate-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.truncate-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* =============================================================================
+   DIVIDERS
+   ============================================================================= */
+
+/* Thin gold divider line */
+.divider-gold {
+  border: none;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--color-gold-400, #d4af37) 30%,
+    var(--color-gold-300, #e8c46a) 50%,
+    var(--color-gold-400, #d4af37) 70%,
+    transparent
+  );
+  opacity: 0.5;
+}
+
+/* Hairline cream divider */
+.divider-cream {
+  border: none;
+  height: 1px;
+  background: var(--color-cream-300, #ede0ce);
+}
+
+/* =============================================================================
+   PERFORMANCE OPTIMIZATION
+   Explicit GPU promotion for elements that animate frequently.
+   Only applied to classes that definitely animate — avoids wasting GPU layers.
+   ============================================================================= */
+
+.gpu {
+  transform: translateZ(0);
+  will-change: transform;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Elements that Framer Motion will animate — hint the browser early */
+[data-motion-component] {
+  transform: translateZ(0);
+}
+
+/* =============================================================================
+   REDUCED MOTION
+   ============================================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation:  none !important;
+    transition: none !important;
+    will-change: auto !important;
+  }
 }

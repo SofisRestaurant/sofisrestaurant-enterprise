@@ -11,6 +11,7 @@ import type {
   AdminPaymentStatus,
   AdminTableSortState,
 } from '../types/admin-common.types';
+import { isOrderRow } from '@/modules/orders/utils/orderValidators';
 
 type OrderRow = Database['public']['Tables']['orders']['Row'];
 type UnknownRecord = Record<string, unknown>;
@@ -263,27 +264,6 @@ function mapOrderRow(row: OrderRow): AdminOrderSummary {
     cartItems: parseCartItems(row.cart_items),
     metadata: isRecord(row.metadata) ? row.metadata : {},
   };
-}
-
-function isOrderRow(value: unknown): value is OrderRow {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  return (
-    typeof value.id === 'string' &&
-    typeof value.created_at === 'string' &&
-    typeof value.updated_at === 'string' &&
-    typeof value.currency === 'string' &&
-    typeof value.order_type === 'string' &&
-    typeof value.payment_status === 'string' &&
-    typeof value.status === 'string' &&
-    typeof value.stripe_session_id === 'string' &&
-    typeof value.amount_shipping === 'number' &&
-    typeof value.amount_subtotal === 'number' &&
-    typeof value.amount_tax === 'number' &&
-    typeof value.amount_total === 'number'
-  );
 }
 
 function matchesSearch(order: AdminOrderSummary, query: string): boolean {

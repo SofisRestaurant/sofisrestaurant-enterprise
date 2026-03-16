@@ -340,7 +340,7 @@ function DealsRailImpl({
               ) : null}
             </div>
 
-            <div className="min-h-[20px]">
+            <div className="min-h-20px">
               {scheduleLabel ? (
                 <div className="flex items-center gap-2 text-[11px] text-neutral-400">
                   <Clock3 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />

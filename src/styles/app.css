@@ -1,17 +1,17 @@
-/* ============================================================
-   SOFIS — app.css (Tailwind v4 entry point)
-   ─────────────────────────────────────────────────────────────
-   Import order is load order. Do not reorder.
-   ============================================================ */
-
 /* 1. Tailwind engine */
-@import 'tailwindcss';
+@import "tailwindcss";
 
-/* 2. @theme tokens → generates all Tailwind utilities */
-@import './tokens.css';
+/* 2. Tailwind theme (must be here) */
+@theme {
+  /* all your theme variables */
+}
 
-/* 3. Base reset + body */
-@import './globals.css';
-
-/* 4. Keyframes + pseudo-state utilities */
-@import './utilities.css';
+/* 3. Project CSS imports */
+@import "./tokens.css";
+@import "./fonts.css";
+@import "./typography.css";
+@import "./globals.css";
+@import "./animations.css";
+@import "./effects.css";
+@import "./utilities.css";
+@import "./components.css";

@@ -1,0 +1,276 @@
+/* =============================================================================
+   SOFIS — effects.css
+   Visual effects system: glass, glow, gradients, overlays, textures.
+   All effects use CSS custom properties from tokens.css.
+   
+   Layer hierarchy (z-index):
+   background texture → image → gradient overlay → glass card → content
+   ============================================================================= */
+
+/* =============================================================================
+   GLASSMORPHISM
+   ============================================================================= */
+
+/* ── Base glass ───────────────────────────────────────────────────────────── */
+/* Subtle frosted glass — primary use: nav, popovers, cards on dark bg */
+.glass {
+  background: var(--glass-bg, rgb(255 255 255 / 0.06));
+  border: 1px solid var(--glass-border, rgb(255 255 255 / 0.10));
+  backdrop-filter: blur(var(--glass-blur, 14px)) saturate(1.6);
+  -webkit-backdrop-filter: blur(var(--glass-blur, 14px)) saturate(1.6);
+}
+
+/* Mid-opacity glass — use for floating panels */
+.glass-mid {
+  background: var(--glass-bg-mid, rgb(255 255 255 / 0.10));
+  border: 1px solid var(--glass-border-mid, rgb(255 255 255 / 0.16));
+  backdrop-filter: blur(var(--glass-blur, 14px)) saturate(1.8);
+  -webkit-backdrop-filter: blur(var(--glass-blur, 14px)) saturate(1.8);
+}
+
+/* Strong glass — modals, dialogs */
+.glass-strong {
+  background: var(--glass-bg-strong, rgb(255 255 255 / 0.14));
+  border: 1px solid var(--glass-border-mid, rgb(255 255 255 / 0.16));
+  backdrop-filter: blur(var(--glass-blur-heavy, 24px)) saturate(2);
+  -webkit-backdrop-filter: blur(var(--glass-blur-heavy, 24px)) saturate(2);
+}
+
+/* Dark glass — overlay on light backgrounds */
+.glass-dark {
+  background: var(--glass-dark-bg, rgb(28 25 21 / 0.65));
+  border: 1px solid var(--glass-dark-border, rgb(28 25 21 / 0.12));
+  backdrop-filter: blur(12px) saturate(1.4);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+}
+
+/* ── Gold-tinted glass — special luxury accent usage ─────────────────────── */
+.glass-gold {
+  background: rgb(212 175 55 / 0.06);
+  border: 1px solid rgb(212 175 55 / 0.18);
+  backdrop-filter: blur(16px) saturate(1.8);
+  -webkit-backdrop-filter: blur(16px) saturate(1.8);
+}
+
+/* =============================================================================
+   GLOW EFFECTS
+   ============================================================================= */
+
+/* ── Gold glow — primary brand glow ─────────────────────────────────────── */
+.glow-gold {
+  box-shadow: var(--shadow-gold,
+    0 0 32px rgb(212 175 55 / 0.22),
+    0 4px 16px rgb(212 175 55 / 0.14));
+}
+
+.glow-gold-lg {
+  box-shadow: var(--shadow-gold-lg,
+    0 0 64px rgb(212 175 55 / 0.28),
+    0 8px 32px rgb(212 175 55 / 0.18));
+}
+
+/* ── Text glow — for accent italic spans ─────────────────────────────────── */
+.text-glow-gold {
+  text-shadow:
+    0 0 40px rgb(212 175 55 / 0.45),
+    0 0 80px rgb(212 175 55 / 0.20);
+}
+
+.text-glow-white {
+  text-shadow:
+    0 0 30px rgb(255 255 255 / 0.40),
+    0 0 60px rgb(255 255 255 / 0.18);
+}
+
+/* ── Brand glow ───────────────────────────────────────────────────────────── */
+.glow-brand {
+  box-shadow: var(--shadow-brand, 0 8px 24px rgb(169 104 64 / 0.25));
+}
+
+/* =============================================================================
+   GRADIENT OVERLAYS
+   Composable gradient layers for hero images and section backgrounds.
+   ============================================================================= */
+
+/* ── Hero vignette — used over full-bleed images ─────────────────────────── */
+.overlay-hero {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(to top,
+      rgb(28 25 21 / 0.95) 0%,
+      rgb(28 25 21 / 0.30) 45%,
+      rgb(28 25 21 / 0.10) 100%),
+    linear-gradient(to right,
+      rgb(28 25 21 / 0.40) 0%,
+      transparent 60%);
+}
+
+/* ── Luxury color overlay (decorative radials) ────────────────────────────── */
+.overlay-luxury {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 90% 60% at 75% 15%, rgb(212 175 55 / 0.09) 0%, transparent 55%),
+    radial-gradient(ellipse 60% 50% at 15% 85%, rgb(168 69 32 / 0.10) 0%, transparent 50%);
+}
+
+/* ── Section top fade — blends section into page bg ─────────────────────── */
+.overlay-fade-top {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  height: 6rem;
+  pointer-events: none;
+  background: linear-gradient(to bottom, var(--color-cream-100, #faf6ef), transparent);
+  z-index: 1;
+}
+
+.overlay-fade-bottom {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 6rem;
+  pointer-events: none;
+  background: linear-gradient(to top, var(--color-cream-100, #faf6ef), transparent);
+  z-index: 1;
+}
+
+/* ── Dark section fades ───────────────────────────────────────────────────── */
+.overlay-fade-bottom-dark {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 8rem;
+  pointer-events: none;
+  background: linear-gradient(to top, var(--color-stone-900, #1c1915), transparent);
+  z-index: 1;
+}
+
+/* =============================================================================
+   SURFACE TREATMENTS
+   ============================================================================= */
+
+/* ── Noise texture overlay — adds grain for luxury tactility ─────────────── */
+/* Applied as ::before pseudo-element on section containers */
+.surface-noise::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.028;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  background-size: 180px;
+  z-index: 1;
+  border-radius: inherit;
+}
+
+/* ── Brushed gold surface — for premium accent areas ────────────────────── */
+.surface-gold-subtle {
+  background:
+    linear-gradient(135deg,
+      rgb(212 175 55 / 0.06) 0%,
+      rgb(232 196 106 / 0.03) 50%,
+      rgb(184 150 31 / 0.06) 100%);
+}
+
+/* ── Warm dark surface — for feature cards on dark sections ──────────────── */
+.surface-warm-dark {
+  background:
+    radial-gradient(ellipse at 30% 0%, rgb(212 175 55 / 0.06) 0%, transparent 60%),
+    var(--color-stone-800, #2e2a24);
+}
+
+/* =============================================================================
+   IMAGE EFFECTS
+   ============================================================================= */
+
+/* ── Image hover zoom — attach to parent, targets <img> ──────────────────── */
+.img-zoom {
+  overflow: hidden;
+}
+
+.img-zoom img,
+.img-zoom .img-zoom-target {
+  transition: transform var(--duration-scene, 800ms) var(--ease-luxury);
+  will-change: transform;
+}
+
+.img-zoom:hover img,
+.img-zoom:hover .img-zoom-target {
+  transform: scale(1.055);
+}
+
+/* ── Aspect ratio helpers ────────────────────────────────────────────────── */
+.aspect-cinema    { aspect-ratio: 16 / 9; }
+.aspect-portrait  { aspect-ratio: 3 / 4;  }
+.aspect-square    { aspect-ratio: 1 / 1;  }
+.aspect-editorial { aspect-ratio: 4 / 5;  }
+.aspect-hero      { aspect-ratio: 21 / 9; }
+
+/* =============================================================================
+   UNDERLINE EFFECTS (used on nav links, CTAs)
+   ============================================================================= */
+
+/* ── Grow-from-left underline ─────────────────────────────────────────────── */
+.link-line {
+  position: relative;
+  text-decoration: none;
+}
+
+.link-line::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -3px;
+  width: 0;
+  height: 1px;
+  background: var(--color-gold-400, #d4af37);
+  transition: width var(--duration-slow, 350ms) var(--ease-luxury);
+}
+
+.link-line:hover::after,
+.link-line.active::after { width: 100%; }
+
+/* ── Centered grow underline ─────────────────────────────────────────────── */
+.link-line-center {
+  position: relative;
+}
+
+.link-line-center::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -3px;
+  width: 0;
+  height: 1px;
+  background: var(--color-gold-400, #d4af37);
+  transform: translateX(-50%);
+  transition: width var(--duration-slow, 350ms) var(--ease-luxury);
+}
+
+.link-line-center:hover::after { width: 100%; }
+
+/* =============================================================================
+   HOVER LIFT EFFECTS
+   ============================================================================= */
+
+.hover-lift {
+  transition: var(--transition-hover);
+}
+
+.hover-lift:hover {
+  transform: translateY(-5px);
+  box-shadow: var(--shadow-xl, 0 16px 56px rgb(26 18 9 / 0.16));
+}
+
+.hover-lift-sm {
+  transition: var(--transition-hover);
+}
+
+.hover-lift-sm:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-lg, 0 8px 32px rgb(26 18 9 / 0.12));
+}

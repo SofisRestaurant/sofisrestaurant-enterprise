@@ -1,11 +1,19 @@
-module.exports = {
-  content: ['./index.html', './src/**/*.{ts,tsx,js,jsx}'],
+/** @type {import('tailwindcss').Config} */
+const config = {
+  content: ['./src/**/*.{js,jsx,ts,tsx}'],
   theme: {
-    extend: {},
+    extend: {
+      colors: {
+        gold: 'var(--color-accent)',
+        ink: 'var(--color-ink-500)',
+      },
+      fontFamily: {
+        display: 'var(--font-display)',
+        sans: 'var(--font-sans)',
+      },
+    },
   },
-  plugins: [
-    require('@tailwindcss/forms'),
-    require('@tailwindcss/typography'),
-    require('@tailwindcss/line-clamp'),
-  ],
+  plugins: [],
 };
+
+module.exports = config;

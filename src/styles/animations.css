@@ -1,0 +1,394 @@
+/* =============================================================================
+   SOFIS — animations.css
+   Cinematic animation system. All keyframes and CSS animation utilities.
+   
+   Philosophy:
+   • CSS animations are for decorative, looping, and CSS-only effects.
+   • Entrance/exit transitions are handled by Framer Motion (motion.ts).
+   • This file provides CSS fallbacks and supplementary animations only.
+   
+   Easing note: all keyframes use CSS custom property easings
+   where supported. The luxury curve [0.16, 1, 0.3, 1] is the signature.
+   ============================================================================= */
+
+/* =============================================================================
+   KEYFRAMES
+   ============================================================================= */
+
+/* ── Fade family ──────────────────────────────────────────────────────────── */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes fade-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-down {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-left {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes fade-right {
+  from {
+    opacity: 0;
+    transform: translateX(-24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* ── Scale family ─────────────────────────────────────────────────────────── */
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes scale-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+}
+
+@keyframes confirm-pop {
+  0%   { transform: scale(0.5);   opacity: 0; }
+  65%  { transform: scale(1.08); }
+  100% { transform: scale(1);     opacity: 1; }
+}
+
+/* ── Slide family ─────────────────────────────────────────────────────────── */
+@keyframes slide-in-up {
+  from { transform: translateY(16px) scale(0.96); opacity: 0; }
+  to   { transform: translateY(0) scale(1);       opacity: 1; }
+}
+
+@keyframes slide-in-down {
+  from { transform: translateY(-12px); opacity: 0; }
+  to   { transform: translateY(0);     opacity: 1; }
+}
+
+/* ── Toast / Notification ────────────────────────────────────────────────── */
+@keyframes toast-in {
+  from { transform: translateY(16px) scale(0.94); opacity: 0; }
+  to   { transform: translateY(0)    scale(1);    opacity: 1; }
+}
+
+@keyframes toast-out {
+  from { transform: translateY(0) scale(1); opacity: 1; }
+  to   { transform: translateY(12px) scale(0.96); opacity: 0; }
+}
+
+/* ── Marquee / Ticker ────────────────────────────────────────────────────── */
+/* -50% because the strip is 2× width — see MarqueeStrip.tsx */
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+/* ── Looping ambience ─────────────────────────────────────────────────────── */
+@keyframes float {
+  0%, 100% { transform: translateY(0);    }
+  50%       { transform: translateY(-8px); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgb(212 175 55 / 0);
+    opacity: 0.7;
+  }
+  50% {
+    box-shadow: 0 0 24px 6px rgb(212 175 55 / 0.22);
+    opacity: 1;
+  }
+}
+
+@keyframes scroll-pulse {
+  0%, 100% { opacity: 0.35; transform: scaleY(1); }
+  50%       { opacity: 0.9;  transform: scaleY(0.5); }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position:  200% center; }
+}
+
+/* ── Ripple (button feedback) ────────────────────────────────────────────── */
+@keyframes ripple {
+  from { transform: scale(0);   opacity: 0.18; }
+  to   { transform: scale(2.8); opacity: 0;    }
+}
+
+/* ── Line draw (dividers, connectors) ────────────────────────────────────── */
+@keyframes line-grow-x {
+  from { transform: scaleX(0); opacity: 0; }
+  to   { transform: scaleX(1); opacity: 1; }
+}
+
+@keyframes line-grow-y {
+  from { transform: scaleY(0); opacity: 0; }
+  to   { transform: scaleY(1); opacity: 1; }
+}
+
+/* ── Step done (confirmation) ────────────────────────────────────────────── */
+@keyframes step-done {
+  from { transform: scale(0.7); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
+}
+
+/* ── Modal card entrance ─────────────────────────────────────────────────── */
+@keyframes modal-card-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* =============================================================================
+   CSS ANIMATION UTILITY CLASSES
+   Apply these classes to add animation. Pair with animation-delay for stagger.
+   All are `forwards` fill-mode so the end state persists.
+   ============================================================================= */
+
+/* ── Entrance utilities ──────────────────────────────────────────────────── */
+.animate-fade-in {
+  animation: fade-in var(--duration-enter, 500ms) var(--ease-out) both;
+}
+
+.animate-fade-up {
+  animation: fade-up 0.75s var(--ease-luxury) both;
+}
+
+.animate-fade-down {
+  animation: fade-down 0.65s var(--ease-luxury) both;
+}
+
+.animate-fade-left {
+  animation: fade-left 0.65s var(--ease-luxury) both;
+}
+
+.animate-fade-right {
+  animation: fade-right 0.65s var(--ease-luxury) both;
+}
+
+.animate-scale-in {
+  animation: scale-in 0.55s var(--ease-spring) both;
+}
+
+.animate-slide-in-up {
+  animation: slide-in-up 0.4s var(--ease-spring) both;
+}
+
+/* ── Staggered fade-up sequence — for lists, grids, step flows ────────────── */
+.animate-fade-up-1 { animation: fade-up 0.5s 0.06s  var(--ease-out) both; will-change: transform, opacity; }
+.animate-fade-up-2 { animation: fade-up 0.5s 0.12s  var(--ease-out) both; will-change: transform, opacity; }
+.animate-fade-up-3 { animation: fade-up 0.5s 0.18s  var(--ease-out) both; will-change: transform, opacity; }
+.animate-fade-up-4 { animation: fade-up 0.5s 0.24s  var(--ease-out) both; will-change: transform, opacity; }
+.animate-fade-up-5 { animation: fade-up 0.5s 0.30s  var(--ease-out) both; will-change: transform, opacity; }
+.animate-fade-up-6 { animation: fade-up 0.5s 0.36s  var(--ease-out) both; will-change: transform, opacity; }
+.animate-fade-up-7 { animation: fade-up 0.5s 0.42s  var(--ease-out) both; will-change: transform, opacity; }
+.animate-fade-up-8 { animation: fade-up 0.5s 0.48s  var(--ease-out) both; will-change: transform, opacity; }
+
+/* ── Feedback utilities ──────────────────────────────────────────────────── */
+.animate-confirm-pop {
+  animation: confirm-pop 0.45s var(--ease-spring) both;
+  will-change: transform, opacity;
+}
+
+.animate-toast-in {
+  animation: toast-in 0.35s var(--ease-spring) both;
+  will-change: transform, opacity;
+}
+
+.animate-step-done {
+  animation: step-done 0.35s var(--ease-spring) both;
+  will-change: transform, opacity;
+}
+
+/* ── Decorative / ambient ─────────────────────────────────────────────────── */
+.animate-marquee {
+  animation: marquee 28s linear infinite;
+  will-change: transform;
+}
+
+.animate-marquee-slow {
+  animation: marquee 42s linear infinite;
+  will-change: transform;
+}
+
+.animate-float {
+  animation: float 7s ease-in-out infinite;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 3s ease-in-out infinite;
+}
+
+.animate-scroll-pulse {
+  animation: scroll-pulse 2.2s ease-in-out infinite;
+}
+
+/* ── Shimmer (skeleton loading) ───────────────────────────────────────────── */
+.animate-shimmer {
+  background: linear-gradient(
+    105deg,
+    var(--color-cream-200, #f5ede0) 0%,
+    var(--color-cream-100, #faf6ef) 40%,
+    var(--color-cream-200, #f5ede0) 60%,
+    var(--color-cream-100, #faf6ef) 100%
+  );
+  background-size: 200% auto;
+  animation: shimmer 1.6s linear infinite;
+}
+
+/* ── Ripple (one-shot button press) ──────────────────────────────────────── */
+.animate-ripple {
+  position: relative;
+  overflow: hidden;
+}
+
+.animate-ripple::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgb(255 255 255 / 0.18);
+  transform: scale(0);
+  animation: ripple 0.5s var(--ease-out) both;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+/* ── Cart button multi-state ─────────────────────────────────────────────── */
+.btn-cart-label {
+  transition:
+    opacity  var(--duration-base) var(--ease-standard),
+    transform var(--duration-base) var(--ease-standard);
+}
+
+.btn-cart-check {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: scale(0.55);
+  transition:
+    opacity  var(--duration-slow) var(--ease-spring),
+    transform var(--duration-slow) var(--ease-spring);
+}
+
+.btn-cart-added .btn-cart-label {
+  opacity: 0;
+  transform: scale(0.55);
+}
+
+.btn-cart-added .btn-cart-check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* =============================================================================
+   SCROLL REVEAL SYSTEM (CSS-only fallback)
+   Use when Framer Motion whileInView is unavailable.
+   Add `.reveal` to elements; toggle `.active` with IntersectionObserver.
+   ============================================================================= */
+
+.reveal {
+  opacity: 0;
+  transform: translateY(32px);
+  transition:
+    opacity  0.85s var(--ease-luxury),
+    transform 0.85s var(--ease-luxury);
+}
+
+.reveal.active {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Stagger children on reveal */
+.reveal-stagger > * {
+  opacity: 0;
+  transform: translateY(24px);
+  transition:
+    opacity  0.7s var(--ease-luxury),
+    transform 0.7s var(--ease-luxury);
+}
+
+.reveal-stagger.active > *:nth-child(1) { transition-delay: 0.06s; opacity: 1; transform: translateY(0); }
+.reveal-stagger.active > *:nth-child(2) { transition-delay: 0.12s; opacity: 1; transform: translateY(0); }
+.reveal-stagger.active > *:nth-child(3) { transition-delay: 0.18s; opacity: 1; transform: translateY(0); }
+.reveal-stagger.active > *:nth-child(4) { transition-delay: 0.24s; opacity: 1; transform: translateY(0); }
+.reveal-stagger.active > *:nth-child(5) { transition-delay: 0.30s; opacity: 1; transform: translateY(0); }
+.reveal-stagger.active > *:nth-child(6) { transition-delay: 0.36s; opacity: 1; transform: translateY(0); }
+
+/* =============================================================================
+   REDUCED MOTION
+   Respects user preference. No motion, no layout side effects.
+   ============================================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration:        0.01ms !important;
+    animation-iteration-count: 1      !important;
+    transition-duration:       0.01ms !important;
+    scroll-behavior:           auto   !important;
+  }
+
+  .reveal,
+  .reveal-stagger > * {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}

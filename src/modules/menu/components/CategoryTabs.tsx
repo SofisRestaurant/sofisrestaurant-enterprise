@@ -1,9 +1,12 @@
+import { m, AnimatePresence } from 'framer-motion';
 import type { MenuCategory } from '@/domain/menu/menu.types';
 
-/* =========================================================
-   MASTER CATEGORY LIST
-   single source of truth for UI labels
-========================================================= */
+// ── Animation constants ───────────────────────────────────────────────────────
+
+const EL = [0.16, 1, 0.3, 1] as const;
+const ES = [0.34, 1.56, 0.64, 1] as const;
+
+// ── Master category list — unchanged ─────────────────────────────────────────
 
 const CATEGORIES: ReadonlyArray<{
   value: MenuCategory | 'all';
@@ -16,23 +19,15 @@ const CATEGORIES: ReadonlyArray<{
   { value: 'drinks', label: 'Drinks' },
 ];
 
-/* =========================================================
-   PROPS
-========================================================= */
+// ── Props — unchanged ─────────────────────────────────────────────────────────
 
 interface CategoryTabsProps {
   selectedCategory: MenuCategory | 'all';
   onSelectCategory: (category: MenuCategory | 'all') => void;
-
-  /**
-   * If provided → hide empty categories
-   */
   availableCategories?: Set<MenuCategory>;
 }
 
-/* =========================================================
-   COMPONENT
-========================================================= */
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export function CategoryTabs({
   selectedCategory,
@@ -46,26 +41,55 @@ export function CategoryTabs({
   });
 
   return (
-    <div className="mb-6 flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-      {visibleCategories.map(({ value, label }) => {
+    // Entrance: tabs fade up on mount
+    <m.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.45, ease: EL }}
+      className="mb-6 flex gap-2 overflow-x-auto pb-2 scrollbar-hide"
+    >
+      {visibleCategories.map(({ value, label }, i) => {
         const active = selectedCategory === value;
 
         return (
-          <button
+          <m.button
             key={value}
             onClick={() => onSelectCategory(value)}
             aria-pressed={active}
+            // Entrance stagger
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35, ease: EL, delay: i * 0.05 }}
+            // Hover / tap micro-interactions
+            whileHover={{ scale: active ? 1 : 1.05, y: -1 }}
+            whileTap={{ scale: 0.95 }}
             className={[
-              'whitespace-nowrap rounded-full px-5 py-2 text-sm font-medium transition-all',
-              active
-                ? 'bg-primary text-white shadow'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200',
+              'relative whitespace-nowrap rounded-full px-5 py-2 text-sm font-medium transition-colors duration-200',
+              active ? 'text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200',
             ].join(' ')}
+            style={active ? {} : undefined}
           >
-            {label}
-          </button>
+            {/* Animated pill background for active state */}
+            <AnimatePresence>
+              {active && (
+                <m.span
+                  key="pill"
+                  layoutId="category-active-pill"
+                  className="absolute inset-0 rounded-full bg-primary shadow"
+                  initial={{ opacity: 0, scale: 0.85 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.85 }}
+                  transition={{ duration: 0.28, ease: ES }}
+                  aria-hidden="true"
+                />
+              )}
+            </AnimatePresence>
+
+            {/* Label sits above the animated background */}
+            <span className="relative z-10">{label}</span>
+          </m.button>
         );
       })}
-    </div>
+    </m.div>
   );
 }

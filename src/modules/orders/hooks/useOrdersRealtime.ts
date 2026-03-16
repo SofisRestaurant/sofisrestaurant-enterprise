@@ -8,6 +8,8 @@ import {
   type RealtimeSubscribeState,
 } from '@/lib/supabase/supabaseClient';
 import type { Tables } from '@/types/supabase';
+import { isOrderRow } from '@/modules/orders/utils/orderValidators';
+
 
 type OrderRow = Tables<'orders'>;
 export type OrdersRealtimePayload = RealtimePostgresChangesPayload<OrderRow>;
@@ -39,21 +41,6 @@ const ORDERS_REALTIME_CONFIG = {
 const MAX_CHANNEL_NAME_LENGTH = 120;
 const CHANNEL_NAME_PATTERN = /^[a-z0-9:_-]+$/i;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
-function isNullableString(value: unknown): value is string | null {
-  return value === null || typeof value === 'string';
-}
-
-function isNullableBoolean(value: unknown): value is boolean | null {
-  return value === null || typeof value === 'boolean';
-}
 
 function normalizeChannelName(value: string): string | null {
   const trimmed = value.trim();
@@ -63,37 +50,6 @@ function normalizeChannelName(value: string): string | null {
   if (!CHANNEL_NAME_PATTERN.test(trimmed)) return null;
 
   return trimmed;
-}
-
-function isOrderRow(value: unknown): value is OrderRow {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  return (
-    typeof value.id === 'string' &&
-    typeof value.created_at === 'string' &&
-    typeof value.updated_at === 'string' &&
-    typeof value.currency === 'string' &&
-    typeof value.order_type === 'string' &&
-    typeof value.payment_status === 'string' &&
-    typeof value.status === 'string' &&
-    typeof value.stripe_session_id === 'string' &&
-    isFiniteNumber(value.amount_shipping) &&
-    isFiniteNumber(value.amount_subtotal) &&
-    isFiniteNumber(value.amount_tax) &&
-    isFiniteNumber(value.amount_total) &&
-    isNullableString(value.assigned_to) &&
-    isNullableString(value.customer_email) &&
-    isNullableString(value.customer_name) &&
-    isNullableString(value.customer_phone) &&
-    isNullableString(value.customer_uid) &&
-    isNullableString(value.notes) &&
-    isNullableString(value.shipping_name) &&
-    isNullableString(value.shipping_phone) &&
-    isNullableString(value.stripe_payment_intent_id) &&
-    isNullableBoolean(value.is_deleted ?? null)
-  );
 }
 
 function removeChannelSafely(channel: RealtimeChannel): void {

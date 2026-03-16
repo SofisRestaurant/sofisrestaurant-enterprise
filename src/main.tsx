@@ -1,11 +1,43 @@
 // src/main.tsx
+// ─── Application bootstrap ────────────────────────────────────────────────────
+//
+// Entry point for the React application. Responsibilities:
+//   1. Import the design system (must be first — establishes CSS custom props)
+//   2. Mount the router-aware React tree into the DOM
+//   3. Guard against a missing #root element with a clear error
+//
+// React.StrictMode is intentionally kept in production-equivalent builds.
+// It surfaces double-invoke bugs and deprecated API usage at zero runtime cost
+// in the compiled bundle (StrictMode effects are dev-only).
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { RouterProvider } from 'react-router-dom';
-import { router } from '@/app/router';
-import './styles/app.css';
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
+// Design system — must load before any component styles
+import '@/styles/app.css';
+
+// Application router (defines all routes + lazy loading)
+import { router } from '@/app/router';
+
+// ── Root element guard ────────────────────────────────────────────────────────
+
+const container = document.getElementById('root');
+
+if (!container) {
+  // Throw synchronously so the browser shows a clear error in the console
+  // rather than a cryptic "Cannot read properties of null" downstream.
+  throw new Error(
+    '[main.tsx] Failed to find #root element. ' +
+    'Ensure index.html contains <div id="root"></div>.',
+  );
+}
+
+// ── Mount ─────────────────────────────────────────────────────────────────────
+
+const root = ReactDOM.createRoot(container);
+
+root.render(
   <React.StrictMode>
     <RouterProvider router={router} />
   </React.StrictMode>,

@@ -28,6 +28,8 @@ export function useActiveOrder(userId: string | null): string | null {
   // ─────────────────────────────────────────────
   // Fetch active order
   // ─────────────────────────────────────────────
+
+  
   useEffect(() => {
     if (!userId) {
       setActiveOrderId(null);

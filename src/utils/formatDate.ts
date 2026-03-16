@@ -1,5 +1,5 @@
 /**
- * Format date for display (e.g., "January 15, 2024")
+ * Format date for display (e.g., "January 15, ")
  */
 export function formatDate(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;

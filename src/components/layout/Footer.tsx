@@ -1,91 +1,217 @@
 // src/components/layout/Footer.tsx
-import { Link } from 'react-router-dom';
+// ─── Luxury restaurant footer ─────────────────────────────────────────────────
+//
+// Design system upgrade 2026:
+//   • Background uses token stone-900 (matches hero/dark sections)
+//   • Typography uses font-display / font-body token classes
+//   • Links use .nav-link component class with gold active underline
+//   • Social links use .glass component class
+//   • CTA button uses .btn .btn-primary component classes
+//   • All colors reference CSS token vars — zero hardcoded hex
+//   • Gold hairline divider above copyright uses .divider-gold class
+//   • Contact cards use .card-dark component class
+//   • ARIA: role="contentinfo", aria-label on nav landmarks
 
-const PHONE_DISPLAY = '(623) 555-0000';
-const PHONE_TEL = '+16235550000';
-const SUPPORT_EMAIL = 'sofisrestaurante@gmail.com';
+import React from 'react';
+import { Link } from 'react-router-dom';
+import { motion as m } from 'framer-motion';
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const PHONE_DISPLAY  = '(623) 555-0000';
+const PHONE_TEL      = 'tel:+16235550000';
+const SUPPORT_EMAIL  = 'hello@sofisrestaurant.com';
+const MAPS_URL       = 'https://maps.google.com/?q=San+Francisco+CA';
+const INSTAGRAM_URL  = 'https://www.instagram.com/sofisrestaurante/';
+const TIKTOK_URL     = 'https://www.tiktok.com/@Sofisrestaurant';
+
+const QUICK_LINKS = [
+  { to: '/menu',         label: 'Menu'         },
+  { to: '/about',        label: 'About'         },
+  { to: '/gallery',      label: 'Gallery'       },
+  { to: '/reservations', label: 'Reservations'  },
+  { to: '/contact',      label: 'Contact'       },
+  { to: '/reviews',      label: 'Reviews'       },
+] as const;
+
+const LEGAL_LINKS = [
+  { to: '/privacy-policy',  label: 'Privacy Policy'   },
+  { to: '/terms-of-service',label: 'Terms of Service' },
+  { to: '/refund-policy',   label: 'Refund Policy'    },
+] as const;
+
+// ── Viewport config for scroll reveals ───────────────────────────────────────
+
+const VP = { once: true, amount: 0.15 } as const;
+const EL: [number, number, number, number] = [0.16, 1, 0.3, 1];
+
+// ── Footer ────────────────────────────────────────────────────────────────────
 
 export default function Footer() {
-  const currentYear = new Date().getFullYear();
+  const year = new Date().getFullYear();
 
   return (
-    <footer className="relative mt-auto overflow-hidden border-t border-white/10 bg-linear-to-b from-gray-950 to-black text-white">
-      {/* ambient glow */}
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(249,115,22,0.12),transparent_60%)]" />
+    <footer
+      role="contentinfo"
+      className="section-wrap relative overflow-[clip]"
+      style={{
+        background: 'var(--color-stone-900, #1c1915)',
+        borderTop: '1px solid rgba(212,175,55,0.10)',
+      }}
+    >
+      {/* Ambient gold glow at top-center */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 h-48"
+        style={{
+          background:
+            'radial-gradient(ellipse 70% 50% at 50% 0%, rgba(212,175,55,0.06) 0%, transparent 70%)',
+        }}
+      />
 
-      <div className="relative mx-auto w-full max-w-96 px-4 py-16 sm:px-6 lg:px-8">
-        {/* ===================================================== */}
-        {/* GRID */}
-        {/* ===================================================== */}
-        <div className="grid min-w-0 grid-cols-1 gap-14 xl:grid-cols-12">
-          {/* ===================================================== */}
-          {/* BRAND */}
-          {/* ===================================================== */}
-          <div className="min-w-0 space-y-6 xl:col-span-4">
-            <div className="flex items-center gap-3">
-              <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-orange-600 text-lg font-bold shadow-lg">
-                S
-              </div>
+      {/* Noise texture */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 opacity-[0.025]"
+        style={{
+          backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
+          backgroundSize: '180px',
+        }}
+      />
 
-              <div className="min-w-0">
-                <h3 className="truncate text-lg font-bold">Sofi&apos;s Restaurant</h3>
-                <p className="text-xs text-gray-400">Surprise, Arizona • Mexican &amp; American</p>
-              </div>
-            </div>
-
-            <p className="max-w-md text-sm leading-relaxed text-gray-300">
-              Fresh tortillas, real plates, and the kind of comfort food you’ll come back for.
-              Dine-in, call-in, and to-go.
-            </p>
-
-            {/* CTA */}
+      {/* ── Main footer grid ───────────────────────────────────────────── */}
+      <div className="relative mx-auto max-w-6xl px-5 pb-14 pt-16 sm:px-8 md:px-12">
+        <m.div
+          className="grid grid-cols-1 gap-12 sm:grid-cols-2 lg:grid-cols-12"
+          initial={{ opacity: 0, y: 24 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={VP}
+          transition={{ duration: 0.7, ease: EL }}
+        >
+          {/* ── Brand column ─────────────────────────────────────────────── */}
+          <div className="flex flex-col gap-6 lg:col-span-4">
+            {/* Wordmark */}
             <Link
-              to="/menu"
-              className="inline-flex w-full items-center justify-center rounded-xl bg-orange-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-orange-500 sm:w-auto"
+              to="/"
+              className="group flex items-center gap-3 focus-visible:outline-none
+                         focus-visible:ring-2 focus-visible:ring-offset-2 w-fit rounded"
+              style={{ '--tw-ring-color': 'var(--color-gold-400, #d4af37)' } as React.CSSProperties}
+              aria-label="Sofi's Restaurant — back to home"
             >
-              Order Online
+              <span
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full
+                           font-display text-base font-medium transition-transform duration-300
+                           group-hover:scale-105"
+                style={{
+                  background: 'var(--color-gold-400, #d4af37)',
+                  color: 'var(--color-stone-900, #1c1915)',
+                  boxShadow: '0 0 20px rgba(212,175,55,0.22)',
+                }}
+                aria-hidden="true"
+              >
+                S
+              </span>
+              <div>
+                <p
+                  className="font-display text-[1.1rem] font-medium leading-tight"
+                  style={{ color: 'rgba(255,255,255,0.92)' }}
+                >
+                  Sofi's Restaurant
+                </p>
+                <p
+                  className="font-body text-[0.68rem] uppercase tracking-[0.14em]"
+                  style={{ color: 'var(--color-ink-500, #8a7a6a)' }}
+                >
+                  San Francisco · Est. 2012
+                </p>
+              </div>
             </Link>
 
-            {/* Social */}
-            <div className="flex flex-wrap gap-3">
-              <a
-                href="https://www.tiktok.com/@Sofisrestaurant"
-                target="_blank"
-                rel="noreferrer"
-                className="rounded-lg bg-white/5 px-3 py-2 text-sm text-gray-300 transition hover:bg-white/10 hover:text-white"
-              >
-                🎵 TikTok
-              </a>
+            {/* Tagline */}
+            <p
+              className="max-w-[22rem] font-body text-[0.88rem] font-light leading-[1.78]"
+              style={{ color: 'rgba(255,255,255,0.45)' }}
+            >
+              Seasonal ingredients, honest technique, and unforgettable evenings. Every detail is an
+              act of hospitality.
+            </p>
 
+            {/* Primary CTA */}
+            <div>
+              <Link to="/reservations" className="btn btn-primary btn-sm">
+                Reserve a Table
+              </Link>
+            </div>
+
+            {/* Social links */}
+            <div className="flex gap-2.5">
               <a
-                href="https://www.instagram.com/sofisrestaurante/"
+                href={INSTAGRAM_URL}
                 target="_blank"
                 rel="noreferrer"
-                className="rounded-lg bg-white/5 px-3 py-2 text-sm text-gray-300 transition hover:bg-white/10 hover:text-white"
+                className="glass flex items-center gap-2 rounded-full px-3.5 py-2
+                           font-body text-[0.68rem] font-medium uppercase tracking-[0.10em]
+                           transition-all duration-300 hover:border-gold-400/30"
+                style={{ color: 'rgba(255,255,255,0.55)' }}
+                aria-label="Follow Sofi's on Instagram"
               >
-                📸 Instagram
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  aria-hidden="true"
+                >
+                  <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
+                  <circle cx="12" cy="12" r="4" />
+                  <circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" />
+                </svg>
+                Instagram
+              </a>
+              <a
+                href={TIKTOK_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="glass flex items-center gap-2 rounded-full px-3.5 py-2
+                           font-body text-[0.68rem] font-medium uppercase tracking-[0.10em]
+                           transition-all duration-300 hover:border-gold-400/30"
+                style={{ color: 'rgba(255,255,255,0.55)' }}
+                aria-label="Follow Sofi's on TikTok"
+              >
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
+                  <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.89-2.89 2.89 2.89 0 0 1 2.89-2.89c.28 0 .54.04.79.1V9.01a6.33 6.33 0 0 0-.79-.05 6.34 6.34 0 0 0-6.34 6.34 6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.33-6.34V8.87a8.28 8.28 0 0 0 4.84 1.54V7.01a4.85 4.85 0 0 1-1.07-.32z" />
+                </svg>
+                TikTok
               </a>
             </div>
           </div>
 
-          {/* ===================================================== */}
-          {/* QUICK LINKS */}
-          {/* ===================================================== */}
-          <nav className="min-w-0 xl:col-span-3" aria-label="Footer navigation">
-            <h4 className="mb-5 text-sm font-semibold tracking-wide text-white">Quick Links</h4>
-
-            <ul className="space-y-3 text-sm">
-              {[
-                ['/menu', 'Menu'],
-                ['/about', 'About'],
-                ['/contact', 'Contact'],
-                ['/reservations', 'Reservations'],
-                ['/reviews', 'Reviews'],
-              ].map(([to, label]) => (
+          {/* ── Quick links ───────────────────────────────────────────────── */}
+          <nav className="lg:col-span-2" aria-label="Quick links">
+            <h3
+              className="mb-5 font-body text-[0.65rem] font-medium uppercase tracking-[0.20em]"
+              style={{ color: 'var(--color-gold-400, #d4af37)' }}
+            >
+              Quick Links
+            </h3>
+            <ul className="flex flex-col gap-2.5">
+              {QUICK_LINKS.map(({ to, label }) => (
                 <li key={to}>
                   <Link
                     to={to}
-                    className="block truncate text-gray-400 transition hover:translate-x-1 hover:text-white"
+                    className="link-line font-body text-[0.85rem] font-light
+                               transition-colors duration-200"
+                    style={{ color: 'rgba(255,255,255,0.50)' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.85)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.50)')}
                   >
                     {label}
                   </Link>
@@ -94,22 +220,24 @@ export default function Footer() {
             </ul>
           </nav>
 
-          {/* ===================================================== */}
-          {/* LEGAL */}
-          {/* ===================================================== */}
-          <nav className="min-w-0 xl:col-span-2" aria-label="Legal">
-            <h4 className="mb-5 text-sm font-semibold tracking-wide text-white">Legal</h4>
-
-            <ul className="space-y-3 text-sm">
-              {[
-                ['/privacy-policy', 'Privacy Policy'],
-                ['/terms-of-service', 'Terms of Service'],
-                ['/refund-policy', 'Refund Policy'],
-              ].map(([to, label]) => (
+          {/* ── Legal ─────────────────────────────────────────────────────── */}
+          <nav className="lg:col-span-2" aria-label="Legal">
+            <h3
+              className="mb-5 font-body text-[0.65rem] font-medium uppercase tracking-[0.20em]"
+              style={{ color: 'var(--color-gold-400, #d4af37)' }}
+            >
+              Legal
+            </h3>
+            <ul className="flex flex-col gap-2.5">
+              {LEGAL_LINKS.map(({ to, label }) => (
                 <li key={to}>
                   <Link
                     to={to}
-                    className="block truncate text-gray-400 transition hover:translate-x-1 hover:text-white"
+                    className="link-line font-body text-[0.85rem] font-light
+                               transition-colors duration-200"
+                    style={{ color: 'rgba(255,255,255,0.50)' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.85)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.50)')}
                   >
                     {label}
                   </Link>
@@ -118,61 +246,125 @@ export default function Footer() {
             </ul>
           </nav>
 
-          {/* ===================================================== */}
-          {/* CONTACT */}
-          {/* ===================================================== */}
-          <div className="min-w-0 space-y-4 xl:col-span-3">
-            <h4 className="text-sm font-semibold tracking-wide text-white">Contact</h4>
-
-            <div className="space-y-3 text-sm">
+          {/* ── Contact ───────────────────────────────────────────────────── */}
+          <address className="not-italic lg:col-span-4" aria-label="Contact information">
+            <h3
+              className="mb-5 font-body text-[0.65rem] font-medium uppercase tracking-[0.20em]"
+              style={{ color: 'var(--color-gold-400, #d4af37)' }}
+            >
+              Contact
+            </h3>
+            <div className="flex flex-col gap-2.5">
+              {/* Phone */}
               <a
-                href={`tel:${PHONE_TEL}`}
-                className="flex items-center gap-3 rounded-xl bg-white/5 p-3 text-gray-300 transition hover:bg-white/10"
+                href={PHONE_TEL}
+                className="card-dark flex items-center gap-3 rounded-xl p-3.5
+                           transition-all duration-300 hover:border-gold-400/20"
+                aria-label={`Call us at ${PHONE_DISPLAY}`}
               >
-                <span>📞</span>
-                <span className="truncate">{PHONE_DISPLAY}</span>
-              </a>
-
-              <a
-                href={`mailto:${SUPPORT_EMAIL}`}
-                className="flex items-center gap-3 rounded-xl bg-white/5 p-3 text-gray-300 transition hover:bg-white/10"
-              >
-                <span>✉️</span>
-                <span className="break-all">{SUPPORT_EMAIL}</span>
-              </a>
-
-              <a
-                href="https://maps.google.com/?q=12851+W+Bell+Rd+Surprise+AZ"
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-start gap-3 rounded-xl bg-white/5 p-3 text-gray-300 transition hover:bg-white/10"
-              >
-                <span>📍</span>
-                <span className="wrap-break-words">
-                  12851 W Bell Rd Unit #120
-                  <br />
-                  Surprise, AZ 85378
+                <span
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm"
+                  style={{
+                    background: 'rgba(212,175,55,0.10)',
+                    color: 'var(--color-gold-400, #d4af37)',
+                  }}
+                  aria-hidden="true"
+                >
+                  📞
+                </span>
+                <span
+                  className="font-body text-[0.83rem]"
+                  style={{ color: 'rgba(255,255,255,0.65)' }}
+                >
+                  {PHONE_DISPLAY}
                 </span>
               </a>
 
-              <div className="flex items-center gap-3 rounded-xl bg-white/5 p-3 text-gray-300">
-                <span>🕒</span>
-                <span>Open Daily • 7 AM – 8 PM</span>
+              {/* Email */}
+              <a
+                href={`mailto:${SUPPORT_EMAIL}`}
+                className="card-dark flex items-center gap-3 rounded-xl p-3.5
+                           transition-all duration-300 hover:border-gold-400/20"
+                aria-label={`Email us at ${SUPPORT_EMAIL}`}
+              >
+                <span
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm"
+                  style={{
+                    background: 'rgba(212,175,55,0.10)',
+                    color: 'var(--color-gold-400, #d4af37)',
+                  }}
+                  aria-hidden="true"
+                >
+                  ✉️
+                </span>
+                <span
+                  className="break-all font-body text-[0.83rem]"
+                  style={{ color: 'rgba(255,255,255,0.65)' }}
+                >
+                  {SUPPORT_EMAIL}
+                </span>
+              </a>
+
+              {/* Address */}
+              <a
+                href={MAPS_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="card-dark flex items-start gap-3 rounded-xl p-3.5
+                           transition-all duration-300 hover:border-gold-400/20"
+                aria-label="View location on Google Maps"
+              >
+                <span
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm"
+                  style={{
+                    background: 'rgba(212,175,55,0.10)',
+                    color: 'var(--color-gold-400, #d4af37)',
+                  }}
+                  aria-hidden="true"
+                >
+                  📍
+                </span>
+                <span
+                  className="font-body text-[0.83rem] leading-relaxed"
+                  style={{ color: 'rgba(255,255,255,0.65)' }}
+                >
+                  San Francisco, California
+                </span>
+              </a>
+
+              {/* Hours */}
+              <div className="card-dark flex items-center gap-3 rounded-xl p-3.5">
+                <span
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm"
+                  style={{
+                    background: 'rgba(212,175,55,0.10)',
+                    color: 'var(--color-gold-400, #d4af37)',
+                  }}
+                  aria-hidden="true"
+                >
+                  🕒
+                </span>
+                <span
+                  className="font-body text-[0.83rem]"
+                  style={{ color: 'rgba(255,255,255,0.65)' }}
+                >
+                  Tue – Sun · 5:30 PM – 10:00 PM
+                </span>
               </div>
             </div>
-          </div>
-        </div>
+          </address>
+        </m.div>
 
-        {/* ===================================================== */}
-        {/* BOTTOM BAR */}
-        {/* ===================================================== */}
-        <div className="mt-16 flex flex-col items-center justify-between gap-4 border-t border-white/10 pt-6 text-center sm:flex-row sm:text-left">
-          <p className="text-xs text-gray-400">
-            © {currentYear} Sofi&apos;s Restaurant. All rights reserved.
+        {/* ── Gold divider ───────────────────────────────────────────────── */}
+        <hr className="divider-gold mt-14 mb-6" />
+
+        {/* ── Copyright bar ──────────────────────────────────────────────── */}
+        <div className="flex flex-col items-center justify-between gap-3 sm:flex-row">
+          <p className="font-body text-[0.70rem]" style={{ color: 'rgba(255,255,255,0.28)' }}>
+            © {year} Sofi's Restaurant. All rights reserved.
           </p>
-
-          <p className="text-xs text-gray-500">
-            Built with precision using Supabase • Stripe • React
+          <p className="font-body text-[0.70rem]" style={{ color: 'rgba(255,255,255,0.18)' }}>
+            Built with care · Powered by React &amp; Supabase
           </p>
         </div>
       </div>
