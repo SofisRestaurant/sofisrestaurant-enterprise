@@ -10,6 +10,8 @@
 // ✅ Premium: debounce store writes (reduces jank)
 // ✅ A11y: skip link, aria-current, ESC + click-outside + route-close
 // ✅ Deterministic: no console.*, no localStorage trust
+// ✅ CSS system: all colors/tokens/classes aligned to tokens.css + components.css
+// ✅ i18n: all user-visible strings via useTranslation()
 // =============================================================================
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -26,27 +28,31 @@ import { canAccessAdmin } from '@/security/permissions';
 
 import MenuHeaderSearch from '@/modules/menu/components/MenuHeaderSearch';
 import { useMenuUi } from '@/modules/menu/store/menuUi.store';
+import { useTranslation } from '@/i18n/useTranslation';
+
+type NavLinkKey = 'home' | 'menu' | 'about' | 'contact';
 
 type NavLink = {
   path: string;
-  label: string;
-  ariaLabel: string;
+  key: NavLinkKey;
 };
 
 function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(' ');
 }
 
+// Keys only — labels and aria strings come from the translation system
 const NAV_LINKS: NavLink[] = [
-  { path: '/', label: 'Home', ariaLabel: 'Go to homepage' },
-  { path: '/menu', label: 'Menu', ariaLabel: 'View our menu' },
-  { path: '/about', label: 'About', ariaLabel: 'Learn about us' },
-  { path: '/contact', label: 'Contact', ariaLabel: 'Contact us' },
+  { path: '/', key: 'home' },
+  { path: '/menu', key: 'menu' },
+  { path: '/about', key: 'about' },
+  { path: '/contact', key: 'contact' },
 ];
 
 const SEARCH_DEBOUNCE_MS = 150;
 
 export default function Header() {
+  const { t } = useTranslation();
   const { pathname } = useLocation();
   const isMenu = pathname === '/menu' || pathname.startsWith('/menu/');
 
@@ -86,8 +92,10 @@ export default function Header() {
 
   const cartAriaLabel = useMemo(() => {
     const count = itemCount ?? 0;
-    return `Shopping cart with ${count} ${count === 1 ? 'item' : 'items'}`;
-  }, [itemCount]);
+    if (count === 0) return t('header.cart.ariaEmpty');
+    if (count === 1) return t('header.cart.ariaSingular');
+    return t('header.cart.ariaPlural', { count });
+  }, [itemCount, t]);
 
   const isActive = useCallback(
     (path: string) =>
@@ -123,7 +131,6 @@ export default function Header() {
 
   const closeMobileSearch = useCallback(() => {
     setMobileSearchOpen(false);
-    // restore focus to the search icon (clean + deterministic)
     queueMicrotask(() => mobileSearchBtnRef.current?.focus());
   }, []);
 
@@ -254,27 +261,31 @@ export default function Header() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isMenu, openMobileSearch]);
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <>
       {/* Accessibility skip link */}
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-100 focus:rounded-lg focus:bg-white focus:px-4 focus:py-2 focus:shadow-xl focus:ring-2 focus:ring-orange-500"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[60] focus:rounded-[var(--radius-lg)] focus:bg-white focus:px-4 focus:py-2 focus:shadow-[var(--shadow-xl)] focus:ring-2 focus:ring-[var(--color-gold-400)]"
       >
-        Skip to main content
+        {t('nav.skipToContent')}
       </a>
 
-      <header className="sticky top-0 z-40 border-b border-gray-100 bg-white/95 shadow-sm backdrop-blur-md">
-        <nav className="mx-auto max-w-7xl px-4 py-4" role="navigation" aria-label="Main navigation">
+      <header className="sticky top-0 z-[30] border-b border-[var(--color-border)] bg-white/95 shadow-sm backdrop-blur-md">
+        <nav
+          className="mx-auto max-w-7xl px-4 py-4"
+          role="navigation"
+          aria-label={t('nav.ariaLabel')}
+        >
           <div className="flex items-center justify-between gap-3">
             {/* Logo */}
             <Link
               to="/"
-              className="text-script rounded-lg px-2 py-1 text-2xl text-orange-700 transition-colors hover:text-orange-800 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
-              aria-label="Sofi's Restaurant - Go to homepage"
+              className="text-script rounded-[var(--radius-md)] px-2 py-1 text-2xl text-[var(--color-ember-700)] transition-colors duration-[var(--duration-base)] hover:text-[var(--color-ember-600)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)] focus-visible:ring-offset-2"
+              aria-label={t('header.logo.aria')}
             >
-              Sofi&apos;s Restaurant
+              {t('common.appName')}
             </Link>
 
             {/* Desktop navigation */}
@@ -283,59 +294,62 @@ export default function Header() {
               role="menubar"
               aria-label="Primary links"
             >
-              {NAV_LINKS.map(({ path, label, ariaLabel }) => {
+              {NAV_LINKS.map(({ path, key }) => {
                 const active = isActive(path);
                 return (
                   <Link
                     key={path}
                     to={path}
                     role="menuitem"
-                    aria-label={ariaLabel}
+                    aria-label={t(`nav.links.${key}.aria`)}
                     aria-current={active ? 'page' : undefined}
                     className={cx(
-                      'rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200',
-                      'focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2',
+                      'rounded-[var(--radius-md)] px-3 py-2 text-sm font-medium',
+                      'transition-all duration-[var(--duration-base)]',
+                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)] focus-visible:ring-offset-2',
                       active
-                        ? 'bg-orange-50 text-orange-700'
-                        : 'text-gray-700 hover:bg-gray-50 hover:text-orange-700',
+                        ? 'bg-[var(--color-ember-50)] text-[var(--color-ember-700)]'
+                        : 'text-[var(--color-ink-700)] hover:bg-[var(--color-ink-50)] hover:text-[var(--color-ember-700)]',
                     )}
                   >
-                    {label}
+                    {t(`nav.links.${key}.label`)}
                   </Link>
                 );
               })}
             </div>
 
-            {/* Right-side actions (luxury cluster) */}
+            {/* Right-side actions */}
             <div className="flex items-center gap-2 md:gap-3">
-              {/* Desktop: show full search input only on /menu (kept calm + premium) */}
+              {/* Desktop search — only on /menu, lg+ */}
               {isMenu ? (
-                <div className="hidden w-28rem max-w-[38vw] lg:block">
+                <div className="hidden w-[28rem] max-w-[38vw] lg:block">
                   <MenuHeaderSearch
                     value={draftSearch}
                     onChange={setDraftSearch}
-                    placeholder="Search tacos, breakfast, spicy…"
+                    placeholder={t('header.search.placeholder')}
                   />
                 </div>
               ) : null}
 
-              {/* Mobile: magnifying glass icon NEXT TO CART only on /menu */}
+              {/* Mobile search icon — only on /menu, hidden on lg+ */}
               {isMenu ? (
                 <button
                   ref={mobileSearchBtnRef}
                   type="button"
                   onClick={() => {
-                    // don’t stack overlays
                     setMobileMenuOpen(false);
                     openMobileSearch();
                   }}
-                  aria-label="Search menu"
+                  aria-label={t('header.search.openAria')}
                   aria-haspopup="dialog"
                   aria-expanded={mobileSearchOpen ? 'true' : 'false'}
                   className={cx(
-                    'inline-flex h-10 w-10 items-center justify-center rounded-2xl',
-                    'border border-gray-200 bg-white text-gray-800 shadow-sm',
-                    'hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-orange-500/40',
+                    'inline-flex h-10 w-10 items-center justify-center',
+                    'rounded-[var(--radius-pill)]',
+                    'border border-[var(--color-border)] bg-white',
+                    'text-[var(--color-ink-800)] shadow-[var(--shadow-xs)]',
+                    'transition-colors duration-[var(--duration-base)] hover:bg-[var(--color-ink-50)]',
+                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]/40',
                     'lg:hidden',
                   )}
                 >
@@ -348,12 +362,18 @@ export default function Header() {
                 onClick={handleOpenCart}
                 type="button"
                 aria-label={cartAriaLabel}
-                className="relative rounded-lg p-2 text-gray-700 transition-all hover:bg-gray-50 hover:text-orange-700 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
+                className={cx(
+                  'relative rounded-[var(--radius-md)] p-2',
+                  'text-[var(--color-ink-700)]',
+                  'transition-all duration-[var(--duration-base)]',
+                  'hover:bg-[var(--color-ink-50)] hover:text-[var(--color-ember-700)]',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)] focus-visible:ring-offset-2',
+                )}
               >
                 <ShoppingCart className="h-6 w-6" aria-hidden="true" />
                 {(itemCount ?? 0) > 0 ? (
                   <span
-                    className="absolute -right-1 -top-1 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-orange-600 px-1 text-[11px] font-bold text-white shadow-sm"
+                    className="absolute -right-1 -top-1 flex h-5 min-w-[1.25rem] items-center justify-center rounded-[var(--radius-pill)] bg-[var(--color-ember-600)] px-1 text-[11px] font-bold text-white shadow-[var(--shadow-xs)]"
                     aria-hidden="true"
                   >
                     {(itemCount ?? 0) > 99 ? '99+' : itemCount}
@@ -361,36 +381,43 @@ export default function Header() {
                 ) : null}
               </button>
 
-              {/* Desktop auth */}
+              {/* Desktop auth cluster */}
               <div className="hidden items-center gap-2 md:flex">
                 {isAuthed ? (
                   <>
                     {activeOrderId ? (
                       <Link
                         to={`/order-status/${activeOrderId}`}
-                        className="rounded-lg px-3 py-2 text-sm font-semibold text-orange-600 transition hover:text-orange-700 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
+                        className="link-line rounded-[var(--radius-md)] px-3 py-2 text-sm font-semibold text-[var(--color-ember-600)] transition-colors duration-[var(--duration-base)] hover:text-[var(--color-ember-500)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)] focus-visible:ring-offset-2"
                       >
-                        Track Order
+                        {t('header.auth.trackOrder')}
                       </Link>
                     ) : null}
 
                     {isAdmin ? (
                       <Link
                         to="/admin"
-                        className="rounded-lg px-3 py-2 text-sm font-semibold text-amber-600 transition hover:text-amber-700 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
+                        className="link-line rounded-[var(--radius-md)] px-3 py-2 text-sm font-semibold text-[var(--color-gold-600)] transition-colors duration-[var(--duration-base)] hover:text-[var(--color-gold-500)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)] focus-visible:ring-offset-2"
                       >
-                        Admin
+                        {t('header.auth.admin')}
                       </Link>
                     ) : null}
 
                     <Link
                       to="/account"
-                      aria-label="Go to your account"
-                      className="flex items-center gap-2 rounded-lg bg-gray-50 px-3 py-2 transition-all hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
+                      aria-label={t('header.auth.account')}
+                      className={cx(
+                        'flex items-center gap-2 rounded-[var(--radius-md)]',
+                        'bg-[var(--color-ink-50)] px-3 py-2',
+                        'transition-all duration-[var(--duration-base)] hover:bg-[var(--color-ink-100)]',
+                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)] focus-visible:ring-offset-2',
+                      )}
                     >
-                      <User className="h-4 w-4 text-gray-600" aria-hidden="true" />
+                      <User className="h-4 w-4 text-[var(--color-ink-500)]" aria-hidden="true" />
                       {displayName ? (
-                        <span className="text-sm font-medium text-gray-700">Hi, {displayName}</span>
+                        <span className="text-sm font-medium text-[var(--color-ink-700)]">
+                          {t('header.auth.greeting', { name: displayName })}
+                        </span>
                       ) : null}
                     </Link>
 
@@ -399,11 +426,11 @@ export default function Header() {
                       variant="secondary"
                       size="sm"
                       type="button"
-                      aria-label="Sign out"
+                      aria-label={t('header.auth.signOut')}
                       className="flex items-center gap-2"
                     >
                       <LogOut className="h-4 w-4" aria-hidden="true" />
-                      Sign Out
+                      {t('header.auth.signOut')}
                     </Button>
                   </>
                 ) : (
@@ -413,18 +440,16 @@ export default function Header() {
                       variant="secondary"
                       size="sm"
                       type="button"
-                      aria-label="Sign in to your account"
                     >
-                      Log In
+                      {t('header.auth.logIn')}
                     </Button>
                     <Button
                       onClick={() => openModalSafe('signup')}
                       variant="primary"
                       size="sm"
                       type="button"
-                      aria-label="Create a new account"
                     >
-                      Sign Up
+                      {t('header.auth.signUp')}
                     </Button>
                   </>
                 )}
@@ -435,10 +460,17 @@ export default function Header() {
                 ref={mobileToggleRef}
                 onClick={toggleMobileMenu}
                 type="button"
-                aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
+                aria-label={mobileMenuOpen ? t('header.auth.closeMenu') : t('header.auth.openMenu')}
                 aria-expanded={mobileMenuOpen}
                 aria-controls="mobile-menu"
-                className="rounded-lg p-2 text-gray-700 transition-all hover:bg-gray-50 hover:text-orange-700 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 md:hidden"
+                className={cx(
+                  'rounded-[var(--radius-md)] p-2',
+                  'text-[var(--color-ink-700)]',
+                  'transition-all duration-[var(--duration-base)]',
+                  'hover:bg-[var(--color-ink-50)] hover:text-[var(--color-ember-700)]',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)] focus-visible:ring-offset-2',
+                  'md:hidden',
+                )}
               >
                 {mobileMenuOpen ? (
                   <X className="h-6 w-6" aria-hidden="true" />
@@ -449,17 +481,18 @@ export default function Header() {
             </div>
           </div>
 
-          {/* Mobile menu (NO search inside here) */}
+          {/* Mobile menu panel */}
           {mobileMenuOpen ? (
             <div
               ref={mobileMenuRef}
               id="mobile-menu"
               role="menu"
-              className="mt-4 rounded-2xl border border-gray-200 bg-white p-3 shadow-lg md:hidden"
+              className="card mt-4 p-3 md:hidden"
+              style={{ transform: 'none' }}
             >
               <div className="flex flex-col gap-2">
                 <div className="flex flex-col gap-1">
-                  {NAV_LINKS.map(({ path, label, ariaLabel }) => {
+                  {NAV_LINKS.map(({ path, key }) => {
                     const active = isActive(path);
                     return (
                       <Link
@@ -467,23 +500,24 @@ export default function Header() {
                         to={path}
                         role="menuitem"
                         onClick={closeMobileMenu}
-                        aria-label={ariaLabel}
+                        aria-label={t(`nav.links.${key}.aria`)}
                         aria-current={active ? 'page' : undefined}
                         className={cx(
-                          'rounded-xl px-4 py-3 text-sm font-medium transition-all',
-                          'focus:outline-none focus:ring-2 focus:ring-orange-500',
+                          'rounded-[var(--radius-xl)] px-4 py-3 text-sm font-medium',
+                          'transition-all duration-[var(--duration-base)]',
+                          'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]',
                           active
-                            ? 'bg-orange-50 text-orange-700'
-                            : 'text-gray-700 hover:bg-gray-50 hover:text-orange-700',
+                            ? 'bg-[var(--color-ember-50)] text-[var(--color-ember-700)]'
+                            : 'text-[var(--color-ink-700)] hover:bg-[var(--color-ink-50)] hover:text-[var(--color-ember-700)]',
                         )}
                       >
-                        {label}
+                        {t(`nav.links.${key}.label`)}
                       </Link>
                     );
                   })}
                 </div>
 
-                <div className="my-1 border-t border-gray-200" />
+                <hr className="divider-cream my-1" />
 
                 {user ? (
                   <>
@@ -491,9 +525,9 @@ export default function Header() {
                       <Link
                         to={`/order-status/${activeOrderId}`}
                         onClick={closeMobileMenu}
-                        className="block rounded-xl bg-orange-50 px-4 py-3 text-sm font-semibold text-orange-700 transition hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        className="block rounded-[var(--radius-xl)] bg-[var(--color-ember-50)] px-4 py-3 text-sm font-semibold text-[var(--color-ember-700)] transition-colors duration-[var(--duration-base)] hover:bg-[var(--color-ember-100)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]"
                       >
-                        Track Order
+                        {t('header.auth.trackOrder')}
                       </Link>
                     ) : null}
 
@@ -501,23 +535,27 @@ export default function Header() {
                       <Link
                         to="/admin"
                         onClick={closeMobileMenu}
-                        className="block rounded-xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700 transition hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        className="block rounded-[var(--radius-xl)] bg-[var(--color-gold-50)] px-4 py-3 text-sm font-semibold text-[var(--color-gold-600)] transition-colors duration-[var(--duration-base)] hover:bg-[var(--color-gold-100)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]"
                       >
-                        Admin Panel
+                        {t('header.auth.adminPanel')}
                       </Link>
                     ) : null}
 
                     <Link
                       to="/account"
                       onClick={closeMobileMenu}
-                      aria-label="Go to your account"
-                      className="block rounded-xl bg-gray-50 px-4 py-3 transition-all hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      aria-label={t('header.auth.account')}
+                      className="block rounded-[var(--radius-xl)] bg-[var(--color-ink-50)] px-4 py-3 transition-all duration-[var(--duration-base)] hover:bg-[var(--color-ink-100)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]"
                     >
                       <div className="mb-1 flex items-center gap-2">
-                        <User className="h-4 w-4 text-gray-600" aria-hidden="true" />
-                        <span className="text-sm font-semibold text-gray-900">{displayName}</span>
+                        <User className="h-4 w-4 text-[var(--color-ink-500)]" aria-hidden="true" />
+                        <span className="text-sm font-semibold text-[var(--color-ink-900)]">
+                          {displayName}
+                        </span>
                       </div>
-                      {user.email ? <p className="text-xs text-gray-600">{user.email}</p> : null}
+                      {user.email ? (
+                        <p className="text-xs text-[var(--color-ink-500)]">{user.email}</p>
+                      ) : null}
                     </Link>
 
                     <Button
@@ -528,7 +566,7 @@ export default function Header() {
                     >
                       <span className="flex items-center justify-center gap-2">
                         <LogOut className="h-4 w-4" aria-hidden="true" />
-                        Sign Out
+                        {t('header.auth.signOut')}
                       </span>
                     </Button>
                   </>
@@ -540,7 +578,7 @@ export default function Header() {
                       type="button"
                       className="w-full"
                     >
-                      Log In
+                      {t('header.auth.logIn')}
                     </Button>
                     <Button
                       onClick={() => openModalSafe('signup')}
@@ -548,7 +586,7 @@ export default function Header() {
                       type="button"
                       className="w-full"
                     >
-                      Sign Up
+                      {t('header.auth.signUp')}
                     </Button>
                   </div>
                 )}
@@ -558,51 +596,49 @@ export default function Header() {
         </nav>
       </header>
 
-      {/* Mobile Search Overlay (only on /menu) */}
+      {/* Mobile Search Overlay */}
       {isMenu && mobileSearchOpen ? (
         <div
-          className="fixed inset-0 z-50"
+          className="fixed inset-0 z-[40]"
           role="dialog"
           aria-modal="true"
-          aria-label="Search menu"
+          aria-label={t('header.search.aria')}
         >
           <div className="absolute inset-0 bg-black/40" aria-hidden="true" />
           <div className="absolute inset-x-0 top-0 p-3">
             <div
               ref={mobileSearchPanelRef}
-              className="mx-auto max-w-2xl overflow-hidden rounded-2xl border border-white/10 bg-neutral-950 text-white shadow-2xl"
+              className="mx-auto max-w-2xl overflow-hidden rounded-[var(--radius-card)] border border-white/10 bg-[var(--color-stone-950)] text-white shadow-[var(--shadow-2xl)]"
             >
               <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
                 <div className="min-w-0 flex-1">
                   <div className="relative">
                     <Search
-                      className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500"
+                      className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-ink-400)]"
                       aria-hidden="true"
                     />
                     <input
                       ref={mobileSearchInputRef}
                       value={draftSearch}
                       onChange={(e) => setDraftSearch(e.target.value)}
-                      placeholder="Search tacos, breakfast, spicy…"
-                      className={cx(
-                        'h-11 w-full rounded-2xl border border-white/10 bg-white/5 pl-10 pr-10 text-sm text-white outline-none',
-                        'placeholder:text-zinc-500 focus-visible:ring-2 focus-visible:ring-amber-500/25 focus-visible:border-amber-500/30',
-                      )}
+                      placeholder={t('header.search.placeholder')}
+                      className="input input-dark h-11 w-full pl-10 pr-10"
                       type="search"
                       inputMode="search"
                       autoComplete="off"
-                      aria-label="Search menu"
+                      aria-label={t('header.search.aria')}
                     />
                     {draftSearch.trim().length > 0 ? (
                       <button
                         type="button"
                         onClick={() => setDraftSearch('')}
                         className={cx(
-                          'absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-xl',
-                          'border border-white/10 bg-white/5 text-zinc-200 hover:bg-white/10',
-                          'focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25',
+                          'absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center',
+                          'rounded-[var(--radius-lg)] border border-white/10 bg-white/5 text-white/80',
+                          'transition-colors duration-[var(--duration-base)] hover:bg-white/10',
+                          'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]/40',
                         )}
-                        aria-label="Clear search"
+                        aria-label={t('header.search.clear')}
                       >
                         <X className="h-4 w-4" aria-hidden="true" />
                       </button>
@@ -613,15 +649,20 @@ export default function Header() {
                 <button
                   type="button"
                   onClick={closeMobileSearch}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25"
-                  aria-label="Close search"
+                  className={cx(
+                    'inline-flex h-10 w-10 items-center justify-center',
+                    'rounded-[var(--radius-lg)] border border-white/10 bg-white/5 text-white',
+                    'transition-colors duration-[var(--duration-base)] hover:bg-white/10',
+                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]/40',
+                  )}
+                  aria-label={t('header.search.close')}
                 >
                   <X className="h-5 w-5" aria-hidden="true" />
                 </button>
               </div>
 
               <div className="px-4 py-3">
-                <p className="text-xs text-zinc-400">Tip: Press “/” to search instantly.</p>
+                <p className="text-label text-[var(--color-ink-400)]">{t('header.search.tip')}</p>
               </div>
             </div>
           </div>

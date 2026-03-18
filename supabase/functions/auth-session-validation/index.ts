@@ -17,6 +17,10 @@
 //   - ✅ event_data uses Json (via toJson helper)
 //   - ✅ err() is called with <= 4 args (matches your shared http.ts signature)
 //   - ✅ No `any`
+//   - ✅ Table<T> helper for ergonomic, autocomplete-friendly row types
+//   - ✅ SessionMetaPartial correctly typed as Pick<> (partial select, not full row)
+//   - ✅ RiskScoreRow typed and used for auth_risk_scores query result
+//   - ✅ toJson() called with single arg (shared helper signature)
 // =============================================================================
 
 import { requireAuth, serviceClient, AuthError } from '../_shared/auth.ts';
@@ -24,6 +28,24 @@ import { handlePreflight, ok, err, clientIp } from '../_shared/http.ts';
 import type { SvcClient } from '../_shared/supabase.ts';
 import type { Database, Json } from '../_shared/database.types.ts';
 import { toJson } from '../_shared/json.ts';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Database type helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+type Table<T extends keyof Database['public']['Tables']> = Database['public']['Tables'][T];
+
+type SessionMetaPartial = Pick<
+  Table<'auth_sessions_meta'>['Row'],
+  'invalidated_at' | 'invalidation_reason' | 'is_trusted_device'
+>;
+
+type RiskScoreRow = Pick<
+  Table<'auth_risk_scores'>['Row'],
+  'risk_score' | 'requires_step_up' | 'requires_mfa' | 'expires_at' | 'evaluated_at'
+>;
+
+type AuditInsert = Table<'auth_audit_log'>['Insert'];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
@@ -126,8 +148,6 @@ function parseBody(raw: unknown): { sessionId: string; action: Action } | null {
 // ─────────────────────────────────────────────────────────────────────────────
 // Audit (best effort — never throws, fully typed)
 // ─────────────────────────────────────────────────────────────────────────────
-
-type AuditInsert = Database['public']['Tables']['auth_audit_log']['Insert'];
 
 async function audit(
   db: SvcClient,
@@ -289,10 +309,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       eventType: 'suspicious_activity',
       ipAddress: ip,
       riskScore: 100,
-      eventData: toJson(
-        { reason: 'session_meta_missing', action: body.action, sessionId: body.sessionId },
-        {},
-      ),
+      eventData: toJson({ reason: 'session_meta_missing', action: body.action, sessionId: body.sessionId }),
     });
 
     return ok(req, {
@@ -302,22 +319,22 @@ Deno.serve(async (req: Request): Promise<Response> => {
     });
   }
 
+  // Cast to precise partial type matching the selected columns
+  const meta = sessionMeta as SessionMetaPartial;
+
   // Invalidated session gate
-  if (sessionMeta.invalidated_at) {
+  if (meta.invalidated_at) {
     await audit(db, {
       userId: user.id,
       eventType: 'suspicious_activity',
       ipAddress: ip,
       riskScore: 100,
-      eventData: toJson(
-        {
-          reason: 'invalidated_session_used',
-          action: body.action,
-          sessionId: body.sessionId,
-          invalidation_reason: sessionMeta.invalidation_reason ?? null,
-        },
-        {},
-      ),
+      eventData: toJson({
+        reason: 'invalidated_session_used',
+        action: body.action,
+        sessionId: body.sessionId,
+        invalidation_reason: meta.invalidation_reason ?? null,
+      }),
     });
 
     return ok(req, {
@@ -328,7 +345,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // Fetch current risk score row
-  const { data: riskRow, error: riskErr } = await db
+  const { data: riskData, error: riskErr } = await db
     .from('auth_risk_scores')
     .select('risk_score, requires_step_up, requires_mfa, expires_at, evaluated_at')
     .eq('session_id', body.sessionId)
@@ -339,6 +356,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return err(req, 'DB_ERROR', 'Failed to load risk score', 500);
   }
 
+  const riskRow = (riskData ?? null) as RiskScoreRow | null;
   const currentScore = Number(riskRow?.risk_score ?? 0);
 
   // Determine freshness
@@ -356,7 +374,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       valid: false,
       reason: 'RISK_EVALUATION_REQUIRED',
       riskScore: currentScore,
-      requiresDeviceTrust: !sessionMeta.is_trusted_device,
+      requiresDeviceTrust: !meta.is_trusted_device,
     });
   }
 
@@ -376,7 +394,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     eventType: 'session_validated',
     ipAddress: ip,
     riskScore: currentScore,
-    eventData: toJson({ action: body.action, sessionId: body.sessionId }, {}),
+    eventData: toJson({ action: body.action, sessionId: body.sessionId }),
   });
 
   try {
@@ -392,6 +410,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
   return ok(req, {
     valid: true,
     riskScore: currentScore,
-    isTrustedDevice: !!sessionMeta.is_trusted_device,
+    isTrustedDevice: !!meta.is_trusted_device,
   });
 });

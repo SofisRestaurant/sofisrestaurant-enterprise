@@ -50,7 +50,7 @@ export function assertRecord(
 }
 
 export function assertArray<T>(
-  value: readonly T[] | unknown,
+  value: unknown,
   message = 'Expected an array',
 ): asserts value is readonly T[] {
   if (!Array.isArray(value)) {
@@ -59,7 +59,7 @@ export function assertArray<T>(
 }
 
 export function assertNonEmptyArray<T>(
-  value: readonly T[] | unknown,
+  value: unknown,
   message = 'Expected a non-empty array',
 ): asserts value is readonly [T, ...T[]] {
   if (!Array.isArray(value) || value.length === 0) {

@@ -14,6 +14,9 @@
 //   • whileHover scale guarded: MotionConfig automatically strips transforms
 //     when reducedMotion="user", so no manual shouldReduceMotion guard needed
 //     on whileHover/whileTap — MotionConfig handles it.
+// ✅ i18n: all user-visible strings via useTranslation()
+// ✅ Type-safe: SlideKey derived from TranslationTree — no `as` casts anywhere
+// ✅ DRY: tSlide() helper eliminates repeated template-literal key construction
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -24,24 +27,64 @@ import {
   useReducedMotion,
   useSpring,
   useTransform,
-} from 'motion/react'; // ← preferred package alias for Motion 12+
+} from 'motion/react';
 import { Link } from 'react-router-dom';
 import { APP_TAGLINE, type BrandTheme } from '@/assets/logo';
 import { HERO_IMAGES } from '@/assets/images';
 import { EASE_LUXURY, heroText, staggerContainer } from '@/lib/motion';
 import SlideDots from '@/components/home/SlideDots';
+import { useTranslation } from '@/i18n/useTranslation';
+import type { TranslationTree } from '@/i18n';
 
 // motion.create() replaces the deprecated motion() factory — fixes console warning
 const MotionLink = motion.create(Link);
 
-// ── Types & data ──────────────────────────────────────────────────────────────
+// ── i18n slide key types ──────────────────────────────────────────────────────
+//
+// SlideKey is derived directly from en.json's shape — never hardcoded.
+// TranslationTree['hero']['slides'] = { '1': {...}, '2': {...}, '3': {...} }
+// so SlideKey resolves to '1' | '2' | '3'.
+//
+// Adding a new slide to en.json automatically widens this union.
+// Removing a key makes TypeScript flag any stale imageKey references.
+// No `as` cast is ever required because imageKey: SlideKey, not string.
+//
+type SlideKey = keyof TranslationTree['hero']['slides'];
+
+// Valid copy fields within each slide object in en.json.
+// Derived from the actual JSON shape — adding/removing fields propagates automatically.
+type SlideCopyField = keyof TranslationTree['hero']['slides'][SlideKey];
+
+// ── tSlide factory ────────────────────────────────────────────────────────────
+//
+// Produces a bound helper that translates a per-slide copy field without
+// repeating the full key path at every call site.
+//
+// Usage inside HeroSection:
+//   const tSlide = makeTSlide(t);
+//   tSlide(slide, 'headline')    → t('hero.slides.1.headline')
+//   tSlide(slide, 'accentWord')  → t('hero.slides.1.accentWord')
+//   tSlide(slide, 'sub')         → t('hero.slides.1.sub')
+//   tSlide(slide, 'ariaLabel')   → t('hero.slides.1.ariaLabel')
+//
+// `field` is typed as SlideCopyField so typos are caught at compile time.
+//
+function makeTSlide(t: ReturnType<typeof useTranslation>['t']) {
+  return function tSlide(
+    slide: Pick<BaseHeroSlide, 'imageKey'>,
+    field: SlideCopyField,
+  ): string {
+    return t(`hero.slides.${slide.imageKey}.${field}`);
+  };
+}
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface BaseHeroSlide {
   id: number;
-  headline: string;
-  accentWord: string;
-  sub: string;
-  ariaLabel?: string;
+  // SlideKey instead of string — TypeScript validates every imageKey value
+  // against en.json at compile time. A typo like '4' is a type error.
+  imageKey: SlideKey;
 }
 
 interface ImageHeroSlide extends BaseHeroSlide {
@@ -57,34 +100,12 @@ interface VideoHeroSlide extends BaseHeroSlide {
 
 export type HeroSlide = ImageHeroSlide | VideoHeroSlide;
 
+// Slide definitions — visual/media data only; all copy comes from translations.
+// TypeScript errors here if any imageKey value is not a valid key of en.json slides.
 const SLIDES: HeroSlide[] = [
-  {
-    id: 1,
-    kind: 'image',
-    image: HERO_IMAGES.hero1,
-    headline: 'Crafted With',
-    accentWord: 'Intention',
-    sub: 'Seasonal ingredients, honest technique, unforgettable evenings.',
-    ariaLabel: "Dining room with warm candlelight at Sofi's Restaurant",
-  },
-  {
-    id: 2,
-    kind: 'image',
-    image: HERO_IMAGES.hero2,
-    headline: 'Every Dish',
-    accentWord: 'Tells a Story',
-    sub: 'From our kitchen to your table — flavour rooted in place.',
-    ariaLabel: "Chef plating a seasonal dish at Sofi's Restaurant",
-  },
-  {
-    id: 3,
-    kind: 'image',
-    image: HERO_IMAGES.hero3,
-    headline: 'The Table',
-    accentWord: 'Is Yours',
-    sub: 'Reserve your evening. Make it a memory worth keeping.',
-    ariaLabel: "Intimate table setting ready for guests at Sofi's Restaurant",
-  },
+  { id: 1, kind: 'image', image: HERO_IMAGES.hero1, imageKey: '1' },
+  { id: 2, kind: 'image', image: HERO_IMAGES.hero2, imageKey: '2' },
+  { id: 3, kind: 'image', image: HERO_IMAGES.hero3, imageKey: '3' },
 ];
 
 const SLIDE_COUNT = SLIDES.length;
@@ -169,7 +190,11 @@ function SlideMedia({ slide, kenBurnsActive, shouldReduceMotion }: SlideMediaPro
 // ── ScrollHint ────────────────────────────────────────────────────────────────
 // Only rendered when !shouldReduceMotion, so no internal guard needed.
 
-function ScrollHint() {
+interface ScrollHintProps {
+  label: string;
+}
+
+function ScrollHint({ label }: ScrollHintProps) {
   return (
     <motion.div
       className="absolute bottom-9 right-7 z-20 flex select-none flex-col items-center gap-2"
@@ -188,7 +213,7 @@ function ScrollHint() {
         className="font-body text-[0.55rem] uppercase tracking-[0.24em] text-white/35"
         style={{ writingMode: 'vertical-rl' }}
       >
-        Scroll
+        {label}
       </span>
     </motion.div>
   );
@@ -206,6 +231,13 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
   // Still needed for imperative logic: video autoplay, parallax, auto-advance.
   // MotionConfig handles declarative animation suppression automatically.
   const shouldReduceMotion: boolean = useReducedMotion() ?? false;
+
+  const { t } = useTranslation();
+
+  // Bind tSlide once per render. `t` is stable across renders (memoized in the
+  // hook) so this produces the same reference unless the locale actually changes,
+  // at which point tSlide correctly picks up the new locale's strings.
+  const tSlide = makeTSlide(t);
 
   const [current, setCurrent] = useState(0);
   const [paused, setPaused] = useState(false);
@@ -242,8 +274,20 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
   const [liveAnnounce, setLiveAnnounce] = useState('');
   useEffect(() => {
     const s = SLIDES[current];
-    setLiveAnnounce(`Slide ${current + 1} of ${SLIDE_COUNT}: ${s.headline} ${s.accentWord}`);
-  }, [current]);
+    // No cast needed — s.imageKey is SlideKey, so tSlide is fully type-safe here.
+    setLiveAnnounce(
+      t('hero.slideAnnounce', {
+        current: String(current + 1),
+        total: String(SLIDE_COUNT),
+        headline: tSlide(s, 'headline'),
+        accentWord: tSlide(s, 'accentWord'),
+      }),
+    );
+    // tSlide is recreated when `t` changes (locale switch), so the announcement
+    // re-fires in the new locale too. Omitting tSlide from deps is intentional:
+    // it is a derived value of `t`, and including it would require useCallback.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, t]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -309,7 +353,7 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
           ref={heroRef}
           role="region"
           aria-roledescription="carousel"
-          aria-label="Sofi's Restaurant — featured slides"
+          aria-label={t('hero.carouselAria')}
           aria-live="off"
           tabIndex={0}
           onKeyDown={handleKeyDown}
@@ -411,17 +455,17 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
                   style={{ background: 'var(--color-gold-400, #d4af37)' }}
                   aria-hidden="true"
                 />
-                San Francisco · Est. 2024
+                {t('hero.location')}
               </motion.p>
 
-              {/* Headline */}
+              {/* Headline — tSlide replaces t(`hero.slides.${slide.imageKey}.headline`) */}
               <motion.h1
                 variants={heroText}
                 transition={{ duration: 0.9, ease: EASE_LUXURY, delay: 0.18 }}
                 className="font-display text-[clamp(3rem,11vw,6.5rem)] leading-[0.92]
                            tracking-[-0.04em] text-white"
               >
-                {slide.headline}
+                {tSlide(slide, 'headline')}
                 <br />
                 <span
                   className="text-script"
@@ -430,18 +474,18 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
                     textShadow: '0 0 48px rgba(212,175,55,0.35)',
                   }}
                 >
-                  {slide.accentWord}
+                  {tSlide(slide, 'accentWord')}
                 </span>
               </motion.h1>
 
-              {/* Sub */}
+              {/* Sub — tSlide replaces t(`hero.slides.${slide.imageKey}.sub`) */}
               <motion.p
                 variants={heroText}
                 transition={{ duration: 0.7, ease: EASE_LUXURY, delay: 0.32 }}
                 className="font-body max-w-28rem text-[1rem] font-light
                            leading-[1.75] text-white/60 sm:text-[1.05rem]"
               >
-                {slide.sub}
+                {tSlide(slide, 'sub')}
                 {APP_TAGLINE && <span className="text-white/35"> · {APP_TAGLINE}</span>}
               </motion.p>
 
@@ -459,7 +503,7 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
                 <MotionLink
                   to="/menu"
                   onClick={onMenuClick}
-                  aria-label="View the full menu"
+                  aria-label={t('hero.cta.menuAria')}
                   whileHover={{ scale: 1.03 }}
                   whileTap={{ scale: 0.97 }}
                   transition={{ duration: 0.18, ease: EASE_LUXURY }}
@@ -474,13 +518,13 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
                     'focus-visible:ring-[#d4af37] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1c1915]',
                   ].join(' ')}
                 >
-                  Explore Menu
+                  {t('hero.cta.menu')}
                 </MotionLink>
 
                 <MotionLink
                   to="/reservations"
                   onClick={onReservationClick}
-                  aria-label="Make a reservation"
+                  aria-label={t('hero.cta.reserveAria')}
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.97 }}
                   transition={{ duration: 0.18, ease: EASE_LUXURY }}
@@ -495,7 +539,7 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
                     'focus-visible:ring-[#d4af37] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1c1915]',
                   ].join(' ')}
                 >
-                  Reserve a Table
+                  {t('hero.cta.reserve')}
                 </MotionLink>
               </motion.div>
             </motion.div>
@@ -503,7 +547,7 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
 
           <SlideDots slides={SLIDES} current={current} onSelect={jumpTo} />
 
-          {!shouldReduceMotion && <ScrollHint />}
+          {!shouldReduceMotion && <ScrollHint label={t('hero.scrollHint')} />}
 
           <div
             aria-hidden="true"

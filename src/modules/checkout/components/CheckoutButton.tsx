@@ -9,14 +9,7 @@
 // - No token/session logging
 // - Accessible modal: ESC, outside click, focus restore, focus trap-lite
 // - Scroll lock handled centrally through useScrollLock
-// ----------------------------------------------------------------------------
-// Upgrades:
-// - Fully wired redirectToCheckout() success path
-// - Stronger runtime guards + safer formatting fallbacks
-// - Safer timer and animation behavior
-// - More defensive auth/cart/credit/promo handling
-// - Better modal UX and keyboard handling
-// - Production-safe callbacks, cleanup, and state transitions
+// ✅ i18n: all user-visible strings via useTranslation()
 // ============================================================================
 
 import React, { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
@@ -35,6 +28,7 @@ import { useCheckout } from '@/modules/checkout/hooks/useCheckout';
 import { useUserContext } from '@/contexts/useUserContext';
 import { useCart } from '@/modules/cart/hooks/useCart';
 import { useScrollLock } from '@/lib/ui/useScrollLock';
+import { useTranslation } from '@/i18n/useTranslation';
 
 import type { CartItem, CartModifier } from '@/modules/cart/types/cart.types';
 import { cartItemKey } from '@/modules/cart/types/cart.types';
@@ -198,18 +192,6 @@ function modifierLabel(modifiers: CartModifier[]): string {
   return names.join(', ');
 }
 
-function formatOrderTypeLabel(orderType: OrderType): string {
-  switch (orderType) {
-    case 'delivery':
-      return 'Delivery';
-    case 'dine_in':
-      return 'Dine in';
-    case 'pickup':
-    default:
-      return 'Pickup';
-  }
-}
-
 // ============================================================================
 // Focus trap-lite
 // ============================================================================
@@ -241,6 +223,7 @@ function CheckoutButton({
   className,
   disabled: disabledProp = false,
 }: CheckoutButtonProps) {
+  const { t } = useTranslation();
   const normalizedOrderType = normalizeOrderType(orderType);
 
   const { user, loading: authLoading, isAuthenticated } = useUserContext();
@@ -430,13 +413,13 @@ function CheckoutButton({
     inflightRef.current;
 
   const buttonLabel = useMemo(() => {
-    if (!stripeEnabled) return 'Checkout unavailable';
-    if (authLoading) return 'Loading…';
-    if (!isAuthed) return 'Log in to pay';
-    if (!hasItems) return 'Cart is empty';
-    if (isLoading) return 'Creating secure checkout…';
-    if (disabledBecauseCooldown) return `Retry in ${cooldownSeconds}s`;
-    return reviewFirst ? 'Review Order' : 'Proceed to Payment';
+    if (!stripeEnabled) return t('checkout.button.unavailable');
+    if (authLoading) return t('checkout.button.loading');
+    if (!isAuthed) return t('checkout.button.loginRequired');
+    if (!hasItems) return t('checkout.button.cartEmpty');
+    if (isLoading) return t('checkout.button.processing');
+    if (disabledBecauseCooldown) return t('checkout.button.retryIn', { seconds: cooldownSeconds });
+    return reviewFirst ? t('checkout.button.reviewOrder') : t('checkout.button.proceedToPayment');
   }, [
     stripeEnabled,
     authLoading,
@@ -446,7 +429,11 @@ function CheckoutButton({
     disabledBecauseCooldown,
     cooldownSeconds,
     reviewFirst,
+    t,
   ]);
+
+  // Order type label is pulled from translations
+  const orderTypeLabel = t(`checkout.orderType.${normalizedOrderType}`);
 
   const reviewSubtotalCents = useMemo(() => sumCartSubtotalCents(safeItems), [safeItems]);
 
@@ -470,12 +457,12 @@ function CheckoutButton({
     if (disabled) return;
 
     if (!stripeEnabled) {
-      onPromoError?.('Checkout is temporarily unavailable. Please try again later.');
+      onPromoError?.(t('checkout.error.unavailableToast'));
       return;
     }
 
     if (!isAuthed || !user) {
-      window.alert('Please log in to continue');
+      window.alert(t('checkout.error.loginAlert'));
       return;
     }
 
@@ -499,7 +486,8 @@ function CheckoutButton({
         notes,
       });
     } catch (checkoutError: unknown) {
-      const message = checkoutError instanceof Error ? checkoutError.message : 'Checkout failed';
+      const message =
+        checkoutError instanceof Error ? checkoutError.message : t('checkout.error.checkoutFailed');
 
       if (onPromoError && (isPromoRelatedMessage(message) || isCreditRelatedMessage(message))) {
         onPromoError(message);
@@ -518,6 +506,7 @@ function CheckoutButton({
     normalizedOrderType,
     notes,
     onPromoError,
+    t,
   ]);
 
   const handlePrimaryClick = useCallback(() => {
@@ -533,6 +522,7 @@ function CheckoutButton({
 
   const shimmerEnabled = !prefersReducedMotion();
 
+  // ── Loading skeleton ───────────────────────────────────────────────────────
   if (authLoading) {
     return (
       <button
@@ -546,23 +536,23 @@ function CheckoutButton({
       >
         <div className="flex items-center justify-center gap-3">
           <Loader2 className="h-5 w-5 animate-spin" />
-          <span className="text-base font-semibold">Loading…</span>
+          <span className="text-base font-semibold">{t('checkout.button.loading')}</span>
         </div>
       </button>
     );
   }
 
+  // ── Stripe not configured ──────────────────────────────────────────────────
   if (!stripeEnabled) {
     return (
       <div className={cx('space-y-3', className)} aria-live="polite">
         <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
           <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-amber-900">Checkout is not configured.</p>
-            <p className="mt-1 text-xs text-amber-800">
-              Missing <span className="font-mono">VITE_STRIPE_PUBLIC_KEY</span>. Add it in env vars
-              and redeploy.
+            <p className="text-sm font-semibold text-amber-900">
+              {t('checkout.error.notConfiguredTitle')}
             </p>
+            <p className="mt-1 text-xs text-amber-800">{t('checkout.error.notConfiguredBody')}</p>
           </div>
         </div>
 
@@ -573,13 +563,14 @@ function CheckoutButton({
         >
           <span className="flex items-center justify-center gap-2">
             <ShieldCheck className="h-4 w-4" />
-            Checkout unavailable
+            {t('checkout.button.unavailable')}
           </span>
         </button>
       </div>
     );
   }
 
+  // ── Error state ────────────────────────────────────────────────────────────
   if (error) {
     return (
       <div className={cx('space-y-3', className)} aria-live="polite">
@@ -587,10 +578,14 @@ function CheckoutButton({
           <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-red-900">{error}</p>
-            {errorCode ? <p className="mt-1 text-xs text-red-700">Code: {errorCode}</p> : null}
+            {errorCode ? (
+              <p className="mt-1 text-xs text-red-700">
+                {t('checkout.error.codeLabel', { code: errorCode })}
+              </p>
+            ) : null}
             {disabledBecauseCooldown ? (
               <p className="mt-1 text-xs text-red-700">
-                Please wait {cooldownSeconds}s before retrying.
+                {t('checkout.error.waitToRetry', { seconds: cooldownSeconds })}
               </p>
             ) : null}
           </div>
@@ -609,7 +604,9 @@ function CheckoutButton({
           >
             <span className="flex items-center justify-center gap-2">
               <RefreshCw className="h-4 w-4" />
-              {disabledBecauseCooldown ? `Retry in ${cooldownSeconds}s` : 'Try Again'}
+              {disabledBecauseCooldown
+                ? t('checkout.error.retryIn', { seconds: cooldownSeconds })
+                : t('checkout.error.tryAgain')}
             </span>
           </button>
         ) : null}
@@ -619,12 +616,13 @@ function CheckoutButton({
           onClick={reset}
           className="w-full text-sm text-zinc-600 underline decoration-zinc-300 underline-offset-4 hover:text-zinc-900"
         >
-          ← Back to checkout
+          {t('checkout.error.back')}
         </button>
       </div>
     );
   }
 
+  // ── Primary button + review modal ──────────────────────────────────────────
   return (
     <>
       <button
@@ -658,7 +656,7 @@ function CheckoutButton({
               className={cx(
                 'pointer-events-none absolute -inset-y-8 -left-24 w-24 rotate-12 bg-white/10 blur-xl',
                 'transition-transform duration-700',
-                !disabled && 'group-hover:translate-x-28rem',
+                !disabled && 'group-hover:translate-x-[28rem]',
               )}
             />
           ) : null}
@@ -667,7 +665,7 @@ function CheckoutButton({
 
       {reviewOpen ? (
         <div
-          className="fixed inset-0 z-80 flex items-center justify-center bg-black/50 p-4"
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4"
           data-modal-root="true"
           role="dialog"
           aria-modal="true"
@@ -680,21 +678,21 @@ function CheckoutButton({
           }}
         >
           <div ref={modalRef} className="w-full max-w-xl rounded-2xl bg-white shadow-2xl">
+            {/* Modal header */}
             <div className="flex items-start justify-between border-b border-zinc-200 p-5">
               <div className="min-w-0">
                 <h3 id={modalTitleId} className="text-lg font-semibold text-zinc-900">
-                  Review your order
+                  {t('checkout.modal.title')}
                 </h3>
                 <p id={modalDescId} className="mt-1 text-xs text-zinc-600">
-                  Prices, promo eligibility, credits, and tax are re-validated securely on the
-                  server before payment.
+                  {t('checkout.modal.description')}
                 </p>
               </div>
 
               <button
                 ref={closeBtnRef}
                 type="button"
-                aria-label="Close"
+                aria-label={t('checkout.modal.close')}
                 onClick={() => setReviewOpen(false)}
                 className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
               >
@@ -702,10 +700,11 @@ function CheckoutButton({
               </button>
             </div>
 
+            {/* Modal body */}
             <div className="max-h-[60vh] overflow-y-auto p-5">
               {!hasItems ? (
                 <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-700">
-                  Your cart is empty. Add items before checking out.
+                  {t('checkout.modal.emptyCart')}
                 </div>
               ) : (
                 <>
@@ -728,7 +727,8 @@ function CheckoutButton({
 
                               {item.notes ? (
                                 <p className="mt-1 text-xs text-zinc-500">
-                                  Note: {String(item.notes).slice(0, 200)}
+                                  {t('checkout.modal.notePrefix')}
+                                  {String(item.notes).slice(0, 200)}
                                 </p>
                               ) : null}
                             </div>
@@ -738,7 +738,9 @@ function CheckoutButton({
                                 {formatCents(safeLineTotalCents(item))}
                               </p>
                               <p className="mt-1 text-xs text-zinc-500">
-                                Qty {clampInt(item.quantity, 1, 100)}
+                                {t('checkout.modal.qtyLabel', {
+                                  qty: clampInt(item.quantity, 1, 100),
+                                })}
                               </p>
                             </div>
                           </div>
@@ -747,52 +749,55 @@ function CheckoutButton({
                     })}
                   </div>
 
+                  {/* Totals */}
                   <div className="mt-5 rounded-2xl bg-zinc-50 p-4 ring-1 ring-zinc-200">
                     <div className="flex items-center justify-between text-sm">
-                      <span className="text-zinc-600">Subtotal</span>
+                      <span className="text-zinc-600">{t('checkout.modal.subtotal')}</span>
                       <span className="font-semibold text-zinc-900 tabular-nums">
                         {reviewSubtotalLabel}
                       </span>
                     </div>
 
                     <div className="mt-3 flex items-center justify-between text-sm">
-                      <span className="text-zinc-700">Estimated total</span>
+                      <span className="text-zinc-700">{t('checkout.modal.estimatedTotal')}</span>
                       <span className="text-base font-bold text-zinc-900 tabular-nums">
                         {reviewTotalLabel}
                       </span>
                     </div>
 
                     <p className="mt-2 text-[11px] text-zinc-500">
-                      Final total may change based on server-authoritative tax, deals, credit
-                      validation, and availability.
+                      {t('checkout.modal.totalDisclaimer')}
                     </p>
                   </div>
 
+                  {/* Order meta */}
                   <div className="mt-4 space-y-1 text-xs text-zinc-600">
                     <div className="flex items-center justify-between">
-                      <span>Order type</span>
-                      <span className="font-semibold text-zinc-900">
-                        {formatOrderTypeLabel(normalizedOrderType)}
-                      </span>
+                      <span>{t('checkout.modal.orderType')}</span>
+                      <span className="font-semibold text-zinc-900">{orderTypeLabel}</span>
                     </div>
 
                     {normalizedPromo ? (
                       <div className="flex items-center justify-between">
-                        <span>Promo code</span>
+                        <span>{t('checkout.modal.promoCode')}</span>
                         <span className="font-semibold text-zinc-900">{normalizedPromo}</span>
                       </div>
                     ) : null}
 
                     {normalizedCreditId ? (
                       <div className="flex items-center justify-between">
-                        <span>Credit</span>
-                        <span className="font-semibold text-zinc-900">Applied</span>
+                        <span>{t('checkout.modal.credit')}</span>
+                        <span className="font-semibold text-zinc-900">
+                          {t('checkout.modal.creditApplied')}
+                        </span>
                       </div>
                     ) : null}
 
                     {safeNotesPreview ? (
                       <div className="mt-2 rounded-lg border border-zinc-200 bg-white p-3">
-                        <p className="text-[11px] font-semibold text-zinc-800">Notes</p>
+                        <p className="text-[11px] font-semibold text-zinc-800">
+                          {t('checkout.modal.notesLabel')}
+                        </p>
                         <p className="mt-1 text-[11px] text-zinc-600">{safeNotesPreview}</p>
                       </div>
                     ) : null}
@@ -801,13 +806,14 @@ function CheckoutButton({
               )}
             </div>
 
+            {/* Modal footer */}
             <div className="flex flex-col gap-3 border-t border-zinc-200 p-5 sm:flex-row sm:justify-end">
               <button
                 type="button"
                 onClick={() => setReviewOpen(false)}
                 className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm font-semibold text-zinc-900 hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-zinc-900/10 sm:w-auto"
               >
-                Back
+                {t('checkout.modal.back')}
               </button>
 
               <button
@@ -825,7 +831,7 @@ function CheckoutButton({
               >
                 <span className="inline-flex items-center justify-center gap-2">
                   <ShoppingBag className="h-4 w-4" />
-                  {isLoading ? 'Creating secure checkout…' : 'Pay with card'}
+                  {isLoading ? t('checkout.modal.processing') : t('checkout.modal.payWithCard')}
                 </span>
               </button>
             </div>

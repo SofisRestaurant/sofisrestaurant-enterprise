@@ -35,22 +35,27 @@ function cx(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(' ');
 }
 
-function normalizeInternalRedirectPath(
+/**
+ * Safely normalizes internal redirect paths.
+ * Returns `fallback` if the input is unsafe.
+ */
+export function normalizeInternalRedirectPath(
   input: string | null | undefined,
   fallback: string,
 ): string {
   const value = typeof input === 'string' ? input.trim() : '';
 
-  if (!value) {
-    return fallback;
-  }
+  if (!value) return fallback;
 
+  // Must start with a single slash and not contain full URLs
   if (!value.startsWith('/') || value.startsWith('//') || /^(https?:)?\/\//i.test(value)) {
     return fallback;
   }
 
-  if (/[\u0000-\u001F\u007F]/.test(value)) {
-    return fallback;
+  // Check for control characters (ASCII 0-31 and 127) without regex
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if ((code >= 0 && code <= 31) || code === 127) return fallback;
   }
 
   return value;

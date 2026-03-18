@@ -10,6 +10,12 @@ type EdgeOk = {
   asOf: string;
 };
 
+// Type-safe Supabase invoke response
+type SupabaseInvokeResponse<T> = {
+  data: T | null;
+  error: { message: string } | null;
+};
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -70,15 +76,29 @@ export async function getActiveCampaigns(args?: {
     qs.set('limit', String(limit));
     qs.set('featured', featured ? 'true' : 'false');
 
-    const { data, error } = await supabase.functions.invoke(
-      `get-active-campaigns?${qs.toString()}`,
+    // Step 1: Assign response first (avoid unsafe destructuring)
+    const response: SupabaseInvokeResponse<EdgeOk> = await supabase.functions.invoke(
+      'get-active-campaigns',
       {
         method: 'GET',
-      },
+        headers: { 'x-query-string': qs.toString() },
+        // Optional: use a JSON body if your edge function supports it
+        // body: { placement, limit, featured },
+      }
     );
 
-    if (error) return { featured: null, campaigns: [] };
-    if (!isEdgeOk(data)) return { featured: null, campaigns: [] };
+    // Step 2: Access safely
+    const data = response.data;
+    const error = response.error;
+
+    if (error) {
+      console.error('Supabase function error:', error.message);
+      return { featured: null, campaigns: [] };
+    }
+
+    if (!data || !isEdgeOk(data)) {
+      return { featured: null, campaigns: [] };
+    }
 
     return {
       featured: data.featured,

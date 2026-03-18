@@ -122,14 +122,14 @@ export default function Footer() {
                   className="font-body text-[0.68rem] uppercase tracking-[0.14em]"
                   style={{ color: 'var(--color-ink-500, #8a7a6a)' }}
                 >
-                  San Francisco · Est. 2012
+                  Surprise Arizona · Est. 2022
                 </p>
               </div>
             </Link>
 
             {/* Tagline */}
             <p
-              className="max-w-[22rem] font-body text-[0.88rem] font-light leading-[1.78]"
+              className="max-w-22rem font-body text-[0.88rem] font-light leading-[1.78]"
               style={{ color: 'rgba(255,255,255,0.45)' }}
             >
               Seasonal ingredients, honest technique, and unforgettable evenings. Every detail is an
@@ -150,7 +150,7 @@ export default function Footer() {
                 target="_blank"
                 rel="noreferrer"
                 className="glass flex items-center gap-2 rounded-full px-3.5 py-2
-                           font-body text-[0.68rem] font-medium uppercase tracking-[0.10em]
+                           font-body text-[0.68rem] font-medium uppercase tracking-caps[0.10em]
                            transition-all duration-300 hover:border-gold-400/30"
                 style={{ color: 'rgba(255,255,255,0.55)' }}
                 aria-label="Follow Sofi's on Instagram"
@@ -175,7 +175,7 @@ export default function Footer() {
                 target="_blank"
                 rel="noreferrer"
                 className="glass flex items-center gap-2 rounded-full px-3.5 py-2
-                           font-body text-[0.68rem] font-medium uppercase tracking-[0.10em]
+                           font-body text-[0.68rem] font-medium uppercase tracking-caps[0.10em]
                            transition-all duration-300 hover:border-gold-400/30"
                 style={{ color: 'rgba(255,255,255,0.55)' }}
                 aria-label="Follow Sofi's on TikTok"
@@ -328,7 +328,7 @@ export default function Footer() {
                   className="font-body text-[0.83rem] leading-relaxed"
                   style={{ color: 'rgba(255,255,255,0.65)' }}
                 >
-                  San Francisco, California
+                  Surprise Arizona, Arizona
                 </span>
               </a>
 

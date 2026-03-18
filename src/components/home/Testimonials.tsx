@@ -32,32 +32,36 @@ interface Testimonial {
 
 const TESTIMONIALS: Testimonial[] = [
   {
-    id:     1,
-    quote:  'An evening that felt like theatre. The braised short rib was worth every penny — I was still thinking about it days later.',
+    id: 1,
+    quote:
+      'An evening that felt like theatre. The braised short rib was worth every penny — I was still thinking about it days later.',
     author: 'Margot L.',
     detail: 'Verified Guest · March 2025',
     rating: 5,
     source: 'OpenTable',
   },
   {
-    id:     2,
-    quote:  'The attention to detail here is extraordinary. Every dish arrived as if it had been painted. The wine pairings were inspired.',
+    id: 2,
+    quote:
+      'The attention to detail here is extraordinary. Every dish arrived as if it had been painted. The wine pairings were inspired.',
     author: 'James & Claire W.',
     detail: 'Anniversary Dinner · February 2025',
     rating: 5,
     source: 'Google',
   },
   {
-    id:     3,
-    quote:  "I've dined across San Francisco for twenty years. Sofi's has quietly become my benchmark. Impeccable without pretension.",
+    id: 3,
+    quote:
+      "I've dined across Surprise Arizona for twenty years. Sofi's has quietly become my benchmark. Impeccable without pretension.",
     author: 'Rafael M.',
     detail: 'Regular Guest · January 2025',
     rating: 5,
     source: 'Yelp',
   },
   {
-    id:     4,
-    quote:  'The chocolate soufflé alone justifies the reservation. Our server knew every dish like a friend would — warm, knowledgeable, genuine.',
+    id: 4,
+    quote:
+      'The chocolate soufflé alone justifies the reservation. Our server knew every dish like a friend would — warm, knowledgeable, genuine.',
     author: 'Priya S.',
     detail: 'Birthday Celebration · December 2024',
     rating: 5,

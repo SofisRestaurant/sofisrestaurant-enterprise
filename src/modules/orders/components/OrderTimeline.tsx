@@ -9,6 +9,7 @@ import {
   Flag, Clock, Package, ChevronDown,
 } from 'lucide-react';
 import type { TimelineEvent, TimelineEventKind, TimelineEventSeverity } from '../types/order-dispute.types';
+import { nanoid } from 'nanoid';
 
 // ---------------------------------------------------------------------------
 // Icon + color maps
@@ -60,16 +61,14 @@ function TimelineRow({
   return (
     <div className="relative flex gap-4">
       {/* Connector line */}
-      {!isLast && (
-        <div className="absolute left-[19px] top-7 bottom-0 w-px bg-white/8" />
-      )}
+      {!isLast && <div className="absolute left-19px top-7 bottom-0 w-px bg-white/8" />}
 
       {/* Icon bubble */}
-      <div className="shrink-0 w-10 h-10 rounded-xl border border-white/10 bg-slate-900
-                      flex items-center justify-center z-10">
-        <span className={s.icon}>
-          {KIND_ICON[event.kind] ?? <Clock size={14} />}
-        </span>
+      <div
+        className="shrink-0 w-10 h-10 rounded-xl border border-white/10 bg-slate-900
+                      flex items-center justify-center z-10"
+      >
+        <span className={s.icon}>{KIND_ICON[event.kind] ?? <Clock size={14} />}</span>
       </div>
 
       {/* Content */}
@@ -93,7 +92,10 @@ function TimelineRow({
               >
                 <ChevronDown
                   size={14}
-                  className={['transition-transform duration-150', expanded ? 'rotate-180' : ''].join(' ')}
+                  className={[
+                    'transition-transform duration-150',
+                    expanded ? 'rotate-180' : '',
+                  ].join(' ')}
                 />
               </button>
             )}
@@ -130,8 +132,10 @@ function TimelineRow({
 
             {/* Metadata */}
             {event.metadata && Object.keys(event.metadata).length > 0 && (
-              <pre className="text-[11px] text-slate-500 font-mono bg-black/30
-                              rounded-lg p-2 overflow-x-auto border border-white/6">
+              <pre
+                className="text-[11px] text-slate-500 font-mono bg-black/30
+                              rounded-lg p-2 overflow-x-auto border border-white/6"
+              >
                 {JSON.stringify(event.metadata, null, 2)}
               </pre>
             )}
@@ -141,6 +145,7 @@ function TimelineRow({
     </div>
   );
 }
+const skeletonKeys = Array.from({ length: 5 }, () => nanoid());
 
 // ---------------------------------------------------------------------------
 // Main export
@@ -158,8 +163,8 @@ export function OrderTimeline({
   if (isLoading) {
     return (
       <div className={['space-y-4', className].join(' ')}>
-        {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="flex gap-4 animate-pulse">
+        {skeletonKeys.map((key) => (
+          <div key={key} className="flex gap-4 animate-pulse">
             <div className="w-10 h-10 rounded-xl bg-white/6 shrink-0" />
             <div className="flex-1 space-y-2 pt-1">
               <div className="h-3.5 w-40 rounded bg-white/6" />

@@ -16,17 +16,23 @@ export function getUserDisplayName(user: AppUser | null | undefined): string {
  * (Named export required by ForgotPasswordModal.tsx)
  */
 export function formatAuthError(err: unknown): string {
-  // Supabase errors often come as { message, status, ... }
-  const message =
-    typeof err === 'string'
-      ? err
-      : err && typeof err === 'object' && 'message' in err
-        ? String((err as { message?: unknown }).message ?? '')
-        : '';
+  // Step 1: Convert unknown error to a string safely
+  let message: string;
 
+  if (typeof err === 'string') {
+    message = err;
+  } else if (err && typeof err === 'object' && 'message' in err) {
+    const maybeMessage = (err as { message?: unknown }).message;
+    if (typeof maybeMessage === 'string') message = maybeMessage;
+    else if (maybeMessage != null) message = JSON.stringify(maybeMessage);
+    else message = '';
+  } else {
+    message = '';
+  }
+
+  // Step 2: Normalize and map to friendly messages
   const m = message.toLowerCase();
 
-  // Common, friendly mappings
   if (!message) return 'Something went wrong. Please try again.';
   if (m.includes('invalid login credentials')) return 'Invalid email or password.';
   if (m.includes('email not confirmed')) return 'Please confirm your email before signing in.';
@@ -37,6 +43,6 @@ export function formatAuthError(err: unknown): string {
   if (m.includes('network') || m.includes('fetch'))
     return 'Network error. Check your connection and try again.';
 
-  // Default: show the original message (cleaned)
+  // Default: show the original message
   return message;
 }

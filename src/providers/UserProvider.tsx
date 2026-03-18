@@ -83,14 +83,11 @@ function mergeUser(authUser: SupabaseUser | null, profile: Profile | null): AppU
   };
 }
 
-// Events that imply “new user identity applied” (good moment to hydrate cache, refresh profile)
+// Events that imply "new user identity applied" (good moment to hydrate cache, refresh profile)
 const SIGN_IN_EVENTS = new Set<AuthChangeEvent>(['SIGNED_IN', 'USER_UPDATED']);
 
-// Events that are “session churn only” — do not touch profile/user besides sessionRef
-const SESSION_ONLY_EVENTS = new Set<AuthChangeEvent>([
-  'TOKEN_REFRESHED',
-  'SIGNED_IN' /* already in SIGN_IN_EVENTS but ok */,
-]);
+// Events that are "session churn only" — do not touch profile/user besides sessionRef
+const SESSION_ONLY_EVENTS = new Set<AuthChangeEvent>(['TOKEN_REFRESHED']);
 
 // ============================================================================
 // PROVIDER
@@ -244,11 +241,10 @@ export function UserProvider({ children }: UserProviderProps) {
         return;
       }
 
-      // ── Session churn only (token refresh) ────────────────────────────────
-      if (event && event === 'TOKEN_REFRESHED') {
-        // Keep user/profile as-is; only refresh SessionManager
+      // ── Session churn only (token refresh, etc.) ─────────────────────────
+      if (event && SESSION_ONLY_EVENTS.has(event)) {
         if (s) sessionManagerRef.current?.start(s);
-        devLog('token_refreshed', { uid: u.id });
+        devLog('session_only_event', { event, uid: u.id });
         return;
       }
 
@@ -286,7 +282,6 @@ export function UserProvider({ children }: UserProviderProps) {
     },
     [fetchProfileSafe, teardownSecurity, safeSignOut],
   );
-
   useEffect(() => {
     applyRef.current = applyUser;
   }, [applyUser]);

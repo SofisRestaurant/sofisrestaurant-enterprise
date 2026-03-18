@@ -18,6 +18,7 @@
 
 import React, { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import { ChevronLeft, ChevronRight, Flame, Star } from 'lucide-react';
+import { nanoid } from 'nanoid';
 
 export type BaseItem = {
   id?: string;
@@ -167,9 +168,9 @@ function PopularRailImpl<TItem extends BaseItem>({
 
       {loading ? (
         <div className="flex gap-3 overflow-hidden" aria-hidden="true">
-          {Array.from({ length: 4 }).map((_, i) => (
+          {items.map(() => (
             <div
-              key={i}
+              key={nanoid()}
               className="h-28 w-56 shrink-0 animate-pulse rounded-2xl border border-white/10 bg-white/5"
             />
           ))}

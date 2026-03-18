@@ -248,3 +248,22 @@
   --z-toast:   50;
   --z-cursor:  60;
 }
+:root {
+  /* Button system */
+  --btn-primary-bg: var(--color-accent);
+  --btn-primary-text: #ffffff;
+  --btn-primary-hover: color-mix(in srgb, var(--color-accent) 85%, black);
+
+  --btn-secondary-bg: var(--color-cream);
+  --btn-secondary-text: var(--color-ink);
+  --btn-secondary-border: var(--color-border);
+
+  --btn-outline-text: var(--color-accent);
+  --btn-outline-border: var(--color-accent);
+
+  --btn-danger-bg: #dc2626;
+  --btn-danger-text: #ffffff;
+
+  --btn-glass-bg: rgba(255, 255, 255, 0.05);
+  --btn-glass-border: rgba(255, 255, 255, 0.12);
+}

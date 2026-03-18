@@ -149,18 +149,18 @@ export function useAsyncState<TData, TError>(
 
         return data;
       } catch (error) {
-        const normalizedError = normalizeError(error);
+  const normalizedError = normalizeError(error);
 
-        if (mountedRef.current && requestIdRef.current === requestId) {
-          setState((current) => ({
-            status: 'error',
-            data: current.data,
-            error: normalizedError,
-          }));
-        }
+  if (mountedRef.current && requestIdRef.current === requestId) {
+    setState((current) => ({
+      status: 'error',
+      data: current.data,
+      error: normalizedError,
+    }));
+  }
 
-        throw normalizedError;
-      }
+  throw toError(normalizedError);
+}
     },
   );
 

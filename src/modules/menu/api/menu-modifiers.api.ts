@@ -50,21 +50,16 @@ function isRecord(value: unknown): value is UnknownRecord {
 }
 
 function sanitizePlainText(value: unknown, maxLength: number): string | null {
-  if (typeof value !== 'string') {
-    return null;
-  }
+  if (typeof value !== 'string') return null;
 
-  const normalized = value
-    .trim()
-    .replace(/[\u0000-\u001F\u007F]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const chars = Array.from(value).map((char) => {
+    const code = char.charCodeAt(0);
+    return code >= 32 && code !== 127 ? char : ' ';
+  });
 
-  if (!normalized) {
-    return null;
-  }
+  const clean = chars.join('').replace(/\s+/g, ' ').trim();
 
-  return normalized.length <= maxLength ? normalized : normalized.slice(0, maxLength).trim();
+  return clean ? (clean.length <= maxLength ? clean : clean.slice(0, maxLength).trim()) : null;
 }
 
 function pickText(record: UnknownRecord, keys: readonly string[], maxLength: number): string | null {
@@ -94,27 +89,18 @@ function asFiniteNumber(value: unknown): number | null {
   return null;
 }
 
-function asBoolean(value: unknown, fallback: boolean): boolean {
-  if (typeof value === 'boolean') {
-    return value;
-  }
-
+const asBoolean = (value: unknown, fallback: boolean): boolean => {
+  if (typeof value === 'boolean') return value;
   if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase();
-    if (normalized === 'true') return true;
-    if (normalized === 'false') return false;
+    const v = value.trim().toLowerCase();
+    if (v === 'true') return true;
+    if (v === 'false') return false;
   }
-
   return fallback;
-}
+};
 
-function clamp(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) {
-    return min;
-  }
-
-  return Math.max(min, Math.min(max, value));
-}
+const clamp = (value: number, min: number, max: number): number =>
+  Number.isFinite(value) ? Math.min(Math.max(value, min), max) : min;
 
 function pickNumber(record: UnknownRecord, keys: readonly string[]): number | null {
   for (const key of keys) {
@@ -160,6 +146,14 @@ function readPriceDelta(record: UnknownRecord): number {
   }
 
   return 0;
+}
+
+function throwInvalidInputError(message: string): never {
+  throw new MenuApiError({
+    code: MENU_API_ERROR_CODES.INVALID_INPUT,
+    message,
+    status: 400,
+  });
 }
 
 function parseModifierGroup(record: unknown): MenuModifierGroup | null {
@@ -289,13 +283,7 @@ export async function getMenuModifierGroupsForItem(
 ): Promise<MenuModifierGroup[]> {
   const normalizedItemId = sanitizePlainText(itemId, 128);
 
-  if (!normalizedItemId) {
-    throw new MenuApiError({
-      code: MENU_API_ERROR_CODES.INVALID_INPUT,
-      message: 'Menu item id is required.',
-      status: 400,
-    });
-  }
+  if (!normalizedItemId) throwInvalidInputError('Menu item id is required.');
 
   const includeInactive = options.includeInactive ?? false;
   const cacheTtlMs = options.cacheTtlMs ?? 30_000;
@@ -354,16 +342,13 @@ export async function getMenuModifierGroupsForItem(
   const hydratedGroups = selectedGroups
     .filter((group) => includeInactive || group.isActive)
     .map((group) => {
-      const options = sortOptions(
+      const opts = sortOptions(
         (optionsByGroupId.get(group.id) ?? []).filter(
           (option) => includeInactive || option.isActive,
         ),
       );
 
-      return {
-        ...group,
-        options,
-      };
+      return { ...group, options: opts };
     })
     .filter((group) => group.options.length > 0 || includeInactive);
 

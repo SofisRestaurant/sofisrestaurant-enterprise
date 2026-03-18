@@ -19,14 +19,24 @@ import { computeRiskScore, isUnusualTime } from '../_shared/riskScore.ts';
 
 import type { Database, Json } from '../_shared/database.types.ts';
 
-type Db = ReturnType<typeof serviceClient>;
-type Tables = Database['public']['Tables'];
+// ─────────────────────────────────────────────────────────────────────────────
+// Database type helpers
+// ─────────────────────────────────────────────────────────────────────────────
 
-type AuthAuditInsert = Tables['auth_audit_log']['Insert'];
-type RateLimitRow = Tables['auth_risk_rate_limits']['Row'];
-type DeviceTrustRow = Tables['device_trust']['Row'];
-type SessionMetaRow = Tables['auth_sessions_meta']['Row'];
-type RiskScoreRow = Tables['auth_risk_scores']['Row'];
+type Db = ReturnType<typeof serviceClient>;
+
+type Table<T extends keyof Database['public']['Tables']> = Database['public']['Tables'][T];
+
+// Partial type matching the columns actually selected in the geo-mismatch block
+type SessionMetaPartial = Pick<Table<'auth_sessions_meta'>['Row'], 'country_code' | 'created_at'>;
+
+type RateLimitRow = Table<'auth_risk_rate_limits'>['Row'];
+type DeviceTrustRow = Table<'device_trust'>['Row'];
+type AuthAuditInsert = Table<'auth_audit_log'>['Insert'];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Config
+// ─────────────────────────────────────────────────────────────────────────────
 
 const CONFIG = {
   MAX_BODY_BYTES: 6_000,
@@ -440,7 +450,7 @@ Deno.serve(async (req) => {
 
   const recentFailures = failuresRes?.data?.length ?? 0;
 
-  // Geo mismatch based on last N sessions
+  // Geo mismatch: flag if current country is not in the user's recent session history
   let geoMismatch = false;
   if (countryCode) {
     try {
@@ -452,13 +462,15 @@ Deno.serve(async (req) => {
         .limit(CONFIG.RECENT_SESSIONS_COUNTRY_LIMIT);
 
       if (!sessErr) {
+        const sessions = (recentSessions ?? []) as SessionMetaPartial[];
         const known = new Set(
-          (recentSessions ?? [])
+          sessions
             .map((s) => (typeof s.country_code === 'string' ? s.country_code.toUpperCase() : ''))
             .filter(Boolean),
         );
 
-        if (known.size >= 2 && !known.has(countryCode)) geoMismatch = true;
+        // Flag mismatch if user has any prior sessions and none are from this country
+        if (known.size >= 1 && !known.has(countryCode)) geoMismatch = true;
       }
     } catch {
       geoMismatch = false;
@@ -496,7 +508,7 @@ Deno.serve(async (req) => {
         requires_step_up: result.requiresStepUp,
         evaluated_at: evaluatedAt,
         expires_at: expiresAt,
-      } satisfies Tables['auth_risk_scores']['Insert'],
+      } satisfies Table<'auth_risk_scores'>['Insert'],
       { onConflict: 'session_id' },
     );
   } catch {
@@ -514,7 +526,7 @@ Deno.serve(async (req) => {
         is_trusted_device: !!deviceTrustId,
         risk_score: result.score,
         last_active_at: evaluatedAt,
-      } satisfies Tables['auth_sessions_meta']['Insert'],
+      } satisfies Table<'auth_sessions_meta'>['Insert'],
       { onConflict: 'session_id' },
     );
   } catch {

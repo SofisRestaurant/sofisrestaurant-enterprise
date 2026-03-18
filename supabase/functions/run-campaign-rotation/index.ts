@@ -1,4 +1,5 @@
 import { createAuthClient, createServiceClient } from '../_shared/supabase.ts';
+import type { Database } from '../_shared/database.types.ts';
 
 type JsonObject = Record<string, unknown>;
 
@@ -13,12 +14,8 @@ type RotationSettings = {
   last_rotation_at: string | null;
 };
 
-type RotationRpcRow = {
-  placement: string | null;
-  featured_campaign_id: string | null;
-  was_manual_override: boolean | null;
-  rotated_at: string | null;
-};
+type RotationRpcRow =
+  Database['public']['Functions']['rotate_featured_growth_campaigns']['Returns'][number];
 
 type RateLimitDecision =
   | {
@@ -144,11 +141,12 @@ function sanitizePlainText(value: unknown, maxLength: number): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
 
-  const withoutControls = trimmed
-    .replace(/[\u0000-\u001F\u007F]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const chars = Array.from(trimmed).map((char) => {
+    const code = char.charCodeAt(0);
+    return code >= 32 && code !== 127 ? char : ' ';
+  });
 
+  const withoutControls = chars.join('').replace(/\s+/g, ' ').trim();
   if (!withoutControls) return null;
 
   return withoutControls.length <= maxLength
@@ -353,7 +351,7 @@ function parseRotationRpcRow(value: unknown): RotationRpcRow | null {
     featured_campaign_id: featuredCampaignId,
     was_manual_override: wasManualOverride,
     rotated_at: rotatedAt,
-  };
+  } as RotationRpcRow;
 }
 
 function parseRotationRpcRows(value: unknown): RotationRpcRow[] {
@@ -405,7 +403,7 @@ function timingSafeEqual(left: string, right: string): boolean {
   return mismatch === 0;
 }
 
-async function applyCheckoutRateLimit(input: {
+async function applyRateLimit(input: {
   svc: ReturnType<typeof createServiceClient>;
   scope: 'cron' | 'admin';
   actorKey: string;
@@ -579,7 +577,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const cors: HeadersInit =
     actorMode === 'admin' ? (adminCors ?? { Vary: 'Origin' }) : { Vary: 'Origin' };
 
-  // ✅ Security hardening: cron calls must not be browser-originated.
+  // Security hardening: cron calls must not be browser-originated.
   if (actorMode === 'cron' && origin) {
     return errorResponse(
       403,
@@ -647,7 +645,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   try {
     if (actorMode === 'cron') {
-      const rateLimit = await applyCheckoutRateLimit({
+      const rateLimit = await applyRateLimit({
         svc,
         scope: 'cron',
         actorKey: `${reason}:${placement ?? '*'}`,
@@ -715,11 +713,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
         .eq('id', user.id)
         .maybeSingle();
 
-      if (profileError || !profile || sanitizePlainText(profile.role, 32) !== 'admin') {
+      if (profileError || !profile || String(profile.role).toLowerCase() !== 'admin') {
         return errorResponse(403, 'FORBIDDEN', 'Forbidden.', cors, requestId);
       }
 
-      const rateLimit = await applyCheckoutRateLimit({
+      const rateLimit = await applyRateLimit({
         svc,
         scope: 'admin',
         actorKey: `${user.id}:${placement ?? '*'}:${reason}`,

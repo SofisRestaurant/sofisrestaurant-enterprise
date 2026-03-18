@@ -12,6 +12,7 @@
 // =============================================================================
 
 import { createServiceClient, createAnonClient, type SvcClient } from '../_shared/supabase.ts';
+import type { Database } from '../_shared/database.types.ts';
 
 const CONFIG = {
   MAX_BODY_BYTES: 10_000,
@@ -164,21 +165,12 @@ function fnv1a32(input: string): string {
   return hash.toString(36);
 }
 
-type RedeemRow = { new_balance?: unknown; was_duplicate?: unknown };
+type RedeemRow =
+  Database['public']['Functions']['v2_redeem_points']['Returns'][number];
 
-function normalizeRedeemRow(raw: unknown): { new_balance: number; was_duplicate: boolean } | null {
-  const row: unknown = Array.isArray(raw) ? (raw[0] ?? null) : raw;
-
-  if (!isRecord(row)) return null;
-
-  const nb = row.new_balance;
-  const wd = row.was_duplicate;
-
-  const new_balance = typeof nb === 'number' && Number.isFinite(nb) ? nb : NaN;
-  const was_duplicate = typeof wd === 'boolean' ? wd : false;
-
-  if (!Number.isFinite(new_balance)) return null;
-  return { new_balance, was_duplicate };
+function normalizeRedeemRow(raw: unknown): RedeemRow | null {
+  const row = Array.isArray(raw) ? raw[0] : raw;
+  return isRecord(row) ? (row as RedeemRow) : null;
 }
 
 Deno.serve(async (req) => {

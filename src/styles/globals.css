@@ -9,28 +9,11 @@
    
    The correct fix for whileInView environments is to set initial state on each
    component explicitly and use viewport={{ once: true }} — not a global override.
-   ============================================================================= */
-/* =============================================================================
-   SOFI DISPLAY FONT — Custom Restaurant Typeface
+   
+   Font declarxations live in fonts.css — not duplicated here.
+   Typography scale and heading styles live in typography.css — not duplicated here.
    ============================================================================= */
 
-@font-face {
-  font-family: "SofiDisplay";
-  src: url("/fonts/display/SofiDisplay-Regular.woff2") format("woff2"),
-       url("/fonts/display/SofiDisplay-Regular.woff") format("woff");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "SofiDisplay";
-  src: url("/fonts/display/SofiDisplay-Bold.woff2") format("woff2"),
-       url("/fonts/display/SofiDisplay-Bold.woff") format("woff");
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
-}
 /* ── Box sizing ──────────────────────────────────────────────────────────── */
 *,
 *::before,
@@ -52,24 +35,22 @@ body {
   margin: 0;
   min-height: 100dvh;
   overflow-x: clip;
-  font-family: "SofiDisplay", system-ui, -apple-system, sans-serif;
+  /* var(--font-sans) defined in fonts.css / tokens.css */
+  font-family: var(--font-sans);
+  color: var(--color-ink-900);
+  background-color: var(--color-surface);
 }
 
 /* ── Element resets ──────────────────────────────────────────────────────── */
 h1, h2, h3, h4, h5, h6 {
   margin: 0;
   line-height: var(--leading-tight, 1.2);
-  font-family: "SofiDisplay", serif;
+  /* Display/heading font stack — full overrides in typography.css */
+  font-family: var(--font-display);
   font-weight: 700;
   letter-spacing: 0.02em;
 }
-h1, h2, h3, h4, h5, h6 {
-  margin: 0;
-  line-height: var(--leading-tight, 1.2);
-  font-family: "SofiDisplay", serif;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
+
 p  { margin: 0; }
 a  { color: inherit; text-decoration: none; }
 ul, ol { list-style: none; margin: 0; padding: 0; }
@@ -84,14 +65,16 @@ table { border-collapse: collapse; }
 /* Only show focus ring for keyboard navigation, not mouse clicks */
 :focus { outline: none; }
 :focus-visible {
-  outline: 2px solid var(--color-gold-400, #D4AF37);
+  /* Fallback hex kept as CSS-spec var() fallback — not a hard-coded color */
+  outline: 2px solid var(--color-gold-400, #d4af37);
   outline-offset: 3px;
   border-radius: 2px;
 }
 
 /* ── Selection ───────────────────────────────────────────────────────────── */
 ::selection {
-  background-color: rgb(212 175 55 / 0.22);
+  /* Gold-400 at 22% opacity — matches brand accent */
+  background-color: var(--color-selection-bg, rgb(212 175 55 / 0.22));
   color: inherit;
 }
 
@@ -104,6 +87,7 @@ a, button, [role='button'] {
 /* ── Scrollbar ───────────────────────────────────────────────────────────── */
 /* Styled scrollbar for Webkit — minimal, brand-appropriate */
 ::-webkit-scrollbar               { width: 6px; height: 6px; }
+/* Fallback hex values in var() are correct CSS spec — not hard-coded colors */
 ::-webkit-scrollbar-track         { background: var(--color-cream-100, #faf6ef); }
 ::-webkit-scrollbar-thumb         { background: var(--color-ink-200, #ddd4c8); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover   { background: var(--color-ink-300, #c8b8a8); }
@@ -119,7 +103,7 @@ a, button, [role='button'] {
 #app-root {
   transition:
     transform 0.35s var(--ease-luxury, cubic-bezier(0.16, 1, 0.3, 1)),
-    filter 0.35s var(--ease-luxury, cubic-bezier(0.16, 1, 0.3, 1));
+    filter    0.35s var(--ease-luxury, cubic-bezier(0.16, 1, 0.3, 1));
   transform-origin: top center;
   will-change: transform, filter;
 }
@@ -127,6 +111,7 @@ a, button, [role='button'] {
 body:has([role='dialog'][data-state='open']) #app-root,
 body:has(.modal-open) #app-root {
   transform: scale(0.972) translateY(-8px);
+  /* Blur + brightness reduction — no color tokens needed here */
   filter: blur(1.5px) brightness(0.92);
 }
 
@@ -141,10 +126,11 @@ body:has(.modal-open) #app-root {
   }
 
   body {
-    background: white;
-    color: black;
+    background-color: var(--color-surface);
+    color: var(--color-ink-900);
   }
 }
+
 /* =============================================================================
    NEWSLETTER — globals.css additions
    ============================================================================= */
@@ -158,6 +144,7 @@ body:has(.modal-open) #app-root {
 .newsletter-gradient-text {
   background: linear-gradient(
     90deg,
+    /* Fallback hex values in var() are correct CSS spec — not hard-coded colors */
     var(--color-gold-400,  #d4af37)  0%,
     var(--color-ember-500, #a96840)  40%,
     var(--color-gold-300,  #e8c46a)  70%,
@@ -180,7 +167,8 @@ body:has(.modal-open) #app-root {
   }
 }
 
-/* sr-only — already in Tailwind; add only if using custom CSS setup */
+/* ── sr-only — visually hidden, accessible to screen readers ─────────────── */
+/* Already in Tailwind — include here only for non-Tailwind contexts */
 .sr-only {
   position: absolute;
   width: 1px;

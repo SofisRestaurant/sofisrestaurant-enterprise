@@ -194,7 +194,7 @@ function LocationCard({ onReservationClick }: LocationCardProps) {
         <address className="not-italic font-body text-[0.92rem] font-light leading-relaxed text-white/80">
           742 Valencia Street
           <br />
-          San Francisco, CA 94110
+          Surprise Arizona, AZ 85378
         </address>
       </div>
 

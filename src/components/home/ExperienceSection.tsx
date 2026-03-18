@@ -90,7 +90,6 @@ export function ExperienceSection() {
     >
       <div className="mx-auto max-w-6xl">
         <div className="grid grid-cols-1 items-center gap-16 lg:grid-cols-2 lg:gap-28">
-
           {/* ── Left: Copy ─────────────────────────────────────────────────── */}
           <m.div
             variants={staggerContainer}
@@ -102,7 +101,7 @@ export function ExperienceSection() {
             {/* Eyebrow */}
             <m.div
               variants={{
-                hidden:  { opacity: 0, y: 14 },
+                hidden: { opacity: 0, y: 14 },
                 visible: { opacity: 1, y: 0, transition: { duration: 0.55, ease: EASE_LUXURY } },
               }}
             >
@@ -113,9 +112,11 @@ export function ExperienceSection() {
             <m.h2
               id="experience-heading"
               variants={{
-                hidden:  { opacity: 0, y: 22, filter: 'blur(5px)' },
+                hidden: { opacity: 0, y: 22, filter: 'blur(5px)' },
                 visible: {
-                  opacity: 1, y: 0, filter: 'blur(0px)',
+                  opacity: 1,
+                  y: 0,
+                  filter: 'blur(0px)',
                   transition: { duration: 0.9, ease: EASE_LUXURY },
                 },
               }}
@@ -134,24 +135,25 @@ export function ExperienceSection() {
             {/* Body */}
             <m.p
               variants={{
-                hidden:  { opacity: 0, y: 16 },
+                hidden: { opacity: 0, y: 16 },
                 visible: {
-                  opacity: 1, y: 0,
+                  opacity: 1,
+                  y: 0,
                   transition: { duration: 0.75, ease: EASE_LUXURY, delay: 0.1 },
                 },
               }}
               className="max-w-30rem font-body text-[1.02rem] font-light
                          leading-[1.82] text-ink-600"
             >
-              Sofi's began as a simple belief: that honest food, served with care
-              in a room that feels like home, is more valuable than spectacle.
-              Twelve years later, that belief is still the only thing on the menu.
+              Sofi's began as a simple belief: that honest food, served with care in a room that
+              feels like home, is more valuable than spectacle. Twelve years later, that belief is
+              still the only thing on the menu.
             </m.p>
 
             {/* Pillars */}
             <m.div
               variants={{
-                hidden:  {},
+                hidden: {},
                 visible: { transition: { staggerChildren: 0.1, delayChildren: 0.2 } },
               }}
               className="flex flex-col gap-5"
@@ -160,7 +162,7 @@ export function ExperienceSection() {
                 <m.div
                   key={p.label}
                   variants={{
-                    hidden:  { opacity: 0, x: -18 },
+                    hidden: { opacity: 0, x: -18 },
                     visible: { opacity: 1, x: 0, transition: { duration: 0.6, ease: EASE_LUXURY } },
                   }}
                   className="flex items-start gap-4"
@@ -176,8 +178,8 @@ export function ExperienceSection() {
                     className="mt-1.5 min-h-2.5rem w-px shrink-0"
                     style={{
                       background: 'var(--color-gold-400, #d4af37)',
-                      opacity:    0.38,
-                      originY:    0,
+                      opacity: 0.38,
+                      originY: 0,
                     }}
                     initial={{ scaleY: 0 }}
                     whileInView={{ scaleY: 1 }}
@@ -205,7 +207,7 @@ export function ExperienceSection() {
             {/* Signature / establishment line */}
             <m.div
               variants={{
-                hidden:  { opacity: 0 },
+                hidden: { opacity: 0 },
                 visible: {
                   opacity: 1,
                   transition: { duration: 0.7, ease: EASE_LUXURY, delay: 0.4 },
@@ -219,7 +221,7 @@ export function ExperienceSection() {
                 aria-hidden="true"
               />
               <cite className="not-italic font-body text-[0.65rem] uppercase tracking-[0.22em] text-ink-300">
-                Est. San Francisco, 2012
+                Est. Surprise Arizona, 2022
               </cite>
             </m.div>
           </m.div>
@@ -250,7 +252,6 @@ export function ExperienceSection() {
               aspectClass="aspect-square"
             />
           </m.div>
-
         </div>
       </div>
     </section>
