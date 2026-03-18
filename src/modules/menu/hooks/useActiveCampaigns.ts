@@ -117,16 +117,38 @@ function clampInt(value: number, min: number, max: number): number {
 
 function sanitizePlainText(value: unknown, maxLength: number): string | null {
   if (typeof value !== 'string') return null;
+
   const trimmed = value.trim();
   if (!trimmed) return null;
-  const withoutControls = trimmed
-    .replace(/[\u0000-\u001F\u007F]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!withoutControls) return null;
-  return withoutControls.length <= maxLength
-    ? withoutControls
-    : withoutControls.slice(0, maxLength).trim();
+
+  let cleaned = '';
+  let lastWasSpace = false;
+
+  for (let i = 0; i < trimmed.length; i++) {
+    const code = trimmed.charCodeAt(i);
+
+    // Replace control chars with space
+    const isControl = (code >= 0 && code <= 31) || code === 127;
+    const char = isControl ? ' ' : trimmed[i];
+
+    // Collapse multiple spaces
+    if (char === ' ') {
+      if (!lastWasSpace) {
+        cleaned += ' ';
+        lastWasSpace = true;
+      }
+    } else {
+      cleaned += char;
+      lastWasSpace = false;
+    }
+  }
+
+  cleaned = cleaned.trim();
+  if (!cleaned) return null;
+
+  return cleaned.length <= maxLength
+    ? cleaned
+    : cleaned.slice(0, maxLength).trim();
 }
 
 function sanitizePlacement(value: unknown): string | null {
@@ -140,10 +162,30 @@ function sanitizeDeepLink(value: unknown): string | null {
   if (value === null) return null;
   if (typeof value !== 'string') return null;
 
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.length > 2048) return null;
-  if (/[\\\u0000-\u001F\u007F]/.test(trimmed)) return null;
-  if (trimmed.startsWith('/')) return trimmed;
+const trimmed = value.trim();
+if (!trimmed || trimmed.length > 2048) return null;
+
+// 🚫 Replace regex with this
+for (let i = 0; i < trimmed.length; i++) {
+  const code = trimmed.charCodeAt(i);
+
+  // Control chars (0–31 and 127) OR backslash
+  if ((code >= 0 && code <= 31) || code === 127 || code === 92) {
+    return null;
+  }
+}
+
+if (trimmed.startsWith('/')) return trimmed;
+
+try {
+  const url = new URL(trimmed);
+  if (url.protocol === 'https:' || url.protocol === 'http:') {
+    return url.toString();
+  }
+  return null;
+} catch {
+  return null;
+}
 
   try {
     const url = new URL(trimmed);

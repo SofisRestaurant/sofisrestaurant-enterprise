@@ -3,11 +3,20 @@ import clsx from 'clsx';
 
 import type { AdminStatusTone } from '../types/admin-common.types';
 
+// ======================================================
+// METRIC TYPE
+// ======================================================
+
 export interface AdminPageHeaderMetric {
+  id: string; // ✅ required now
   label: ReactNode;
   value: ReactNode;
   tone?: AdminStatusTone;
 }
+
+// ======================================================
+// PROPS
+// ======================================================
 
 export interface AdminPageHeaderProps
   extends Omit<ComponentPropsWithoutRef<'header'>, 'title'> {
@@ -19,6 +28,10 @@ export interface AdminPageHeaderProps
   metrics?: readonly AdminPageHeaderMetric[];
   divider?: boolean;
 }
+
+// ======================================================
+// TONE CLASS HELPER
+// ======================================================
 
 function toneToClassName(tone: AdminStatusTone | undefined): string {
   switch (tone) {
@@ -35,6 +48,10 @@ function toneToClassName(tone: AdminStatusTone | undefined): string {
       return 'border-zinc-800 bg-zinc-900/60 text-zinc-300';
   }
 }
+
+// ======================================================
+// COMPONENT
+// ======================================================
 
 export function AdminPageHeader({
   eyebrow,
@@ -57,36 +74,36 @@ export function AdminPageHeader({
       )}
       {...rest}
     >
+      {/* Header top */}
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0">
-          {eyebrow ? (
+          {eyebrow && (
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-400">
               {eyebrow}
             </p>
-          ) : null}
+          )}
 
           <div className="mt-1 flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-black tracking-tight text-white sm:text-3xl">{title}</h1>
-            {badge ? <div className="shrink-0">{badge}</div> : null}
+            {badge && <div className="shrink-0">{badge}</div>}
           </div>
 
-          {subtitle ? (
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">{subtitle}</p>
-          ) : null}
+          {subtitle && <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">{subtitle}</p>}
 
-          {children ? <div className="mt-3">{children}</div> : null}
+          {children && <div className="mt-3">{children}</div>}
         </div>
 
-        {actions ? (
+        {actions && (
           <div className="flex shrink-0 flex-wrap items-center gap-2 lg:justify-end">{actions}</div>
-        ) : null}
+        )}
       </div>
 
-      {metrics && metrics.length > 0 ? (
+      {/* Metrics */}
+      {metrics && metrics.length > 0 && (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {metrics.map((metric, index) => (
+          {metrics.map((metric) => (
             <div
-              key={`${index}-${String(metric.label)}`}
+              key={metric.id} // ✅ safe, required
               className={clsx(
                 'rounded-2xl border px-4 py-3 shadow-sm',
                 toneToClassName(metric.tone),
@@ -99,7 +116,7 @@ export function AdminPageHeader({
             </div>
           ))}
         </div>
-      ) : null}
+      )}
     </header>
   );
 }

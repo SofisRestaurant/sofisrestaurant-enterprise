@@ -74,8 +74,9 @@ import { staggerMedium } from '@/lib/animations/stagger';
 // ─────────────────────────────────────────────────────────────────────────────
 
 // OPTION A — use this if FeaturedMenu.tsx has `export default FeaturedMenu`
-const FeaturedMenu = lazy(() => import('@/components/home/FeaturedMenu'));
-
+const FeaturedMenu = lazy(() =>
+  import('@/components/home/FeaturedMenu').then((mod) => ({ default: mod.FeaturedMenu })),
+);
 // OPTION B — use this instead if FeaturedMenu.tsx only has a named export
 // (rename the .then param to `mod` — never `m`, which shadows the motion alias)
 // const FeaturedMenu = lazy(

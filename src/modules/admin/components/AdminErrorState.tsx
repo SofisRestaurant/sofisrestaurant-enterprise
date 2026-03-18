@@ -87,7 +87,7 @@ export function AdminErrorState({
             <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.16em] text-red-200/80">
               Error details
             </summary>
-            <pre className="mt-3 whitespace-pre-wrap break-words text-xs leading-6 text-red-100">
+            <pre className="mt-3 whitespace-pre-wrap wrap-break-words text-xs leading-6 text-red-100">
               {errorMessage}
             </pre>
           </details>

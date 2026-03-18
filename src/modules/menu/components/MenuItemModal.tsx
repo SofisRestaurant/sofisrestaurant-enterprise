@@ -3,309 +3,48 @@
 // =============================================================================
 // MENU ITEM MODAL — Production (2026) — Luxury UX + Modifier Support
 // =============================================================================
-// IMPORTANT: This file upgrades ONLY modal UI/UX + mechanics.
-// All existing business logic + data contracts remain intact:
-// - preflight invoke + payload shape
-// - modifier selection rules + pruning behavior
-// - addItem payload shape
-// - pricingHash composition (kept exactly as-is)
+// This file is the modal shell: props → hooks → JSX.
+// All state, business logic, and utilities live in their own modules.
+//
+// Contracts preserved exactly:
+//   - preflight invoke + payload shape
+//   - modifier selection rules + pruning behavior
+//   - addItem payload shape
+//   - pricingHash composition
 // =============================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Info, Minus, Plus, Star, X } from 'lucide-react';
-import { supabase } from '@/lib/supabase/supabaseClient';
 import type { MenuItemPublic } from '@/domain/menu/menu.types';
 import { useCart } from '@/modules/cart/hooks/useCart';
 import { useScrollLock } from '@/lib/ui/useScrollLock';
 import { unlockScroll } from '@/lib/ui/scroll-lock';
 
-type CartPhase = 'idle' | 'adding' | 'success';
+import { useMenuItemPreflight } from '../hooks/useMenuItemPreflight';
+import { useMenuItemModifiers } from '../hooks/useMenuItemModifiers';
+import { useMenuItemQty } from '../hooks/useMenuItemQty';
+
+import {
+  isRecord,
+  isMenuItemPublic,
+  safeStr,
+  safeCents,
+  clampInt,
+  fmtUsdFromCents,
+} from '../utils/menuItemGuards';
+import {
+  parseTags,
+  computeSelectedModifierCents,
+  canonicalizeSelectionsForHash,
+  isSelectionValidForGroup,
+  groupSelectionRangeLabel,
+} from '../utils/modifierGuards';
+import { cx, getFocusable } from '../utils/uiHelpers';
+import { SKELETON_IDS, MAX_NOTES_LENGTH } from '../constants';
 
 interface Props {
   item: MenuItemPublic;
   onClose: () => void;
-}
-
-type PreflightOk = {
-  ok: true;
-  item_id: string;
-  available: boolean;
-  unit_price_cents: number;
-  stock_count: number | null;
-  low_stock_threshold: number | null;
-  max_qty: number;
-};
-
-type PreflightErr = { ok: false; error: string };
-
-type PreflightResponse = PreflightOk | PreflightErr;
-type UnknownRecord = Record<string, unknown>;
-
-type ModifierGroupType = 'radio' | 'checkbox';
-
-type ModifierLike = {
-  id: string;
-  name: string;
-  price_adjustment: number;
-  available: boolean;
-  sort_order?: number | null;
-};
-
-type ModifierGroupLike = {
-  id: string;
-  name: string;
-  description: string | null;
-  type: ModifierGroupType;
-  required: boolean;
-  min_selections: number | null;
-  max_selections: number | null;
-  sort_order?: number | null;
-  active: boolean;
-
-  // UI expects this:
-  modifiers: ModifierLike[];
-
-  // DB may send this instead:
-  selections?: ModifierLike[];
-};
-
-type SelectedModifier = {
-  id: string;
-  name: string;
-  priceAdjustment: number; // cents
-  groupId: string;
-};
-
-function isRecord(v: unknown): v is UnknownRecord {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-function clampInt(n: unknown, min: number, max: number): number {
-  const v = typeof n === 'number' ? n : typeof n === 'string' ? Number(n) : NaN;
-  if (!Number.isFinite(v)) return min;
-  return Math.max(min, Math.min(max, Math.trunc(v)));
-}
-
-function safeStr(v: unknown, fallback = '', max = 500): string {
-  if (typeof v !== 'string') return fallback;
-  const s = v.trim();
-  if (!s) return fallback;
-  return s.length > max ? s.slice(0, max) : s;
-}
-
-function safeBool(v: unknown, fallback = false): boolean {
-  return typeof v === 'boolean' ? v : fallback;
-}
-
-function safeCents(v: unknown, fallback = 0): number {
-  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
-  if (!Number.isFinite(n)) return fallback;
-  return clampInt(Math.round(n), 0, 50_000_000);
-}
-
-function fmtUsdFromCents(cents: number): string {
-  const c = safeCents(cents, 0);
-  return (c / 100).toLocaleString('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
-function errMsg(e: unknown): string {
-  if (e instanceof DOMException && e.name === 'AbortError') return 'aborted';
-  if (e instanceof Error) return e.message;
-  return typeof e === 'string' ? e : 'Request failed';
-}
-
-/** Tight runtime guard for MenuItemPublic-ish objects. */
-function isMenuItemPublic(v: unknown): v is MenuItemPublic {
-  if (!isRecord(v)) return false;
-  return (
-    typeof v.id === 'string' && v.id.length > 0 && typeof v.name === 'string' && v.name.length > 0
-  );
-}
-
-function cx(...c: Array<string | false | null | undefined>) {
-  return c.filter(Boolean).join(' ');
-}
-
-function parseTags(raw: unknown): string[] {
-  if (Array.isArray(raw)) {
-    return raw
-      .map((x) => (typeof x === 'string' ? x.trim() : ''))
-      .filter((s) => s.length > 0)
-      .slice(0, 24);
-  }
-  if (typeof raw === 'string') {
-    return raw
-      .split(',')
-      .map((x) => x.trim())
-      .filter((s) => s.length > 0)
-      .slice(0, 24);
-  }
-  return [];
-}
-
-function normalizeGroupType(v: unknown): ModifierGroupType | null {
-  const t = safeStr(v, '').toLowerCase();
-  if (t === 'radio') return 'radio';
-  if (t === 'checkbox') return 'checkbox';
-  return null;
-}
-
-function normalizeModifierLike(v: unknown): ModifierLike | null {
-  if (!isRecord(v)) return null;
-  const id = safeStr(v.id, '', 128);
-  const name = safeStr(v.name, '', 120);
-  if (!id || !name) return null;
-
-  return {
-    id,
-    name,
-    price_adjustment: safeCents(v.price_adjustment, 0),
-    available: safeBool(v.available, true),
-    sort_order: typeof v.sort_order === 'number' ? v.sort_order : null,
-  };
-}
-
-/**
- * NOTE: FIX APPLIED HERE (and only here):
- * - DB view may return `selections` instead of `modifiers`
- * - UI renders `g.modifiers.map(...)`
- * - We map selections -> modifiers when modifiers is absent/empty
- *
- * ALSO fixes TS errors:
- * - avoid iterating `unknown`
- * - never call `.map` on `{}` / unknown
- * - avoid implicit any
- */
-function normalizeGroupLike(v: unknown): ModifierGroupLike | null {
-  if (!isRecord(v)) return null;
-
-  const id = safeStr(v.id, '', 128);
-  const name = safeStr(v.name, '', 120);
-  const type = normalizeGroupType(v.type);
-  if (!id || !name || !type) return null;
-
-  // Build mods from either `modifiers` OR `selections` (whatever DB sends)
-  const modsSrc: unknown[] = Array.isArray(v.modifiers)
-    ? v.modifiers
-    : Array.isArray(v.selections)
-      ? v.selections
-      : [];
-
-  const mods: ModifierLike[] = [];
-  for (const m of modsSrc) {
-    const mm = normalizeModifierLike(m);
-    if (mm) mods.push(mm);
-  }
-
-  mods.sort((a, b) => {
-    const ao = typeof a.sort_order === 'number' ? a.sort_order : 0;
-    const bo = typeof b.sort_order === 'number' ? b.sort_order : 0;
-    return ao - bo || a.name.localeCompare(b.name);
-  });
-
-  // Preserve `selections` if DB sent it (optional; does not affect UI)
-  const selections: ModifierLike[] | undefined = Array.isArray(v.selections)
-    ? v.selections
-        .map((x: unknown) => normalizeModifierLike(x))
-        .filter((x): x is ModifierLike => !!x)
-    : undefined;
-
-  return {
-    id,
-    name,
-    description: v.description == null ? null : safeStr(v.description, '', 240) || null,
-    type,
-    required: safeBool(v.required, false),
-    min_selections: v.min_selections == null ? null : clampInt(v.min_selections, 0, 999),
-    max_selections: v.max_selections == null ? null : clampInt(v.max_selections, 0, 999),
-    sort_order: typeof v.sort_order === 'number' ? v.sort_order : null,
-    active: safeBool(v.active, true),
-    modifiers: mods,
-    selections: selections && selections.length ? selections : undefined,
-  };
-}
-
-function normalizeGroups(v: unknown): ModifierGroupLike[] {
-  const out: ModifierGroupLike[] = [];
-  const raw = Array.isArray(v) ? v : [];
-  for (const g of raw) {
-    const gg = normalizeGroupLike(g);
-    if (gg && gg.active) out.push(gg);
-  }
-  out.sort((a, b) => {
-    const ao = typeof a.sort_order === 'number' ? a.sort_order : 0;
-    const bo = typeof b.sort_order === 'number' ? b.sort_order : 0;
-    return ao - bo || a.name.localeCompare(b.name);
-  });
-  return out;
-}
-
-function groupSelectionRangeLabel(group: ModifierGroupLike): string {
-  const min = group.min_selections ?? (group.required ? 1 : 0);
-  const max = group.max_selections ?? (group.type === 'radio' ? 1 : null);
-
-  if (group.type === 'radio') {
-    if (group.required || min >= 1) return 'Choose 1';
-    return 'Optional';
-  }
-
-  if (max != null && max > 0) {
-    if (min > 0) return `Choose ${min}–${max}`;
-    return `Choose up to ${max}`;
-  }
-
-  if (min > 0) return `Choose at least ${min}`;
-  return 'Optional';
-}
-
-function isSelectionValidForGroup(group: ModifierGroupLike, selected: SelectedModifier[]): boolean {
-  const sels = Array.isArray(selected) ? selected : [];
-  const count = sels.length;
-
-  const min = group.min_selections ?? (group.required ? 1 : 0);
-  const max = group.max_selections ?? (group.type === 'radio' ? 1 : null);
-
-  if (count < min) return false;
-  if (max != null && count > max) return false;
-  if (group.type === 'radio' && count > 1) return false;
-  return true;
-}
-
-function computeSelectedModifierCents(selected: Record<string, SelectedModifier[]>): number {
-  let sum = 0;
-  for (const sels of Object.values(selected)) {
-    if (!Array.isArray(sels)) continue;
-    for (const s of sels) sum += safeCents(s.priceAdjustment, 0);
-  }
-  return Math.max(0, sum);
-}
-
-function canonicalizeSelectionsForHash(selected: Record<string, SelectedModifier[]>): string {
-  const parts: string[] = [];
-  const groupIds = Object.keys(selected).sort((a, b) => a.localeCompare(b));
-  for (const gid of groupIds) {
-    const sels = selected[gid] ?? [];
-    const ids = sels
-      .map((s) => safeStr(s.id, '').trim())
-      .filter(Boolean)
-      .sort((a, b) => a.localeCompare(b));
-    parts.push(`${gid}:${ids.join('.')}`);
-  }
-  return parts.join('|');
-}
-
-function getFocusable(container: HTMLElement): HTMLElement[] {
-  const selector =
-    'a[href],button:not([disabled]),textarea,input,select,[tabindex]:not([tabindex="-1"])';
-  const nodes = Array.from(container.querySelectorAll<HTMLElement>(selector));
-  return nodes.filter(
-    (el) => !el.hasAttribute('disabled') && el.getAttribute('aria-hidden') !== 'true',
-  );
 }
 
 export default function MenuItemModal({ item, onClose }: Props) {
@@ -314,13 +53,11 @@ export default function MenuItemModal({ item, onClose }: Props) {
   const invalidItem = !isMenuItemPublic(item);
 
   // Treat props as untrusted at runtime (shape drift safe)
-  const rec: UnknownRecord = isRecord(item) ? item : {};
+  const rec = isRecord(item) ? (item as Record<string, unknown>) : {};
   const id = safeStr(rec.id, '', 128);
   const name = safeStr(rec.name, 'Menu item', 120);
 
   const scrollToken = id ? `menu-item:${id}` : 'menu-item:unknown';
-
-  // ✅ FIX: Hooks must be called at the top level (not inside effects/callbacks/conditions)
   useScrollLock({ enabled: true, token: scrollToken });
 
   const categoryLabel = safeStr(rec.category, 'menu', 40);
@@ -336,58 +73,64 @@ export default function MenuItemModal({ item, onClose }: Props) {
       Number.isFinite(rec.popularity_score) &&
       rec.popularity_score >= 80);
 
-  // UI state
-  const [qty, setQty] = useState<number>(1);
+  // ── Phase + notes (local to modal) ──────────────────────────────────────────
+
+  type CartPhase = 'idle' | 'adding' | 'success';
   const [phase, setPhase] = useState<CartPhase>('idle');
-
-  const [preflight, setPreflight] = useState<PreflightResponse | null>(null);
-  const [preflightLoading, setPreflightLoading] = useState(false);
-  const [preflightError, setPreflightError] = useState<string | null>(null);
-
-  // Modifiers (best-effort load)
-  const [groupsLoading, setGroupsLoading] = useState(false);
-  const [groupsError, setGroupsError] = useState<string | null>(null);
-  const [modifierGroups, setModifierGroups] = useState<ModifierGroupLike[]>([]);
-  const [selected, setSelected] = useState<Record<string, SelectedModifier[]>>({});
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
-
-  // Notes (optional; used in cart payload)
   const [notes, setNotes] = useState<string>('');
-
-  // Warnings / status
-  const [selectionPrunedWarning, setSelectionPrunedWarning] = useState<string | null>(null);
-  const [maxSelectionHint, setMaxSelectionHint] = useState<string | null>(null);
   const [liveStatus, setLiveStatus] = useState<string>('');
+  const onLiveStatus = useCallback((msg: string) => setLiveStatus(msg), []);
 
-  // timers + cancellation
+  // ── Timers ───────────────────────────────────────────────────────────────────
+
   const successTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const addTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const requestSeq = useRef(0);
-  const abortRef = useRef<AbortController | null>(null);
 
-  // Modal mechanics refs
+  // ── Modal focus / keyboard refs ──────────────────────────────────────────────
+
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const lastFocusRef = useRef<HTMLElement | null>(null);
 
+  // ── Composed hooks ───────────────────────────────────────────────────────────
+
+  const { safeQty, maxQty, setQty, clampToServerMax } = useMenuItemQty();
+
+  const { preflight, preflightLoading, preflightError, runPreflight, abortRef } =
+    useMenuItemPreflight(id, onLiveStatus, clampToServerMax);
+
+  const {
+    modifierGroups,
+    groupsLoading,
+    groupsError,
+    selected,
+    expandedGroups,
+    selectionPrunedWarning,
+    maxSelectionHint,
+    loadModifierGroups,
+    setSelectionForGroup,
+    toggleGroupExpanded,
+    clearSelections,
+  } = useMenuItemModifiers(id, onLiveStatus);
+
+  // ── Modal close ──────────────────────────────────────────────────────────────
+
   const close = useCallback(() => {
-    // Fail-safe: unlock immediately (don’t rely solely on unmount cleanup)
     unlockScroll(scrollToken);
     onClose();
   }, [onClose, scrollToken]);
 
-  // Focus restore (preserve existing behavior)
+  // ── Focus restore ────────────────────────────────────────────────────────────
+
   useEffect(() => {
     lastFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
-
     queueMicrotask(() => {
       closeBtnRef.current?.focus();
     });
 
     return () => {
-      // (Optional) fail-safe unlock; useScrollLock also unlocks on unmount
       unlockScroll(scrollToken);
       queueMicrotask(() => {
         const el = lastFocusRef.current;
@@ -396,7 +139,8 @@ export default function MenuItemModal({ item, onClose }: Props) {
     };
   }, [scrollToken]);
 
-  // Global key handling: ESC close + focus trap (Tab cycles within modal)
+  // ── Keyboard: ESC + focus trap ───────────────────────────────────────────────
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -404,8 +148,8 @@ export default function MenuItemModal({ item, onClose }: Props) {
         close();
         return;
       }
-
       if (e.key !== 'Tab') return;
+
       const dialog = dialogRef.current;
       if (!dialog) return;
 
@@ -433,189 +177,38 @@ export default function MenuItemModal({ item, onClose }: Props) {
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [close]);
 
-  // Cleanup: preserve existing abort/timer hygiene
+  // ── Cleanup ──────────────────────────────────────────────────────────────────
+
   useEffect(() => {
+    // Capture ref values at effect-run time so the cleanup closure sees the
+    // correct instance even if the ref changes before unmount.
+    const abort = abortRef.current;
+    const debounceTmr = debounceTimer;
+    const addTmr = addTimer;
+    const successTmr = successTimer;
     return () => {
-      abortRef.current?.abort();
-      if (debounceTimer.current) clearTimeout(debounceTimer.current);
-      if (addTimer.current) clearTimeout(addTimer.current);
-      if (successTimer.current) clearTimeout(successTimer.current);
+      abort?.abort();
+      if (debounceTmr.current) clearTimeout(debounceTmr.current);
+      if (addTmr.current) clearTimeout(addTmr.current);
+      if (successTmr.current) clearTimeout(successTmr.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Load modifier groups best-effort from menu_items_public view (if present).
-  // This does NOT replace server truth; it only drives customization UI.
-  const loadModifierGroups = useCallback(async () => {
+  // ── Debounced preflight ──────────────────────────────────────────────────────
+
+  useEffect(() => {
     if (!id) return;
-    setGroupsLoading(true);
-    setGroupsError(null);
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => {
+      void runPreflight(safeQty);
+    }, 200);
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    };
+  }, [id, safeQty, runPreflight]);
 
-    try {
-      const { data, error } = await supabase
-        .from('menu_items_public')
-        .select('modifier_groups')
-        .eq('id', id)
-        .maybeSingle();
-
-      if (error) throw new Error(error.message || 'Failed to load options');
-
-      const raw = isRecord(data) ? (data as UnknownRecord).modifier_groups : null;
-      const groups = normalizeGroups(raw);
-
-      setModifierGroups(groups);
-
-      // Expand required groups by default
-      const exp: Record<string, boolean> = {};
-      for (const g of groups) {
-        const min = g.min_selections ?? (g.required ? 1 : 0);
-        exp[g.id] = g.required || min > 0;
-      }
-      setExpandedGroups(exp);
-
-      // Prune stale selections if groups changed
-      setSelected((prev) => {
-        const next: Record<string, SelectedModifier[]> = {};
-        for (const g of groups) {
-          const prior = prev[g.id] ?? [];
-          const allowed = new Set(g.modifiers.filter((m) => m.available).map((m) => m.id));
-          const pruned = prior.filter((s) => allowed.has(s.id));
-          next[g.id] = pruned;
-        }
-        return next;
-      });
-    } catch (e) {
-      const msg = errMsg(e);
-      if (msg !== 'aborted') {
-        setModifierGroups([]);
-        setGroupsError('Options are temporarily unavailable.');
-      }
-    } finally {
-      setGroupsLoading(false);
-    }
-  }, [id]);
-
-  useEffect(() => {
-    void loadModifierGroups();
-  }, [loadModifierGroups]);
-
-  // If selected modifiers become unavailable later, prune + warn (UX-only; business logic preserved)
-  useEffect(() => {
-    if (!modifierGroups.length) return;
-
-    let prunedCount = 0;
-
-    const allowedByGroup: Record<string, Set<string>> = {};
-    for (const g of modifierGroups) {
-      allowedByGroup[g.id] = new Set(g.modifiers.filter((m) => m.available).map((m) => m.id));
-    }
-
-    setSelected((prev) => {
-      let changed = false;
-      const next: Record<string, SelectedModifier[]> = {};
-      for (const g of modifierGroups) {
-        const prior = prev[g.id] ?? [];
-        const allowed = allowedByGroup[g.id] ?? new Set<string>();
-        const pruned = prior.filter((s) => allowed.has(s.id));
-        if (pruned.length !== prior.length) {
-          changed = true;
-          prunedCount += prior.length - pruned.length;
-        }
-        next[g.id] = pruned;
-      }
-      return changed ? next : prev;
-    });
-
-    if (prunedCount > 0) {
-      const msg = 'Some selected options were removed because they are no longer available.';
-      setSelectionPrunedWarning(msg);
-      setLiveStatus(msg);
-      const t = window.setTimeout(() => setSelectionPrunedWarning(null), 3500);
-      return () => window.clearTimeout(t);
-    }
-
-    return undefined;
-  }, [modifierGroups]);
-
-  // Server preflight (authoritative for base item + qty)
-  const runPreflight = useCallback(
-    async (requestedQty: number) => {
-      if (!id) {
-        setPreflight({ ok: false, error: 'Invalid item.' });
-        setPreflightError('Invalid item.');
-        return;
-      }
-
-      abortRef.current?.abort();
-      const ac = new AbortController();
-      abortRef.current = ac;
-
-      const seq = ++requestSeq.current;
-
-      setPreflightLoading(true);
-      setPreflightError(null);
-
-      try {
-        const { data, error } = await supabase.functions.invoke('menu-preflight', {
-          method: 'POST',
-          body: { item_id: id, qty: clampInt(requestedQty, 1, 20) },
-          signal: ac.signal,
-        });
-
-        if (seq !== requestSeq.current) return;
-
-        if (error) throw new Error(error.message || 'Preflight failed');
-
-        const payload = data as unknown;
-        if (!isRecord(payload) || typeof payload.ok !== 'boolean') {
-          throw new Error('Invalid preflight response');
-        }
-
-        if (payload.ok !== true) {
-          const msg = typeof payload.error === 'string' ? payload.error : 'Item unavailable';
-          setPreflight({ ok: false, error: msg });
-          setPreflightError(msg);
-          setLiveStatus(msg);
-          return;
-        }
-
-        const normalized: PreflightOk = {
-          ok: true,
-          item_id: safeStr(payload.item_id, id, 128),
-          available: Boolean(payload.available),
-          unit_price_cents: safeCents(payload.unit_price_cents, 0),
-          stock_count:
-            payload.stock_count == null ? null : clampInt(payload.stock_count, 0, 1_000_000),
-          low_stock_threshold:
-            payload.low_stock_threshold == null
-              ? null
-              : clampInt(payload.low_stock_threshold, 1, 1_000_000),
-          max_qty: clampInt(payload.max_qty ?? 1, 1, 20),
-        };
-
-        setPreflight(normalized);
-        setQty((q) => clampInt(q, 1, normalized.max_qty));
-      } catch (e) {
-        const msg = errMsg(e);
-        if (msg === 'aborted') return;
-
-        setPreflight({ ok: false, error: msg });
-        setPreflightError(msg);
-        setLiveStatus(msg);
-      } finally {
-        if (seq === requestSeq.current) setPreflightLoading(false);
-      }
-    },
-    [id],
-  );
-
-  // Derived
-  const maxQty = useMemo(() => {
-    const hardCap = 20;
-    if (preflight?.ok !== true) return hardCap;
-    return clampInt(preflight.max_qty, 1, hardCap);
-  }, [preflight]);
-
-  const safeQty = useMemo(() => clampInt(qty, 1, maxQty), [qty, maxQty]);
+  // ── Derived price ────────────────────────────────────────────────────────────
 
   const unitPriceCents = useMemo(() => {
     if (preflight?.ok === true) return safeCents(preflight.unit_price_cents, 0);
@@ -636,29 +229,15 @@ export default function MenuItemModal({ item, onClose }: Props) {
     return preflight.stock_count > 0 && preflight.stock_count <= thr;
   }, [preflight]);
 
-  // Debounced preflight on open + qty changes
-  useEffect(() => {
-    if (!id) return;
+  // ── Modifier validation ──────────────────────────────────────────────────────
 
-    if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    debounceTimer.current = setTimeout(() => {
-      void runPreflight(safeQty);
-    }, 200);
-
-    return () => {
-      if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    };
-  }, [id, safeQty, runPreflight]);
-
-  // Modifier validation + inventory gate (fail closed)
   const selectionBlockedIds = useMemo(() => {
     const blocked = new Set<string>();
     for (const g of modifierGroups) {
       const sels = selected[g.id] ?? [];
       for (const s of sels) {
         const mod = g.modifiers.find((m) => m.id === s.id);
-        if (!mod) blocked.add(s.id);
-        else if (!mod.available) blocked.add(s.id);
+        if (!mod || !mod.available) blocked.add(s.id);
       }
     }
     return blocked;
@@ -666,8 +245,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
 
   const modifierRulesOk = useMemo(() => {
     for (const g of modifierGroups) {
-      const sels = selected[g.id] ?? [];
-      if (!isSelectionValidForGroup(g, sels)) return false;
+      if (!isSelectionValidForGroup(g, selected[g.id] ?? [])) return false;
     }
     return true;
   }, [modifierGroups, selected]);
@@ -685,83 +263,15 @@ export default function MenuItemModal({ item, onClose }: Props) {
 
   const requiredHint = useMemo(() => {
     if (!modifierGroups.length) return null;
-    const missing: string[] = [];
-    for (const g of modifierGroups) {
-      const sels = selected[g.id] ?? [];
-      if (!isSelectionValidForGroup(g, sels)) missing.push(g.name);
-    }
+    const missing = modifierGroups
+      .filter((g) => !isSelectionValidForGroup(g, selected[g.id] ?? []))
+      .map((g) => g.name);
     if (!missing.length) return null;
     return `Choose required options: ${missing.slice(0, 2).join(', ')}${missing.length > 2 ? '…' : ''}`;
   }, [modifierGroups, selected]);
 
-  // Selection handlers
-  const toggleGroupExpanded = useCallback((groupId: string) => {
-    setExpandedGroups((prev) => ({ ...prev, [groupId]: !prev[groupId] }));
-  }, []);
+  // ── Add to cart ──────────────────────────────────────────────────────────────
 
-  const setSelectionForGroup = useCallback((group: ModifierGroupLike, mod: ModifierLike) => {
-    if (!group.active) return;
-    if (!mod.available) return;
-
-    setMaxSelectionHint(null);
-
-    setSelected((prev) => {
-      const current = prev[group.id] ?? [];
-      const exists = current.some((s) => s.id === mod.id);
-
-      if (group.type === 'radio') {
-        if (exists) {
-          const min = group.min_selections ?? (group.required ? 1 : 0);
-          if (min >= 1) return prev;
-          setLiveStatus(`${group.name}: cleared`);
-          return { ...prev, [group.id]: [] };
-        }
-        setLiveStatus(`${group.name}: selected ${mod.name}`);
-        return {
-          ...prev,
-          [group.id]: [
-            {
-              id: mod.id,
-              name: mod.name,
-              priceAdjustment: safeCents(mod.price_adjustment, 0),
-              groupId: group.id,
-            },
-          ],
-        };
-      }
-
-      const next = exists
-        ? current.filter((s) => s.id !== mod.id)
-        : [
-            ...current,
-            {
-              id: mod.id,
-              name: mod.name,
-              priceAdjustment: safeCents(mod.price_adjustment, 0),
-              groupId: group.id,
-            },
-          ];
-
-      const max = group.max_selections ?? null;
-      if (max != null && max > 0 && next.length > max) {
-        const trimmed = next.slice(next.length - max);
-        const hint = `You can choose up to ${max}. Oldest selection removed.`;
-        setMaxSelectionHint(hint);
-        setLiveStatus(hint);
-        return { ...prev, [group.id]: trimmed };
-      }
-
-      setLiveStatus(`${group.name}: ${exists ? 'removed' : 'added'} ${mod.name}`);
-      return { ...prev, [group.id]: next };
-    });
-  }, []);
-
-  const clearSelections = useCallback(() => {
-    setSelected({});
-    setLiveStatus('Selections cleared');
-  }, []);
-
-  // Add to cart (fail-closed unless preflight ok + modifiers ok)
   const handleAddToCart = useCallback(() => {
     if (!canAdd) {
       if (!modifierRulesOk) setLiveStatus('Choose required options before adding.');
@@ -778,8 +288,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
       const chosen: Array<{ id: string; groupId: string; name: string; priceAdjustment: number }> =
         [];
       for (const g of modifierGroups) {
-        const sels = selected[g.id] ?? [];
-        for (const s of sels) {
+        for (const s of selected[g.id] ?? []) {
           chosen.push({
             id: s.id,
             groupId: s.groupId,
@@ -789,10 +298,10 @@ export default function MenuItemModal({ item, onClose }: Props) {
         }
       }
 
-      const note = safeStr(notes, '', 600);
+      const note = safeStr(notes, '', MAX_NOTES_LENGTH);
       const notesOrNull = note.length ? note : null;
 
-      // IMPORTANT: pricingHash logic must remain intact
+      // IMPORTANT: pricingHash composition must remain intact
       const pricingHash = `v2:preflight:${id}:${preflight.unit_price_cents}:mods:${canonicalizeSelectionsForHash(selected)}:qty:${safeQty}`;
 
       addItem({
@@ -830,6 +339,8 @@ export default function MenuItemModal({ item, onClose }: Props) {
     close,
   ]);
 
+  // ── Derived labels ───────────────────────────────────────────────────────────
+
   const headerPriceLabel = useMemo(() => {
     if (preflightLoading) return 'checking…';
     if (preflight?.ok === true) return 'server-confirmed';
@@ -846,9 +357,11 @@ export default function MenuItemModal({ item, onClose }: Props) {
 
   const unavailable = preflight?.ok === true && preflight.available === false;
 
+  // ── Render ───────────────────────────────────────────────────────────────────
+
   return (
     <div className="fixed inset-0 z-50">
-      {/* Backdrop: clicking closes and always unlocks */}
+      {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/60"
         aria-hidden="true"
@@ -871,10 +384,12 @@ export default function MenuItemModal({ item, onClose }: Props) {
           )}
           onMouseDown={(e) => e.stopPropagation()}
         >
+          {/* Live region */}
           <div className="sr-only" aria-live="polite" aria-atomic="true">
             {liveStatus}
           </div>
 
+          {/* ── Header ── */}
           <div className="shrink-0 border-b border-white/10 bg-neutral-950/90 backdrop-blur supports-backdrop-filter:bg-neutral-950/70">
             <div className="flex items-start justify-between gap-3 px-5 py-4">
               <div className="min-w-0">
@@ -911,6 +426,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
             </div>
           </div>
 
+          {/* ── Scrollable body ── */}
           <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 pb-6 [-webkit-overflow-scrolling:touch]">
             {invalidItem ? (
               <div className="pt-4">
@@ -918,7 +434,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
                   className="w-full rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200 shadow-xl"
                   aria-label="Item unavailable"
                 >
-                  This item can’t be opened right now.
+                  This item can't be opened right now.
                   <div className="mt-4 flex justify-end">
                     <button
                       type="button"
@@ -933,6 +449,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
               </div>
             ) : (
               <>
+                {/* ── Item image + meta ── */}
                 <div className="pt-4">
                   <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/5">
                     {imageUrl ? (
@@ -946,7 +463,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
                     ) : (
                       <div className="flex h-56 w-full items-center justify-center bg-linear-to-br from-white/5 to-white/0">
                         <div className="text-center">
-                          <p className="text-sm font-semibold text-neutral-200">Sofi’s Kitchen</p>
+                          <p className="text-sm font-semibold text-neutral-200">Sofi's Kitchen</p>
                           <p className="mt-1 text-xs text-zinc-500">
                             Fresh, real plates, made to order.
                           </p>
@@ -972,6 +489,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
                   ) : null}
                 </div>
 
+                {/* ── Alerts ── */}
                 {preflightError ? (
                   <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
                     {preflightError}
@@ -1002,6 +520,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
                   </div>
                 ) : null}
 
+                {/* ── Modifier groups ── */}
                 <div className="mt-6">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -1011,7 +530,6 @@ export default function MenuItemModal({ item, onClose }: Props) {
                         cart.
                       </p>
                     </div>
-
                     {modifierGroups.length ? (
                       <button
                         type="button"
@@ -1028,9 +546,9 @@ export default function MenuItemModal({ item, onClose }: Props) {
                     <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
                       <p className="text-sm text-zinc-300">Loading options…</p>
                       <div className="mt-3 grid gap-2">
-                        {Array.from({ length: 3 }).map((_, i) => (
+                        {SKELETON_IDS.map((skeletonId) => (
                           <div
-                            key={i}
+                            key={skeletonId}
                             className="h-10 animate-pulse rounded-xl bg-white/5"
                             aria-hidden="true"
                           />
@@ -1183,7 +701,6 @@ export default function MenuItemModal({ item, onClose }: Props) {
                                             {!m.available ? ' • Unavailable' : ''}
                                           </p>
                                         </div>
-
                                         <div className="shrink-0">
                                           {on ? (
                                             <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/15 ring-1 ring-amber-500/25">
@@ -1220,17 +737,17 @@ export default function MenuItemModal({ item, onClose }: Props) {
                   )}
                 </div>
 
+                {/* ── Special instructions ── */}
                 <div className="mt-6">
                   <p className="text-sm font-semibold text-white">Special instructions</p>
                   <p className="mt-1 text-xs text-zinc-500">
-                    Allergy notes, “no onions”, “extra crispy”, etc.
+                    Allergy notes, "no onions", "extra crispy", etc.
                   </p>
-
                   <textarea
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                     rows={3}
-                    maxLength={600}
+                    maxLength={MAX_NOTES_LENGTH}
                     className={cx(
                       'mt-3 w-full resize-none rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white',
                       'placeholder:text-zinc-500 outline-none',
@@ -1240,7 +757,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
                     aria-label="Special instructions"
                   />
                   <p className="mt-1 text-[11px] text-zinc-500">
-                    {clampInt(notes.length, 0, 999)} / 600
+                    {clampInt(notes.length, 0, 999)} / {MAX_NOTES_LENGTH}
                   </p>
                 </div>
 
@@ -1255,6 +772,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
             )}
           </div>
 
+          {/* ── Sticky footer ── */}
           <div className="shrink-0 border-t border-white/10 bg-neutral-950/90 backdrop-blur supports-backdrop-filter:bg-neutral-950/70">
             <div className="px-5 py-4">
               <div className="flex items-center justify-between gap-4">

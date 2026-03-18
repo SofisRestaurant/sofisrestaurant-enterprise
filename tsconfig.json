@@ -1,18 +1,27 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // --- Modern JS / ESNext ---
+    "target": "ESNext",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+
+    // --- Module & JSX ---
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
 
+    // --- Strictness & Safety ---
     "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "esModuleInterop": true,
     "noEmit": true,
+    "useDefineForClassFields": true,
 
+    // --- Path Aliases ---
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
@@ -21,8 +30,8 @@
       "@/lib/*": ["src/lib/*"]
     },
 
+    // --- Global Types ---
     "types": ["vite/client", "vitest/globals", "node"]
   },
-  "include": ["src"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

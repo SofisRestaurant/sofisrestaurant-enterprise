@@ -29,6 +29,15 @@
 //   ✅ Nav driven by buildNavGroups() — edit nav.config.tsx to change nav
 //   ✅ Skeleton KPI bar — no layout shift on load
 //   ✅ Manual refresh with live countdown + polling timer reset
+//
+// TIMER TYPE FIX
+//   useRef types use ReturnType<typeof setInterval/setTimeout> (no window. prefix).
+//   All call sites use bare setInterval/clearInterval/setTimeout/clearTimeout.
+//   Reason: window.setInterval returns `number` (DOM lib) but when @types/node
+//   is installed TypeScript resolves the ref type as NodeJS.Timer via the global
+//   setInterval declaration — causing "Type 'number' is not assignable to 'Timeout'".
+//   Using the bare global for BOTH the type and the call sites forces TypeScript
+//   to resolve both from the same declaration, eliminating the mismatch.
 // =============================================================================
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -182,7 +191,7 @@ async function withRetry<T>(fn: () => Promise<T>, maxAttempts = RETRY_MAX): Prom
 
       if (attempt < maxAttempts - 1) {
         await new Promise<void>((resolve) => {
-          window.setTimeout(resolve, RETRY_BASE_MS * 2 ** attempt);
+          setTimeout(resolve, RETRY_BASE_MS * 2 ** attempt);
         });
       }
     }
@@ -365,8 +374,11 @@ export default function AdminLayout() {
   });
 
   const mountedRef = useRef(true);
-  const pollTimerRef = useRef<ReturnType<typeof window.setInterval> | null>(null);
-  const countTimerRef = useRef<ReturnType<typeof window.setInterval> | null>(null);
+
+  // Timer refs typed with bare ReturnType<typeof setInterval> — no window. prefix.
+  // See file header for the full explanation of why this matters with @types/node.
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const countTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const snapshot = metricsState.snapshot;
   const isAuthorized = authStatus === 'authorized';
@@ -442,10 +454,10 @@ export default function AdminLayout() {
 
   const startPollTimer = useCallback(() => {
     if (pollTimerRef.current !== null) {
-      window.clearInterval(pollTimerRef.current);
+      clearInterval(pollTimerRef.current);
     }
 
-    pollTimerRef.current = window.setInterval(() => {
+    pollTimerRef.current = setInterval(() => {
       if (mountedRef.current && document.visibilityState === 'visible') {
         void fetchMetrics(true);
       }
@@ -521,7 +533,7 @@ export default function AdminLayout() {
 
     document.addEventListener('visibilitychange', onVisibilityChange);
 
-    countTimerRef.current = window.setInterval(() => {
+    countTimerRef.current = setInterval(() => {
       if (mountedRef.current) {
         setCountdown((c) => (c <= 1 ? COUNTDOWN_S : c - 1));
       }
@@ -531,12 +543,12 @@ export default function AdminLayout() {
       document.removeEventListener('visibilitychange', onVisibilityChange);
 
       if (pollTimerRef.current !== null) {
-        window.clearInterval(pollTimerRef.current);
+        clearInterval(pollTimerRef.current);
         pollTimerRef.current = null;
       }
 
       if (countTimerRef.current !== null) {
-        window.clearInterval(countTimerRef.current);
+        clearInterval(countTimerRef.current);
         countTimerRef.current = null;
       }
     };
@@ -693,7 +705,7 @@ export default function AdminLayout() {
                       {badge !== null ? (
                         <span
                           className={[
-                            'min-w-[20px] rounded-full px-2 py-0.5 text-center text-[10px] font-black',
+                            'min-w-5 rounded-full px-2 py-0.5 text-center text-[10px] font-black',
                             item.badgeWarn
                               ? 'bg-red-500/20 text-red-400'
                               : 'bg-amber-500/20 text-amber-400',

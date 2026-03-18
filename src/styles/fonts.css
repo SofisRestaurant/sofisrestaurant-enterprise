@@ -1,14 +1,14 @@
 /* =============================================================================
    SOFIS — fonts.css
-   Typography foundation. Custom face declarations + Google Fonts fallbacks.
-   Performance: all custom fonts use font-display: swap.
-   Fallback chain ensures beautiful rendering even before fonts load.
+   Fully self-hosted + Dancing Script + SofiDisplay + SofiBody
    ============================================================================= */
 
-/* ── Custom display face (self-hosted) ─────────────────────────────────────── */
+/* ── Display Face (SofiDisplay) ───────────────────────────────────────────── */
 @font-face {
   font-family: 'SofiDisplay';
-  src: url('/fonts/display/SofiDisplay-Regular.woff2') format('woff2');
+  src: url('/fonts/display/SofiDisplay-Regular.woff2') format('woff2'),
+       url('/fonts/display/SofiDisplay-Regular.woff') format('woff'),
+       url('/fonts/display/SofiDisplay-Regular.ttf') format('truetype');
   font-weight: 400;
   font-style: normal;
   font-display: swap;
@@ -16,32 +16,21 @@
 
 @font-face {
   font-family: 'SofiDisplay';
-  src: url('/fonts/display/SofiDisplay-Italic.woff2') format('woff2');
-  font-weight: 400;
-  font-style: italic;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'SofiDisplay';
-  src: url('/fonts/display/SofiDisplay-Medium.woff2') format('woff2');
-  font-weight: 500;
+  src: url('/fonts/display/SofiDisplay-Bold.woff2') format('woff2'),
+       url('/fonts/display/SofiDisplay-Bold.woff') format('woff'),
+       url('/fonts/display/SofiDisplay-Bold.ttf') format('truetype');
+  font-weight: 700;
   font-style: normal;
   font-display: swap;
 }
 
-/* ── Custom body face (self-hosted) ────────────────────────────────────────── */
+/* ── Body Face (SofiBody) ─────────────────────────────────────────────────── */
 @font-face {
   font-family: 'SofiBody';
-  src: url('/fonts/body/SofiBody-Light.woff2') format('woff2');
-  font-weight: 300;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'SofiBody';
-  src: url('/fonts/body/SofiBody-Regular.woff2') format('woff2');
+  src: url('/fonts/body/SofiBody-Regular.woff2') format('woff2'),
+       url('/fonts/body/SofiBody-Regular.woff') format('woff'),
+       url('/fonts/body/SofiBody-Regular.ttf') format('truetype'),
+       url('/fonts/body/SofiBody-Regular.eot') format('embedded-opentype');
   font-weight: 400;
   font-style: normal;
   font-display: swap;
@@ -49,50 +38,71 @@
 
 @font-face {
   font-family: 'SofiBody';
-  src: url('/fonts/body/SofiBody-Medium.woff2') format('woff2');
-  font-weight: 500;
+  src: url('/fonts/body/SofiBody-Bold.woff2') format('woff2'),
+       url('/fonts/body/SofiBody-Bold.woff') format('woff'),
+       url('/fonts/body/SofiBody-Bold.ttf') format('truetype'),
+       url('/fonts/body/SofiBody-Bold.eot') format('embedded-opentype');
+  font-weight: 700;
   font-style: normal;
   font-display: swap;
 }
 
-/* ── Google Fonts (network fallbacks) ──────────────────────────────────────── */
-/* Loaded in app.css as @import url() — referenced here for documentation only */
-/* Playfair Display: 400, 400i, 500, 500i, 700                                */
-/* Cormorant Garamond: 300, 300i, 400, 400i                                   */
-/* DM Sans: 300, 400, 500                                                     */
+@font-face {
+  font-family: 'SofiBody';
+  src: url('/fonts/body/SofiBody-Variable.woff2') format('woff2'),
+       url('/fonts/body/SofiBody-Variable.woff') format('woff'),
+       url('/fonts/body/SofiBody-Variable.ttf') format('truetype'),
+       url('/fonts/body/SofiBody-Variable.eot') format('embedded-opentype');
+  font-weight: 100 900; /* variable font range */
+  font-style: normal;
+  font-display: swap;
+}
 
-/* ── Font variable aliases ─────────────────────────────────────────────────── */
-/* These mirror the @theme block in tokens.css.
-   Used for non-Tailwind contexts (vanilla CSS, inline styles) */
+/* ── Hand / Script Face (Dancing Script) ─────────────────────────────────── */
+@font-face {
+  font-family: 'Dancing Script';
+  src: url('/fonts/hand/SofiBody-Regular.woff2') format('woff2'), /* replace with actual DancingScript-Regular file */
+       url('/fonts/hand/SofiBody-Regular.woff') format('woff'),
+       url('/fonts/hand/SofiBody-Regular.ttf') format('truetype'),
+       url('/fonts/hand/SofiBody-Regular.eot') format('embedded-opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Dancing Script';
+  src: url('/fonts/hand/SofiBody-Bold.woff2') format('woff2'), /* replace with actual DancingScript-Bold file */
+       url('/fonts/hand/SofiBody-Bold.woff') format('woff'),
+       url('/fonts/hand/SofiBody-Bold.ttf') format('truetype'),
+       url('/fonts/hand/SofiBody-Bold.eot') format('embedded-opentype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ── Font Variable Aliases ────────────────────────────────────────────────── */
 :root {
-  --font-display: 'Playfair Display', 'SofiDisplay', Georgia, 'Times New Roman', serif;
+  --font-display: 'SofiDisplay', Georgia, 'Times New Roman', serif;
   --font-serif:   'Cormorant Garamond', Georgia, 'Times New Roman', serif;
-  --font-sans:    'DM Sans', 'SofiBody', -apple-system, BlinkMacSystemFont,
+  --font-sans:    'SofiBody', -apple-system, BlinkMacSystemFont,
                   'Segoe UI', Helvetica, Arial, sans-serif;
   --font-mono:    'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace;
+  --font-hand:    'Dancing Script', cursive;
 }
 
-/* ── Base rendering ─────────────────────────────────────────────────────────── */
-html {
-  text-rendering: optimizeLegibility;
+/* ── Utility Classes ─────────────────────────────────────────────────────── */
+.font-display { font-family: var(--font-display); }
+.font-serif   { font-family: var(--font-serif); }
+.font-body    { font-family: var(--font-sans); }
+.font-mono    { font-family: var(--font-mono); }
+.font-hand    { font-family: var(--font-hand); }
+.font-accent  { font-family: var(--font-display); font-style: italic; font-weight: 400; }
+
+body {
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
   font-feature-settings: 'kern' 1, 'liga' 1, 'calt' 1;
 }
-
-/* ── Utility classes ────────────────────────────────────────────────────────── */
-/* Mirror Tailwind font-family utilities for use in plain CSS contexts */
-.font-display { font-family: var(--font-display); }
-.font-serif   { font-family: var(--font-serif);   }
-.font-body    { font-family: var(--font-sans);     }
-.font-mono    { font-family: var(--font-mono);     }
-
-/* Elegant italic accent — display font in italic, used for accentWord spans */
-.font-accent {
-  font-family: var(--font-display);
-  font-style: italic;
-  font-weight: 400;
-}
-
-/* Premium label spacing — uppercase small caps */
-.tracking-luxury { letter-spacing: var(--tracking-caps, 0.18em); }

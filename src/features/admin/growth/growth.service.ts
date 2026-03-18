@@ -104,12 +104,6 @@ function readNullableBoolField(obj: unknown, key: string): boolean | null {
   return v === null ? null : readBool(v);
 }
 
-function clampInt(v: unknown, min: number, max: number, fallback: number): number {
-  const n = readNumber(v);
-  if (n === null) return fallback;
-  const x = Math.trunc(n);
-  return Math.max(min, Math.min(max, x));
-}
 
 function normalizeError(e: unknown, fallback: string): Error {
   const msg = formatAdminGatewayError(e);

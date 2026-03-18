@@ -1,3 +1,5 @@
+// src/lib/api/fetcher.ts
+
 export async function fetcher<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...options,
@@ -8,10 +10,14 @@ export async function fetcher<T>(url: string, options?: RequestInit): Promise<T>
   });
 
   if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`);
+    throw new APIError(response.status, `HTTP error! status: ${response.status}`);
   }
 
-  return response.json();
+  // response.json() is typed as Promise<any> in TypeScript's DOM lib because
+  // the runtime has no way to verify the response shape matches T. The cast to
+  // Promise<T> is correct here — the generic parameter is the caller's contract,
+  // and this is the standard pattern for typed fetch wrappers.
+  return response.json() as Promise<T>;
 }
 
 export class APIError extends Error {

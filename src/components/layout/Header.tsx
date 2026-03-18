@@ -271,7 +271,7 @@ export default function Header() {
             {/* Logo */}
             <Link
               to="/"
-              className="rounded-lg px-2 py-1 text-2xl font-bold text-orange-700 transition-colors hover:text-orange-800 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
+              className="text-script rounded-lg px-2 py-1 text-2xl text-orange-700 transition-colors hover:text-orange-800 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
               aria-label="Sofi's Restaurant - Go to homepage"
             >
               Sofi&apos;s Restaurant

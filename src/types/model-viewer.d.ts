@@ -5,6 +5,7 @@
 // Ref: https://modelviewer.dev/docs/index.html
 
 import type * as React from 'react';
+import type { ModelViewerElement } from '@google/model-viewer';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Native DOM interface for imperative access via ref
@@ -192,7 +193,16 @@ interface ModelViewerJSXProps {
   onAnimationFinish?: React.ReactEventHandler<HTMLElement>;
   onQuickLookButtonTapped?: React.ReactEventHandler<HTMLElement>;
 }
-
+declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      'model-viewer': React.DetailedHTMLProps<
+        React.HTMLAttributes<ModelViewerElement>,
+        ModelViewerElement
+      >;
+    }
+  }
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // Merge with standard HTML element props and register in JSX
 // ─────────────────────────────────────────────────────────────────────────────

@@ -65,16 +65,24 @@ export default function ServiceStatus() {
         setErrorCount((n) => n + 1);
 
         // degrade after repeated failures
-        setHealth((prev) => ({
-          ...prev,
-          api: errorCount >= 2 ? 'down' : 'degraded',
-          checkedAt: new Date().toISOString(),
-        }));
+ setErrorCount((n) => {
+   const next = n + 1;
+
+   setHealth((prev) => ({
+     ...prev,
+     api: next >= 2 ? 'down' : 'degraded',
+     checkedAt: new Date().toISOString(),
+   }));
+
+   return next;
+ });
       } finally {
         clearTimeout(timeout);
         // backoff if failing
         const nextMs = errorCount >= 2 ? 120000 : 60000;
-        timer = setTimeout(run, nextMs);
+      timer = setTimeout(() => {
+        void run();
+      }, nextMs);
       }
     };
 

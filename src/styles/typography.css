@@ -170,3 +170,27 @@ small, .text-caption {
 h1, h2, h3, .section-title {
   text-wrap: balance;
 }
+/* ── Script accent typography (Dancing Script) ───────────────────────────── */
+
+.text-script {
+  font-family: var(--font-hand);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+
+.signature {
+  font-family: var(--font-hand);
+  font-size: clamp(1.4rem, 2vw, 2rem);
+  line-height: 1.2;
+}
+
+.menu-accent {
+  font-family: var(--font-hand);
+  font-size: 1.1em;
+}
+
+.hero-script {
+  font-family: var(--font-hand);
+  font-size: clamp(2rem, 5vw, 3rem);
+  letter-spacing: 0.01em;
+}

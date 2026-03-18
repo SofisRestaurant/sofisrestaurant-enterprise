@@ -516,6 +516,19 @@ function MenuPage() {
     });
   }, []);
 
+  /**
+   * Stable prop callbacks for MenuGrid + PopularRail.
+   * Wrapped in useCallback so child components that memo-compare props
+   * don't re-render just because MenuPage re-renders.
+   */
+  // MenuPage.tsx
+
+  const getPriceCents = useCallback(
+    <T extends MenuItemPublic>(item: T) => readPriceCents(item),
+    [],
+  );
+  const getAvailable = useCallback(<T extends MenuItemPublic>(item: T) => readAvailable(item), []);
+
   const clearAll = useCallback(() => {
     setSearchText('');
     setSelectedCategory('all');
@@ -587,15 +600,21 @@ function MenuPage() {
         {!loading && !error && (
           <m.div key="content" variants={staggerSection} initial="hidden" animate="visible">
             {/* Deals + Popular rails */}
-            <m.div variants={fadeUp} className="mt-6 space-y-6">
+            <m.div
+              variants={fadeUp}
+              initial="hidden"
+              whileInView="visible"
+              viewport={VP} // now it's used
+              className="mt-6 space-y-6"
+            >
               {deals.length > 0 && (
                 <DealsRail deals={deals} onSelect={(dealId) => applyDeal(dealId)} />
               )}
               <PopularRail
                 items={popular}
                 onOpenItem={openItem}
-                getPriceCents={readPriceCents}
-                getAvailable={readAvailable}
+                getPriceCents={getPriceCents}
+                getAvailable={getAvailable}
                 emptyHintActionLabel="Clear all"
                 onEmptyHintAction={clearAll}
               />
@@ -617,7 +636,13 @@ function MenuPage() {
                   whileHover={{ scale: 1.03, y: -1 }}
                   whileTap={{ scale: 0.97 }}
                   transition={{ duration: 0.18, ease: EL }}
-                  className="inline-flex h-10 items-center justify-center rounded-xl border border-gray-200 bg-white px-4 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-orange-500/40"
+                  className={cx(
+                    'inline-flex h-10 items-center justify-center rounded-xl border px-4 text-sm font-semibold shadow-sm',
+                    filtersOpen
+                      ? 'bg-orange-50 border-orange-500 text-orange-700'
+                      : 'bg-white border-gray-200 text-gray-900',
+                    'hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-orange-500/40',
+                  )}
                   aria-label="Open filters"
                 >
                   Filters
@@ -693,8 +718,12 @@ function MenuPage() {
               <MenuGrid
                 items={filteredSortedItems}
                 onOpenItem={openItem}
-                getPriceCents={readPriceCents}
-                getAvailable={readAvailable}
+                getPriceCents={
+                  getPriceCents as unknown as (item: (typeof filteredSortedItems)[number]) => number
+                }
+                getAvailable={
+                  getAvailable as unknown as (item: (typeof filteredSortedItems)[number]) => boolean
+                }
                 emptyHintActionLabel="Clear all"
                 onEmptyHintAction={clearAll}
               />

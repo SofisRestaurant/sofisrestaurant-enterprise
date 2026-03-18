@@ -20,6 +20,36 @@ import type {
 import { isGatewayErr } from '@/features/admin/api/adminGateway.types';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Optional fields that may or may not exist on LiveMetrics today
+//
+// WHY THIS APPROACH:
+// The original code used `as any` to write `pendingCarts`, `netRevenue30dCents`,
+// and `grossProfit30dCents` onto a `LiveMetrics` value conditionally — only if
+// those keys already existed at runtime. The intent was forward-compatibility:
+// don't fail if the type doesn't have the field yet, but do set it if it does.
+//
+// `as any` erases the type entirely and triggers no-explicit-any,
+// no-unsafe-member-access, no-unsafe-argument, and no-unsafe-assignment.
+//
+// The correct pattern is an intersection with Partial<OptionalMetricFields>:
+//   LiveMetrics & Partial<OptionalMetricFields>
+//
+// This gives TypeScript a precise type for the optional keys — every access is
+// fully typed, no lint violations — while the `'key' in obj` guard at runtime
+// still ensures we only set the field when it is already present on the object.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Fields that exist on LiveMetrics today or may be added in the future. */
+interface OptionalMetricFields {
+  pendingCarts: number;
+  netRevenue30dCents: number;
+  grossProfit30dCents: number;
+}
+
+/** A LiveMetrics value with typed access to the optional extension fields. */
+type ExtendedMetrics = LiveMetrics & Partial<OptionalMetricFields>;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -53,7 +83,10 @@ function applyLayoutSnapshot(
 ): LiveMetrics {
   if (!snap) return out;
 
-  const next: LiveMetrics = {
+  // Cast once to ExtendedMetrics so optional fields are typed, not `any`.
+  // The cast is safe: ExtendedMetrics is a supertype of LiveMetrics — it only
+  // adds optional fields, never removes or changes required ones.
+  const next: ExtendedMetrics = {
     ...out,
     todayRevenueCents: asNum(snap.today_revenue_cents, out.todayRevenueCents),
     todayOrders: asNum(snap.today_orders, out.todayOrders),
@@ -63,9 +96,10 @@ function applyLayoutSnapshot(
     abandonedCarts: asNum(snap.abandoned_carts, out.abandonedCarts),
   };
 
-  // Optional: only set if LiveMetrics actually has it
+  // Only write pendingCarts if it already exists on the object at runtime
+  // (forward-compatible: no-op if LiveMetrics hasn't added the field yet).
   if (isRecord(next) && 'pendingCarts' in next) {
-    (next as any).pendingCarts = asNum(snap.pending_carts, (next as any).pendingCarts ?? 0);
+    next.pendingCarts = asNum(snap.pending_carts, next.pendingCarts ?? 0);
   }
 
   return next;
@@ -80,13 +114,11 @@ function applyExecutiveSnapshot(
   const net30d = asNum(snap.net_revenue_30d_cents, 0);
   const grossProfit30d = asNum(snap.total_gross_profit_cents, 0);
 
-  // Only attach extra KPI fields if LiveMetrics supports them (future-proof)
-  const next = out as any;
+  // Cast once to ExtendedMetrics — same reasoning as applyLayoutSnapshot above.
+  const next: ExtendedMetrics = out;
 
-  if (next && typeof next === 'object') {
-    if ('netRevenue30dCents' in next) next.netRevenue30dCents = net30d;
-    if ('grossProfit30dCents' in next) next.grossProfit30dCents = grossProfit30d;
-  }
+  if ('netRevenue30dCents' in next) next.netRevenue30dCents = net30d;
+  if ('grossProfit30dCents' in next) next.grossProfit30dCents = grossProfit30d;
 
   return out;
 }
@@ -97,7 +129,7 @@ function applyExecutiveSnapshot(
 
 /**
  * ✅ admin-gateway "metrics" -> LiveMetrics
- * Executive snapshot is 30d KPIs, not “today tiles”.
+ * Executive snapshot is 30d KPIs, not "today tiles".
  */
 export function mapGatewayMetricsToLiveMetrics(
   res: GatewayResponse<ExecutiveSnapshot | null>,
@@ -129,7 +161,7 @@ export function mapGatewayLayoutToLiveMetrics(
 
 /**
  * Merge both gateway results:
- * - layout = “today tiles”
+ * - layout = "today tiles"
  * - metrics = 30d KPI extras (optional)
  */
 export function mergeGatewaySnapshots(

@@ -61,14 +61,14 @@ export interface SelectionInventoryCheck {
 // Internal helpers (drift-safe)
 // ─────────────────────────────────────────────────────────────────────────────
 
-type UnknownRecord = Record<string, unknown>;
-
-function isRecord(v: unknown): v is UnknownRecord {
-  return typeof v === 'object' && v !== null;
-}
-
-function asString(v: unknown): string {
-  return typeof v === 'string' ? v : String(v ?? '');
+// Safe string conversion
+export function asString(v: unknown): string {
+  if (v == null) return ''; // null or undefined
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  if (Array.isArray(v)) return v.map(asString).join(', ');
+  if (typeof v === 'object') return JSON.stringify(v); // safely stringify objects
+  return ''; // fallback for functions, symbols, etc.
 }
 
 function asBool(v: unknown, fallback: boolean): boolean {
@@ -109,28 +109,29 @@ type StockLike = {
   lowStockThreshold?: unknown;
 };
 
+/** Shared cast used anywhere MenuItem must be treated as StockLike. */
+type ModifierLike = { id: string; available: boolean } & Partial<StockLike>;
+
 function getStockCount(item: StockLike): number | null {
   const raw =
     item.inventory_count ??
-    item.inventoryCount ??
-    item.stock_count ??
-    item.stockCount ??
-    item.stock_qty ??
-    item.stockQty ??
-    item.stock ??
-    item.inventory ??
+    item.inventoryCount  ??
+    item.stock_count     ??
+    item.stockCount      ??
+    item.stock_qty       ??
+    item.stockQty        ??
+    item.stock           ??
+    item.inventory       ??
     null;
 
   const n = asFiniteNumber(raw);
   if (n === null) return null;
-  // inventory should be integer-ish
   return clampInt(n, -1_000_000, 1_000_000);
 }
 
 function getLowStockThreshold(item: StockLike): number {
   const raw = item.low_stock_threshold ?? item.lowStockThreshold ?? null;
   const n = asFiniteNumber(raw);
-  // sensible default if column not present
   return n === null ? 5 : clampInt(n, 1, 10_000);
 }
 
@@ -139,8 +140,7 @@ export function isOutOfStock(item: StockLike): boolean {
   if (!available) return true;
 
   const count = getStockCount(item);
-  // unknown stock => fail-open
-  if (count === null) return false;
+  if (count === null) return false; // unknown stock => fail-open
   return count <= 0;
 }
 
@@ -169,7 +169,7 @@ export function getStockMessage(item: StockLike): string {
   const status = getStockStatus(item);
   if (status === 'out') return 'Out of stock';
   if (status === 'low') return 'Low stock';
-  if (status === 'ok') return 'In stock';
+  if (status === 'ok')  return 'In stock';
   return 'Stock unknown';
 }
 
@@ -182,24 +182,25 @@ export function getStockMessage(item: StockLike): string {
  * Future: add modifier inventory_count / threshold columns and plug in here.
  */
 export function getModifierInventoryStatus(
-  modifier: { id: string; available: boolean } & Partial<StockLike>,
+  modifier: ModifierLike,
 ): ModifierInventoryStatus {
   const available = Boolean(modifier.available);
 
-  // Future-ready: if modifier later gains inventory fields, these will start working automatically.
   const stock_count = getStockCount(modifier);
-  const status = available ? getStockStatus(modifier) : 'out';
-  const out = !available || status === 'out';
-  const low = available && status === 'low';
+  const status      = available ? getStockStatus(modifier) : 'out';
+  const out         = !available || status === 'out';
+  const low         = available && status === 'low';
 
   return {
-    modifier_id: modifier.id,
+    modifier_id:    modifier.id,
     available,
     stock_count,
-    is_low_stock: low,
+    is_low_stock:   low,
     is_out_of_stock: out,
     status,
-    message: available ? (status === 'unknown' ? null : getStockMessage(modifier)) : 'Unavailable',
+    message: available
+      ? (status === 'unknown' ? null : getStockMessage(modifier))
+      : 'Unavailable',
   };
 }
 
@@ -217,46 +218,60 @@ export function checkSelectionInventory(
   groups: ModifierGroup[],
   selectedModifiers: Record<string, SelectedModifier[]>,
 ): SelectionInventoryCheck {
-  const blocked: string[] = [];
+  const blocked:  string[] = [];
   const warnings: string[] = [];
 
   for (const group of groups) {
     const selections = selectedModifiers[group.id] ?? [];
     if (!Array.isArray(selections) || !Array.isArray(group.modifiers)) continue;
 
-    for (const selection of selections) {
-      const selId = asString(selection?.id).trim();
-      if (!selId) continue;
+for (const selection of selections) {
+  let selId: string;
 
-      const mod = group.modifiers.find((m) => m.id === selId);
-
-      // If it's not in this group anymore, block (stale UI selection)
-      if (!mod) {
-        blocked.push(selId);
-        continue;
-      }
-
-      // If explicitly unavailable, block
-      if (!mod.available) {
-        blocked.push(selId);
-        continue;
-      }
-
-      // Future-ready: if modifier later gains inventory fields, use it
-      const st = getModifierInventoryStatus(mod as any);
-      if (st.is_out_of_stock) blocked.push(selId);
-      else if (st.is_low_stock && st.message) warnings.push(st.message);
-    }
+  if (selection?.id == null) {
+    continue; // skip null/undefined IDs
+  } else if (typeof selection.id === 'string') {
+    selId = selection.id.trim();
+  } else if (typeof selection.id === 'number' || typeof selection.id === 'boolean') {
+    selId = String(selection.id);
+  } else if (typeof selection.id === 'object') {
+    // Safely stringify objects, arrays, etc.
+    selId = JSON.stringify(selection.id);
+  } else {
+    // fallback for functions, symbols, unknown types
+    selId = '';
   }
 
-  // de-dupe
-  const blocked_unique = Array.from(new Set(blocked));
+  if (!selId) continue;
+
+  const mod = group.modifiers.find((m) => m.id === selId);
+
+  // If it's not in this group anymore, block (stale UI selection)
+  if (!mod) {
+    blocked.push(selId);
+    continue;
+  }
+
+  // If explicitly unavailable, block
+  if (!mod.available) {
+    blocked.push(selId);
+    continue;
+  }
+
+  // Future-ready: if modifier later gains inventory fields, use it.
+  const st = getModifierInventoryStatus(mod as ModifierLike);
+  if (st.is_out_of_stock) blocked.push(selId);
+  else if (st.is_low_stock && st.message) warnings.push(st.message);
+}
+  }
+
+  const blocked_unique  = Array.from(new Set(blocked));
   const warnings_unique = Array.from(new Set(warnings));
 
   return {
-    can_proceed: blocked_unique.length === 0,
+    can_proceed:       blocked_unique.length === 0,
     blocked_modifiers: blocked_unique,
-    warnings: warnings_unique,
+    warnings:          warnings_unique,
   };
 }
 
@@ -265,18 +280,19 @@ export function checkSelectionInventory(
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function getItemInventoryStatus(item: MenuItem): ItemInventoryStatus {
-  const stock_count = getStockCount(item as unknown as StockLike);
-  const status = getStockStatus(item as unknown as StockLike);
-  const out = isOutOfStock(item as unknown as StockLike);
-  const low = isLowStock(item as unknown as StockLike);
+  // Cast once — MenuItem fields overlap with StockLike by name convention
+  // but TypeScript requires an explicit bridge since the types are independent.
+  const stockLike = item as unknown as StockLike;
 
   return {
-    item_id: item.id,
-    available: Boolean(item.available),
-    stock_count,
-    is_low_stock: low,
-    is_out_of_stock: out,
-    status,
-    message: status === 'unknown' ? null : getStockMessage(item as unknown as StockLike),
+    item_id:        item.id,
+    available:      Boolean(item.available),
+    stock_count:    getStockCount(stockLike),
+    is_low_stock:   isLowStock(stockLike),
+    is_out_of_stock: isOutOfStock(stockLike),
+    status:         getStockStatus(stockLike),
+    message:        getStockStatus(stockLike) === 'unknown'
+                      ? null
+                      : getStockMessage(stockLike),
   };
 }

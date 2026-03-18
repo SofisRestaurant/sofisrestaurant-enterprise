@@ -4,7 +4,6 @@ import type {
   ReactNode,
   TableHTMLAttributes,
 } from 'react';
-import { useMemo } from 'react';
 import clsx from 'clsx';
 
 // ======================================================
@@ -125,9 +124,7 @@ export function StatCard({
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="text-xs font-bold uppercase tracking-widest text-zinc-500">{title}</div>
-
           <div className="mt-2 text-2xl font-black text-zinc-100 tabular-nums">{value}</div>
-
           {subtitle ? <div className="mt-1 text-xs text-zinc-500">{subtitle}</div> : null}
         </div>
 
@@ -249,6 +246,10 @@ export function LoadingSpinner({ size = 'md', className, ...rest }: LoadingSpinn
   );
 }
 
+// ======================================================
+// PROGRESS BAR
+// ======================================================
+
 export type ProgressColor = 'neutral' | 'success' | 'warning' | 'danger' | 'primary';
 
 export function ProgressBar(props: {
@@ -307,24 +308,16 @@ type TrendLike =
     };
 
 function normalizeTrend(input: unknown): 'up' | 'down' | 'flat' {
-  if (input === 'up' || input === 'down' || input === 'flat') {
-    return input;
-  }
+  if (input === 'up' || input === 'down' || input === 'flat') return input;
 
   if (isRecord(input)) {
     const direction = input.direction;
-    if (direction === 'up' || direction === 'down' || direction === 'flat') {
-      return direction;
-    }
+    if (direction === 'up' || direction === 'down' || direction === 'flat') return direction;
 
     const trend = input.trend;
-    if (trend === 'up' || trend === 'down' || trend === 'flat') {
-      return trend;
-    }
+    if (trend === 'up' || trend === 'down' || trend === 'flat') return trend;
 
-    if (typeof input.up === 'boolean') {
-      return input.up ? 'up' : 'down';
-    }
+    if (typeof input.up === 'boolean') return input.up ? 'up' : 'down';
   }
 
   return 'flat';
@@ -371,7 +364,6 @@ export function KPICard({
       : normalizedTrend === 'down'
         ? 'text-red-400'
         : 'text-zinc-400';
-
   const trendIcon = normalizedTrend === 'up' ? '↗' : normalizedTrend === 'down' ? '↘' : '→';
 
   return (
@@ -471,9 +463,9 @@ export function SkeletonGrid({
 
   return (
     <div className={clsx('grid gap-4', colClass, className)} {...rest}>
-      {Array.from({ length: count }).map((_, index) => {
-        return <SkeletonBlock key={index} height={itemHeight} className="rounded-2xl" />;
-      })}
+      {Array.from({ length: count }, (_, i) => (
+        <SkeletonBlock key={`grid-sk-${i}`} height={itemHeight} className="rounded-2xl" />
+      ))}
     </div>
   );
 }
@@ -567,7 +559,7 @@ export function Badge({ children, tone = 'neutral', className }: BadgeProps) {
 }
 
 // ======================================================
-// EMPTY STATE + SKELETONS
+// EMPTY STATE
 // ======================================================
 
 export interface EmptyStateAction {
@@ -585,10 +577,7 @@ export interface EmptyStateProps {
 function isEmptyStateAction(
   action: ReactNode | EmptyStateAction | undefined,
 ): action is EmptyStateAction {
-  if (!isRecord(action)) {
-    return false;
-  }
-
+  if (!isRecord(action)) return false;
   return typeof action.label === 'string' && typeof action.onClick === 'function';
 }
 
@@ -617,20 +606,22 @@ export function EmptyState({ title, description, action, icon }: EmptyStateProps
   );
 }
 
+// ======================================================
+// SKELETON (simple stacked rows variant)
+// ======================================================
+
 export interface SkeletonProps {
   rows?: number;
+  /** Height of each skeleton row in pixels. */
+  height?: number;
   className?: string;
 }
 
-export function Skeleton({ rows = 3, className }: SkeletonProps) {
-  const skeletonKeys = useMemo(() => {
-    return Array.from({ length: rows }, () => crypto.randomUUID());
-  }, [rows]);
-
+export function Skeleton({ rows = 3, height = 16, className }: SkeletonProps) {
   return (
     <div className={clsx('space-y-3', className)}>
-      {skeletonKeys.map((key) => (
-        <div key={key} className="h-8 animate-pulse rounded-xl bg-gray-800/60" />
+      {Array.from({ length: rows }, (_, i) => (
+        <SkeletonBlock key={`sk-row-${i}`} height={height} className="rounded-2xl" />
       ))}
     </div>
   );

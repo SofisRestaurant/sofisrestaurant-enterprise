@@ -24,7 +24,8 @@ function buildVariants(
   direction: RevealSectionProps['direction'],
   distance: number,
 ): Variants {
-  const hidden: Record<string, unknown> = { opacity: 0 };
+  const hidden: Record<string, number> = { opacity: 0, x: 0, y: 0 };
+
   if (direction === 'up') hidden.y = distance;
   if (direction === 'down') hidden.y = -distance;
   if (direction === 'left') hidden.x = distance;
@@ -34,13 +35,12 @@ function buildVariants(
     hidden,
     visible: {
       opacity: 1,
-      y: 0,
       x: 0,
+      y: 0,
       transition: { duration: 0.75, ease: EASE_LUXURY },
     },
   };
 }
-
 export function RevealSection({
   children,
   className,
@@ -55,7 +55,6 @@ export function RevealSection({
 }: RevealSectionProps) {
   const variants = buildVariants(direction, distance);
 
-  // Override transition if delay/duration differ from defaults
   const overrideVariants: Variants = {
     hidden: variants.hidden,
     visible: {
@@ -64,23 +63,22 @@ export function RevealSection({
     },
   };
 
-  // Cast motion element dynamically
-  const MotionTag = m[Tag as 'div'] as typeof m.div;
+const MotionTag = m[Tag];
 
-  return (
-    <MotionTag
-      id={id}
-      variants={overrideVariants}
-      initial="hidden"
-      whileInView="visible"
-      viewport={VIEWPORT_ONCE}
-      className={className}
-      aria-labelledby={ariaLabelledby}
-      aria-label={ariaLabel}
-    >
-      {children}
-    </MotionTag>
-  );
+return (
+  <MotionTag
+    id={id}
+    variants={overrideVariants}
+    initial="hidden"
+    whileInView="visible"
+    viewport={VIEWPORT_ONCE}
+    className={className}
+    aria-labelledby={ariaLabelledby}
+    aria-label={ariaLabel}
+  >
+    {children}
+  </MotionTag>
+);
 }
 
 export default RevealSection;

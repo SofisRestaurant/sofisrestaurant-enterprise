@@ -1,17 +1,21 @@
-/* 1. Tailwind engine */
 @import "tailwindcss";
 
-/* 2. Tailwind theme (must be here) */
-@theme {
-  /* all your theme variables */
-}
-
-/* 3. Project CSS imports */
-@import "./tokens.css";
+/* Import your fonts first */
 @import "./fonts.css";
-@import "./typography.css";
+
+/* Tailwind plugins */
+@plugin "@tailwindcss/forms";
+@plugin "@tailwindcss/typography";
+
+/* Project styles */
+@import "./tokens.css";
 @import "./globals.css";
 @import "./animations.css";
 @import "./effects.css";
 @import "./utilities.css";
 @import "./components.css";
+@utility btn {
+  border-radius: 0.5rem;
+  padding: 0.5rem 1rem;
+  background-color: ButtonFace;
+}

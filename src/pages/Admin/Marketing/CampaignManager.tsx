@@ -135,7 +135,6 @@ function safeTrim(v: unknown, max = 10_000): string {
 }
 
 function isUuidLike(v: string): boolean {
-  // strict-enough for UI validation (server remains authoritative)
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
@@ -237,10 +236,9 @@ function getCampaignStatus(c: Campaign): CampaignStatus {
   return 'draft';
 }
 
-function getStartedAt(c: Campaign): string | null {
-  const s = readString(c, ['startedAt', 'started_at']);
-  return s ?? null;
-}
+// NOTE: readString is defined once above (module-level safe readers section).
+// The duplicate declaration that previously appeared here has been removed.
+// getStartedAt was also removed — it was unused throughout the component.
 
 function getSentCount(c: Campaign): number {
   return readNumber(c, ['sentCount', 'sent_count']) ?? 0;
@@ -272,7 +270,6 @@ function getIsFeatured(c: Campaign): boolean {
 }
 
 function getEligibleForRotation(c: Campaign): boolean {
-  // Must exist in DB/types. If a future migration removes it, this gracefully defaults.
   return readBool(c, ['eligible_for_rotation', 'eligibleForRotation']) ?? true;
 }
 
@@ -323,7 +320,6 @@ function getScheduleState(c: Campaign): { state: ScheduleState; nextChangeIso: s
   const eMs = parseIsoMs(getEndsAt(c));
   const now = Date.now();
 
-  // invalid date strings should not break UI
   if ((getStartsAt(c) && sMs == null) || (getEndsAt(c) && eMs == null)) {
     return { state: 'invalid', nextChangeIso: null };
   }
@@ -335,7 +331,6 @@ function getScheduleState(c: Campaign): { state: ScheduleState; nextChangeIso: s
 
   if (eMs != null && now >= eMs) return { state: 'ended', nextChangeIso: null };
 
-  // now is between start and end (or only start passed, no end)
   if (eMs != null) return { state: 'live', nextChangeIso: new Date(eMs).toISOString() };
   return { state: 'live', nextChangeIso: null };
 }
@@ -392,7 +387,6 @@ type CampaignDraft = {
 };
 
 function draftEquals(a: CampaignDraft, b: CampaignDraft): boolean {
-  // keep simple and stable: compare the fields we edit
   return (
     (a.id ?? '') === (b.id ?? '') &&
     a.campaign_name === b.campaign_name &&
@@ -445,7 +439,6 @@ function CampaignModal({
 
   const dirty = useMemo(() => !draftEquals(draft, initial), [draft, initial]);
 
-  // Focus management (accessibility)
   useEffect(() => {
     if (!open) return;
     prevFocusRef.current = (document.activeElement as HTMLElement) ?? null;
@@ -460,7 +453,6 @@ function CampaignModal({
     };
   }, [open]);
 
-  // Esc to close
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -889,7 +881,6 @@ export const CampaignManager = memo(function CampaignManager() {
     void load();
   }, [load]);
 
-  // Auto-refresh (sales-ops friendly: always current schedule/featured state)
   useEffect(() => {
     if (!autoRefresh) return;
     const sec = clampInt(autoRefreshSec, 10, 300);
@@ -919,7 +910,6 @@ export const CampaignManager = memo(function CampaignManager() {
       setBusyId(c.id);
       setError(null);
 
-      // optimistic update: keep both status + active consistent if present
       setCampaigns((prev) =>
         prev.map((x) =>
           x.id === c.id
@@ -967,7 +957,6 @@ export const CampaignManager = memo(function CampaignManager() {
       setBusyId(c.id);
       setError(null);
 
-      // optimistic: mark this featured; clear others in placement
       setCampaigns((prev) =>
         prev.map((x) => {
           if (getPlacement(x) !== placement) return x;
@@ -1076,7 +1065,6 @@ export const CampaignManager = memo(function CampaignManager() {
     try {
       await navigator.clipboard.writeText(s);
     } catch {
-      // fallback
       const el = document.createElement('textarea');
       el.value = s;
       el.style.position = 'fixed';
@@ -1132,7 +1120,6 @@ export const CampaignManager = memo(function CampaignManager() {
           const res = await createCampaign(basePayload);
           campaignId = extractCreatedId(res);
 
-          // If create didn't return an id, do best-effort by refreshing and matching.
           if (!campaignId) {
             const list = await refreshListSilently();
             const match = list.find((c) => {
@@ -1147,7 +1134,6 @@ export const CampaignManager = memo(function CampaignManager() {
           campaignId = draft.id;
         }
 
-        // Enforce single featured winner per placement server-side.
         if (basePayload.is_featured && campaignId) {
           await pinFeaturedCampaign({ id: campaignId, placement: basePayload.placement });
         }
@@ -1203,7 +1189,7 @@ export const CampaignManager = memo(function CampaignManager() {
       if (!active || info.state !== 'live' || !info.nextChangeIso) return false;
       const ms = parseIsoMs(info.nextChangeIso);
       if (ms == null) return false;
-      return ms - Date.now() <= 2 * 60 * 60 * 1000; // 2 hours
+      return ms - Date.now() <= 2 * 60 * 60 * 1000;
     }).length;
 
     return {
@@ -1265,7 +1251,6 @@ export const CampaignManager = memo(function CampaignManager() {
       if (sort.key === 'status') {
         return dir * getCampaignStatus(a).localeCompare(getCampaignStatus(b));
       }
-      // schedule
       const as = getScheduleState(a).state;
       const bs = getScheduleState(b).state;
       const order = (s: ScheduleState) =>
@@ -1273,7 +1258,6 @@ export const CampaignManager = memo(function CampaignManager() {
       const d0 = order(as) - order(bs);
       if (d0 !== 0) return dir * d0;
 
-      // tie-breaker: soonest next change first
       const an = parseIsoMs(getScheduleState(a).nextChangeIso) ?? Number.MAX_SAFE_INTEGER;
       const bn = parseIsoMs(getScheduleState(b).nextChangeIso) ?? Number.MAX_SAFE_INTEGER;
       const d1 = an - bn;
@@ -1349,7 +1333,6 @@ export const CampaignManager = memo(function CampaignManager() {
 
       setError(null);
 
-      // optimistic
       setCampaigns((prev) =>
         prev.map((x) => {
           const hit = targets.some((t) => t.id === x.id);
@@ -1364,7 +1347,6 @@ export const CampaignManager = memo(function CampaignManager() {
 
       try {
         for (const c of targets) {
-          // do sequential to keep gateway load sane
           await toggleCampaign(c.id, nextActive);
         }
         await refreshListSilently();

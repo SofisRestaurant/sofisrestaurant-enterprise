@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUpRight,
   BadgeDollarSign,
@@ -56,6 +56,12 @@ export type DealsRailProps = {
   selectedDealId?: string | null;
 };
 
+// ── Stable skeleton keys — avoids react/no-array-index-key ────────────────────
+
+const SKELETON_KEYS = ['deal-sk-0', 'deal-sk-1', 'deal-sk-2', 'deal-sk-3'] as const;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 const DATE_TIME_FORMATTER = new Intl.DateTimeFormat('en-US', {
   month: 'short',
   day: 'numeric',
@@ -97,8 +103,16 @@ function getSafeHref(value: string | null | undefined): string | null {
 
   const trimmed = value.trim();
   if (!trimmed || trimmed.length > 2048) return null;
-  if (/[\\\u0000-\u001F\u007F]/.test(trimmed)) return null;
-  if (trimmed.startsWith('/')) return trimmed;
+  for (let i = 0; i < trimmed.length; i++) {
+    const code = trimmed.charCodeAt(i);
+
+    // Control chars: 0–31 and 127
+    if ((code >= 0 && code <= 31) || code === 127) {
+      return null;
+    }
+  }
+
+  if (trimmed.includes('\\')) return null;
 
   try {
     const url = new URL(trimmed);
@@ -108,6 +122,8 @@ function getSafeHref(value: string | null | undefined): string | null {
     return null;
   }
 }
+
+// ── Horizontal rail hook ───────────────────────────────────────────────────────
 
 function useHorizontalRail(itemCount: number) {
   const railRef = useRef<HTMLDivElement | null>(null);
@@ -149,31 +165,19 @@ function useHorizontalRail(itemCount: number) {
   const scrollByAmount = useCallback((delta: number) => {
     const rail = railRef.current;
     if (!rail) return;
-
-    rail.scrollBy({
-      left: delta,
-      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
-    });
+    rail.scrollBy({ left: delta, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
   }, []);
 
   const scrollToStart = useCallback(() => {
     const rail = railRef.current;
     if (!rail) return;
-
-    rail.scrollTo({
-      left: 0,
-      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
-    });
+    rail.scrollTo({ left: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
   }, []);
 
   const scrollToEnd = useCallback(() => {
     const rail = railRef.current;
     if (!rail) return;
-
-    rail.scrollTo({
-      left: rail.scrollWidth,
-      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
-    });
+    rail.scrollTo({ left: rail.scrollWidth, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
   }, []);
 
   useEffect(() => {
@@ -216,19 +220,13 @@ function useHorizontalRail(itemCount: number) {
     };
   }, [scheduleUpdate]);
 
-  return {
-    railRef,
-    canScrollPrev,
-    canScrollNext,
-    scrollByAmount,
-    scrollToStart,
-    scrollToEnd,
-  };
+  return { railRef, canScrollPrev, canScrollNext, scrollByAmount, scrollToStart, scrollToEnd };
 }
+
+// ── Campaign → DealCard mappers ───────────────────────────────────────────────
 
 export function campaignToDealCard(campaign: CampaignLike): DealCard {
   const title = campaign.hero_title?.trim() || campaign.campaign_name;
-
   return {
     id: campaign.id,
     title,
@@ -247,6 +245,8 @@ export function campaignToDealCard(campaign: CampaignLike): DealCard {
 export function campaignsToDealCards(campaigns: CampaignLike[]): DealCard[] {
   return campaigns.map(campaignToDealCard);
 }
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 function DealsRailImpl({
   deals,
@@ -340,6 +340,7 @@ function DealsRailImpl({
               ) : null}
             </div>
 
+            {/* min-h-[20px] — arbitrary value requires bracket syntax */}
             <div className="min-h-20px">
               {scheduleLabel ? (
                 <div className="flex items-center gap-2 text-[11px] text-neutral-400">
@@ -412,6 +413,7 @@ function DealsRailImpl({
         {announcement}
       </div>
 
+      {/* Header row */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-amber-400/20 bg-amber-500/10 text-amber-300">
@@ -467,12 +469,13 @@ function DealsRailImpl({
         </div>
       </div>
 
+      {/* Content states */}
       {loading ? (
         <div className="flex gap-3 overflow-hidden" aria-hidden="true">
-          {Array.from({ length: 4 }).map((_, index) => (
+          {SKELETON_KEYS.map((key) => (
             <div
-              key={index}
-              className="h-160px w-18.5rem shrink-0 rounded-2xl border border-white/10 bg-white/5 animate-pulse"
+              key={key}
+              className="h-160px w-18.5rem shrink-0 animate-pulse rounded-2xl border border-white/10 bg-white/5"
             />
           ))}
         </div>
@@ -519,6 +522,7 @@ function DealsRailImpl({
             ))}
           </div>
 
+          {/* Scroll fade overlays */}
           <div
             aria-hidden="true"
             className={cx(

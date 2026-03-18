@@ -1,5 +1,5 @@
 import type { Variants } from 'framer-motion';
-import { EASE_LUXURY } from './reveal';
+import { EASE_LUXURY } from '@/lib/motion';
 
 // Soft page-level transition for marketing pages.
 // This is intentionally minimal so it can layer with section-level

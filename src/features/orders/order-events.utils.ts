@@ -32,6 +32,26 @@ export type OrderPhase =
   | 'completed'
   | 'unknown';
 
+// ── EventTypeInput ─────────────────────────────────────────────────────────
+//
+// WHY `string & {}` INSTEAD OF `string`:
+//
+// `OrderEventType` is a union of string literals. Writing `OrderEventType | string`
+// triggers @typescript-eslint/no-redundant-type-constituents because `string`
+// is a supertype of every string literal — it absorbs the entire literal union,
+// making `OrderEventType` invisible to both the type checker and autocomplete.
+//
+// `string & {}` is the standard TypeScript pattern for "any string, while
+// keeping named literals visible". It is structurally identical to `string`
+// at runtime and compiles away completely, but TypeScript treats it as a
+// distinct type that does NOT absorb literal constituents of a union. This means:
+//   • Callers get autocomplete for every OrderEventType literal.
+//   • The type checker flags typos in known event names.
+//   • Arbitrary string values (e.g. from DB rows or external sources) are
+//     still accepted without casting.
+//   • The lint rule is satisfied — no redundant constituent.
+export type EventTypeInput = OrderEventType | (string & {});
+
 // ============================================================================
 // TIME CALCULATIONS (SAFE)
 // ============================================================================
@@ -83,22 +103,22 @@ export function formatRelativeTime(timestamp: string): string {
 
 export function findFirstEvent(
   events: OrderEvent[],
-  eventType: OrderEventType | string,
+  eventType: EventTypeInput,
 ): OrderEvent | null {
-  return events.find((e) => e.event_type === eventType) || null;
+  return events.find((e) => e.event_type === eventType) ?? null;
 }
 
 export function findLastEvent(
   events: OrderEvent[],
-  eventType: OrderEventType | string,
+  eventType: EventTypeInput,
 ): OrderEvent | null {
   const filtered = events.filter((e) => e.event_type === eventType);
-  return filtered.length ? filtered[filtered.length - 1] : null;
+  return filtered.length ? (filtered[filtered.length - 1] ?? null) : null;
 }
 
 export function filterEventsByType(
   events: OrderEvent[],
-  eventTypes: (OrderEventType | string)[],
+  eventTypes: EventTypeInput[],
 ): OrderEvent[] {
   return events.filter((e) => eventTypes.includes(e.event_type));
 }
@@ -127,7 +147,7 @@ export function sortEventsByTime(events: OrderEvent[], ascending = true): OrderE
 // STATUS / PHASE DETECTION (OPTIMIZED)
 // ============================================================================
 
-export function hasReachedEvent(events: OrderEvent[], eventType: OrderEventType | string): boolean {
+export function hasReachedEvent(events: OrderEvent[], eventType: EventTypeInput): boolean {
   return events.some((e) => e.event_type === eventType);
 }
 

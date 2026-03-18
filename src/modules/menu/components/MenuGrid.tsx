@@ -1,79 +1,53 @@
 // src/modules/menu/components/MenuGrid.tsx
 // ============================================================================
 // MENU GRID — Production (2026) — Luxury UI + Customization Preserved
-// ----------------------------------------------------------------------------
-// ✅ Repo-compatible with MenuPage.tsx (does NOT break your page):
-//    - Props type name is literally `Props`
-//    - Supports MenuPage usage exactly:
-//      items, loading?, onOpenItem, getPriceCents, getAvailable,
-//      emptyHintActionLabel, onEmptyHintAction
-//
-// ✅ Restores “Customize” behavior by rendering MenuItemCard (your customizer UI)
-//    - MenuItemCard is assumed to own “open item / modifiers / add to cart”
-//    - MenuGrid stays presentational (no fetching)
-//
-// ✅ Still uses onOpenItem safely:
-//    - Right-click / long-press (context menu) opens the MenuPage modal details,
-//      without interfering with normal tap-to-customize behavior.
-//
-// A11y + UX:
-// - Uses <ul>/<li> semantics
-// - Premium empty/loading states
-// - Never crashes on weird shapes
 // ============================================================================
 
-import React, { memo, useMemo } from 'react';
+import { memo, useMemo } from 'react';
+import type { ReactElement } from 'react';
 import { AlertCircle } from 'lucide-react';
-
 import { MenuItemCard } from '@/modules/menu/components/MenuItemCard';
+import type { MenuItemPublic } from '@/domain/menu/menu.types';
 
-export type BaseItem = {
-  id?: string;
-  name?: string;
-};
+// ─── Types ───────────────────────────────────────────────────────────────────
 
-export type MenuGridProps<TItem extends BaseItem = BaseItem> = {
+export type MenuGridProps<TItem extends MenuItemPublic = MenuItemPublic> = {
   items: TItem[];
   loading?: boolean;
-
-  // NOTE: kept for MenuPage compatibility
   onOpenItem: (item: TItem) => void;
-
   getPriceCents: (item: TItem) => number;
   getAvailable: (item: TItem) => boolean;
-
   emptyHintActionLabel: string;
   onEmptyHintAction: () => void;
-
   className?: string;
   ariaLabel?: string;
 };
 
-// IMPORTANT: Your TS error expects the component's props type name to be `Props`.
-export type Props = MenuGridProps<BaseItem>;
+/** Named `Props` for MenuPage.tsx compatibility. */
+export type Props = MenuGridProps<MenuItemPublic>;
 
-type UnknownRecord = Record<string, unknown>;
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function cx(...c: Array<string | false | null | undefined>) {
+function cx(...c: Array<string | false | null | undefined>): string {
   return c.filter(Boolean).join(' ');
-}
-
-function isRecord(v: unknown): v is UnknownRecord {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 function safeStr(v: unknown, fallback = ''): string {
   return typeof v === 'string' ? v : fallback;
 }
 
-function safeId(item: BaseItem, idx: number): string {
+function stableItemKey(item: MenuItemPublic, idx: number): string {
   const id = safeStr(item?.id, '').trim();
-  if (id) return id;
+  if (id) return `id:${id}`;
   const name = safeStr(item?.name, '').trim();
   return name ? `name:${name}:${idx}` : `idx:${idx}`;
 }
 
-function MenuGridImpl<TItem extends BaseItem>({
+const SKELETON_KEYS = Array.from({ length: 9 }, (_, i) => `skeleton-${i}`) as readonly string[];
+
+// ─── Component ───────────────────────────────────────────────────────────────
+
+function MenuGridImpl<TItem extends MenuItemPublic>({
   items,
   loading = false,
   onOpenItem,
@@ -83,18 +57,18 @@ function MenuGridImpl<TItem extends BaseItem>({
   onEmptyHintAction,
   className,
   ariaLabel = 'Menu items',
-}: MenuGridProps<TItem>): React.ReactElement | null {
+}: MenuGridProps<TItem>): ReactElement | null {
   const list = useMemo(() => (Array.isArray(items) ? items : []), [items]);
-  const hasItems = list.length > 0;
 
   if (loading) {
     return (
-      <section className={cx('space-y-3', className)} aria-label={ariaLabel}>
-        <ul className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3" aria-hidden="true">
-          {Array.from({ length: 9 }).map((_, i) => (
+      <section className={cx('space-y-3', className)} aria-label={ariaLabel} aria-busy="true">
+        <ul className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {SKELETON_KEYS.map((key) => (
             <li
-              key={i}
+              key={key}
               className="list-none overflow-hidden rounded-2xl border border-white/10 bg-white/5 shadow-sm"
+              aria-hidden="true"
             >
               <div className="h-40 animate-pulse bg-white/5" />
               <div className="space-y-2 p-4">
@@ -109,7 +83,7 @@ function MenuGridImpl<TItem extends BaseItem>({
     );
   }
 
-  if (!hasItems) {
+  if (list.length === 0) {
     return (
       <section className={cx('space-y-3', className)} aria-label={ariaLabel}>
         <div className="rounded-2xl border border-white/10 bg-white/3 p-5">
@@ -140,34 +114,18 @@ function MenuGridImpl<TItem extends BaseItem>({
 
   return (
     <section className={cx('space-y-3', className)} aria-label={ariaLabel}>
-      <ul className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3" aria-label={ariaLabel}>
+      <ul className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
         {list.map((item, idx) => {
-          const key = safeId(item, idx);
+          const key = stableItemKey(item, idx);
 
-          // Context menu / long-press “details”
-          const onContextMenu = (e: React.MouseEvent) => {
-            // Don’t show browser menu; use as “More details”
+          const handleContextMenu = (e: React.MouseEvent) => {
             e.preventDefault();
             onOpenItem(item);
           };
 
-          // Avoid passing unsafe props into MenuItemCard unless they exist
-          // (MenuItemCard already works in your repo with these optional props in your older grid.)
-          const cardItem = item as unknown;
-
           return (
-            <li
-              key={key}
-              className="list-none"
-              onContextMenu={onContextMenu}
-              aria-label="Menu item"
-            >
-              <MenuItemCard
-                // MenuItemCard is expected to handle “customize” + add-to-cart
-                item={cardItem as any}
-                getPriceCents={getPriceCents as any}
-                getAvailable={getAvailable as any}
-              />
+            <li key={key} className="list-none" onContextMenu={handleContextMenu}>
+              <MenuItemCard item={item} getPriceCents={getPriceCents} getAvailable={getAvailable} />
             </li>
           );
         })}
@@ -180,9 +138,13 @@ function MenuGridImpl<TItem extends BaseItem>({
   );
 }
 
-export function MenuGrid<TItem extends BaseItem>(props: MenuGridProps<TItem>) {
-  return <MenuGridImpl {...props} />;
+// ─── Exports ──────────────────────────────────────────────────────────────────
+
+export function MenuGrid<TItem extends MenuItemPublic>(
+  props: MenuGridProps<TItem>
+): ReactElement | null {
+  return MenuGridImpl(props);
 }
 
-const MenuGridMemo = memo(MenuGrid) as unknown as (props: Props) => React.ReactElement | null;
+const MenuGridMemo = memo(MenuGrid) as typeof MenuGrid;
 export default MenuGridMemo;

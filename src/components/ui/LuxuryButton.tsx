@@ -1,10 +1,10 @@
 // src/components/ui/LuxuryButton.tsx
-// ─── Premium CTA button with gold shimmer and spring hover ───────────────────
+// ─── Premium CTA button with gold shimmer and spring hover ────────────────
 
 import React from 'react';
-import { m } from 'framer-motion';
-import {EASE_SPRING } from '@/lib/motion';
+import { motion, MotionConfig, useReducedMotion } from 'motion/react';
 import { Link } from 'react-router-dom';
+import { EASE_SPRING } from '@/lib/motion';
 
 type ButtonVariant = 'gold' | 'outline-gold' | 'outline-white' | 'ember' | 'white';
 
@@ -21,11 +21,13 @@ export interface LuxuryButtonProps {
 }
 
 const VARIANT_STYLES: Record<ButtonVariant, string> = {
-  gold: 'bg-[#D4AF37] text-[#1C1C1C] hover:bg-[#E8C46A] shadow-[0_4px_20px_rgba(212,175,55,0.25)]',
-  'outline-gold': 'border border-[#D4AF37]/40 text-[#D4AF37] hover:bg-[#D4AF37]/8 hover:border-[#D4AF37]',
-  'outline-white': 'border border-white/30 text-white/85 hover:border-[#D4AF37] hover:text-[#E8C46A]',
-  ember: 'bg-[#A84520] text-white hover:bg-[#C25520] shadow-[0_4px_20px_rgba(168,69,32,0.25)]',
-  white: 'bg-white text-[#A84520] hover:bg-white/90 shadow-[0_4px_20px_rgba(255,255,255,0.15)]',
+  gold: 'bg-[#D4AF37] text-[#1C1C1C] hover:bg-[#E8C46A]',
+  'outline-gold':
+    'border border-[#D4AF37]/40 text-[#D4AF37] hover:bg-[#D4AF37]/8 hover:border-[#D4AF37]',
+  'outline-white':
+    'border border-white/30 text-white/85 hover:border-[#D4AF37] hover:text-[#E8C46A]',
+  ember: 'bg-[#A84520] text-white hover:bg-[#C25520]',
+  white: 'bg-white text-[#A84520] hover:bg-white/90',
 };
 
 const SIZE_STYLES = {
@@ -34,12 +36,13 @@ const SIZE_STYLES = {
   lg: 'px-9 py-4 text-[0.82rem] tracking-[0.12em]',
 };
 
+// Hover shadows in OKLCH color space for smooth perceptual shimmer
 const HOVER_SHADOW: Record<ButtonVariant, string> = {
-  gold: '0 8px 30px rgba(212,175,55,0.35)',
-  'outline-gold': '0 4px 18px rgba(212,175,55,0.15)',
-  'outline-white': '0 4px 18px rgba(255,255,255,0.08)',
-  ember: '0 8px 30px rgba(168,69,32,0.35)',
-  white: '0 8px 30px rgba(255,255,255,0.22)',
+  gold: '0 8px 30px oklch(80% 0.15 45deg / 0.35)',
+  'outline-gold': '0 4px 18px oklch(80% 0.05 45deg / 0.15)',
+  'outline-white': '0 4px 18px oklch(100% 0 0 / 0.08)',
+  ember: '0 8px 30px oklch(50% 0.15 25deg / 0.35)',
+  white: '0 8px 30px oklch(100% 0 0 / 0.22)',
 };
 
 export function LuxuryButton({
@@ -53,9 +56,10 @@ export function LuxuryButton({
   icon,
   iconPosition = 'right',
 }: LuxuryButtonProps) {
-  const base = [
-    'inline-flex items-center justify-center gap-2.5',
-    'rounded-full font-body font-medium uppercase',
+  const shouldReduceMotion = useReducedMotion() ?? false;
+
+  const baseClasses = [
+    'inline-flex items-center justify-center gap-2.5 rounded-full font-body font-medium uppercase',
     'transition-colors duration-300',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D4AF37] focus-visible:ring-offset-2',
     VARIANT_STYLES[variant],
@@ -63,11 +67,13 @@ export function LuxuryButton({
     className,
   ].join(' ');
 
-  const motionProps = {
-    whileHover: { scale: 1.03, boxShadow: HOVER_SHADOW[variant] },
-    whileTap: { scale: 0.97 },
-    transition: { duration: 0.2, ease: EASE_SPRING },
-  };
+  const motionProps = shouldReduceMotion
+    ? {} // Do not animate if reduced motion is enabled
+    : {
+        whileHover: { scale: 1.03, boxShadow: HOVER_SHADOW[variant] },
+        whileTap: { scale: 0.97 },
+        transition: { duration: 0.2, ease: EASE_SPRING },
+      };
 
   const content = (
     <>
@@ -77,29 +83,30 @@ export function LuxuryButton({
     </>
   );
 
+  // motion.create() Link for router
+  const MotionLink = motion.create(Link);
+
   if (href) {
-    const MotionLink = m(Link);
     return (
-      <MotionLink
-        to={href}
-        aria-label={ariaLabel}
-        className={base}
-        {...motionProps}
-      >
-        {content}
-      </MotionLink>
+      <MotionConfig reducedMotion="user">
+        <MotionLink to={href} aria-label={ariaLabel} className={baseClasses} {...motionProps}>
+          {content}
+        </MotionLink>
+      </MotionConfig>
     );
   }
 
   return (
-    <m.button
-      onClick={onClick}
-      aria-label={ariaLabel}
-      className={base}
-      {...motionProps}
-    >
-      {content}
-    </m.button>
+    <MotionConfig reducedMotion="user">
+      <motion.button
+        onClick={onClick}
+        aria-label={ariaLabel}
+        className={baseClasses}
+        {...motionProps}
+      >
+        {content}
+      </motion.button>
+    </MotionConfig>
   );
 }
 

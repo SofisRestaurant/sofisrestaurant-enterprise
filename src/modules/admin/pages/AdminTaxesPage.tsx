@@ -6,15 +6,7 @@
 // Route:    /admin/taxes
 // =============================================================================
 
-import React, { useCallback } from 'react';
-import {
-  Receipt,
-  RefreshCw,
-  AlertTriangle,
-  Clock,
-  TrendingUp,
-  Download,
-} from 'lucide-react';
+import { Receipt, RefreshCw, AlertTriangle, Clock, TrendingUp } from 'lucide-react';
 
 import { useTaxReports } from '../../tax/hooks/useTaxReports';
 import { TaxSummaryCards } from '../../tax/components/TaxSummaryCards';
@@ -144,12 +136,16 @@ function EmptyState({ hasFilters, onReset }: {
 function DisputeAlert({ count }: { count: number }) {
   if (count === 0) return null;
   return (
-    <div className="flex items-center gap-2 px-4 py-2.5
-                    rounded-xl bg-amber-500/10 border border-amber-500/30">
+    <div
+      className="flex items-center gap-2 px-4 py-2.5
+                    rounded-xl bg-amber-500/10 border border-amber-500/30"
+    >
       <AlertTriangle size={14} className="text-amber-400 shrink-0" />
       <p className="text-sm text-amber-300">
-        <span className="font-semibold">{count} disputed {count === 1 ? 'order' : 'orders'}</span>
-        {' '}in this period. Filter by "Disputed only" to review.
+        <span className="font-semibold">
+          {count} disputed {count === 1 ? 'order' : 'orders'}
+        </span>{' '}
+        in this period. Filter by "Disputed only" to review.
       </p>
     </div>
   );
@@ -162,7 +158,6 @@ function DisputeAlert({ count }: { count: number }) {
 export function AdminTaxesPage() {
   const tax = useTaxReports();
 
-  // Is there any first-render data (vs empty period)?
   const hasFilters =
     tax.filters.fulfillmentType !== 'all' ||
     tax.filters.disputedOnly ||
@@ -173,39 +168,29 @@ export function AdminTaxesPage() {
     !tax.summaryError &&
     !tax.hasOrders;
 
-  // Collect all errors into one banner message
-  const errorMessage =
-    tax.summaryError
-      ? `Summary: ${tax.summaryError}`
-      : tax.periodError
+  const errorMessage = tax.summaryError
+    ? `Summary: ${tax.summaryError}`
+    : tax.periodError
       ? `Period data: ${tax.periodError}`
       : tax.ordersError
-      ? `Orders: ${tax.ordersError}`
-      : null;
+        ? `Orders: ${tax.ordersError}`
+        : null;
 
   // ── Render ───────────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen bg-slate-950 text-white">
-      {/* Page layout */}
       <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-
-        {/* Title + refresh */}
         <PageHeader
           lastFetchedAt={tax.lastFetchedAt}
           isAnyLoading={tax.isAnyLoading}
           onRefresh={tax.refresh}
         />
 
-        {/* Global error */}
-        {errorMessage && (
-          <ErrorBanner message={errorMessage} onDismiss={tax.clearErrors} />
-        )}
+        {errorMessage && <ErrorBanner message={errorMessage} onDismiss={tax.clearErrors} />}
 
-        {/* Dispute alert (when disputes exist in period) */}
         <DisputeAlert count={tax.summary?.disputedOrdersCount ?? 0} />
 
-        {/* Filters bar */}
         <TaxFiltersBar
           filters={tax.filters}
           setFilters={tax.setFilters}
@@ -219,20 +204,16 @@ export function AdminTaxesPage() {
           onRefreshCache={tax.refreshCache}
         />
 
-        {/* Summary cards */}
         <TaxSummaryCards
           summary={tax.summary}
           isLoading={tax.isLoadingSummary}
           reconciliation={tax.reconciliation}
         />
 
-        {/* Main content: period table + export panel side-by-side on wide screens */}
         {showEmpty ? (
           <EmptyState hasFilters={hasFilters} onReset={tax.resetFilters} />
         ) : (
           <div className="grid grid-cols-1 xl:grid-cols-[1fr_320px] gap-5 items-start">
-
-            {/* Period table (takes most space) */}
             <TaxPeriodTable
               granularity={tax.filters.granularity}
               dailyRows={tax.dailyRows}
@@ -244,7 +225,6 @@ export function AdminTaxesPage() {
               onGoToPage={tax.goToPage}
             />
 
-            {/* Export panel (sidebar) */}
             <div className="space-y-4">
               <TaxExportPanel
                 filters={tax.filters}
@@ -252,7 +232,6 @@ export function AdminTaxesPage() {
                 isExporting={tax.isExporting}
               />
 
-              {/* Mini stats sidebar */}
               {tax.summary && !tax.isLoadingSummary && (
                 <div className="rounded-2xl border border-white/8 bg-white/3 p-5 space-y-4">
                   <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-500">
@@ -277,7 +256,7 @@ export function AdminTaxesPage() {
                         label: 'Tips collected',
                         value: tax.summary
                           ? new Intl.NumberFormat('en-US', {
-                              style:    'currency',
+                              style: 'currency',
                               currency: tax.summary.currency.toUpperCase(),
                             }).format(tax.summary.tipCents / 100)
                           : '—',
@@ -286,7 +265,7 @@ export function AdminTaxesPage() {
                         label: 'Stripe fees',
                         value: tax.summary
                           ? new Intl.NumberFormat('en-US', {
-                              style:    'currency',
+                              style: 'currency',
                               currency: tax.summary.currency.toUpperCase(),
                             }).format(tax.summary.totalStripeFeesCents / 100)
                           : '—',

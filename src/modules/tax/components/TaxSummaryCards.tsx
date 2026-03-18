@@ -207,7 +207,9 @@ function MetricCard({
         ) : null}
 
         {trend && trendLabel ? (
-          <div className={['mt-3 flex items-center gap-1 text-xs font-medium', trendColor].join(' ')}>
+          <div
+            className={['mt-3 flex items-center gap-1 text-xs font-medium', trendColor].join(' ')}
+          >
             <TrendIcon size={12} />
             <span>{trendLabel}</span>
           </div>

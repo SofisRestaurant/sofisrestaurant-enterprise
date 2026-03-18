@@ -4,9 +4,10 @@
 // Uses overflow:clip (not hidden) so IntersectionObserver still fires for
 // whileInView children. Gracefully degrades when prefers-reduced-motion is set.
 
-import React, { type ReactNode, useRef } from 'react';
+import { type ReactNode, useRef } from 'react';
 import { m, useScroll, useTransform, useSpring, useReducedMotion } from 'framer-motion';
-import { EASE_OUT } from '@/lib/motion';
+
+// Removed unused EASE_OUT import
 
 export interface ParallaxSectionProps {
   children: ReactNode;
@@ -30,18 +31,17 @@ export function ParallaxSection({
     offset: ['start end', 'end start'],
   });
 
+  // Convert strength to percentage dynamically
   const rawY = useTransform(
     scrollYProgress,
     [0, 1],
-    shouldReduce ? ['0%', '0%'] : [`${strength * 100}%`, `-${strength * 100}%`],
+    shouldReduce ? [0, 0] : [strength * 100, -strength * 100],
   );
 
-  // Smoother spring — lower stiffness than original for more luxury feel
+  // Smooth spring for luxury feel
   const y = useSpring(rawY, { stiffness: 45, damping: 24, mass: 0.9 });
 
   return (
-    // overflow:clip — does NOT create a scroll container, so whileInView
-    // children inside still fire against the window via IntersectionObserver.
     <div ref={ref} className={`overflow-[clip] ${className}`}>
       <m.div style={{ y }} className={innerClassName}>
         {children}
@@ -55,18 +55,13 @@ export function ParallaxSection({
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface ParallaxImageProps {
-  src:        string;
-  alt?:       string;
+  src: string;
+  alt?: string;
   className?: string;
-  strength?:  number;
+  strength?: number; // unused for now
 }
 
-export function ParallaxImage({
-  src,
-  alt = '',
-  className = '',
-  strength = 0.15,
-}: ParallaxImageProps) {
+export function ParallaxImage({ src, alt = '', className = '' }: ParallaxImageProps) {
   const shouldReduce = useReducedMotion();
   const ref = useRef<HTMLDivElement>(null);
 
@@ -75,11 +70,7 @@ export function ParallaxImage({
     offset: ['start end', 'end start'],
   });
 
-  const y = useTransform(
-    scrollYProgress,
-    [0, 1],
-    shouldReduce ? ['0%', '0%'] : ['-8%', '8%'],
-  );
+  const y = useTransform(scrollYProgress, [0, 1], shouldReduce ? [0, 0] : [-8, 8]);
 
   return (
     <div ref={ref} className={`relative overflow-[clip] ${className}`}>
@@ -90,7 +81,6 @@ export function ParallaxImage({
         className="w-full h-full object-cover"
         loading="lazy"
         decoding="async"
-        // Fade in on load
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.8 }}

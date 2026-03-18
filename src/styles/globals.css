@@ -10,7 +10,27 @@
    The correct fix for whileInView environments is to set initial state on each
    component explicitly and use viewport={{ once: true }} — not a global override.
    ============================================================================= */
+/* =============================================================================
+   SOFI DISPLAY FONT — Custom Restaurant Typeface
+   ============================================================================= */
 
+@font-face {
+  font-family: "SofiDisplay";
+  src: url("/fonts/display/SofiDisplay-Regular.woff2") format("woff2"),
+       url("/fonts/display/SofiDisplay-Regular.woff") format("woff");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "SofiDisplay";
+  src: url("/fonts/display/SofiDisplay-Bold.woff2") format("woff2"),
+       url("/fonts/display/SofiDisplay-Bold.woff") format("woff");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
 /* ── Box sizing ──────────────────────────────────────────────────────────── */
 *,
 *::before,
@@ -32,11 +52,24 @@ body {
   margin: 0;
   min-height: 100dvh;
   overflow-x: clip;
-  /* Background & color come from app.css — not repeated here */
+  font-family: "SofiDisplay", system-ui, -apple-system, sans-serif;
 }
 
 /* ── Element resets ──────────────────────────────────────────────────────── */
-h1, h2, h3, h4, h5, h6 { margin: 0; line-height: var(--leading-tight, 1.2); }
+h1, h2, h3, h4, h5, h6 {
+  margin: 0;
+  line-height: var(--leading-tight, 1.2);
+  font-family: "SofiDisplay", serif;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+h1, h2, h3, h4, h5, h6 {
+  margin: 0;
+  line-height: var(--leading-tight, 1.2);
+  font-family: "SofiDisplay", serif;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
 p  { margin: 0; }
 a  { color: inherit; text-decoration: none; }
 ul, ol { list-style: none; margin: 0; padding: 0; }

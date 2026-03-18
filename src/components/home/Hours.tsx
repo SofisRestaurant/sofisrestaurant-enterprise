@@ -9,6 +9,7 @@
 //   • Section header stagger: initial="hidden" on container
 //   • Gold rules: initial={{ scaleX:0 }} whileInView
 
+import type { CSSProperties } from 'react';
 import { motion as m } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { SectionLabel } from '@/components/ui/SectionLabel';
@@ -52,6 +53,21 @@ const lineGrow = {
   hidden: { scaleX: 0, opacity: 0, originX: 0 },
   visible: { scaleX: 1, opacity: 1, transition: { duration: 1.0, ease: EASE_LUXURY } },
 };
+
+// ── Footnotes — explicit named entries, no null-slot array mapping ─────────────
+
+interface Footnote {
+  key:   string;
+  delay: number;
+  muted: boolean;
+  content: 'kitchen' | 'holiday' | 'reservations';
+}
+
+const FOOTNOTES: Footnote[] = [
+  { key: 'note-kitchen',      delay: 0.20, muted: false, content: 'kitchen'      },
+  { key: 'note-holiday',      delay: 0.28, muted: false, content: 'holiday'      },
+  { key: 'note-reservations', delay: 0.36, muted: true,  content: 'reservations' },
+];
 
 // ── Hours table ───────────────────────────────────────────────────────────────
 
@@ -150,7 +166,11 @@ function HoursTable() {
 
 // ── Location card ─────────────────────────────────────────────────────────────
 
-function LocationCard() {
+interface LocationCardProps {
+  onReservationClick?: () => void;
+}
+
+function LocationCard({ onReservationClick }: LocationCardProps) {
   return (
     <m.div
       initial={{ opacity: 0, y: 20 }}
@@ -194,8 +214,12 @@ function LocationCard() {
           href="tel:+14158675309"
           className="flex items-center gap-2 font-body text-[0.85rem] transition-colors duration-200"
           style={{ color: 'rgba(255,255,255,0.65)' }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = 'white')}
-          onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.65)')}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = 'white';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = 'rgba(255,255,255,0.65)';
+          }}
         >
           <span style={{ color: 'var(--color-gold-400, #d4af37)' }} aria-hidden="true">
             ↗
@@ -206,8 +230,12 @@ function LocationCard() {
           href="mailto:hello@sofisrestaurant.com"
           className="flex items-center gap-2 font-body text-[0.85rem] transition-colors duration-200"
           style={{ color: 'rgba(255,255,255,0.65)' }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = 'white')}
-          onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.65)')}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = 'white';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = 'rgba(255,255,255,0.65)';
+          }}
         >
           <span style={{ color: 'var(--color-gold-400, #d4af37)' }} aria-hidden="true">
             ↗
@@ -235,6 +263,7 @@ function LocationCard() {
       >
         <Link
           to="/reservations"
+          onClick={onReservationClick}
           className="flex w-full items-center justify-center gap-2 rounded-full
                      py-3 font-body text-[0.75rem] font-medium uppercase tracking-[0.14em]
                      transition-[background-color,box-shadow] duration-300
@@ -244,7 +273,7 @@ function LocationCard() {
               background: 'var(--color-gold-400, #d4af37)',
               color: 'var(--color-stone-900, #1c1915)',
               '--tw-ring-color': 'var(--color-gold-400, #d4af37)',
-            } as React.CSSProperties
+            } as CSSProperties
           }
           onMouseEnter={(e) => {
             e.currentTarget.style.background = 'var(--color-gold-300, #e8c46a)';
@@ -340,23 +369,23 @@ export function Hours({ onReservationClick }: HoursProps) {
           >
             <HoursTable />
 
-            {/* Footnotes — each has initial */}
+            {/* Footnotes — explicit entries, no null-slot array or index keys */}
             <div className="mt-5 flex flex-col gap-2 px-1">
-              {[
-                '* Kitchen closes 30 minutes before listed closing time.',
-                null, // rendered differently below
-                'Reservations recommended for Friday–Sunday evenings.',
-              ].map((note, i) => {
-                if (i === 1)
+              {FOOTNOTES.map((fn) => {
+                const baseStyle = fn.muted
+                  ? 'var(--color-ink-300, #c8b8a8)'
+                  : 'var(--color-ink-400, #a89888)';
+
+                if (fn.content === 'holiday') {
                   return (
                     <m.p
-                      key="note-ig"
+                      key={fn.key}
                       initial={{ opacity: 0, y: 8 }}
                       whileInView={{ opacity: 1, y: 0 }}
                       viewport={SECTION_VIEWPORT}
-                      transition={{ duration: 0.5, ease: EASE_LUXURY, delay: 0.28 }}
+                      transition={{ duration: 0.5, ease: EASE_LUXURY, delay: fn.delay }}
                       className="font-body text-[0.72rem] font-light leading-relaxed"
-                      style={{ color: 'var(--color-ink-400, #a89888)' }}
+                      style={{ color: baseStyle }}
                     >
                       * Holiday hours may vary — follow us on{' '}
                       <a
@@ -371,20 +400,24 @@ export function Hours({ onReservationClick }: HoursProps) {
                       for updates.
                     </m.p>
                   );
+                }
+
+                const text =
+                  fn.content === 'kitchen'
+                    ? '* Kitchen closes 30 minutes before listed closing time.'
+                    : 'Reservations recommended for Friday–Sunday evenings.';
+
                 return (
                   <m.p
-                    key={`note-${i}`}
+                    key={fn.key}
                     initial={{ opacity: 0, y: 8 }}
                     whileInView={{ opacity: 1, y: 0 }}
                     viewport={SECTION_VIEWPORT}
-                    transition={{ duration: 0.5, ease: EASE_LUXURY, delay: 0.2 + i * 0.08 }}
+                    transition={{ duration: 0.5, ease: EASE_LUXURY, delay: fn.delay }}
                     className="font-body text-[0.72rem] font-light"
-                    style={{
-                      color:
-                        i === 2 ? 'var(--color-ink-300, #c8b8a8)' : 'var(--color-ink-400, #a89888)',
-                    }}
+                    style={{ color: baseStyle }}
                   >
-                    {note}
+                    {text}
                   </m.p>
                 );
               })}
@@ -392,7 +425,7 @@ export function Hours({ onReservationClick }: HoursProps) {
           </m.div>
 
           {/* Location + contact card */}
-          <LocationCard />
+          <LocationCard onReservationClick={onReservationClick} />
         </div>
       </div>
     </section>

@@ -70,20 +70,24 @@ const TESTIMONIALS: Testimonial[] = [
 function Stars({ count }: { count: number }) {
   return (
     <div className="flex items-center gap-0.5" aria-label={`${count} out of 5 stars`}>
-      {Array.from({ length: 5 }).map((_, i) => (
-        <svg
-          key={i}
-          width="11"
-          height="11"
-          viewBox="0 0 12 12"
-          aria-hidden="true"
-          fill={i < count ? 'var(--color-gold-400, #d4af37)' : 'none'}
-          stroke={i < count ? 'var(--color-gold-400, #d4af37)' : 'var(--color-ink-300, #c8b8a8)'}
-          strokeWidth="1"
-        >
-          <polygon points="6,1 7.5,4.5 11,4.8 8.5,7 9.3,10.5 6,8.7 2.7,10.5 3.5,7 1,4.8 4.5,4.5" />
-        </svg>
-      ))}
+      {Array.from({ length: 5 }).map((_, i) => {
+        const key = `star-${i}`; // stable key
+
+        return (
+          <svg
+            key={key}
+            width="11"
+            height="11"
+            viewBox="0 0 12 12"
+            aria-hidden="true"
+            fill={i < count ? 'var(--color-gold-400, #d4af37)' : 'none'}
+            stroke={i < count ? 'var(--color-gold-400, #d4af37)' : 'var(--color-ink-300, #c8b8a8)'}
+            strokeWidth="1"
+          >
+            <polygon points="6,1 7.5,4.5 11,4.8 8.5,7 9.3,10.5 6,8.7 2.7,10.5 3.5,7 1,4.8 4.5,4.5" />
+          </svg>
+        );
+      })}
     </div>
   );
 }

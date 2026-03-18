@@ -97,7 +97,17 @@ type FinalizeResp = {
 };
 
 type UnknownRecord = Record<string, unknown>;
-type TimeoutHandle = ReturnType<typeof window.setTimeout>;
+// TimeoutHandle uses the global `setTimeout` (not `window.setTimeout`).
+// All call sites also use bare `setTimeout`/`clearTimeout` (no window. prefix).
+//
+// Why: when @types/node is installed, TypeScript resolves window.setTimeout
+// as returning `number` (DOM) but the ref type resolves through @types/node
+// as NodeJS.Timeout — mismatch: "Type 'number' is not assignable to type 'Timeout'".
+//
+// Using the bare global for BOTH the type alias and the call sites forces
+// TypeScript to resolve both from the same declaration, so the types always
+// match regardless of whether @types/node is present.
+type TimeoutHandle = ReturnType<typeof setTimeout>;
 
 // ---------------------------------------------------------------------------
 // Constants (unchanged)
@@ -382,7 +392,7 @@ function LoyaltyResultCard({
             ? 'Matched by time window'
             : null;
 
-  const isEarnLike =
+  const _isEarnLike =
     loyalty.entry_type === 'earn' ||
     loyalty.entry_type === 'bonus' ||
     loyalty.entry_type === 'adjustment';
@@ -611,7 +621,7 @@ export default function OrderSuccess() {
 
   const stopTimer = useCallback((ref: { current: TimeoutHandle | null }) => {
     if (ref.current !== null) {
-      window.clearTimeout(ref.current);
+      clearTimeout(ref.current);
       ref.current = null;
     }
   }, []);
@@ -624,7 +634,7 @@ export default function OrderSuccess() {
 
       const schedule = (ms: number) => {
         stopTimer(loyaltyTimerRef);
-        loyaltyTimerRef.current = window.setTimeout(() => {
+        loyaltyTimerRef.current = setTimeout(() => {
           void run();
         }, ms);
       };
@@ -696,7 +706,7 @@ export default function OrderSuccess() {
         finalizeStateRef.current = 'idle';
         if (finalizeAttemptsRef.current < FINALIZE_MAX_ATTEMPTS) {
           stopTimer(finalizeTimerRef);
-          finalizeTimerRef.current = window.setTimeout(
+          finalizeTimerRef.current = setTimeout(
             () => {
               void finalizeRunnerRef.current?.();
             },
@@ -735,7 +745,7 @@ export default function OrderSuccess() {
       finalizeStateRef.current = 'idle';
       if (finalizeAttemptsRef.current < FINALIZE_MAX_ATTEMPTS) {
         stopTimer(finalizeTimerRef);
-        finalizeTimerRef.current = window.setTimeout(
+        finalizeTimerRef.current = setTimeout(
           () => {
             void finalizeRunnerRef.current?.();
           },
@@ -750,7 +760,7 @@ export default function OrderSuccess() {
       finalizeStateRef.current = 'idle';
       if (shouldRetryFinalize(error) && finalizeAttemptsRef.current < FINALIZE_MAX_ATTEMPTS) {
         stopTimer(finalizeTimerRef);
-        finalizeTimerRef.current = window.setTimeout(
+        finalizeTimerRef.current = setTimeout(
           () => {
             void finalizeRunnerRef.current?.();
           },
@@ -780,7 +790,7 @@ export default function OrderSuccess() {
 
     const schedulePoll = () => {
       stopPoll();
-      pollTimerRef.current = window.setTimeout(() => {
+      pollTimerRef.current = setTimeout(() => {
         void run();
       }, POLL_INTERVAL_MS);
     };

@@ -61,6 +61,15 @@ const staggerCards = {
 };
 
 // ── Component ─────────────────────────────────────────────────────────────────
+export type Rule = {
+  id: string;
+  title: string;
+  description: string;
+};
+
+export type HouseRulesProps = {
+  rules: Rule[];
+};
 
 export function HouseRules() {
   return (
@@ -151,4 +160,3 @@ export function HouseRules() {
   );
 }
 
-export default HouseRules;
