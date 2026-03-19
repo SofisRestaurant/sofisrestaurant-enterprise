@@ -33,6 +33,6 @@
     // --- Global Types ---
     "types": ["vite/client", "node"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/shared/types/**/*.d.ts"],
   "exclude": ["node_modules", "dist", "src/tests"]
 }
