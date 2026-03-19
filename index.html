@@ -88,25 +88,19 @@
 
     <!-- ── Performance: LCP image preload ────────────────────── -->
     <!--
-      Preloads the above-the-fold hero image so the LCP paint
-      starts before the JS bundle runs. Replace src with the actual
-      hero1 path from HERO_IMAGES.
-      fetchpriority="high" ensures it competes at the highest priority.
-    -->
-    <link
-      rel="preload"
-      as="image"
-      href="/images/hero/hero1.webp"
-      fetchpriority="high"
-      type="image/webp"
-    />
+      OMITTED INTENTIONALLY.
+      HeroSection.tsx imports hero images through Vite's asset pipeline, which
+      rewrites the path to a content-hashed URL (e.g. /assets/hero1-Bx3kP9mQ.webp).
+      A <link rel="preload"> with a hardcoded /images/hero/hero1.webp points to a
+      DIFFERENT URL — the browser loads two copies and warns "preload not used."
+      Vite automatically injects <link rel="modulepreload"> for JS chunks at build
+      time; no manual hint needed for the entry point either.
 
-    <!-- ── Performance: module preload ──────────────────────── -->
-    <!--
-      Hints the browser to fetch the main entry module during idle time
-      so it is ready when the parser reaches the <script> tag below.
+      To add an LCP preload: move hero images to /public/images/ and reference
+      them as plain string paths in JS instead of ESM imports, then add:
+        <link rel="preload" as="image" href="/images/hero/hero1.webp"
+              fetchpriority="high" type="image/webp" />
     -->
-    <link rel="modulepreload" href="/src/main.tsx" />
 
     <!-- ── Structured Data (JSON-LD) ─────────────────────────── -->
     <script type="application/ld+json">
