@@ -71,17 +71,13 @@
     "husky": "^9.1.7",
     "jsdom": "^29.0.0",
     "lint-staged": "^16.4.0",
-    "node-gyp": "^12.2.0",
     "postcss": "^8.5.8",
     "prettier": "^3.8.1",
     "rollup-plugin-visualizer": "^7.0.1",
-    "sharp": "^0.34.5",
     "tailwindcss": "^4.2.2",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.57.1",
     "vite": "^8.0.1",
-    "vite-imagetools": "^10.0.0",
-    "vite-plugin-compression": "^0.5.1",
     "vitest": "^4.1.0"
   }
 }
