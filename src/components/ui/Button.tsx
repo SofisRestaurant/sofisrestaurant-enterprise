@@ -6,20 +6,16 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'outline' | 'danger' | 'glass';
   size?: 'sm' | 'md' | 'lg' | 'xl';
 
-  /** Visible content */
   children?: ReactNode;
 
-  /** Optional i18n key instead of children */
+  /** ✅ FIXED */
   labelKey?: TranslationKey;
 
-  /** Loading state */
   isLoading?: boolean;
 
-  /** Icon support */
   icon?: ReactNode;
   iconPosition?: 'left' | 'right';
 
-  /** Accessibility */
   ariaLabel?: string;
 
   className?: string;
@@ -98,8 +94,7 @@ export function Button({
   };
 
   // Determine displayed content
-  const content = labelKey ? t(labelKey) : children;
-
+const content = labelKey ? t(labelKey) : children;
   return (
     <button
       type={type}

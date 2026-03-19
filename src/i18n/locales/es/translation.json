@@ -1,0 +1,288 @@
+{
+  "common": {
+    "loading": "Cargando…",
+    "close": "Cerrar",
+    "back": "Atrás",
+    "appName": "Restaurante Sofi's",
+    "somethingWentWrong": "Algo salió mal. Por favor intenta de nuevo."
+  },
+
+  "nav": {
+    "skipToContent": "Saltar al contenido principal",
+    "ariaLabel": "Navegación principal",
+    "links": {
+      "home":    { "label": "Inicio",   "aria": "Ir a la página de inicio" },
+      "menu":    { "label": "Menú",     "aria": "Ver nuestro menú"         },
+      "about":   { "label": "Nosotros", "aria": "Conócenos"                },
+      "contact": { "label": "Contacto", "aria": "Contáctanos"              }
+    }
+  },
+
+  "mobileNav": {
+    "home":    "Inicio",
+    "menu":    "Menú",
+    "cart":    "Carrito",
+    "account": "Mi cuenta",
+    "login":   "Iniciar sesión"
+  },
+
+  "header": {
+    "logo": {
+      "aria": "Restaurante Sofi's - Ir a la página de inicio"
+    },
+    "search": {
+      "aria": "Buscar en el menú",
+      "placeholder": "Buscar tacos, desayuno, picante…",
+      "clear": "Borrar búsqueda",
+      "close": "Cerrar búsqueda",
+      "tip": "Consejo: Presiona \"/\" para buscar al instante.",
+      "openAria": "Buscar en el menú"
+    },
+    "cart": {
+      "ariaEmpty": "Carrito de compras, vacío",
+      "ariaSingular": "Carrito de compras con 1 artículo",
+      "ariaPlural": "Carrito de compras con {{count}} artículos"
+    },
+    "auth": {
+      "trackOrder": "Rastrear pedido",
+      "admin":      "Admin",
+      "adminPanel": "Panel de administración",
+      "greeting":   "Hola, {{name}}",
+      "account":    "Ir a tu cuenta",
+      "signOut":    "Cerrar sesión",
+      "logIn":      "Iniciar sesión",
+      "signUp":     "Registrarse",
+      "openMenu":   "Abrir menú",
+      "closeMenu":  "Cerrar menú"
+    }
+  },
+
+  "footer": {
+    "logo": {
+      "aria":     "Restaurante Sofi's — volver al inicio",
+      "name":     "Restaurante Sofi's",
+      "location": "Surprise, Arizona · Est. 2022"
+    },
+    "tagline": "Ingredientes de temporada, técnica honesta y noches inolvidables. Cada detalle es un acto de hospitalidad.",
+    "cta": {
+      "reserve": "Reservar una Mesa"
+    },
+    "social": {
+      "instagramAria": "Síguenos en Instagram",
+      "tiktokAria":    "Síguenos en TikTok",
+      "instagram":     "Instagram",
+      "tiktok":        "TikTok"
+    },
+    "quickLinks": {
+      "heading":      "Enlaces rápidos",
+      "menu":         "Menú",
+      "about":        "Nosotros",
+      "gallery":      "Galería",
+      "reservations": "Reservaciones",
+      "contact":      "Contacto",
+      "reviews":      "Reseñas"
+    },
+    "legal": {
+      "heading":        "Legal",
+      "privacyPolicy":  "Política de privacidad",
+      "termsOfService": "Términos de servicio",
+      "refundPolicy":   "Política de reembolso"
+    },
+    "contact": {
+      "heading":     "Contacto",
+      "phoneAria":   "Llámanos al {{phone}}",
+      "emailAria":   "Escríbenos a {{email}}",
+      "mapsAria":    "Ver ubicación en Google Maps",
+      "address":     "Surprise, Arizona",
+      "hours":       "Mar – Dom · 5:30 PM – 10:00 PM"
+    },
+    "copyright": "© {{year}} Restaurante Sofi's. Todos los derechos reservados.",
+    "builtWith":  "Hecho con cuidado · Desarrollado con React y Supabase"
+  },
+
+  "hero": {
+    "carouselAria":  "Restaurante Sofi's — diapositivas destacadas",
+    "slideAnnounce": "Diapositiva {{current}} de {{total}}: {{headline}} {{accentWord}}",
+    "location":      "Surprise, Arizona · Est. 2022",
+    "scrollHint":    "Desplazar",
+    "cta": {
+      "menu":        "Ver Menú",
+      "menuAria":    "Ver el menú completo",
+      "reserve":     "Reservar una Mesa",
+      "reserveAria": "Hacer una reservación"
+    },
+    "slides": {
+      "1": {
+        "headline":   "Elaborado con",
+        "accentWord": "Intención",
+        "sub":        "Ingredientes de temporada, técnica honesta, noches inolvidables.",
+        "ariaLabel":  "Comedor con cálida luz de velas en el Restaurante Sofi's"
+      },
+      "2": {
+        "headline":   "Cada Platillo",
+        "accentWord": "Cuenta una Historia",
+        "sub":        "De nuestra cocina a tu mesa — sabor con raíces en el lugar.",
+        "ariaLabel":  "Chef emplatando un platillo de temporada en el Restaurante Sofi's"
+      },
+      "3": {
+        "headline":   "La Mesa",
+        "accentWord": "Es Tuya",
+        "sub":        "Reserva tu noche. Conviértela en un recuerdo que vale la pena guardar.",
+        "ariaLabel":  "Mesa íntima lista para los comensales en el Restaurante Sofi's"
+      }
+    }
+  },
+
+  "button": {
+    "loading": "Cargando..."
+  },
+
+  "auth": {
+    "login": {
+      "title":              "Bienvenido de nuevo",
+      "subtitle":           "Inicia sesión en tu cuenta de Sofi's",
+      "emailLabel":         "Correo electrónico",
+      "emailPlaceholder":   "tu@correo.com",
+      "passwordLabel":      "Contraseña",
+      "passwordPlaceholder":"••••••••",
+      "forgotPassword":     "¿Olvidaste tu contraseña?",
+      "showPassword":       "Mostrar contraseña",
+      "hidePassword":       "Ocultar contraseña",
+      "show":               "Mostrar",
+      "hide":               "Ocultar",
+      "submit":             "Iniciar sesión",
+      "submitting":         "Iniciando sesión…",
+      "cancel":             "Cancelar",
+      "noAccount":          "¿No tienes una cuenta?",
+      "createOne":          "Créala aquí",
+      "errors": {
+        "invalidCredentials":   "Correo electrónico o contraseña incorrectos.",
+        "emailNotConfirmed":    "Por favor confirma tu correo antes de iniciar sesión.",
+        "tooManyRequests":      "Demasiados intentos. Por favor espera un momento.",
+        "networkError":         "Error de red. Verifica tu conexión.",
+        "generic":              "Algo salió mal. Por favor intenta de nuevo.",
+        "fillAllFields":        "Por favor completa todos los campos",
+        "tooManyAttemptsShort": "Demasiados intentos. Por favor espera.",
+        "signInFailed":         "Error al iniciar sesión",
+        "lockedTimer":          "Bloqueado ({{time}})"
+      }
+    },
+    "signup": {
+      "title":              "Crear cuenta",
+      "subtitle":           "Únete a Sofi's y empieza a ordenar",
+      "emailLabel":         "Correo electrónico",
+      "emailPlaceholder":   "tu@ejemplo.com",
+      "passwordLabel":      "Contraseña",
+      "passwordPlaceholder":"Crea una contraseña",
+      "confirmLabel":       "Confirmar contraseña",
+      "confirmPlaceholder": "••••••••",
+      "nameLabel":          "Nombre completo",
+      "namePlaceholder":    "Juan García",
+      "submit":             "Crear cuenta",
+      "submitting":         "Creando cuenta…",
+      "submittingDots":     "Creando cuenta...",
+      "alreadyAccount":     "¿Ya tienes una cuenta?",
+      "signIn":             "Inicia sesión",
+      "errors": {
+        "passwordTooShort": "La contraseña debe tener al menos 6 caracteres.",
+        "passwordMismatch": "Las contraseñas no coinciden.",
+        "generic":          "Algo salió mal. Por favor intenta de nuevo.",
+        "fillAllFields":    "Por favor completa todos los campos",
+        "invalidEmail":     "Por favor ingresa un correo electrónico válido",
+        "accountExists":    "Ya existe una cuenta con este correo. Por favor inicia sesión.",
+        "createFailed":     "Error al crear la cuenta"
+      }
+    },
+    "forgotPassword": {
+      "title":             "Restablecer contraseña",
+      "subtitle":          "Te enviaremos un enlace de restablecimiento",
+      "emailLabel":        "Correo electrónico",
+      "emailPlaceholder":  "tu@ejemplo.com",
+      "submit":            "Enviar enlace de restablecimiento",
+      "submitting":        "Enviando…",
+      "cancel":            "Cancelar",
+      "backToLogin":       "Volver al inicio de sesión",
+      "successMessage":    "Si existe una cuenta para {{email}}, recibirás un correo de restablecimiento en breve."
+    }
+  },
+
+  "checkout": {
+    "button": {
+      "unavailable":       "Pago no disponible",
+      "loading":           "Cargando…",
+      "loginRequired":     "Inicia sesión para pagar",
+      "cartEmpty":         "El carrito está vacío",
+      "processing":        "Creando pago seguro…",
+      "retryIn":           "Reintentar en {{seconds}}s",
+      "reviewOrder":       "Revisar pedido",
+      "proceedToPayment":  "Proceder al pago",
+      "payWithCard":       "Pagar con tarjeta"
+    },
+    "error": {
+      "notConfiguredTitle": "El pago no está configurado.",
+      "notConfiguredBody":  "Falta VITE_STRIPE_PUBLIC_KEY. Agrégalo en las variables de entorno y vuelve a implementar.",
+      "unavailableToast":   "El pago no está disponible temporalmente. Por favor intenta de nuevo más tarde.",
+      "loginAlert":         "Por favor inicia sesión para continuar",
+      "checkoutFailed":     "El pago falló",
+      "codeLabel":          "Código: {{code}}",
+      "waitToRetry":        "Por favor espera {{seconds}}s antes de reintentar.",
+      "back":               "← Volver al pago",
+      "tryAgain":           "Intentar de nuevo",
+      "retryIn":            "Reintentar en {{seconds}}s"
+    },
+    "modal": {
+      "title":           "Revisa tu pedido",
+      "description":     "Los precios, elegibilidad de promociones, créditos e impuestos se validan de forma segura en el servidor antes del pago.",
+      "close":           "Cerrar",
+      "emptyCart":       "Tu carrito está vacío. Agrega artículos antes de finalizar.",
+      "subtotal":        "Subtotal",
+      "estimatedTotal":  "Total estimado",
+      "totalDisclaimer": "El total final puede cambiar según impuestos, ofertas, validación de crédito y disponibilidad autorizados por el servidor.",
+      "orderType":       "Tipo de pedido",
+      "promoCode":       "Código promocional",
+      "credit":          "Crédito",
+      "creditApplied":   "Aplicado",
+      "notesLabel":      "Notas",
+      "qtyLabel":        "Cant. {{qty}}",
+      "notePrefix":      "Nota: ",
+      "back":            "Atrás",
+      "payWithCard":     "Pagar con tarjeta",
+      "processing":      "Creando pago seguro…"
+    },
+    "orderType": {
+      "delivery": "A domicilio",
+      "dine_in":  "En el restaurante",
+      "pickup":   "Para llevar"
+    }
+  },
+
+  "admin": {
+    "nav": {
+      "groups": {
+        "operations": "Operaciones",
+        "marketing":  "Marketing",
+        "finance":    "Finanzas"
+      },
+      "items": {
+        "dashboard":      "Panel principal",
+        "orders":         "Pedidos",
+        "kitchen":        "Cocina",
+        "menu":           "Menú",
+        "loyaltyScan":    "Escaneo de lealtad",
+        "campaigns":      "Campañas",
+        "promoCodes":     "Códigos promocionales",
+        "abandonedCarts": "Carritos abandonados",
+        "aiOptimizer":    "Optimizador IA",
+        "finance":        "Finanzas",
+        "taxes":          "Impuestos",
+        "fraudLog":       "Registro de fraudes"
+      }
+    }
+  },
+
+  "languageSwitcher": {
+    "label":   "Idioma",
+    "english": "English",
+    "spanish": "Español"
+  }
+}

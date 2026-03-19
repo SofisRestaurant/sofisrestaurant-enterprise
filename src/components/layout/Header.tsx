@@ -267,12 +267,12 @@ export default function Header() {
       {/* Accessibility skip link */}
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[60] focus:rounded-[var(--radius-lg)] focus:bg-white focus:px-4 focus:py-2 focus:shadow-[var(--shadow-xl)] focus:ring-2 focus:ring-[var(--color-gold-400)]"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-60 focus:rounded-var(--radius-lg)] focus:bg-white focus:px-4 focus:py-2 focus:shadow-var(--shadow-xl)] focus:ring-2 focus:ring-var(--color-gold-400)]"
       >
         {t('nav.skipToContent')}
       </a>
 
-      <header className="sticky top-0 z-[30] border-b border-[var(--color-border)] bg-white/95 shadow-sm backdrop-blur-md">
+      <header className="sticky top-0 z-30 border-b border-var(--color-border)] bg-white/95 shadow-sm backdrop-blur-md">
         <nav
           className="mx-auto max-w-7xl px-4 py-4"
           role="navigation"
@@ -282,7 +282,7 @@ export default function Header() {
             {/* Logo */}
             <Link
               to="/"
-              className="text-script rounded-[var(--radius-md)] px-2 py-1 text-2xl text-[var(--color-ember-700)] transition-colors duration-[var(--duration-base)] hover:text-[var(--color-ember-600)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)] focus-visible:ring-offset-2"
+              className="text-script rounded-var(--radius-md)] px-2 py-1 text-2xl text-var(--color-ember-700)] transition-colors duration-var(--duration-base)] hover:text-var(--color-ember-600)] focus:outline-none focus-visible:ring-2 focus-visible:ring-var(--color-gold-400)] focus-visible:ring-offset-2"
               aria-label={t('header.logo.aria')}
             >
               {t('common.appName')}
@@ -304,12 +304,12 @@ export default function Header() {
                     aria-label={t(`nav.links.${key}.aria`)}
                     aria-current={active ? 'page' : undefined}
                     className={cx(
-                      'rounded-[var(--radius-md)] px-3 py-2 text-sm font-medium',
-                      'transition-all duration-[var(--duration-base)]',
-                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)] focus-visible:ring-offset-2',
+                      'rounded-var(--radius-md)] px-3 py-2 text-sm font-medium',
+                      'transition-all duration-var(--duration-base)]',
+                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-var(--color-gold-400)] focus-visible:ring-offset-2',
                       active
-                        ? 'bg-[var(--color-ember-50)] text-[var(--color-ember-700)]'
-                        : 'text-[var(--color-ink-700)] hover:bg-[var(--color-ink-50)] hover:text-[var(--color-ember-700)]',
+                        ? 'bg-var(--color-ember-50)] text-var(--color-ember-700)]'
+                        : 'text-var(--color-ink-700)] hover:bg-var(--color-ink-50)] hover:text-var(--color-ember-700)]',
                     )}
                   >
                     {t(`nav.links.${key}.label`)}
@@ -322,7 +322,7 @@ export default function Header() {
             <div className="flex items-center gap-2 md:gap-3">
               {/* Desktop search — only on /menu, lg+ */}
               {isMenu ? (
-                <div className="hidden w-[28rem] max-w-[38vw] lg:block">
+                <div className="hidden w-28rem max-w-[38vw] lg:block">
                   <MenuHeaderSearch
                     value={draftSearch}
                     onChange={setDraftSearch}
@@ -345,11 +345,11 @@ export default function Header() {
                   aria-expanded={mobileSearchOpen ? 'true' : 'false'}
                   className={cx(
                     'inline-flex h-10 w-10 items-center justify-center',
-                    'rounded-[var(--radius-pill)]',
-                    'border border-[var(--color-border)] bg-white',
-                    'text-[var(--color-ink-800)] shadow-[var(--shadow-xs)]',
-                    'transition-colors duration-[var(--duration-base)] hover:bg-[var(--color-ink-50)]',
-                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]/40',
+                    'rounded-var(--radius-pill)]',
+                    'border border-var(--color-border)] bg-white',
+                    'text-var(--color-ink-800)] shadow-var(--shadow-xs)]',
+                    'transition-colors duration-var(--duration-base)] hover:bg-var(--color-ink-50)]',
+                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-var(--color-gold-400)]/40',
                     'lg:hidden',
                   )}
                 >
@@ -363,17 +363,17 @@ export default function Header() {
                 type="button"
                 aria-label={cartAriaLabel}
                 className={cx(
-                  'relative rounded-[var(--radius-md)] p-2',
-                  'text-[var(--color-ink-700)]',
-                  'transition-all duration-[var(--duration-base)]',
-                  'hover:bg-[var(--color-ink-50)] hover:text-[var(--color-ember-700)]',
-                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)] focus-visible:ring-offset-2',
+                  'relative rounded-var(--radius-md)] p-2',
+                  'text-var(--color-ink-700)]',
+                  'transition-all duration-var(--duration-base)]',
+                  'hover:bg-var(--color-ink-50)] hover:text-var(--color-ember-700)]',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-var(--color-gold-400)] focus-visible:ring-offset-2',
                 )}
               >
                 <ShoppingCart className="h-6 w-6" aria-hidden="true" />
                 {(itemCount ?? 0) > 0 ? (
                   <span
-                    className="absolute -right-1 -top-1 flex h-5 min-w-[1.25rem] items-center justify-center rounded-[var(--radius-pill)] bg-[var(--color-ember-600)] px-1 text-[11px] font-bold text-white shadow-[var(--shadow-xs)]"
+                    className="absolute -right-1 -top-1 flex h-5 min-w-1.25rem items-center justify-center rounded-var(--radius-pill)] bg-var(--color-ember-600)] px-1 text-[11px] font-bold text-white shadow-var(--shadow-xs)]"
                     aria-hidden="true"
                   >
                     {(itemCount ?? 0) > 99 ? '99+' : itemCount}
@@ -388,7 +388,7 @@ export default function Header() {
                     {activeOrderId ? (
                       <Link
                         to={`/order-status/${activeOrderId}`}
-                        className="link-line rounded-[var(--radius-md)] px-3 py-2 text-sm font-semibold text-[var(--color-ember-600)] transition-colors duration-[var(--duration-base)] hover:text-[var(--color-ember-500)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)] focus-visible:ring-offset-2"
+                        className="link-line rounded-var(--radius-md)] px-3 py-2 text-sm font-semibold text-var(--color-ember-600)] transition-colors duration-var(--duration-base)] hover:text-var(--color-ember-500)] focus:outline-none focus-visible:ring-2 focus-visible:ring-var(--color-gold-400)] focus-visible:ring-offset-2"
                       >
                         {t('header.auth.trackOrder')}
                       </Link>
@@ -397,7 +397,7 @@ export default function Header() {
                     {isAdmin ? (
                       <Link
                         to="/admin"
-                        className="link-line rounded-[var(--radius-md)] px-3 py-2 text-sm font-semibold text-[var(--color-gold-600)] transition-colors duration-[var(--duration-base)] hover:text-[var(--color-gold-500)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)] focus-visible:ring-offset-2"
+                        className="link-line rounded-var(--radius-md)] px-3 py-2 text-sm font-semibold text-var(--color-gold-600)] transition-colors duration-var(--duration-base)] hover:text-var(--color-gold-500)] focus:outline-none focus-visible:ring-2 focus-visible:ring-var(--color-gold-400)] focus-visible:ring-offset-2"
                       >
                         {t('header.auth.admin')}
                       </Link>
@@ -407,15 +407,15 @@ export default function Header() {
                       to="/account"
                       aria-label={t('header.auth.account')}
                       className={cx(
-                        'flex items-center gap-2 rounded-[var(--radius-md)]',
-                        'bg-[var(--color-ink-50)] px-3 py-2',
-                        'transition-all duration-[var(--duration-base)] hover:bg-[var(--color-ink-100)]',
-                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)] focus-visible:ring-offset-2',
+                        'flex items-center gap-2 rounded-var(--radius-md)]',
+                        'bg-var(--color-ink-50)] px-3 py-2',
+                        'transition-all duration-var(--duration-base)] hover:bg-var(--color-ink-100)]',
+                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-var(--color-gold-400)] focus-visible:ring-offset-2',
                       )}
                     >
-                      <User className="h-4 w-4 text-[var(--color-ink-500)]" aria-hidden="true" />
+                      <User className="h-4 w-4 text-var(--color-ink-500)]" aria-hidden="true" />
                       {displayName ? (
-                        <span className="text-sm font-medium text-[var(--color-ink-700)]">
+                        <span className="text-sm font-medium text-var(--color-ink-700)]">
                           {t('header.auth.greeting', { name: displayName })}
                         </span>
                       ) : null}
@@ -464,11 +464,11 @@ export default function Header() {
                 aria-expanded={mobileMenuOpen}
                 aria-controls="mobile-menu"
                 className={cx(
-                  'rounded-[var(--radius-md)] p-2',
-                  'text-[var(--color-ink-700)]',
-                  'transition-all duration-[var(--duration-base)]',
-                  'hover:bg-[var(--color-ink-50)] hover:text-[var(--color-ember-700)]',
-                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)] focus-visible:ring-offset-2',
+                  'rounded-var(--radius-md)] p-2',
+                  'text-var(--color-ink-700)]',
+                  'transition-all duration-var(--duration-base)]',
+                  'hover:bg-var(--color-ink-50)] hover:text-var(--color-ember-700)]',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-var(--color-gold-400)] focus-visible:ring-offset-2',
                   'md:hidden',
                 )}
               >
@@ -503,12 +503,12 @@ export default function Header() {
                         aria-label={t(`nav.links.${key}.aria`)}
                         aria-current={active ? 'page' : undefined}
                         className={cx(
-                          'rounded-[var(--radius-xl)] px-4 py-3 text-sm font-medium',
-                          'transition-all duration-[var(--duration-base)]',
-                          'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]',
+                          'rounded-var(--radius-xl)] px-4 py-3 text-sm font-medium',
+                          'transition-all duration-var(--duration-base)]',
+                          'focus:outline-none focus-visible:ring-2 focus-visible:ring-var(--color-gold-400)]',
                           active
-                            ? 'bg-[var(--color-ember-50)] text-[var(--color-ember-700)]'
-                            : 'text-[var(--color-ink-700)] hover:bg-[var(--color-ink-50)] hover:text-[var(--color-ember-700)]',
+                            ? 'bg-var(--color-ember-50)] text-var(--color-ember-700)]'
+                            : 'text-var(--color-ink-700)] hover:bg-var(--color-ink-50)] hover:text-var(--color-ember-700)]',
                         )}
                       >
                         {t(`nav.links.${key}.label`)}
@@ -525,7 +525,7 @@ export default function Header() {
                       <Link
                         to={`/order-status/${activeOrderId}`}
                         onClick={closeMobileMenu}
-                        className="block rounded-[var(--radius-xl)] bg-[var(--color-ember-50)] px-4 py-3 text-sm font-semibold text-[var(--color-ember-700)] transition-colors duration-[var(--duration-base)] hover:bg-[var(--color-ember-100)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]"
+                        className="block rounded-var(--radius-xl)] bg-var(--color-ember-50)] px-4 py-3 text-sm font-semibold text-var(--color-ember-700)] transition-colors duration-var(--duration-base)] hover:bg-var(--color-ember-100)] focus:outline-none focus-visible:ring-2 focus-visible:ring-var(--color-gold-400)]"
                       >
                         {t('header.auth.trackOrder')}
                       </Link>
@@ -535,7 +535,7 @@ export default function Header() {
                       <Link
                         to="/admin"
                         onClick={closeMobileMenu}
-                        className="block rounded-[var(--radius-xl)] bg-[var(--color-gold-50)] px-4 py-3 text-sm font-semibold text-[var(--color-gold-600)] transition-colors duration-[var(--duration-base)] hover:bg-[var(--color-gold-100)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]"
+                        className="block rounded-var(--radius-xl)] bg-var(--color-gold-50)] px-4 py-3 text-sm font-semibold text-var(--color-gold-600)] transition-colors duration-var(--duration-base)] hover:bg-var(--color-gold-100)] focus:outline-none focus-visible:ring-2 focus-visible:ring-var(--color-gold-400)]"
                       >
                         {t('header.auth.adminPanel')}
                       </Link>
@@ -545,16 +545,16 @@ export default function Header() {
                       to="/account"
                       onClick={closeMobileMenu}
                       aria-label={t('header.auth.account')}
-                      className="block rounded-[var(--radius-xl)] bg-[var(--color-ink-50)] px-4 py-3 transition-all duration-[var(--duration-base)] hover:bg-[var(--color-ink-100)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]"
+                      className="block rounded-var(--radius-xl)] bg-var(--color-ink-50)] px-4 py-3 transition-all duration-var(--duration-base)] hover:bg-var(--color-ink-100)] focus:outline-none focus-visible:ring-2 focus-visible:ring-var(--color-gold-400)]"
                     >
                       <div className="mb-1 flex items-center gap-2">
-                        <User className="h-4 w-4 text-[var(--color-ink-500)]" aria-hidden="true" />
-                        <span className="text-sm font-semibold text-[var(--color-ink-900)]">
+                        <User className="h-4 w-4 text-var(--color-ink-500)]" aria-hidden="true" />
+                        <span className="text-sm font-semibold text-var(--color-ink-900)]">
                           {displayName}
                         </span>
                       </div>
                       {user.email ? (
-                        <p className="text-xs text-[var(--color-ink-500)]">{user.email}</p>
+                        <p className="text-xs text-var(--color-ink-500)]">{user.email}</p>
                       ) : null}
                     </Link>
 
@@ -599,7 +599,7 @@ export default function Header() {
       {/* Mobile Search Overlay */}
       {isMenu && mobileSearchOpen ? (
         <div
-          className="fixed inset-0 z-[40]"
+          className="fixed inset-0 z-40"
           role="dialog"
           aria-modal="true"
           aria-label={t('header.search.aria')}
@@ -608,13 +608,13 @@ export default function Header() {
           <div className="absolute inset-x-0 top-0 p-3">
             <div
               ref={mobileSearchPanelRef}
-              className="mx-auto max-w-2xl overflow-hidden rounded-[var(--radius-card)] border border-white/10 bg-[var(--color-stone-950)] text-white shadow-[var(--shadow-2xl)]"
+              className="mx-auto max-w-2xl overflow-hidden rounded-var(--radius-card)] border border-white/10 bg-var(--color-stone-950)] text-white shadow-var(--shadow-2xl)]"
             >
               <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
                 <div className="min-w-0 flex-1">
                   <div className="relative">
                     <Search
-                      className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-ink-400)]"
+                      className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-var(--color-ink-400)]"
                       aria-hidden="true"
                     />
                     <input
@@ -634,9 +634,9 @@ export default function Header() {
                         onClick={() => setDraftSearch('')}
                         className={cx(
                           'absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center',
-                          'rounded-[var(--radius-lg)] border border-white/10 bg-white/5 text-white/80',
-                          'transition-colors duration-[var(--duration-base)] hover:bg-white/10',
-                          'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]/40',
+                          'rounded-var(--radius-lg)] border border-white/10 bg-white/5 text-white/80',
+                          'transition-colors duration-var(--duration-base)] hover:bg-white/10',
+                          'focus:outline-none focus-visible:ring-2 focus-visible:ring-var(--color-gold-400)]/40',
                         )}
                         aria-label={t('header.search.clear')}
                       >
@@ -651,9 +651,9 @@ export default function Header() {
                   onClick={closeMobileSearch}
                   className={cx(
                     'inline-flex h-10 w-10 items-center justify-center',
-                    'rounded-[var(--radius-lg)] border border-white/10 bg-white/5 text-white',
-                    'transition-colors duration-[var(--duration-base)] hover:bg-white/10',
-                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]/40',
+                    'rounded-var(--radius-lg)] border border-white/10 bg-white/5 text-white',
+                    'transition-colors duration-var(--duration-base)] hover:bg-white/10',
+                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-var(--color-gold-400)]/40',
                   )}
                   aria-label={t('header.search.close')}
                 >
@@ -662,7 +662,7 @@ export default function Header() {
               </div>
 
               <div className="px-4 py-3">
-                <p className="text-label text-[var(--color-ink-400)]">{t('header.search.tip')}</p>
+                <p className="text-label text-var(--color-ink-400)]">{t('header.search.tip')}</p>
               </div>
             </div>
           </div>

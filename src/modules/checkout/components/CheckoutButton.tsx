@@ -656,7 +656,7 @@ function CheckoutButton({
               className={cx(
                 'pointer-events-none absolute -inset-y-8 -left-24 w-24 rotate-12 bg-white/10 blur-xl',
                 'transition-transform duration-700',
-                !disabled && 'group-hover:translate-x-[28rem]',
+                !disabled && 'group-hover:translate-x-28rem',
               )}
             />
           ) : null}
@@ -665,7 +665,7 @@ function CheckoutButton({
 
       {reviewOpen ? (
         <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4"
+          className="fixed inset-0 z-80 flex items-center justify-center bg-black/50 p-4"
           data-modal-root="true"
           role="dialog"
           aria-modal="true"

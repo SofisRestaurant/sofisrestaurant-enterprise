@@ -11,33 +11,38 @@
 //   • Gold hairline divider above copyright uses .divider-gold class
 //   • Contact cards use .card-dark component class
 //   • ARIA: role="contentinfo", aria-label on nav landmarks
+// ✅ i18n: all user-visible strings via react-i18next useTranslation()
+// ✅ LanguageSwitcher embedded in copyright bar
 
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { motion as m } from 'framer-motion';
+import { useTranslation } from 'react-i18next';
+import { LanguageSwitcher } from '@/components/ui/LanguageSwitcher';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// ── Constants (URLs never change with locale) ─────────────────────────────────
 
-const PHONE_DISPLAY  = '(623) 555-0000';
-const PHONE_TEL      = 'tel:+16235550000';
-const SUPPORT_EMAIL  = 'hello@sofisrestaurant.com';
-const MAPS_URL       = 'https://maps.google.com/?q=San+Francisco+CA';
-const INSTAGRAM_URL  = 'https://www.instagram.com/sofisrestaurante/';
-const TIKTOK_URL     = 'https://www.tiktok.com/@Sofisrestaurant';
+const PHONE_DISPLAY = '(623) 555-0000';
+const PHONE_TEL = 'tel:+16235550000';
+const SUPPORT_EMAIL = 'hello@sofisrestaurant.com';
+const MAPS_URL = 'https://maps.google.com/?q=San+Francisco+CA';
+const INSTAGRAM_URL = 'https://www.instagram.com/sofisrestaurante/';
+const TIKTOK_URL = 'https://www.tiktok.com/@Sofisrestaurant';
 
-const QUICK_LINKS = [
-  { to: '/menu',         label: 'Menu'         },
-  { to: '/about',        label: 'About'         },
-  { to: '/gallery',      label: 'Gallery'       },
-  { to: '/reservations', label: 'Reservations'  },
-  { to: '/contact',      label: 'Contact'       },
-  { to: '/reviews',      label: 'Reviews'       },
+// Route paths never change — labels come from translations
+const QUICK_LINK_PATHS = [
+  { to: '/menu',         key: 'quickLinks.menu'         },
+  { to: '/about',        key: 'quickLinks.about'        },
+  { to: '/gallery',      key: 'quickLinks.gallery'      },
+  { to: '/reservations', key: 'quickLinks.reservations' },
+  { to: '/contact',      key: 'quickLinks.contact'      },
+  { to: '/reviews',      key: 'quickLinks.reviews'      },
 ] as const;
 
-const LEGAL_LINKS = [
-  { to: '/privacy-policy',  label: 'Privacy Policy'   },
-  { to: '/terms-of-service',label: 'Terms of Service' },
-  { to: '/refund-policy',   label: 'Refund Policy'    },
+const LEGAL_LINK_PATHS = [
+  { to: '/privacy-policy', key: 'legal.privacyPolicy' },
+  { to: '/terms-of-service', key: 'legal.termsOfService' },
+  { to: '/refund-policy', key: 'legal.refundPolicy' },
 ] as const;
 
 // ── Viewport config for scroll reveals ───────────────────────────────────────
@@ -48,6 +53,7 @@ const EL: [number, number, number, number] = [0.16, 1, 0.3, 1];
 // ── Footer ────────────────────────────────────────────────────────────────────
 
 export default function Footer() {
+  const { t } = useTranslation();
   const year = new Date().getFullYear();
 
   return (
@@ -96,7 +102,7 @@ export default function Footer() {
               className="group flex items-center gap-3 focus-visible:outline-none
                          focus-visible:ring-2 focus-visible:ring-offset-2 w-fit rounded"
               style={{ '--tw-ring-color': 'var(--color-gold-400, #d4af37)' } as React.CSSProperties}
-              aria-label="Sofi's Restaurant — back to home"
+              aria-label={t('footer.logo.aria')}
             >
               <span
                 className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full
@@ -116,13 +122,13 @@ export default function Footer() {
                   className="font-display text-[1.1rem] font-medium leading-tight"
                   style={{ color: 'rgba(255,255,255,0.92)' }}
                 >
-                  Sofi's Restaurant
+                  {t('footer.logo.name')}
                 </p>
                 <p
                   className="font-body text-[0.68rem] uppercase tracking-[0.14em]"
                   style={{ color: 'var(--color-ink-500, #8a7a6a)' }}
                 >
-                  Surprise Arizona · Est. 2022
+                  {t('footer.logo.location')}
                 </p>
               </div>
             </Link>
@@ -132,14 +138,13 @@ export default function Footer() {
               className="max-w-22rem font-body text-[0.88rem] font-light leading-[1.78]"
               style={{ color: 'rgba(255,255,255,0.45)' }}
             >
-              Seasonal ingredients, honest technique, and unforgettable evenings. Every detail is an
-              act of hospitality.
+              {t('footer.tagline')}
             </p>
 
             {/* Primary CTA */}
             <div>
               <Link to="/reservations" className="btn btn-primary btn-sm">
-                Reserve a Table
+                {t('footer.cta.reserve')}
               </Link>
             </div>
 
@@ -153,7 +158,7 @@ export default function Footer() {
                            font-body text-[0.68rem] font-medium uppercase tracking-caps[0.10em]
                            transition-all duration-300 hover:border-gold-400/30"
                 style={{ color: 'rgba(255,255,255,0.55)' }}
-                aria-label="Follow Sofi's on Instagram"
+                aria-label={t('footer.social.instagramAria')}
               >
                 <svg
                   width="13"
@@ -168,8 +173,9 @@ export default function Footer() {
                   <circle cx="12" cy="12" r="4" />
                   <circle cx="17.5" cy="6.5" r="0.5" fill="currentColor" />
                 </svg>
-                Instagram
+                {t('footer.social.instagram')}
               </a>
+
               <a
                 href={TIKTOK_URL}
                 target="_blank"
@@ -178,7 +184,7 @@ export default function Footer() {
                            font-body text-[0.68rem] font-medium uppercase tracking-caps[0.10em]
                            transition-all duration-300 hover:border-gold-400/30"
                 style={{ color: 'rgba(255,255,255,0.55)' }}
-                aria-label="Follow Sofi's on TikTok"
+                aria-label={t('footer.social.tiktokAria')}
               >
                 <svg
                   width="13"
@@ -189,21 +195,21 @@ export default function Footer() {
                 >
                   <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.89-2.89 2.89 2.89 0 0 1 2.89-2.89c.28 0 .54.04.79.1V9.01a6.33 6.33 0 0 0-.79-.05 6.34 6.34 0 0 0-6.34 6.34 6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.33-6.34V8.87a8.28 8.28 0 0 0 4.84 1.54V7.01a4.85 4.85 0 0 1-1.07-.32z" />
                 </svg>
-                TikTok
+                {t('footer.social.tiktok')}
               </a>
             </div>
           </div>
 
           {/* ── Quick links ───────────────────────────────────────────────── */}
-          <nav className="lg:col-span-2" aria-label="Quick links">
+          <nav className="lg:col-span-2" aria-label={t('footer.quickLinks.heading')}>
             <h3
               className="mb-5 font-body text-[0.65rem] font-medium uppercase tracking-[0.20em]"
               style={{ color: 'var(--color-gold-400, #d4af37)' }}
             >
-              Quick Links
+              {t('footer.quickLinks.heading')}
             </h3>
             <ul className="flex flex-col gap-2.5">
-              {QUICK_LINKS.map(({ to, label }) => (
+              {QUICK_LINK_PATHS.map(({ to, key }) => (
                 <li key={to}>
                   <Link
                     to={to}
@@ -213,7 +219,7 @@ export default function Footer() {
                     onMouseEnter={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.85)')}
                     onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.50)')}
                   >
-                    {label}
+                    {t(`footer.${key}`)}
                   </Link>
                 </li>
               ))}
@@ -221,15 +227,15 @@ export default function Footer() {
           </nav>
 
           {/* ── Legal ─────────────────────────────────────────────────────── */}
-          <nav className="lg:col-span-2" aria-label="Legal">
+          <nav className="lg:col-span-2" aria-label={t('footer.legal.heading')}>
             <h3
               className="mb-5 font-body text-[0.65rem] font-medium uppercase tracking-[0.20em]"
               style={{ color: 'var(--color-gold-400, #d4af37)' }}
             >
-              Legal
+              {t('footer.legal.heading')}
             </h3>
             <ul className="flex flex-col gap-2.5">
-              {LEGAL_LINKS.map(({ to, label }) => (
+              {LEGAL_LINK_PATHS.map(({ to, key }) => (
                 <li key={to}>
                   <Link
                     to={to}
@@ -239,7 +245,7 @@ export default function Footer() {
                     onMouseEnter={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.85)')}
                     onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.50)')}
                   >
-                    {label}
+                    {t(`footer.${key}`)}
                   </Link>
                 </li>
               ))}
@@ -247,12 +253,12 @@ export default function Footer() {
           </nav>
 
           {/* ── Contact ───────────────────────────────────────────────────── */}
-          <address className="not-italic lg:col-span-4" aria-label="Contact information">
+          <address className="not-italic lg:col-span-4" aria-label={t('footer.contact.heading')}>
             <h3
               className="mb-5 font-body text-[0.65rem] font-medium uppercase tracking-[0.20em]"
               style={{ color: 'var(--color-gold-400, #d4af37)' }}
             >
-              Contact
+              {t('footer.contact.heading')}
             </h3>
             <div className="flex flex-col gap-2.5">
               {/* Phone */}
@@ -260,7 +266,7 @@ export default function Footer() {
                 href={PHONE_TEL}
                 className="card-dark flex items-center gap-3 rounded-xl p-3.5
                            transition-all duration-300 hover:border-gold-400/20"
-                aria-label={`Call us at ${PHONE_DISPLAY}`}
+                aria-label={t('footer.contact.phoneAria', { phone: PHONE_DISPLAY })}
               >
                 <span
                   className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm"
@@ -285,7 +291,7 @@ export default function Footer() {
                 href={`mailto:${SUPPORT_EMAIL}`}
                 className="card-dark flex items-center gap-3 rounded-xl p-3.5
                            transition-all duration-300 hover:border-gold-400/20"
-                aria-label={`Email us at ${SUPPORT_EMAIL}`}
+                aria-label={t('footer.contact.emailAria', { email: SUPPORT_EMAIL })}
               >
                 <span
                   className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm"
@@ -312,7 +318,7 @@ export default function Footer() {
                 rel="noreferrer"
                 className="card-dark flex items-start gap-3 rounded-xl p-3.5
                            transition-all duration-300 hover:border-gold-400/20"
-                aria-label="View location on Google Maps"
+                aria-label={t('footer.contact.mapsAria')}
               >
                 <span
                   className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm"
@@ -328,7 +334,7 @@ export default function Footer() {
                   className="font-body text-[0.83rem] leading-relaxed"
                   style={{ color: 'rgba(255,255,255,0.65)' }}
                 >
-                  Surprise Arizona, Arizona
+                  {t('footer.contact.address')}
                 </span>
               </a>
 
@@ -348,7 +354,7 @@ export default function Footer() {
                   className="font-body text-[0.83rem]"
                   style={{ color: 'rgba(255,255,255,0.65)' }}
                 >
-                  Tue – Sun · 5:30 PM – 10:00 PM
+                  {t('footer.contact.hours')}
                 </span>
               </div>
             </div>
@@ -361,10 +367,14 @@ export default function Footer() {
         {/* ── Copyright bar ──────────────────────────────────────────────── */}
         <div className="flex flex-col items-center justify-between gap-3 sm:flex-row">
           <p className="font-body text-[0.70rem]" style={{ color: 'rgba(255,255,255,0.28)' }}>
-            © {year} Sofi's Restaurant. All rights reserved.
+            {t('footer.copyright', { year })}
           </p>
+
+          {/* Language switcher — dark surface variant, no label (icon-only pill) */}
+          <LanguageSwitcher surface="dark" />
+
           <p className="font-body text-[0.70rem]" style={{ color: 'rgba(255,255,255,0.18)' }}>
-            Built with care · Powered by React &amp; Supabase
+            {t('footer.builtWith')}
           </p>
         </div>
       </div>

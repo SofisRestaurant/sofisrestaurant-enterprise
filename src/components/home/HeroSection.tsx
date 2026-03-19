@@ -41,23 +41,23 @@ const MotionLink = motion.create(Link);
 
 // ── i18n slide key types ──────────────────────────────────────────────────────
 //
-// SlideKey is derived directly from en.json's shape — never hardcoded.
-// TranslationTree['hero']['slides'] = { '1': {...}, '2': {...}, '3': {...} }
+// SlideKey is derived directly from the JSON shape of en/translation.json —
+// never hardcoded. TranslationTree['hero']['slides'] = { '1': {…}, '2': {…}, '3': {…} }
 // so SlideKey resolves to '1' | '2' | '3'.
 //
-// Adding a new slide to en.json automatically widens this union.
-// Removing a key makes TypeScript flag any stale imageKey references.
-// No `as` cast is ever required because imageKey: SlideKey, not string.
+// Adding a slide key to translation.json automatically widens this union.
+// Removing one makes TypeScript flag every stale imageKey reference immediately.
+// No `as` cast is ever required because imageKey is typed as SlideKey, not string.
 //
 type SlideKey = keyof TranslationTree['hero']['slides'];
 
-// Valid copy fields within each slide object in en.json.
-// Derived from the actual JSON shape — adding/removing fields propagates automatically.
+// Valid copy fields within each slide object — derived from the JSON shape.
+// Adding or removing a field in translation.json propagates here automatically.
 type SlideCopyField = keyof TranslationTree['hero']['slides'][SlideKey];
 
 // ── tSlide factory ────────────────────────────────────────────────────────────
 //
-// Produces a bound helper that translates a per-slide copy field without
+// Returns a bound helper that translates a per-slide copy field without
 // repeating the full key path at every call site.
 //
 // Usage inside HeroSection:
@@ -82,8 +82,8 @@ function makeTSlide(t: ReturnType<typeof useTranslation>['t']) {
 
 interface BaseHeroSlide {
   id: number;
-  // SlideKey instead of string — TypeScript validates every imageKey value
-  // against en.json at compile time. A typo like '4' is a type error.
+  // SlideKey (not string) — TypeScript validates every imageKey value against
+  // the translation JSON at compile time. A typo like '4' is a type error.
   imageKey: SlideKey;
 }
 
@@ -100,12 +100,26 @@ interface VideoHeroSlide extends BaseHeroSlide {
 
 export type HeroSlide = ImageHeroSlide | VideoHeroSlide;
 
-// Slide definitions — visual/media data only; all copy comes from translations.
-// TypeScript errors here if any imageKey value is not a valid key of en.json slides.
+// Slide definitions — visual/media data only, copy comes from translations
 const SLIDES: HeroSlide[] = [
-  { id: 1, kind: 'image', image: HERO_IMAGES.hero1, imageKey: '1' },
-  { id: 2, kind: 'image', image: HERO_IMAGES.hero2, imageKey: '2' },
-  { id: 3, kind: 'image', image: HERO_IMAGES.hero3, imageKey: '3' },
+  {
+    id: 1,
+    kind: 'image',
+    image: HERO_IMAGES.hero1,
+    imageKey: '1',
+  },
+  {
+    id: 2,
+    kind: 'image',
+    image: HERO_IMAGES.hero2,
+    imageKey: '2',
+  },
+  {
+    id: 3,
+    kind: 'image',
+    image: HERO_IMAGES.hero3,
+    imageKey: '3',
+  },
 ];
 
 const SLIDE_COUNT = SLIDES.length;
@@ -134,7 +148,6 @@ function SlideMedia({ slide, kenBurnsActive, shouldReduceMotion }: SlideMediaPro
   }, [slide, shouldReduceMotion]);
 
   return (
-    // initial + animate + exit — crossfade handled by AnimatePresence above
     <motion.div
       className="absolute inset-0"
       initial={{ opacity: 0, scale: 1.04 }}
@@ -164,8 +177,6 @@ function SlideMedia({ slide, kenBurnsActive, shouldReduceMotion }: SlideMediaPro
           muted
           playsInline
           loop
-          // autoPlay still controlled imperatively — MotionConfig does not touch
-          // HTML attributes, only Motion animation values.
           autoPlay={!shouldReduceMotion}
           initial={{ scale: 1.02 }}
           animate={{ scale: 1 }}
@@ -188,7 +199,6 @@ function SlideMedia({ slide, kenBurnsActive, shouldReduceMotion }: SlideMediaPro
 }
 
 // ── ScrollHint ────────────────────────────────────────────────────────────────
-// Only rendered when !shouldReduceMotion, so no internal guard needed.
 
 interface ScrollHintProps {
   label: string;
@@ -234,8 +244,8 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
 
   const { t } = useTranslation();
 
-  // Bind tSlide once per render. `t` is stable across renders (memoized in the
-  // hook) so this produces the same reference unless the locale actually changes,
+  // Bind tSlide once per render. `t` is stable across renders (memoized inside
+  // react-i18next) so this produces the same reference unless the locale changes,
   // at which point tSlide correctly picks up the new locale's strings.
   const tSlide = makeTSlide(t);
 
@@ -332,17 +342,6 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
   const parallaxY = useTransform(sY, [0, 1], ['1.5%', '-1.5%']);
 
   return (
-    /*
-     * MotionConfig reducedMotion="user":
-     *   - Reads prefers-reduced-motion from the OS automatically.
-     *   - Strips transform/scale/layout animations from ALL motion.* children.
-     *   - Preserves opacity and backgroundColor animations (safe for all users).
-     *   - Works as the declarative layer; useReducedMotion() above handles the
-     *     imperative side (video play, parallax, auto-advance).
-     *
-     * Scope: wrapping only <HeroSection> keeps it isolated. If you want it
-     * site-wide, move <MotionConfig> to your root App component instead.
-     */
     <MotionConfig reducedMotion="user">
       <>
         <div role="status" aria-live="polite" aria-atomic={true} className="sr-only">
@@ -381,8 +380,6 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
           <motion.div
             className="absolute inset-0 z-0"
             style={{
-              // MotionConfig will zero-out x/y when reduced motion is requested,
-              // but we also guard imperatively so spring values don't accumulate.
               x: shouldReduceMotion ? 0 : bgX,
               y: shouldReduceMotion ? 0 : bgY,
               willChange: 'transform',
@@ -420,7 +417,7 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
             }}
           />
 
-          {/* Hero copy — parallax wrapper */}
+          {/* Hero copy */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -428,13 +425,6 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
             style={{ y: shouldReduceMotion ? 0 : parallaxY }}
             className="relative z-20 mx-auto w-full max-w-6xl px-5 pb-28 pt-32 sm:px-8 sm:pb-36 md:px-12"
           >
-            {/*
-              Text stagger container.
-              key={`text-${slide.id}`} remounts on slide change, replaying the entrance.
-              initial="hidden" + animate="visible" (not whileInView — already in viewport).
-              MotionConfig automatically suppresses transforms inside heroText variant
-              when reducedMotion="user"; opacity animations are preserved.
-            */}
             <motion.div
               key={`text-${slide.id}`}
               variants={staggerContainer}
@@ -446,8 +436,7 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
               <motion.p
                 variants={heroText}
                 transition={{ duration: 0.6, ease: EASE_LUXURY, delay: 0.08 }}
-                className="flex items-center gap-2.5 font-body text-[0.62rem] font-medium
-                           uppercase tracking-[0.22em]"
+                className="flex items-center gap-2.5 font-body text-[0.62rem] font-medium uppercase tracking-[0.22em]"
                 style={{ color: 'var(--color-gold-300, #e8c46a)' }}
               >
                 <span
@@ -462,8 +451,7 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
               <motion.h1
                 variants={heroText}
                 transition={{ duration: 0.9, ease: EASE_LUXURY, delay: 0.18 }}
-                className="font-display text-[clamp(3rem,11vw,6.5rem)] leading-[0.92]
-                           tracking-[-0.04em] text-white"
+                className="font-display text-[clamp(3rem,11vw,6.5rem)] leading-[0.92] tracking-[-0.04em] text-white"
               >
                 {tSlide(slide, 'headline')}
                 <br />
@@ -482,8 +470,7 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
               <motion.p
                 variants={heroText}
                 transition={{ duration: 0.7, ease: EASE_LUXURY, delay: 0.32 }}
-                className="font-body max-w-28rem text-[1rem] font-light
-                           leading-[1.75] text-white/60 sm:text-[1.05rem]"
+                className="font-body max-w-28rem text-[1rem] font-light leading-[1.75] text-white/60 sm:text-[1.05rem]"
               >
                 {tSlide(slide, 'sub')}
                 {APP_TAGLINE && <span className="text-white/35"> · {APP_TAGLINE}</span>}
@@ -495,11 +482,6 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
                 transition={{ duration: 0.7, ease: EASE_LUXURY, delay: 0.46 }}
                 className="mt-1 flex flex-col gap-3 xs:flex-row"
               >
-                {/*
-                  whileHover/whileTap scale: no manual shouldReduceMotion guard needed.
-                  MotionConfig reducedMotion="user" automatically suppresses these
-                  transform animations when the user's OS preference is set.
-                */}
                 <MotionLink
                   to="/menu"
                   onClick={onMenuClick}

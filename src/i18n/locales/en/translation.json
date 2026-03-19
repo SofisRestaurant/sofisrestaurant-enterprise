@@ -1,0 +1,288 @@
+{
+  "common": {
+    "loading": "Loading…",
+    "close": "Close",
+    "back": "Back",
+    "appName": "Sofi's Restaurant",
+    "somethingWentWrong": "Something went wrong. Please try again."
+  },
+
+  "nav": {
+    "skipToContent": "Skip to main content",
+    "ariaLabel": "Main navigation",
+    "links": {
+      "home":    { "label": "Home",    "aria": "Go to homepage"  },
+      "menu":    { "label": "Menu",    "aria": "View our menu"   },
+      "about":   { "label": "About",   "aria": "Learn about us"  },
+      "contact": { "label": "Contact", "aria": "Contact us"      }
+    }
+  },
+
+  "mobileNav": {
+    "home":    "Home",
+    "menu":    "Menu",
+    "cart":    "Cart",
+    "account": "Account",
+    "login":   "Login"
+  },
+
+  "header": {
+    "logo": {
+      "aria": "Sofi's Restaurant - Go to homepage"
+    },
+    "search": {
+      "aria": "Search menu",
+      "placeholder": "Search tacos, breakfast, spicy…",
+      "clear": "Clear search",
+      "close": "Close search",
+      "tip": "Tip: Press \"/\" to search instantly.",
+      "openAria": "Search menu"
+    },
+    "cart": {
+      "ariaEmpty": "Shopping cart, empty",
+      "ariaSingular": "Shopping cart with 1 item",
+      "ariaPlural": "Shopping cart with {{count}} items"
+    },
+    "auth": {
+      "trackOrder": "Track Order",
+      "admin":      "Admin",
+      "adminPanel": "Admin Panel",
+      "greeting":   "Hi, {{name}}",
+      "account":    "Go to your account",
+      "signOut":    "Sign Out",
+      "logIn":      "Log In",
+      "signUp":     "Sign Up",
+      "openMenu":   "Open menu",
+      "closeMenu":  "Close menu"
+    }
+  },
+
+  "footer": {
+    "logo": {
+      "aria":     "Sofi's Restaurant — back to home",
+      "name":     "Sofi's Restaurant",
+      "location": "Surprise Arizona · Est. 2022"
+    },
+    "tagline": "Seasonal ingredients, honest technique, and unforgettable evenings. Every detail is an act of hospitality.",
+    "cta": {
+      "reserve": "Reserve a Table"
+    },
+    "social": {
+      "instagramAria": "Follow Sofi's on Instagram",
+      "tiktokAria":    "Follow Sofi's on TikTok",
+      "instagram":     "Instagram",
+      "tiktok":        "TikTok"
+    },
+    "quickLinks": {
+      "heading":      "Quick Links",
+      "menu":         "Menu",
+      "about":        "About",
+      "gallery":      "Gallery",
+      "reservations": "Reservations",
+      "contact":      "Contact",
+      "reviews":      "Reviews"
+    },
+    "legal": {
+      "heading":        "Legal",
+      "privacyPolicy":  "Privacy Policy",
+      "termsOfService": "Terms of Service",
+      "refundPolicy":   "Refund Policy"
+    },
+    "contact": {
+      "heading":     "Contact",
+      "phoneAria":   "Call us at {{phone}}",
+      "emailAria":   "Email us at {{email}}",
+      "mapsAria":    "View location on Google Maps",
+      "address":     "Surprise Arizona, Arizona",
+      "hours":       "Tue – Sun · 5:30 PM – 10:00 PM"
+    },
+    "copyright": "© {{year}} Sofi's Restaurant. All rights reserved.",
+    "builtWith":  "Built with care · Powered by React & Supabase"
+  },
+
+  "hero": {
+    "carouselAria":  "Sofi's Restaurant — featured slides",
+    "slideAnnounce": "Slide {{current}} of {{total}}: {{headline}} {{accentWord}}",
+    "location":      "Surprise Arizona · Est. 2022",
+    "scrollHint":    "Scroll",
+    "cta": {
+      "menu":        "Explore Menu",
+      "menuAria":    "View the full menu",
+      "reserve":     "Reserve a Table",
+      "reserveAria": "Make a reservation"
+    },
+    "slides": {
+      "1": {
+        "headline":   "Crafted With",
+        "accentWord": "Intention",
+        "sub":        "Seasonal ingredients, honest technique, unforgettable evenings.",
+        "ariaLabel":  "Dining room with warm candlelight at Sofi's Restaurant"
+      },
+      "2": {
+        "headline":   "Every Dish",
+        "accentWord": "Tells a Story",
+        "sub":        "From our kitchen to your table — flavour rooted in place.",
+        "ariaLabel":  "Chef plating a seasonal dish at Sofi's Restaurant"
+      },
+      "3": {
+        "headline":   "The Table",
+        "accentWord": "Is Yours",
+        "sub":        "Reserve your evening. Make it a memory worth keeping.",
+        "ariaLabel":  "Intimate table setting ready for guests at Sofi's Restaurant"
+      }
+    }
+  },
+
+  "button": {
+    "loading": "Loading..."
+  },
+
+  "auth": {
+    "login": {
+      "title":           "Welcome Back",
+      "subtitle":        "Sign in to your Sofi's account",
+      "emailLabel":      "Email",
+      "emailPlaceholder":"you@email.com",
+      "passwordLabel":   "Password",
+      "passwordPlaceholder": "••••••••",
+      "forgotPassword":  "Forgot password?",
+      "showPassword":    "Show password",
+      "hidePassword":    "Hide password",
+      "show":            "Show",
+      "hide":            "Hide",
+      "submit":          "Sign In",
+      "submitting":      "Signing in…",
+      "cancel":          "Cancel",
+      "noAccount":       "Don't have an account?",
+      "createOne":       "Create one",
+      "errors": {
+        "invalidCredentials": "Incorrect email or password.",
+        "emailNotConfirmed":  "Please confirm your email before signing in.",
+        "tooManyRequests":    "Too many attempts. Please wait a moment and try again.",
+        "networkError":       "Network error. Please check your connection.",
+        "generic":            "Something went wrong. Please try again.",
+        "fillAllFields":      "Please fill in all fields",
+        "tooManyAttemptsShort": "Too many attempts. Please wait.",
+        "signInFailed":       "Sign-in failed",
+        "lockedTimer":        "Locked ({{time}})"
+      }
+    },
+    "signup": {
+      "title":              "Create account",
+      "subtitle":           "Join Sofi's and start ordering",
+      "emailLabel":         "Email",
+      "emailPlaceholder":   "you@example.com",
+      "passwordLabel":      "Password",
+      "passwordPlaceholder":"Create a password",
+      "confirmLabel":       "Confirm Password",
+      "confirmPlaceholder": "••••••••",
+      "nameLabel":          "Full Name",
+      "namePlaceholder":    "John Doe",
+      "submit":             "Create account",
+      "submitting":         "Creating account…",
+      "submittingDots":     "Creating account...",
+      "alreadyAccount":     "Already have an account?",
+      "signIn":             "Sign in",
+      "errors": {
+        "passwordTooShort":  "Password must be at least 6 characters.",
+        "passwordMismatch":  "Passwords do not match.",
+        "generic":           "Something went wrong. Please try again.",
+        "fillAllFields":     "Please fill in all fields",
+        "invalidEmail":      "Please enter a valid email address",
+        "accountExists":     "An account with this email already exists. Please sign in instead.",
+        "createFailed":      "Failed to create account"
+      }
+    },
+    "forgotPassword": {
+      "title":        "Reset password",
+      "subtitle":     "We'll send you a reset link",
+      "emailLabel":   "Email",
+      "emailPlaceholder": "you@example.com",
+      "submit":       "Send reset link",
+      "submitting":   "Sending…",
+      "cancel":       "Cancel",
+      "backToLogin":  "Back to Login",
+      "successMessage": "If an account exists for {{email}}, you'll receive a reset email shortly."
+    }
+  },
+
+  "checkout": {
+    "button": {
+      "unavailable":       "Checkout unavailable",
+      "loading":           "Loading…",
+      "loginRequired":     "Log in to pay",
+      "cartEmpty":         "Cart is empty",
+      "processing":        "Creating secure checkout…",
+      "retryIn":           "Retry in {{seconds}}s",
+      "reviewOrder":       "Review Order",
+      "proceedToPayment":  "Proceed to Payment",
+      "payWithCard":       "Pay with card"
+    },
+    "error": {
+      "notConfiguredTitle": "Checkout is not configured.",
+      "notConfiguredBody":  "Missing VITE_STRIPE_PUBLIC_KEY. Add it in env vars and redeploy.",
+      "unavailableToast":   "Checkout is temporarily unavailable. Please try again later.",
+      "loginAlert":         "Please log in to continue",
+      "checkoutFailed":     "Checkout failed",
+      "codeLabel":          "Code: {{code}}",
+      "waitToRetry":        "Please wait {{seconds}}s before retrying.",
+      "back":               "← Back to checkout",
+      "tryAgain":           "Try Again",
+      "retryIn":            "Retry in {{seconds}}s"
+    },
+    "modal": {
+      "title":           "Review your order",
+      "description":     "Prices, promo eligibility, credits, and tax are re-validated securely on the server before payment.",
+      "close":           "Close",
+      "emptyCart":       "Your cart is empty. Add items before checking out.",
+      "subtotal":        "Subtotal",
+      "estimatedTotal":  "Estimated total",
+      "totalDisclaimer": "Final total may change based on server-authoritative tax, deals, credit validation, and availability.",
+      "orderType":       "Order type",
+      "promoCode":       "Promo code",
+      "credit":          "Credit",
+      "creditApplied":   "Applied",
+      "notesLabel":      "Notes",
+      "qtyLabel":        "Qty {{qty}}",
+      "notePrefix":      "Note: ",
+      "back":            "Back",
+      "payWithCard":     "Pay with card",
+      "processing":      "Creating secure checkout…"
+    },
+    "orderType": {
+      "delivery": "Delivery",
+      "dine_in":  "Dine in",
+      "pickup":   "Pickup"
+    }
+  },
+
+  "admin": {
+    "nav": {
+      "groups": {
+        "operations": "Operations",
+        "marketing":  "Marketing",
+        "finance":    "Finance"
+      },
+      "items": {
+        "dashboard":     "Dashboard",
+        "orders":        "Orders",
+        "kitchen":       "Kitchen",
+        "menu":          "Menu",
+        "loyaltyScan":   "Loyalty Scan",
+        "campaigns":     "Campaigns",
+        "promoCodes":    "Promo Codes",
+        "abandonedCarts":"Abandoned Carts",
+        "aiOptimizer":   "AI Optimizer",
+        "finance":       "Finance",
+        "taxes":         "Taxes",
+        "fraudLog":      "Fraud Log"
+      }
+    }
+  },
+
+  "languageSwitcher": {
+    "label":   "Language",
+    "english": "English",
+    "spanish": "Español"
+  }
+}

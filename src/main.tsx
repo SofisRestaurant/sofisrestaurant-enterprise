@@ -2,9 +2,10 @@
 // ─── Application bootstrap ────────────────────────────────────────────────────
 //
 // Entry point for the React application. Responsibilities:
-//   1. Import the design system (must be first — establishes CSS custom props)
-//   2. Mount the router-aware React tree into the DOM
-//   3. Guard against a missing #root element with a clear error
+//   1. Import i18n FIRST — establishes translations before any component renders
+//   2. Import the design system — establishes CSS custom props
+//   3. Mount the router-aware React tree into the DOM
+//   4. Guard against a missing #root element with a clear error
 //
 // React.StrictMode is intentionally kept in production-equivalent builds.
 // It surfaces double-invoke bugs and deprecated API usage at zero runtime cost
@@ -14,9 +15,15 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { RouterProvider } from 'react-router-dom';
 import { MotionConfig } from 'motion/react';
+
+// ── i18n — MUST be imported before any component that calls useTranslation() ──
+// This initializes i18next with translations and the browser language detector.
+import './i18n';
+
 // Design system — must load before any component styles
 import '@/styles/app.css';
 import './lib/modelViewer';
+
 // Application router (defines all routes + lazy loading)
 import { router } from '@/app/router';
 
