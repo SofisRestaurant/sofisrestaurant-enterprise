@@ -1,21 +1,175 @@
-# netlify.toml
-# redeploy trigger
+# =============================================================================
+# netlify.toml — Sofi's Restaurant
+# =============================================================================
+#
+# This file lives at the project root.
+# Netlify reads it at deploy time to configure build, environment, headers,
+# redirects, and plugins.
+#
+# Docs: https://docs.netlify.com/configure-builds/file-based-configuration/
+# =============================================================================
 
-[build.environment]
-  NODE_VERSION = "24"
+
+# ── BUILD SETTINGS ─────────────────────────────────────────────────────────────
+
+[build]
+  # Root directory of your project (where package.json lives)
+  base = "."
+
+  # Vite outputs to ./dist by default
+  publish = "dist"
+
+  # Production build command
+  command = "npm run build"
+
+  # Environment variables available during BUILD time only
+  # (not sensitive — these are not secrets)
+  [build.environment]
+    NODE_VERSION  = "20"
+    NODE_ENV      = "production"
+    # Tells Vite to produce a production build (no HMR, no devtools)
+    VITE_APP_ENV  = "production"
+
+
+# ── CONTEXT: PRODUCTION ────────────────────────────────────────────────────────
+# Overrides applied only to the main branch deploy (your live site)
+
+[context.production]
+  command = "npm run build"
+
+  [context.production.environment]
+    NODE_ENV = "production"
+
+
+# ── CONTEXT: DEPLOY PREVIEWS ──────────────────────────────────────────────────
+# Overrides for branch deploy previews (PRs, feature branches)
+# Keeps source maps in previews for easier debugging
+
+[context.deploy-preview]
+  command = "npm run build"
+
+  [context.deploy-preview.environment]
+    NODE_ENV     = "production"
+    VITE_APP_ENV = "preview"
+
+
+# ── CONTEXT: BRANCH DEPLOYS ───────────────────────────────────────────────────
+
+[context.branch-deploy]
+  command = "npm run build"
+
+
+# ── REDIRECTS ──────────────────────────────────────────────────────────────────
+# These mirror public/_redirects — defining them here gives you TOML syntax.
+# Both files work; Netlify merges them with _redirects taking precedence
+# on conflicts. Keep them in sync.
+
+# Spanish browser language detection → add ?lng=es on first root visit
+[[redirects]]
+  from       = "/"
+  to         = "/?lng=es"
+  status     = 302
+  force      = false
+
+  [redirects.conditions]
+    Language = ["es"]
+
+# SPA catch-all — must be last
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200
+
+
+# ── HEADERS ───────────────────────────────────────────────────────────────────
+# Defined here as a backup mirror of public/_headers.
+# public/_headers is the canonical source — this section is kept in sync
+# for visibility and for environments where _headers isn't picked up.
+
+# Security + CSP on all routes
+[[headers]]
+  for = "/*"
+
+  [headers.values]
+    X-Frame-Options             = "DENY"
+    X-Content-Type-Options      = "nosniff"
+    X-XSS-Protection            = "1; mode=block"
+    Referrer-Policy             = "strict-origin-when-cross-origin"
+    Strict-Transport-Security   = "max-age=31536000; includeSubDomains"
+    Permissions-Policy          = "camera=(), microphone=(), geolocation=(), payment=(self 'https://js.stripe.com'), usb=()"
+    Content-Security-Policy     = "default-src 'self'; script-src 'self' 'unsafe-inline' https://js.stripe.com https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.supabase.co https://images.pexels.com https://images.unsplash.com https://sofisrestaurant.com; font-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.stripe.com https://unpkg.com; frame-src https://js.stripe.com https://hooks.stripe.com; worker-src blob:; object-src 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests;"
+
+# HTML — never cache (SPA routing requires always-fresh HTML)
+[[headers]]
+  for = "/"
+
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
 
 [[headers]]
-for = "/*"
+  for = "/*.html"
+
   [headers.values]
-  X-Frame-Options = "DENY"
-  X-Content-Type-Options = "nosniff"
-  Referrer-Policy = "strict-origin-when-cross-origin"
-  Content-Security-Policy = """
-  default-src 'self';
-  script-src 'self' https://js.stripe.com;
-  connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.stripe.com;
-  img-src 'self' data: https:;
-  style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
-  font-src 'self' https://fonts.gstatic.com https:;
-  frame-src https://js.stripe.com https://hooks.stripe.com;
-"""
+    Cache-Control = "no-cache, no-store, must-revalidate"
+
+# Hashed JS/CSS assets — immutable (Vite appends content hash to filenames)
+[[headers]]
+  for = "/assets/*"
+
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# Self-hosted fonts — immutable + CORS
+[[headers]]
+  for = "/fonts/*"
+
+  [headers.values]
+    Cache-Control               = "public, max-age=31536000, immutable"
+    Access-Control-Allow-Origin = "*"
+
+# Images — 1 week + stale-while-revalidate
+[[headers]]
+  for = "/images/*"
+
+  [headers.values]
+    Cache-Control = "public, max-age=604800, stale-while-revalidate=86400"
+
+# 3D model assets
+[[headers]]
+  for = "/*.glb"
+
+  [headers.values]
+    Cache-Control = "public, max-age=604800, stale-while-revalidate=86400"
+    Content-Type  = "model/gltf-binary"
+
+# PWA manifest — 24 h cache
+[[headers]]
+  for = "/manifest.json"
+
+  [headers.values]
+    Cache-Control = "public, max-age=86400"
+    Content-Type  = "application/manifest+json"
+
+# Translation JSON — 1 h cache so locale updates roll out quickly
+[[headers]]
+  for = "/locales/*"
+
+  [headers.values]
+    Cache-Control = "public, max-age=3600, stale-while-revalidate=86400"
+    Content-Type  = "application/json; charset=utf-8"
+
+
+# ── PLUGINS ────────────────────────────────────────────────────────────────────
+# Uncomment to enable Netlify's built-in performance and accessibility checks.
+# Install first: npm install -D @netlify/plugin-lighthouse
+
+# [[plugins]]
+#   package = "@netlify/plugin-lighthouse"
+#
+#   [plugins.inputs]
+#     output_path = "reports/lighthouse.html"
+#     # Fail the deploy if Lighthouse scores drop below these thresholds
+#     thresholds.performance    = 0.8
+#     thresholds.accessibility  = 0.9
+#     thresholds.best-practices = 0.9
+#     thresholds.seo            = 0.9

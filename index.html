@@ -1,59 +1,204 @@
 <!doctype html>
 <html lang="en">
   <head>
-      <script type="module" src="https://unpkg.com/@google/model-viewer@4.2.0/dist/model-viewer.min.js"></script>
-
-    <!-- ===================== -->
-    <!-- Core Meta -->
-    <!-- ===================== -->
+    <!-- ── Character encoding (must be first) ────────────────── -->
     <meta charset="UTF-8" />
+
+    <!-- ── Viewport ──────────────────────────────────────────── -->
+    <!-- viewport-fit=cover: content extends under notches on iPhone -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 
-    <!-- ===================== -->
-    <!-- Title & SEO -->
-    <!-- ===================== -->
-    <title>Sofi’s Restaurant | Authentic Food • Fresh Ingredients • Family Owned</title>
+    <!-- ── Title & SEO ───────────────────────────────────────── -->
+    <title>Sofi's Restaurant | Crafted With Intention · Surprise, Arizona</title>
     <meta
       name="description"
-      content="Sofi’s Restaurant offers authentic, freshly prepared dishes made with love. Dine in, order online, or book catering today."
+      content="Sofi's Restaurant — seasonal ingredients, honest technique, and unforgettable evenings in Surprise, Arizona. Reserve your table or order online."
     />
-    <meta name="author" content="Sofi’s Restaurant" />
+    <meta name="author" content="Sofi's Restaurant" />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://sofisrestaurant.com" />
 
-    <!-- ===================== -->
-    <!-- Favicon -->
-    <!-- ===================== -->
-    <link rel="icon" href="/favicon.ico" />
-    <meta name="theme-color" content="#8B1E1E" />
+    <!-- Prevent iOS from auto-linking phone numbers found in meta text -->
+    <meta name="format-detection" content="telephone=no" />
 
-    <!-- ===================== -->
-    <!-- Open Graph -->
-    <!-- ===================== -->
-    <meta property="og:type" content="restaurant.restaurant" />
-    <meta property="og:title" content="Sofi’s Restaurant" />
-    <meta
-      property="og:description"
-      content="Authentic flavors. Fresh ingredients. An unforgettable dining experience."
+    <!-- ── Theme & color scheme ──────────────────────────────── -->
+    <!-- stone-900 brand dark — matches header/footer background -->
+    <meta name="theme-color" content="#1c1915" />
+    <!-- Explicitly light-only; add "dark" here if dark mode is ever added -->
+    <meta name="color-scheme" content="light" />
+
+    <!-- ── Favicon & touch icons ─────────────────────────────── -->
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <!-- Windows tile -->
+    <meta name="msapplication-TileColor" content="#1c1915" />
+
+    <!-- ── PWA manifest ──────────────────────────────────────── -->
+    <link rel="manifest" href="/manifest.json" />
+
+    <!-- ── Open Graph ────────────────────────────────────────── -->
+    <!-- og:type "website" is the correct value; "restaurant.restaurant" is non-standard -->
+    <meta property="og:type"               content="website" />
+    <meta property="og:site_name"          content="Sofi's Restaurant" />
+    <meta property="og:title"              content="Sofi's Restaurant — Crafted With Intention" />
+    <meta property="og:description"        content="Seasonal ingredients, honest technique, unforgettable evenings. Reserve your table today." />
+    <meta property="og:image"             content="https://sofisrestaurant.com/images/og-cover.jpg" />
+    <meta property="og:image:width"        content="1200" />
+    <meta property="og:image:height"       content="630" />
+    <meta property="og:image:alt"          content="Interior of Sofi's Restaurant with warm candlelight and seasonal table settings" />
+    <meta property="og:url"               content="https://sofisrestaurant.com" />
+    <!-- Primary locale + bilingual alternate for Spanish speakers -->
+    <meta property="og:locale"            content="en_US" />
+    <meta property="og:locale:alternate"  content="es_MX" />
+
+    <!-- ── Twitter / X Card ──────────────────────────────────── -->
+    <meta name="twitter:card"        content="summary_large_image" />
+    <meta name="twitter:site"        content="@sofisrestaurant" />
+    <meta name="twitter:title"       content="Sofi's Restaurant — Crafted With Intention" />
+    <meta name="twitter:description" content="Seasonal ingredients, honest technique, unforgettable evenings." />
+    <meta name="twitter:image"       content="https://sofisrestaurant.com/images/og-cover.jpg" />
+    <meta name="twitter:image:alt"   content="Interior of Sofi's Restaurant" />
+
+    <!-- ── Security ──────────────────────────────────────────── -->
+    <!--
+      Referrer policy: sends full URL only to same-origin requests;
+      strips to origin for cross-origin navigations (analytics-friendly,
+      privacy-respecting).
+    -->
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <!--
+      Content-Security-Policy and all other security headers are set via
+      real HTTP headers in public/_headers (and mirrored in netlify.toml).
+      HTTP headers take precedence over meta tags and apply to ALL resources
+      including scripts loaded before the HTML parser reaches <meta> tags.
+    -->
+
+    <!-- ── DNS prefetch for API and CDN domains ─────────────────────────── -->
+    <!--
+      Initiates DNS resolution early for domains the app connects to.
+      Costs nothing if the connection isn't ultimately needed.
+    -->
+    <link rel="dns-prefetch" href="https://api.stripe.com" />
+    <!-- @google/model-viewer loads from unpkg CDN for 3D .glb assets -->
+    <link rel="dns-prefetch" href="https://unpkg.com" />
+    <!-- Supabase storage bucket (images uploaded via dashboard) -->
+    <link rel="dns-prefetch" href="https://images.pexels.com" />
+
+    <!-- ── Performance: LCP image preload ────────────────────── -->
+    <!--
+      Preloads the above-the-fold hero image so the LCP paint
+      starts before the JS bundle runs. Replace src with the actual
+      hero1 path from HERO_IMAGES.
+      fetchpriority="high" ensures it competes at the highest priority.
+    -->
+    <link
+      rel="preload"
+      as="image"
+      href="/images/hero/hero1.webp"
+      fetchpriority="high"
+      type="image/webp"
     />
-    <meta property="og:image" content="/images/og-cover.jpg" />
-    <meta property="og:url" content="https://sofislegacy.com" />
 
-    <!-- ===================== -->
-    <!-- Performance -->
-    <!-- ===================== -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- ── Performance: module preload ──────────────────────── -->
+    <!--
+      Hints the browser to fetch the main entry module during idle time
+      so it is ready when the parser reaches the <script> tag below.
+    -->
+    <link rel="modulepreload" href="/src/main.tsx" />
 
-    <!-- Accessibility -->
-    <meta name="color-scheme" content="light dark" />
+    <!-- ── Structured Data (JSON-LD) ─────────────────────────── -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Restaurant",
+        "name": "Sofi's Restaurant",
+        "url": "https://sofisrestaurant.com",
+        "description": "Seasonal ingredients, honest technique, unforgettable evenings in Surprise, Arizona.",
+        "image": "https://sofisrestaurant.com/images/og-cover.jpg",
+        "telephone": "+16235550000",
+        "email": "hello@sofisrestaurant.com",
+        "servesCuisine": ["Mexican", "Latin American", "Contemporary", "Seasonal"],
+        "priceRange": "$$$",
+        "currenciesAccepted": "USD",
+        "paymentAccepted": "Cash, Credit Card",
+        "address": {
+          "@type": "PostalAddress",
+          "addressLocality": "Surprise",
+          "addressRegion": "AZ",
+          "addressCountry": "US"
+        },
+        "geo": {
+          "@type": "GeoCoordinates",
+          "latitude": "33.6292",
+          "longitude": "-112.3679"
+        },
+        "openingHoursSpecification": [
+          {
+            "@type": "OpeningHoursSpecification",
+            "dayOfWeek": ["Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+            "opens": "17:30",
+            "closes": "22:00"
+          }
+        ],
+        "hasMenu": "https://sofisrestaurant.com/menu",
+        "acceptsReservations": "True",
+        "sameAs": [
+          "https://www.instagram.com/sofisrestaurante/",
+          "https://www.tiktok.com/@Sofisrestaurant"
+        ]
+      }
+    </script>
   </head>
 
   <body>
+    <!-- React mounts here -->
     <div id="root"></div>
 
+    <!-- Application entry point -->
     <script type="module" src="/src/main.tsx"></script>
 
+    <!--
+      Noscript fallback — shown only when JavaScript is fully disabled.
+      Provides minimal but actionable content: phone number and address
+      so users can still reach the restaurant.
+    -->
     <noscript>
-      <strong> Sofi’s Restaurant requires JavaScript to function properly. </strong>
+      <div style="
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        font-family: Georgia, 'Times New Roman', serif;
+        color: #1c1c1c;
+        background: #faf6ef;
+        padding: 2rem;
+        text-align: center;
+      ">
+        <div style="max-width: 480px;">
+          <h1 style="font-size: 2rem; margin: 0 0 0.5rem; letter-spacing: -0.02em;">
+            Sofi's Restaurant
+          </h1>
+          <p style="color: #8a7a6a; margin: 0 0 1.5rem; font-size: 0.95rem; line-height: 1.6;">
+            Surprise, Arizona &nbsp;·&nbsp; Est. 2022
+          </p>
+          <p style="color: #4e3e34; margin: 0 0 1rem; font-size: 0.9rem;">
+            Please enable JavaScript to experience our full website,<br />
+            or reach us directly:
+          </p>
+          <p style="margin: 0 0 0.5rem;">
+            <a href="tel:+16235550000" style="color: #a96840; font-size: 1.05rem; text-decoration: none;">
+              (623) 555-0000
+            </a>
+          </p>
+          <p style="margin: 0;">
+            <a href="mailto:hello@sofisrestaurant.com" style="color: #a96840; font-size: 0.9rem; text-decoration: none;">
+              hello@sofisrestaurant.com
+            </a>
+          </p>
+        </div>
+      </div>
     </noscript>
   </body>
 </html>

@@ -1,1 +1,63 @@
-/*    /index.html   200
+# =============================================================================
+# Netlify Redirects — Sofi's Restaurant
+# =============================================================================
+# Syntax:  [from]  [to]  [status code]  [conditions]
+# Rules:   FIRST matching rule wins — order matters.
+# Docs:    https://docs.netlify.com/routing/redirects/
+#
+# Status codes used here:
+#   200  Rewrite — serve [to] at [from] URL without changing the browser URL.
+#        Used for the SPA catch-all so React Router sees the real path.
+#   301  Permanent redirect — cached by browsers + search engines.
+#        Use when a URL has moved forever (SEO juice transfers).
+#   302  Temporary redirect — not cached.
+#        Used for language detection because it may change per user.
+# =============================================================================
+
+
+# ── HTTPS ENFORCEMENT ─────────────────────────────────────────────────────────
+# Force HTTP → HTTPS. Netlify handles this automatically but this makes it
+# explicit and ensures www → non-www canonical URL.
+http://sofisrestaurant.com/*         https://sofisrestaurant.com/:splat   301!
+http://www.sofisrestaurant.com/*     https://sofisrestaurant.com/:splat   301!
+https://www.sofisrestaurant.com/*    https://sofisrestaurant.com/:splat   301!
+
+
+# ── LANGUAGE DETECTION — Spanish browser redirect ─────────────────────────────
+# Fires only on the root path for browsers sending Accept-Language: es*.
+# Adds ?lng=es so i18next-browser-languagedetector picks it up via the
+# querystring detector and persists it to localStorage (sofis_locale).
+# After the first visit the user's preference is stored — this redirect
+# no longer fires for them.
+# 302 (not 301) so the redirect is re-evaluated on every root visit.
+/    /?lng=es    302    Language=es
+
+
+# ── LEGACY / RENAMED ROUTES ───────────────────────────────────────────────────
+# Uncomment and add entries here when you rename or remove a route.
+# 301 preserves SEO ranking and updates bookmarks permanently.
+
+# /order             /menu                    301
+# /book              /reservations            301
+# /reservations      /reservations            200
+
+
+# ── NETLIFY FUNCTIONS PROXY ───────────────────────────────────────────────────
+# Proxy /api/* to Netlify serverless functions so the client calls /api/...
+# instead of /.netlify/functions/... (cleaner URLs, decoupled from host).
+/api/*    /.netlify/functions/:splat    200
+
+
+# ── KNOWN 404 PAGES — explicit redirects to avoid SPA catch-all confusion ────
+# Paths that definitely don't exist as routes.
+/favicon.ico    /favicon.ico    200
+/robots.txt     /robots.txt     200
+/sitemap.xml    /sitemap.xml    200
+
+
+# ── SPA CATCH-ALL — MUST BE LAST ──────────────────────────────────────────────
+# React Router handles all routing client-side. Every URL the user visits
+# directly (hard reload, shared link, bookmark) must be served index.html
+# so React mounts and the router renders the correct component tree.
+# Status 200 rewrites the response without changing the browser URL.
+/*    /index.html    200

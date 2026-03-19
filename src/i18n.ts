@@ -58,6 +58,8 @@ import esTranslation from './i18n/locales/es/translation.json';
 // TranslationKey is the full union of valid translation keys. Using it in
 // t() means typos are caught at compile time, not at runtime.
 //
+
+
 export type TranslationTree = typeof enTranslation;
 
 type DotPaths<T, Prefix extends string = ''> = {
