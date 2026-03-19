@@ -44,18 +44,40 @@ export function Button({
     ease-[var(--ease-standard)]
     focus:outline-none
     focus-visible:ring-4
-    focus-visible:ring-[var(--accent)]/30
+    focus-visible:ring-[var(--color-gold-400)]/30
     disabled:opacity-50 disabled:cursor-not-allowed
     relative
   `;
 
   const variants: Record<NonNullable<ButtonProps['variant']>, string> = {
     primary: `
-      bg-[var(--btn-primary-bg)]
-      text-[var(--btn-primary-text)]
-      hover:brightness-110
-      active:scale-[0.98]
-    `,
+  relative
+  bg-gradient-to-r 
+  from-[var(--color-gold-400)] 
+  to-[var(--color-gold-300)]
+  text-black
+
+  font-semibold tracking-tight
+
+  rounded-xl
+  px-5 py-3
+
+  shadow-[0_4px_14px_rgba(0,0,0,0.15)]
+
+  transition-all duration-200 ease-[var(--ease-luxury)]
+
+  hover:shadow-[0_6px_20px_rgba(0,0,0,0.22)]
+  hover:brightness-105
+
+  active:scale-[0.97]
+  active:shadow-[0_2px_8px_rgba(0,0,0,0.18)]
+
+  focus-visible:ring-4
+  focus-visible:ring-[var(--color-gold-400)]/30
+
+  disabled:opacity-50
+  disabled:cursor-not-allowed
+`,
     secondary: `
       bg-[var(--btn-secondary-bg)]
       text-[var(--btn-secondary-text)]
@@ -85,6 +107,7 @@ export function Button({
       active:scale-[0.98]
     `,
   };
+<span className="absolute inset-0 rounded-xl opacity-0 transition-opacity duration-300 hover:opacity-100 bg-white/10 pointer-events-none" />;
 
   const sizes: Record<NonNullable<ButtonProps['size']>, string> = {
     sm: 'px-3 py-1.5 text-sm rounded-md',
