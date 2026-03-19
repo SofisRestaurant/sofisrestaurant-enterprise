@@ -717,7 +717,6 @@ function MenuPage() {
             <m.div variants={fadeUp} className="mt-5">
               <MenuGrid
                 items={filteredSortedItems}
-                onOpenItem={openItem}
                 getPriceCents={
                   getPriceCents as unknown as (item: (typeof filteredSortedItems)[number]) => number
                 }
