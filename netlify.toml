@@ -104,7 +104,7 @@
     Referrer-Policy             = "strict-origin-when-cross-origin"
     Strict-Transport-Security   = "max-age=31536000; includeSubDomains"
     Permissions-Policy          = "camera=(), microphone=(), geolocation=(), payment=(self 'https://js.stripe.com'), usb=()"
-    Content-Security-Policy     = "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://js.stripe.com https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.supabase.co https://images.pexels.com https://images.unsplash.com https://sofisrestaurant.com; font-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.stripe.com https://unpkg.com; frame-src https://js.stripe.com https://hooks.stripe.com; worker-src blob:; object-src 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests;"
+    Content-Security-Policy     = "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://js.stripe.com https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.supabase.co https://images.pexels.com https://images.unsplash.com https://sofisrestaurant.com; font-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.stripe.com https://unpkg.com; frame-src https://js.stripe.com https://hooks.stripe.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests;"
 
 # HTML — never cache (SPA routing requires always-fresh HTML)
 [[headers]]
