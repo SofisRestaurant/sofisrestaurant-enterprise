@@ -19,26 +19,34 @@
   # Vite outputs to ./dist by default
   publish = "dist"
 
-  # Production build command
-  command = "npm run build"
+  # Production build command.
+  # npm ci --include=dev ensures devDependencies (vite, tsc, @vitejs/plugin-react,
+  # etc.) are always installed regardless of NODE_ENV.
+  # NODE_ENV=production is intentionally NOT set here — npm skips devDependencies
+  # when it sees NODE_ENV=production, which breaks the build because the entire
+  # Vite/TypeScript toolchain lives in devDependencies.
+  # Vite reads mode from --mode flag; production output is guaranteed by vite build.
+  command = "npm ci --include=dev && npm run build"
 
   # Environment variables available during BUILD time only
   # (not sensitive — these are not secrets)
   [build.environment]
     NODE_VERSION  = "20"
-    NODE_ENV      = "production"
-    # Tells Vite to produce a production build (no HMR, no devtools)
+    # VITE_APP_ENV is read by the app at runtime via import.meta.env.VITE_APP_ENV
     VITE_APP_ENV  = "production"
+    # NPM_FLAGS ensures devDependencies are never skipped — belt-and-suspenders
+    # alongside --include=dev in the command above
+    NPM_FLAGS     = "--include=dev"
 
 
 # ── CONTEXT: PRODUCTION ────────────────────────────────────────────────────────
 # Overrides applied only to the main branch deploy (your live site)
 
 [context.production]
-  command = "npm run build"
+  command = "npm ci --include=dev && npm run build"
 
   [context.production.environment]
-    NODE_ENV = "production"
+    VITE_APP_ENV = "production"
 
 
 # ── CONTEXT: DEPLOY PREVIEWS ──────────────────────────────────────────────────
@@ -46,17 +54,16 @@
 # Keeps source maps in previews for easier debugging
 
 [context.deploy-preview]
-  command = "npm run build"
+  command = "npm ci --include=dev && npm run build"
 
   [context.deploy-preview.environment]
-    NODE_ENV     = "production"
     VITE_APP_ENV = "preview"
 
 
 # ── CONTEXT: BRANCH DEPLOYS ───────────────────────────────────────────────────
 
 [context.branch-deploy]
-  command = "npm run build"
+  command = "npm ci --include=dev && npm run build"
 
 
 # ── REDIRECTS ──────────────────────────────────────────────────────────────────
