@@ -10,7 +10,6 @@ type BootState = 'loading' | 'ready' | 'fallback' | 'fatal';
 
 const MIN_BOOT_SCREEN_MS = 900;
 const EXIT_ANIMATION_MS = 350;
-const BOOT_MODEL_SRC = '/sofis3dlogo-2.glb';
 
 function safeNowMs() {
   return Date.now();
@@ -146,7 +145,6 @@ export default function AppBoot({ children }: { children: React.ReactNode }) {
           <BootSplash3D
             visible
             fadingOut={false}
-            modelSrc={BOOT_MODEL_SRC}
             title="SOFI'S RESTAURANT"
             subtitle="Preparing your experience..."
           />
@@ -163,7 +161,6 @@ export default function AppBoot({ children }: { children: React.ReactNode }) {
         <BootSplash3D
           visible={state === 'loading'}
           fadingOut={state === 'ready'}
-          modelSrc={BOOT_MODEL_SRC}
           title="SOFI'S RESTAURANT"
           subtitle="Preparing your experience..."
         />
