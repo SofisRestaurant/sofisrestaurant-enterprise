@@ -464,3 +464,24 @@
   background-size: 200% auto;
   animation: shimmer 1.6s linear infinite;
 }
+
+/* ── Shimmer keyframes (shared by .skeleton, .skeleton-dark, .animate-shimmer) ── */
+
+@keyframes shimmer {
+  0%   { background-position: 200% center; }
+  100% { background-position: -200% center; }
+}
+
+/* Utility class — apply directly on an element that needs the shimmer sweep.
+   Used by MenuItemCard's image loading placeholder. */
+.animate-shimmer {
+  background: linear-gradient(
+    105deg,
+    rgb(255 255 255 / 0.04) 0%,
+    rgb(255 255 255 / 0.10) 40%,
+    rgb(255 255 255 / 0.04) 60%,
+    rgb(255 255 255 / 0.10) 100%
+  );
+  background-size: 200% auto;
+  animation: shimmer 1.4s linear infinite;
+}

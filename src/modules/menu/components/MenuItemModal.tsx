@@ -524,8 +524,8 @@ export default function MenuItemModal({ item, onClose }: Props) {
                 <div className="mt-6">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold text-white">Customize your order</p>
-                      <p className="mt-1 text-xs text-zinc-500">
+                      <p className="section-eyebrow">Customize your order</p>
+                      <p className="text-xs input-label mt-1">
                         Options are validated for availability and required picks before adding to
                         cart.
                       </p>
@@ -534,7 +534,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
                       <button
                         type="button"
                         onClick={clearSelections}
-                        className="shrink-0 rounded-lg px-2 py-1 text-xs font-semibold text-zinc-300 hover:bg-white/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25"
+                        className="btn btn-ghost-dark btn-sm px-2 py-1 shrink-0"
                         aria-label="Clear all selections"
                       >
                         Clear
@@ -780,7 +780,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
                   <div className="flex items-center rounded-2xl border border-white/10 bg-white/5 p-1">
                     <button
                       type="button"
-                      className="inline-flex h-10 w-10 items-center justify-center rounded-xl text-white hover:bg-white/10 disabled:opacity-40"
+                      className="btn btn-ghost-dark btn-icon"
                       onClick={() => setQty((q) => clampInt(q - 1, 1, maxQty))}
                       disabled={safeQty <= 1 || preflightLoading || invalidItem}
                       aria-label="Decrease quantity"
@@ -794,7 +794,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
 
                     <button
                       type="button"
-                      className="inline-flex h-10 w-10 items-center justify-center rounded-xl text-white hover:bg-white/10 disabled:opacity-40"
+                      className="btn btn-ghost-dark btn-icon"
                       onClick={() => setQty((q) => clampInt(q + 1, 1, maxQty))}
                       disabled={safeQty >= maxQty || preflightLoading || invalidItem}
                       aria-label="Increase quantity"
@@ -805,7 +805,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
 
                   <div className="min-w-0">
                     <p className="text-xs text-zinc-400">Total</p>
-                    <p className="truncate text-lg font-bold text-white">{stickyTotalLabel}</p>
+                    <p className="text-lg font-bold text-white truncate">{stickyTotalLabel}</p>
                     <p className="text-[11px] text-zinc-500">
                       {preflightLoading ? 'Checking…' : preflight?.ok === true ? '' : '—'}
                     </p>
@@ -815,10 +815,9 @@ export default function MenuItemModal({ item, onClose }: Props) {
                 <button
                   type="button"
                   className={cx(
-                    'h-12 rounded-2xl px-5 text-sm font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25',
-                    canAdd && !invalidItem
-                      ? 'bg-amber-500 text-black hover:opacity-95'
-                      : 'cursor-not-allowed bg-white/10 text-zinc-400',
+                    'btn btn-primary h-12 rounded-2xl px-5 text-sm font-semibold transition',
+                    (!canAdd || phase !== 'idle' || invalidItem) &&
+                      'btn-ghost-dark cursor-not-allowed',
                   )}
                   onClick={handleAddToCart}
                   disabled={!canAdd || phase !== 'idle' || invalidItem}

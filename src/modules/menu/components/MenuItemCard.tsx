@@ -24,7 +24,6 @@ import { m, AnimatePresence } from 'framer-motion';
 import type { MenuItemBase } from '@/domain/menu/menu.types';
 import { PricingEngine } from '@/domain/pricing/pricing.engine';
 import { formatCurrency } from '@/utils/currency';
-import { Button } from '@/components/ui/Button';
 
 // ─── Easing curves ────────────────────────────────────────────────────────────
 
@@ -233,7 +232,7 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
       }
       whileTap={isAvailable ? { scale: 0.985, transition: { duration: 0.1 } } : undefined}
       className="group relative flex flex-col overflow-hidden rounded-2xl bg-white
-                 ring-1 ring-zinc-200/70 transition-box-shadow duration-300"
+                 ring-1 ring-zinc-200/70 transition-shadow duration-300"
       aria-label={name}
       data-available={isAvailable}
     >
@@ -372,20 +371,15 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
           whileTap={isAvailable ? { scale: 0.965 } : undefined}
           transition={{ duration: 0.13, ease: ES }}
         >
-          <Button
+          <button
             type="button"
-            variant={isAvailable ? 'primary' : 'secondary'}
-            size="md"
-            onClick={() => {
-              void handleOpen();
-            }}
-            disabled={!isAvailable}
-            isLoading={isOpening}
-            className="w-full"
+            className={`w-full ${isAvailable ? 'btn btn-primary' : 'btn btn-ghost-dark'}`}
+            onClick={() => void handleOpen()}
+            disabled={!isAvailable || isOpening}
             aria-label={!isAvailable ? `${name} is currently unavailable` : `Customize ${name}`}
           >
-            {!isAvailable ? 'Unavailable' : 'Customize'}
-          </Button>
+            {isOpening ? 'Opening…' : !isAvailable ? 'Unavailable' : 'Customize'}
+          </button>
         </m.div>
       </div>
     </m.article>

@@ -254,12 +254,11 @@ export function CartDrawer({ isOpen, onClose }: CartDrawerProps) {
                         <Button
                           onClick={handleCheckout}
                           variant="primary"
-                          className="w-full"
+                          className="w-full py-3 text-lg font-semibold bg-amber-500 hover:bg-amber-600 text-white rounded-lg shadow-lg"
                           disabled={computed.invalidCount > 0}
                         >
                           Proceed to Checkout
                         </Button>
-
                         <button
                           onClick={handleClear}
                           className="w-full text-sm text-gray-500 underline decoration-dotted hover:text-gray-700 hover:no-underline"
