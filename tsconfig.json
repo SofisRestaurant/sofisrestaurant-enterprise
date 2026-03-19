@@ -31,7 +31,8 @@
     },
 
     // --- Global Types ---
-    "types": ["vite/client", "node"]
+    "types": ["vite/client", "node", "@types/react", "@types/react-dom"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["node_modules", "dist", "src/tests"]
 }
