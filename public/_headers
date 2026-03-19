@@ -26,7 +26,6 @@
 #   'self'                 your own domain
 #   'unsafe-inline'        required by Tailwind CSS + Vite build output
 #   https://js.stripe.com  Stripe.js payment widget
-#   https://unpkg.com      @google/model-viewer CDN for sofis3dlogo-2.glb
 #   https://*.supabase.co  Supabase API, Storage, Auth, Realtime REST
 #   wss://*.supabase.co    Supabase Realtime WebSocket (live order status)
 #   https://images.pexels.com    Pexels stock photography (hero/menu images)
@@ -82,7 +81,6 @@
 # ── 3D MODEL ASSETS (.glb / .gltf) ────────────────────────────────────────────
 # sofis3dlogo-2.glb and any other model-viewer assets.
 # Content-Type must be explicit — some CDNs serve .glb as octet-stream
-# which breaks @google/model-viewer's loader.
 /*.glb
   Cache-Control: public, max-age=604800, stale-while-revalidate=86400
   Content-Type: model/gltf-binary

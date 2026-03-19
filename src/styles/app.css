@@ -1,21 +1,38 @@
+/* ── Tailwind base (preflight) ─────────────────────────────────────────────── */
 @import "tailwindcss";
 
-/* Import your fonts first */
+/* ── Tailwind utilities (forms, typography handled via tailwind.config.cjs plugins) ── */
+@import "tailwindcss/utilities";
+
+/* ── Project-specific styles ────────────────────────────────────────────────── */
 @import "./fonts.css";
-
-/* Tailwind plugins */
-@plugin "@tailwindcss/forms";
-@plugin "@tailwindcss/typography";
-
-/* Project styles */
 @import "./tokens.css";
 @import "./globals.css";
 @import "./animations.css";
 @import "./effects.css";
 @import "./utilities.css";
 @import "./components.css";
-@utility btn {
-  border-radius: 0.5rem;
-  padding: 0.5rem 1rem;
-  background-color: ButtonFace;
+
+/* ── Custom utilities ───────────────────────────────────────────────────────── */
+@layer utilities {
+  .btn {
+    border-radius: 0.5rem;
+    padding: 0.5rem 1rem;
+    background-color: ButtonFace;
+    font-weight: 600;
+    text-align: center;
+    display: inline-block;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+  }
+
+  .btn:hover {
+    background-color: #f97316; /* optional hover effect */
+  }
+
+  /* Example extra custom utility */
+  .card-shadow {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    border-radius: 0.5rem;
+  }
 }

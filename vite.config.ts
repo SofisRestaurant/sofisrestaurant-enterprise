@@ -1,89 +1,71 @@
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
-import path from 'path';
-import tailwindcss from '@tailwindcss/vite'; // ✅ add this
-import { VitePWA } from 'vite-plugin-pwa';
+import { defineConfig, loadEnv, UserConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import viteCompression from 'vite-plugin-compression'
+import { imagetools } from 'vite-imagetools'
 
-export default defineConfig(({ mode }) => {
-  const isProduction = mode === 'production';
+// Example async function for feature flags or remote config
+async function getAsyncData() {
+  return { featureFlag: true }
+}
 
-  return {
+export default defineConfig(async ({ command, mode, isSsrBuild, isPreview }) => {
+  // Load environment variables
+  const env = loadEnv(mode, process.cwd(), '')
+
+  // Fetch async initialization data
+  const asyncData = await getAsyncData()
+
+  // Base Vite config
+  const config: UserConfig = {
     plugins: [
       react(),
-      tailwindcss(), // ✅ include the Tailwind Vite plugin here
-      VitePWA({
-        registerType: 'autoUpdate',
-        injectRegister: 'auto',
-        manifest: {
-          name: "Sofi's Restaurant",
-          short_name: "Sofi's",
-          theme_color: "#1c1915",
-          background_color: "#faf6ef",
-          display: "standalone",
-          start_url: "/",
-          icons: [
-            {
-              src: "/icons/icon-192.png",
-              sizes: "192x192",
-              type: "image/png"
-            },
-            {
-              src: "/icons/icon-512.png",
-              sizes: "512x512",
-              type: "image/png"
-            }
-          ]
-        }
-      })
+      viteCompression(),     // Gzip/ Brotli for production
+      imagetools()           // Optimize images on import
     ],
-
+    define: {
+      __APP_ENV__: JSON.stringify(env.APP_ENV || 'development'),
+      __FEATURE_FLAG__: JSON.stringify(asyncData.featureFlag),
+    },
+    server: {
+      port: env.APP_PORT ? Number(env.APP_PORT) : 5173,
+      open: true,
+      strictPort: command === 'serve',
+    },
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, 'src'),
+        '@': `${process.cwd()}/src`,
       },
     },
-
-    server: {
-      port: 3000,
-      open: true,
-    },
-
-    preview: {
-      port: 3000,
-    },
-
-    define: {
-      __DEV__: !isProduction,
-    },
-
-    css: {
-      devSourcemap: true,
-    },
-
-    optimizeDeps: {
-      include: ['react', 'react-dom', 'react-router-dom'],
-    },
-
-    esbuild: {
-      drop: isProduction ? ['console', 'debugger'] : [],
-    },
-
     build: {
       outDir: 'dist',
-      sourcemap: false,
-      chunkSizeWarningLimit: 900,
-
+      sourcemap: false,       // Disable sourcemaps in production
+      minify: 'esbuild',
+      chunkSizeWarningLimit: 1000, // Adjust warning for large chunks
       rollupOptions: {
         output: {
           manualChunks(id) {
-            if (id.includes('node_modules')) {
-              if (id.includes('react')) return 'react';
-              if (id.includes('@supabase')) return 'supabase';
-              if (id.includes('framer-motion')) return 'motion';
-            }
+            if (id.includes('node_modules')) return 'vendor'
+            if (id.includes('Dashboard')) return 'dashboard'
+            if (id.includes('LoyaltyScan')) return 'loyalty'
           },
-        },
-      },
+          entryFileNames: 'assets/[name]-[hash].js',
+          chunkFileNames: 'assets/[name]-[hash].js',
+          assetFileNames: 'assets/[name]-[hash].[ext]'
+        }
+      }
     },
-  };
-});
+    optimizeDeps: {
+      include: ['react', 'react-dom', 'clsx'], // pre-bundle critical deps
+    }
+  }
+
+  // Dev-specific overrides
+  if (command === 'serve') {
+    config.server!.strictPort = true
+  } else {
+    // Production-specific overrides
+    config.build!.sourcemap = false
+  }
+
+  return config
+})
