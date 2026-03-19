@@ -45,67 +45,36 @@ import {
   getPeakHour,
 } from '@/lib/dashboard/formatters';
 
-import type { RevenueRow, HeatmapRow } from '@/types/dashboard.types';
+import type {
+  ExecutiveRow,
+  TopItem,
+  RiskRow,
+  HealthScore,
+  HealthGrade,
+  HeatmapChartPoint,
+  PeakHour,
+  RevenueRow,
+  HeatmapRow,
+} from '@/types/dashboard.types';
 
 // =============================================================================
-// Local safe types
+// Local types
 // =============================================================================
+
+// Only types not covered by dashboard.types.ts belong here.
+// DashboardPayload, ExecutiveRow, TopItem, RiskRow, HealthScore, HealthGrade,
+// HeatmapChartPoint, PeakHour — all imported from '@/types/dashboard.types'.
 
 type UnknownRecord = Record<string, unknown>;
 
-type DashboardSection<T> = {
-  data?: T;
-  error?: unknown;
-};
-
-type ExecutiveData = {
-  avg_order_value_cents?: unknown;
-  total_orders?: unknown;
-  lifetime_revenue_cents?: unknown;
-  fraud_events_7d?: unknown;
-};
-
+// RevenueApiRow is intentionally local: it covers both `day` and `date` field
+// names from the raw API response before normalisation into RevenueRow.
 type RevenueApiRow = {
   day?: unknown;
   date?: unknown;
   total_revenue_cents?: unknown;
   total_orders?: unknown;
   avg_order_value_cents?: unknown;
-};
-
-type TopItemRow = {
-  item_name?: unknown;
-  revenue_impact_cents?: unknown;
-};
-
-type RiskData = {
-  disputes?: unknown;
-  failed_payments?: unknown;
-  cancelled_orders?: unknown;
-};
-
-type DashboardPayload = {
-  executive?: DashboardSection<ExecutiveData>;
-  revenue?: DashboardSection<RevenueApiRow[]>;
-  topItems?: DashboardSection<TopItemRow[]>;
-  risk?: DashboardSection<RiskData>;
-  heatmap?: DashboardSection<HeatmapRow[]>;
-  fraud?: DashboardSection<unknown>;
-  meta?: {
-    error_count?: unknown;
-  };
-};
-
-type HealthModel = {
-  score: number;
-  grade: string;
-  colorHex: string;
-  breakdown: Array<{
-    signal: string;
-    label: string;
-    score: number;
-    detail?: string;
-  }>;
 };
 
 type KPITrend = 'up' | 'down' | 'flat';
@@ -151,12 +120,21 @@ function toTrend(value: unknown): KPITrend {
   return 'flat';
 }
 
-function normalizeHealth(raw: unknown): HealthModel | null {
+const HEALTH_GRADES = new Set<HealthGrade>(['Excellent', 'Good', 'Fair', 'Needs Attention']);
+
+function isHealthGrade(value: string): value is HealthGrade {
+  return HEALTH_GRADES.has(value as HealthGrade);
+}
+
+function normalizeHealth(raw: unknown): HealthScore | null {
   if (!isRecord(raw)) return null;
+
+  const gradeStr = asString(raw.grade, '');
+  const grade: HealthGrade = isHealthGrade(gradeStr) ? gradeStr : 'Needs Attention';
 
   const breakdown = Array.isArray(raw.breakdown)
     ? raw.breakdown.filter(isRecord).map((item) => ({
-        signal: asString(item.signal, 'unknown'),
+        signal: asString(item.signal, 'unknown') as HealthScore['breakdown'][number]['signal'],
         label: asString(item.label, 'Signal'),
         score: asInt(item.score, 0),
         detail: asString(item.detail, '') || undefined,
@@ -165,7 +143,8 @@ function normalizeHealth(raw: unknown): HealthModel | null {
 
   return {
     score: asInt(raw.score, 0),
-    grade: asString(raw.grade, 'N/A'),
+    grade,
+    colorClass: asString(raw.colorClass, 'text-amber-400'),
     colorHex: asString(raw.colorHex, '#f59e0b'),
     breakdown,
   };
@@ -197,19 +176,24 @@ export default function Dashboard() {
   const { data, loading, refreshing, lastRefresh, countdown, error, manualRefresh } =
     useDashboard();
 
-  const payload = (data ?? {}) as DashboardPayload;
-
-  const executive = payload.executive?.data;
-  const revenueRows = safeArray(payload.revenue?.data);
-  const topItems = safeArray(payload.topItems?.data);
-  const risk = payload.risk?.data;
-  const heatmapRows = safeArray(payload.heatmap?.data);
-  const partialErrorCount = asInt(payload.meta?.error_count, 0);
-
-  const health = useMemo(() => {
+  const health: HealthScore | null = useMemo(() => {
     if (!data) return null;
     return normalizeHealth(computeHealthScore(data));
   }, [data]);
+
+  // data is DashboardPayload | null from useDashboard() — no cast needed.
+  // All sections (revenue, topItems, risk, heatmap, executive, meta) are
+  // non-optional on DashboardPayload; guard with null-check on data itself.
+  if (!loading && !data && !error) return null;
+
+  const payload = data;
+
+  const executive: ExecutiveRow | null = payload?.executive.data ?? null;
+  const revenueRows: RevenueRow[] = safeArray(payload?.revenue.data);
+  const topItems: TopItem[] = safeArray(payload?.topItems.data);
+  const risk: RiskRow | null = payload?.risk.data ?? null;
+  const heatmapRows: HeatmapRow[] = safeArray(payload?.heatmap.data);
+  const partialErrorCount: number = payload?.meta.error_count ?? 0;
 
   const today = revenueRows[revenueRows.length - 1];
   const yesterday = revenueRows[revenueRows.length - 2];
@@ -225,14 +209,14 @@ export default function Dashboard() {
   }));
 
   const revenueChart = buildRevenueChartData(revenueChartInput, 14);
-  const heatmapChart = buildHeatmapChartData(heatmapRows);
-  const peakHour = getPeakHour(heatmapRows);
-  const maxHeatmapRevenue = Math.max(...heatmapChart.map((row) => asNumber(row.revenue, 0)), 1);
+  const heatmapChart: HeatmapChartPoint[] = buildHeatmapChartData(heatmapRows);
+  const peakHour: PeakHour | null = getPeakHour(heatmapRows);
+  const maxHeatmapRevenue = Math.max(...heatmapChart.map((row) => row.revenue), 1);
 
   const topItemsNormalized = topItems
     .map((item) => ({
-      name: asString(item.item_name, '').trim() || 'Unknown Item',
-      revenueCents: asNumber(item.revenue_impact_cents, 0),
+      name: item.item_name.trim() || 'Unknown Item',
+      revenueCents: item.revenue_impact_cents,
     }))
     .filter((item) => item.name.length > 0)
     .slice(0, 6);
@@ -350,8 +334,8 @@ export default function Dashboard() {
 
         <KPICard
           label="Avg Order Value"
-          value={formatDollars(asNumber(executive?.avg_order_value_cents, 0))}
-          sub={`${formatCompact(asNumber(executive?.total_orders, 0))} lifetime orders`}
+          value={formatDollars(executive?.avg_order_value_cents ?? 0)}
+          sub={`${formatCompact(executive?.total_orders ?? 0)} lifetime orders`}
           accent="slate"
         />
       </div>
@@ -361,7 +345,7 @@ export default function Dashboard() {
           className="lg:col-span-2"
           title="Revenue Trend"
           subtitle="Last 14 revenue points"
-          error={payload.revenue?.error != null}
+          error={payload?.revenue.error != null}
         >
           {revenueChart.length > 0 ? (
             <ResponsiveContainer width="100%" height={220}>
@@ -393,15 +377,15 @@ export default function Dashboard() {
                   }}
                   axisLine={false}
                   tickLine={false}
-                  tickFormatter={(value: number) => `$${(value / 1000).toFixed(0)}k`}
+                  tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`}
                 />
                 <Tooltip
                   contentStyle={TOOLTIP_STYLE}
                   labelStyle={{ color: '#71717a' }}
-                  formatter={(value: number | undefined) => [
-                    `$${((value ?? 0) / 100).toLocaleString()}`,
-                    'Revenue',
-                  ]}
+                  formatter={(value) => {
+                    const v = typeof value === 'number' ? value : Number(value ?? 0);
+                    return [`$${(v / 100).toLocaleString()}`, 'Revenue'] as const;
+                  }}
                 />
                 <Area
                   type="monotone"
@@ -431,7 +415,7 @@ export default function Dashboard() {
         <Panel
           title="Top Selling Items"
           subtitle="Best current earners"
-          error={payload.topItems?.error != null}
+          error={payload?.topItems.error != null}
         >
           <div className="space-y-3">
             {topItemsNormalized.length > 0 ? (
@@ -474,12 +458,12 @@ export default function Dashboard() {
         <Panel
           title="Hourly Revenue"
           subtitle="Useful for staffing and prep"
-          error={payload.heatmap?.error != null}
+          error={payload?.heatmap.error != null}
           actions={
             peakHour ? (
               <div className="text-right">
                 <p className="font-mono text-[9px] text-zinc-600">Peak hour</p>
-                <p className="font-black text-amber-400">{asString(peakHour.label, '—')}</p>
+                <p className="font-black text-amber-400">{peakHour.label}</p>
               </div>
             ) : undefined
           }
@@ -504,16 +488,16 @@ export default function Dashboard() {
                   <Tooltip
                     contentStyle={TOOLTIP_STYLE}
                     labelStyle={{ color: '#71717a' }}
-                    formatter={(value: number | undefined) => [
-                      `$${((value ?? 0) / 100).toLocaleString()}`,
-                      'Revenue',
-                    ]}
+                    formatter={(value) => {
+                      const v = typeof value === 'number' ? value : Number(value ?? 0);
+                      return [`$${(v / 100).toLocaleString()}`, 'Revenue'] as const;
+                    }}
                   />
                   <Bar dataKey="revenue" radius={[2, 2, 0, 0]}>
                     {heatmapChart.map((entry) => (
                       <Cell
                         key={entry.label}
-                        fill={heatmapBarColor(asNumber(entry.revenue, 0), maxHeatmapRevenue)}
+                        fill={heatmapBarColor(entry.revenue, maxHeatmapRevenue)}
                       />
                     ))}
                   </Bar>
@@ -536,14 +520,14 @@ export default function Dashboard() {
         <Panel
           title="Operational Risk"
           subtitle="Keep an eye on payment and order issues"
-          error={payload.risk?.error != null}
+          error={payload?.risk.error != null}
         >
           <div className="space-y-3">
             {(
               [
-                ['Disputes', asInt(risk?.disputes, 0), 1, '⚖'],
-                ['Failed Payments', asInt(risk?.failed_payments, 0), 3, '✕'],
-                ['Cancellations', asInt(risk?.cancelled_orders, 0), 5, '◌'],
+                ['Disputes', risk?.disputes ?? 0, 1, '⚖'],
+                ['Failed Payments', risk?.failed_payments ?? 0, 3, '✕'],
+                ['Cancellations', risk?.cancelled_orders ?? 0, 5, '◌'],
               ] as Array<[string, number, number, string]>
             ).map(([label, value, threshold, icon]) => {
               const elevated = value >= threshold;
@@ -576,7 +560,7 @@ export default function Dashboard() {
                 Fraud events (7d)
               </p>
               <p className="mt-1 text-2xl font-black text-white tabular-nums">
-                {asInt(executive?.fraud_events_7d, 0)}
+                {executive?.fraud_events_7d ?? 0}
               </p>
             </div>
           </div>
@@ -709,7 +693,7 @@ function DashboardError({ message, onRetry }: { message: string; onRetry: () => 
         <button
           type="button"
           onClick={onRetry}
-          className="mt-6 w-full rounded-lg border border-red-500/20 bg-red-500/8 py-2.5 text-xs font-bold text-red-400 transition-colors hover:bg-red-500/15"
+          className="mt-6 w-full rounded-lg border border-red-500/20 bg-red-500/0.08 py-2.5 text-xs font-bold text-red-400 transition-colors hover:bg-red-500/15"
         >
           ↻ Retry
         </button>
