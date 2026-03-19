@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import tailwindcss from '@tailwindcss/vite'; // ✅ add this
+import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(({ mode }) => {
   const isProduction = mode === 'production';
@@ -10,6 +11,30 @@ export default defineConfig(({ mode }) => {
     plugins: [
       react(),
       tailwindcss(), // ✅ include the Tailwind Vite plugin here
+      VitePWA({
+        registerType: 'autoUpdate',
+        injectRegister: 'auto',
+        manifest: {
+          name: "Sofi's Restaurant",
+          short_name: "Sofi's",
+          theme_color: "#1c1915",
+          background_color: "#faf6ef",
+          display: "standalone",
+          start_url: "/",
+          icons: [
+            {
+              src: "/icons/icon-192.png",
+              sizes: "192x192",
+              type: "image/png"
+            },
+            {
+              src: "/icons/icon-512.png",
+              sizes: "512x512",
+              type: "image/png"
+            }
+          ]
+        }
+      })
     ],
 
     resolve: {
