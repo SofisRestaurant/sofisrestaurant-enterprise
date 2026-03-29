@@ -264,11 +264,7 @@ export default function HomePage() {
       <MenuSection />
 
       {/* ── 7 · Pull quote ────────────────────────────────────────────────── */}
-      <PullQuoteBand
-        quote="Every detail matters."
-        attribution="— Chef's Philosophy"
-        backgroundImage="/images/atmosphere/bg1.jpg"
-      />
+      <PullQuoteBand quote="Every detail matters." attribution="— Chef's Philosophy" />
 
       {/* ── 8 · Testimonials ──────────────────────────────────────────────── */}
       <Testimonials />

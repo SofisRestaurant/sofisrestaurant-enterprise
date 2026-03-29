@@ -8,22 +8,12 @@
 
 // ── Type ─────────────────────────────────────────────────────────────────────
 
-/**
- * Multi-format image asset with intrinsic dimensions.
- * Use with <picture> for automatic browser format negotiation:
- *
- *   <picture>
- *     <source srcSet={img.avif} type="image/avif" />
- *     <source srcSet={img.webp} type="image/webp" />
- *     <img src={img.jpeg} width={img.width} height={img.height} alt="…" />
- *   </picture>
- */
 export interface ImageAsset {
-  readonly avif:   string;  // AVIF  — best compression  (Chrome 85+, FF 93+, Safari 16+)
-  readonly webp:   string;  // WebP  — all modern browsers
-  readonly jpeg:   string;  // JPEG  — universal fallback
-  readonly width:  number;  // intrinsic width  (px) — prevents layout shift
-  readonly height: number;  // intrinsic height (px) — prevents layout shift
+  readonly avif:   string;
+  readonly webp:   string;
+  readonly jpeg:   string;
+  readonly width:  number;
+  readonly height: number;
 }
 
 // ── Vite asset imports ───────────────────────────────────────────────────────
@@ -69,7 +59,8 @@ const hero3: ImageAsset = {
   height: 2133,
 };
 
-// src/assets/images.ts
+// ── HeroImage type (used by HeroSection) ─────────────────────────────────────
+
 export type HeroImage = {
   avif: string;
   webp: string;
@@ -79,44 +70,44 @@ export type HeroImage = {
   height?: number;
 };
 
-/** hero images — `import { HERO_IMAGES } from '@/assets/images'` */
-// src/assets/images.ts
+// ── HERO_IMAGES — uses Vite imports (content-hashed, works on Vercel) ─────────
+// Previously used hardcoded /images/ paths which 404 on Vercel because
+// Vite renames assets to content-hashed filenames at build time.
+
 export const HERO_IMAGES = {
   hero1: {
-    avif: '/images/hero1.avif',
-    webp: '/images/hero1.webp',
-    jpeg: '/images/hero1.jpg',
-    width: 1920,
-    height: 1080,
-    alt: 'Luxury dining room with warm lighting', // <--- add descriptive alt
+    avif: hero1.avif,
+    webp: hero1.webp,
+    jpeg: hero1.jpeg,
+    width: hero1.width,
+    height: hero1.height,
+    alt: 'Luxury dining room with warm lighting',
   },
   hero2: {
-    avif: '/images/hero2.avif',
-    webp: '/images/hero2.webp',
-    jpeg: '/images/hero2.jpg',
-    width: 1920,
-    height: 1080,
+    avif: hero2.avif,
+    webp: hero2.webp,
+    jpeg: hero2.jpeg,
+    width: hero2.width,
+    height: hero2.height,
     alt: 'Chef plating signature dish',
   },
   hero3: {
-    avif: '/images/hero3.avif',
-    webp: '/images/hero3.webp',
-    jpeg: '/images/hero3.jpg',
-    width: 1920,
-    height: 1080,
+    avif: hero3.avif,
+    webp: hero3.webp,
+    jpeg: hero3.jpeg,
+    width: hero3.width,
+    height: hero3.height,
     alt: 'Elegant restaurant exterior at night',
   },
 } as const;
 
 // ── Empty stubs ──────────────────────────────────────────────────────────────
-// No images found yet — add files to optimized/{folder}/ and re-run.
 
 export const MENU_IMAGES: Record<string, ImageAsset> = {};
 export const GALLERY_IMAGES: Record<string, ImageAsset> = {};
 export const BANNER_IMAGES: Record<string, ImageAsset> = {};
 
 // ── IMAGES map ───────────────────────────────────────────────────────────────
-// `import { IMAGES } from '@/assets/images'` then `IMAGES.hero.hero1.webp`
 
 export const IMAGES = {
   hero: HERO_IMAGES,
