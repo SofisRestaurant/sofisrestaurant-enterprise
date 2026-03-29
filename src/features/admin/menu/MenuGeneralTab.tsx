@@ -433,7 +433,7 @@ export function MenuGeneralTab({ form, onChange, disabled = false }: MenuGeneral
             disabled={disabled}
           />
           <p className="text-xs text-gray-400 mt-1">
-            Used to sort popular items in the customer menu. Higher = more prominent.
+            Used to sort popular items in the customer menu. Higher = More prominent.
           </p>
         </div>
       </FormSection>
