@@ -110,7 +110,7 @@ const MAX_ORDER_TOTAL_CENTS = 500_000;
 const ALLOWED_ORIGINS = new Set<string>([
   'https://sofislegacy.com',
   'https://www.sofislegacy.com',
-  'https://sofisrestaurant.netlify.app',
+  'https://sofisrestaurant-enterprise.vercel.app',
   'http://localhost:3000',
   'http://127.0.0.1:3000',
   'http://localhost:5173',

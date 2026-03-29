@@ -29,7 +29,7 @@ export const DEFAULT_ALLOWED_ORIGINS = [
   "http://localhost:5173",
   "https://sofislegacy.com",
   "https://www.sofislegacy.com",
-  "https://sofisrestaurant.netlify.app",
+  "https://sofisrestaurant-enterprise.vercel.app",
 ] as const;
 
 export const DEFAULT_STRIPE_API_VERSION = "2026-02-25.clover";

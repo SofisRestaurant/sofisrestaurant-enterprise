@@ -32,7 +32,7 @@ const ALLOWED_ORIGINS = new Set<string>([
   'http://localhost:5173',
   'https://sofislegacy.com',
   'https://www.sofislegacy.com',
-  'https://sofisrestaurant.netlify.app',
+  'https://sofisrestaurant-enterprise.vercel.app',
 ]);
 
 function corsHeadersFor(req: Request): Record<string, string> | null {

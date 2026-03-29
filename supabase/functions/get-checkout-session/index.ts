@@ -55,7 +55,7 @@ const STRIPE_SESSION_RE = /^cs_(test|live)_[a-zA-Z0-9]+$/;
 const ALLOWED_ORIGINS = [
   'https://sofislegacy.com',
   'https://www.sofislegacy.com',
-  'https://sofisrestaurant.netlify.app',
+  'https://sofisrestaurant-enterprise.vercel.app',
   'http://localhost:3000',
   'http://localhost:3001',
 ] as const;

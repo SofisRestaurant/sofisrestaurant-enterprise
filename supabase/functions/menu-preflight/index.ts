@@ -16,7 +16,7 @@ const ALLOWED_ORIGINS = new Set([
   'http://localhost:5173',
   'https://sofislegacy.com',
   'https://www.sofislegacy.com',
-  'https://sofisrestaurant.netlify.app',
+  'https://sofisrestaurant-enterprise.vercel.app',
 ]);
 
 function corsHeadersFor(origin: string | null): HeadersInit | null {

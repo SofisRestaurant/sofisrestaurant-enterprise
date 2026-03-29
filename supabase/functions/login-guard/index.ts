@@ -39,7 +39,7 @@ import { toJson } from '../_shared/json.ts';
 const ALLOWED_ORIGINS = [
   'https://sofislegacy.com',
   'https://www.sofislegacy.com',
-  'https://sofisrestaurant.netlify.app',
+  'https://sofisrestaurant-enterprise.vercel.app',
   'http://localhost:3000',
   'http://localhost:5173',
 ] as const;
