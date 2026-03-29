@@ -45,3 +45,4 @@ coverage/
 .netlify
 # Supabase Edge Functions lockfiles (CLI runtime may not support latest lock versions)
 supabase/functions/**/deno.locknode_modules/
+tsconfig.tsbuildinfo
