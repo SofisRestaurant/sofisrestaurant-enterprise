@@ -5,16 +5,14 @@
 // selections. No React or Supabase imports — pure functions only.
 // =============================================================================
 
-import { isRecord, safeBool, safeCents, safeStr, clampInt } from './menuItemGuards';
-
-// ─── Types (inlined — avoids cross-package import resolution at build time) ───
-// Keep in sync with src/domain/menu/menu-modal.types.ts
-
-export type ModifierGroupType = 'radio' | 'checkbox';
+import { isRecord, safeBool, safeStr, clampInt } from './menuItemGuards';
+import type { PreflightOk } from '@/domain/menu/menu-modal.types';
+import type { ModifierGroupType } from "@/domain/menu/menu.types";
 
 export type ModifierLike = {
   id: string;
   name: string;
+  /** integer cents — converted from DB dollar float at normalization time */
   price_adjustment: number;
   available: boolean;
   sort_order?: number | null;
@@ -39,16 +37,6 @@ export type SelectedModifier = {
   name: string;
   priceAdjustment: number; // cents
   groupId: string;
-};
-
-export type PreflightOk = {
-  ok: true;
-  item_id: string;
-  available: boolean;
-  unit_price_cents: number;
-  stock_count: number | null;
-  low_stock_threshold: number | null;
-  max_qty: number;
 };
 
 export type PreflightErr = { ok: false; error: string };
@@ -76,23 +64,40 @@ export function parseTags(raw: unknown): string[] {
 
 // ─── Normalization ────────────────────────────────────────────────────────────
 
-export function normalizeGroupType(v: unknown): ModifierGroupType | null {
+export function normalizeGroupType(v: unknown): ModifierGroupType {
   const t = safeStr(v, '').toLowerCase();
-  if (t === 'radio') return 'radio';
-  if (t === 'checkbox') return 'checkbox';
-  return null;
+  if (t === 'checkbox' || t === 'multi') return 'checkbox';
+  return 'radio'; // covers "radio", "single", null, undefined, anything else
 }
 
+/**
+ * Normalize a raw modifier row from the DB / public view.
+ *
+ * The DB `price_adjustment` column is a dollar float (0.5 = $0.50, 1 = $1.00).
+ * ModifierLike.price_adjustment is typed as integer cents throughout the app
+ * (see menu.types.ts /** cents *\/).
+ * We convert here: dollars × 100 → cents, then truncate to integer.
+ *
+ * Previously this called safeCents() which did NOT multiply by 100,
+ * so 0.5 → 0 cents and 1 → 1 cent, producing wrong display prices.
+ */
 export function normalizeModifierLike(v: unknown): ModifierLike | null {
   if (!isRecord(v)) return null;
   const id = safeStr(v.id, '', 128);
   const name = safeStr(v.name, '', 120);
   if (!id || !name) return null;
 
+  const rawAdj = v.price_adjustment;
+  const dollarFloat =
+    typeof rawAdj === 'number' && Number.isFinite(rawAdj) ? rawAdj : 0;
+
+  // Convert dollars → integer cents
+  const priceAdjustmentCents = Math.trunc(Math.round(dollarFloat * 100));
+
   return {
     id,
     name,
-    price_adjustment: safeCents(v.price_adjustment, 0),
+    price_adjustment: priceAdjustmentCents,
     available: safeBool(v.available, true),
     sort_order: typeof v.sort_order === 'number' ? v.sort_order : null,
   };
@@ -110,13 +115,16 @@ export function normalizeGroupLike(v: unknown): ModifierGroupLike | null {
   const id = safeStr(v.id, '', 128);
   const name = safeStr(v.name, '', 120);
   const type = normalizeGroupType(v.type);
-  if (!id || !name || !type) return null;
+  if (!id || !name) return null;
 
+  // ── Pick the raw modifiers from whichever property exists
   const modsSrc: unknown[] = Array.isArray(v.modifiers)
     ? v.modifiers
-    : Array.isArray(v.selections)
-      ? v.selections
-      : [];
+    : Array.isArray(v.options)
+      ? v.options
+      : Array.isArray(v.selections)
+        ? v.selections
+        : [];
 
   const mods: ModifierLike[] = [];
   for (const m of modsSrc) {
@@ -124,6 +132,7 @@ export function normalizeGroupLike(v: unknown): ModifierGroupLike | null {
     if (mm) mods.push(mm);
   }
 
+  // Sort modifiers consistently
   mods.sort((a, b) => {
     const ao = typeof a.sort_order === 'number' ? a.sort_order : 0;
     const bo = typeof b.sort_order === 'number' ? b.sort_order : 0;
@@ -156,7 +165,7 @@ export function normalizeGroups(v: unknown): ModifierGroupLike[] {
   const raw = Array.isArray(v) ? v : [];
   for (const item of raw) {
     const g = normalizeGroupLike(item);
-    if (g !== null && g.active) out.push(g);
+    if (g !== null) out.push(g);
   }
   out.sort((a, b) => {
     const ao = typeof a.sort_order === 'number' ? a.sort_order : 0;
@@ -208,7 +217,13 @@ export function computeSelectedModifierCents(
   let sum = 0;
   for (const sels of Object.values(selected)) {
     if (!Array.isArray(sels)) continue;
-    for (const s of sels) sum += safeCents(s.priceAdjustment, 0);
+    for (const s of sels) {
+      const val =
+        typeof s.priceAdjustment === 'number' && Number.isFinite(s.priceAdjustment)
+          ? s.priceAdjustment
+          : 0;
+      sum += val;
+    }
   }
   return Math.max(0, sum);
 }

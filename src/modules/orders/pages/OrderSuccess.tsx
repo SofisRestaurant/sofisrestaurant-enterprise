@@ -4,7 +4,7 @@
 // ============================================================================
 // Changes from original:
 // ✅ Added "Track My Order" button linking to /order-status/{orderId}
-// ✅ Animated with Framer Motion (motion/react):
+// ✅ Animated with Framer Motion (framer-motion):
 //    - Page-load entrance: staggered children via variants
 //    - "Track My Order" button: whileHover scale + glow, whileTap press
 //    - Success check icon: spring scale-in on mount
@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-// Import directly from framer-motion (motion/react is a thin re-export shim
+// Import directly from framer-motion (framer-motion is a thin re-export shim
 // that can resolve to undefined in Vite's ESM bundling — framer-motion is
 // the actual package and always resolves correctly).
 import {

@@ -46,7 +46,7 @@ const MAX_NAME_LENGTH = 160;
 const MAX_DESCRIPTION_LENGTH = 1_000;
 const FALLBACK_ISO_DATE = new Date(0).toISOString();
 
-const MODIFIER_GROUP_TYPES = ['radio', 'checkbox', 'quantity'] as const;
+const MODIFIER_GROUP_TYPES = ['radio', 'checkbox', 'quantity', 'single'] as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Error
@@ -135,6 +135,7 @@ function normalizeRequiredIsoString(value: unknown): string {
 function normalizeModifierGroupType(value: unknown): ModifierGroup['type'] {
   const normalized = normalizeRequiredString(value, 'radio', 32);
 
+  if (normalized === 'single' || normalized === 'radio') return 'radio';
   if (normalized === 'checkbox') {
     return 'checkbox';
   }
@@ -322,7 +323,7 @@ function buildCreatePayload(payload: ModifierGroupWritePayload): UnknownRecord {
   return {
     name: normalizeId(payload.name, 'Group name').slice(0, MAX_NAME_LENGTH),
     description: normalizeOptionalStringInput(payload.description, MAX_DESCRIPTION_LENGTH),
-    type: MODIFIER_GROUP_TYPES.includes(payload.type) ? payload.type : 'radio',
+    type: payload.type === 'checkbox' ? 'checkbox' : 'single',
     required: payload.required,
     min_selections: payload.min_selections ?? 0,
     max_selections: normalizeOptionalNumberInput(payload.max_selections),
@@ -416,9 +417,12 @@ export class ModifierGroupService {
   }
 
   static async getForMenuItem(menuItemId: string): Promise<AdminModifierGroup[]> {
-    const data = await callAdminGateway<unknown>('menu:modifier-groups:list-for-item', {
-      menu_item_id: normalizeId(menuItemId, 'Menu item id'),
-    });
+    // The Edge Function listForItem now returns flat group objects directly
+    // (unwrapped server-side from the join row). No client-side unwrap needed.
+    const data = await callAdminGateway<unknown>(
+      'menu:modifier-groups:list-for-item',
+      { menu_item_id: normalizeId(menuItemId, 'Menu item id') },
+    );
 
     return mapUnknownArrayToAdminModifierGroups(data);
   }

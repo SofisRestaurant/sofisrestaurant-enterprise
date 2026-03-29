@@ -1,14 +1,6 @@
 // =============================================================================
 // PATH: supabase/functions/admin-gateway/types.ts
 // =============================================================================
-// Single source of truth for all action names, payload types, and the
-// discriminated GatewayRequest union.
-//
-// Rules:
-//   - Adding a new action → add to AdminAction, GatewayRequest, parsers, dispatch
-//   - Never import from lib/* here (would create circular deps)
-//   - Campaign/promo payload types are re-exported from their action modules
-// =============================================================================
 
 import type {
   TogglePayload as ToggleCampaignPayload,
@@ -18,6 +10,8 @@ import type {
 } from './actions/campaigns.ts';
 
 import type { TogglePromoPayload, CreatePromoPayload } from './actions/promos.ts';
+
+import type { Database } from '../_shared/database.types.ts';
 
 export type {
   ToggleCampaignPayload,
@@ -33,12 +27,14 @@ export type {
 /* -------------------------------------------------------------------------- */
 
 export type AdminAction =
-  // Core
   | 'metrics'
   | 'layout'
   | 'orders:list'
   | 'menu:full'
-  // Modifier groups
+  | 'menu:create'
+  | 'menu:update'
+  | 'menu:delete'
+  | 'menu:duplicate'
   | 'menu:modifier-groups:list'
   | 'menu:modifier-groups:list-for-item'
   | 'menu:modifier-groups:get'
@@ -52,7 +48,6 @@ export type AdminAction =
   | 'menu:modifier-groups:reorder-for-item'
   | 'menu:modifier-groups:set-item-groups'
   | 'menu:modifier-groups:delete'
-  // Modifiers
   | 'menu:modifiers:list-for-group'
   | 'menu:modifiers:list-available-for-group'
   | 'menu:modifiers:get'
@@ -64,17 +59,26 @@ export type AdminAction =
   | 'menu:modifiers:delete'
   | 'menu:modifiers:delete-all-in-group'
   | 'menu:modifiers:reorder'
-  // Campaigns
   | 'campaigns:list'
   | 'campaigns:create'
   | 'campaigns:update'
   | 'campaigns:pin-featured'
   | 'campaigns:toggle'
   | 'campaigns:run-rotation'
-  // Promos
   | 'promos:list'
   | 'promos:toggle'
   | 'promos:create';
+
+/* -------------------------------------------------------------------------- */
+/* Menu item CRUD payload types                                               */
+/* -------------------------------------------------------------------------- */
+
+export type MenuItemInsert = Database['public']['Tables']['menu_items']['Insert'];
+export type MenuItemUpdate = Database['public']['Tables']['menu_items']['Update'];
+
+export type MenuItemDeletePayload = {
+  id: string;
+};
 
 /* -------------------------------------------------------------------------- */
 /* Shared primitives                                                          */
@@ -85,11 +89,39 @@ export type ReorderItem = {
   sort_order: number;
 };
 
+export interface MenuItemAdminRow {
+  id: string | null;
+  name: string | null;
+  description: string | null;
+  price: number | null;
+  category: string | null;
+  created_at: string | null;
+  image_url: string | null;
+  available: boolean | null;
+  featured: boolean | null;
+  allergens: string[] | null;
+  spicy_level: number | null;
+  is_vegetarian: boolean | null;
+  is_vegan: boolean | null;
+  is_gluten_free: boolean | null;
+  sort_order: number | null;
+  inventory_count: number | null;
+  low_stock_threshold: number | null;
+  popularity_score: number | null;
+  pairs_with: string[] | null;
+  updated_at: string | null;
+  modifier_groups: unknown | null;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Modifier group payload types                                               */
 /* -------------------------------------------------------------------------- */
 
-export type ModifierGroupType = 'radio' | 'checkbox' | 'quantity';
+/**
+ * 'single' is what your DB actually stores for single-pick groups.
+ * 'radio' is the UI/domain alias. Both are accepted everywhere.
+ */
+export type ModifierGroupType = 'radio' | 'single' | 'checkbox' | 'quantity';
 
 export type ModifierGroupListPayload = {
   activeOnly?: boolean;
@@ -98,7 +130,7 @@ export type ModifierGroupListPayload = {
 export type ModifierGroupCreatePayload = {
   name: string;
   type: ModifierGroupType;
-  description?: string | null;
+  // description omitted — column does not exist in modifier_groups table
   required?: boolean;
   min_selections?: number;
   max_selections?: number | null;
@@ -109,8 +141,8 @@ export type ModifierGroupCreatePayload = {
 export type ModifierGroupUpdatePayload = {
   id: string;
   name?: string;
-  description?: string | null;
   type?: ModifierGroupType;
+  // description omitted — column does not exist in modifier_groups table
   required?: boolean;
   min_selections?: number;
   max_selections?: number | null;
@@ -134,18 +166,10 @@ export type ModifierGroupTogglePayload = {
   active: boolean;
 };
 
-/**
- * Standalone reorder — reorders modifier_groups rows by their own sort_order.
- * Does NOT reference a menu_item_id.
- */
 export type ModifierGroupReorderPayload = {
   items: ReorderItem[];
 };
 
-/**
- * Reorder for a specific menu item — updates sort_order in the
- * menu_item_modifier_groups join table for a given menu_item_id.
- */
 export type ModifierGroupReorderForItemPayload = {
   menu_item_id: string;
   items: ReorderItem[];
@@ -168,7 +192,6 @@ export type ModifierCreatePayload = {
   sort_order?: number;
 };
 
-/** Single entry in a batch create — group_id is provided at the action level. */
 export type ModifierBatchEntry = {
   name: string;
   price_adjustment?: number;
@@ -207,13 +230,18 @@ export type ModifierReorderPayload = {
 /* Discriminated request union                                                */
 /* -------------------------------------------------------------------------- */
 
+export type MenuItemCreatePayload = Database['public']['Tables']['menu_items']['Insert'];
+export type MenuItemUpdatePayload = Database['public']['Tables']['menu_items']['Update'];
+
 export type GatewayRequest =
-  // Core
   | { action: 'metrics' }
   | { action: 'layout' }
   | { action: 'orders:list'; payload?: { page?: number } }
   | { action: 'menu:full'; payload?: { page?: number; pageSize?: number } }
-  // Modifier groups
+  | { action: 'menu:create'; payload: unknown }
+  | { action: 'menu:update'; payload: { id: string; data: MenuItemUpdatePayload } }
+  | { action: 'menu:delete'; payload: { id: string } }
+  | { action: 'menu:duplicate'; payload: { source_id: string; overrides: Record<string, unknown> } }
   | { action: 'menu:modifier-groups:list'; payload?: ModifierGroupListPayload }
   | { action: 'menu:modifier-groups:list-for-item'; payload: { menu_item_id: string } }
   | { action: 'menu:modifier-groups:get'; payload: { id: string } }
@@ -224,13 +252,9 @@ export type GatewayRequest =
   | { action: 'menu:modifier-groups:detach'; payload: ModifierGroupDetachPayload }
   | { action: 'menu:modifier-groups:toggle-active'; payload: ModifierGroupTogglePayload }
   | { action: 'menu:modifier-groups:reorder'; payload: ModifierGroupReorderPayload }
-  | {
-      action: 'menu:modifier-groups:reorder-for-item';
-      payload: ModifierGroupReorderForItemPayload;
-    }
+  | { action: 'menu:modifier-groups:reorder-for-item'; payload: ModifierGroupReorderForItemPayload }
   | { action: 'menu:modifier-groups:set-item-groups'; payload: ModifierGroupSetItemGroupsPayload }
   | { action: 'menu:modifier-groups:delete'; payload: { id: string } }
-  // Modifiers
   | { action: 'menu:modifiers:list-for-group'; payload: { group_id: string } }
   | { action: 'menu:modifiers:list-available-for-group'; payload: { group_id: string } }
   | { action: 'menu:modifiers:get'; payload: { id: string } }
@@ -238,21 +262,16 @@ export type GatewayRequest =
   | { action: 'menu:modifiers:create-batch'; payload: ModifierCreateBatchPayload }
   | { action: 'menu:modifiers:update'; payload: ModifierUpdatePayload }
   | { action: 'menu:modifiers:toggle-availability'; payload: ModifierTogglePayload }
-  | {
-      action: 'menu:modifiers:toggle-group-availability';
-      payload: ModifierGroupToggleAvailabilityPayload;
-    }
+  | { action: 'menu:modifiers:toggle-group-availability'; payload: ModifierGroupToggleAvailabilityPayload }
   | { action: 'menu:modifiers:delete'; payload: { id: string } }
   | { action: 'menu:modifiers:delete-all-in-group'; payload: { group_id: string } }
   | { action: 'menu:modifiers:reorder'; payload: ModifierReorderPayload }
-  // Campaigns
   | { action: 'campaigns:list' }
   | { action: 'campaigns:run-rotation' }
   | { action: 'campaigns:toggle'; payload: ToggleCampaignPayload }
   | { action: 'campaigns:create'; payload: CreateCampaignPayload }
   | { action: 'campaigns:update'; payload: UpdateCampaignPayload }
   | { action: 'campaigns:pin-featured'; payload: PinFeaturedPayload }
-  // Promos
   | { action: 'promos:list' }
   | { action: 'promos:toggle'; payload: TogglePromoPayload }
   | { action: 'promos:create'; payload: CreatePromoPayload };

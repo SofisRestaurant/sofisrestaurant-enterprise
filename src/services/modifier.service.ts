@@ -4,30 +4,6 @@
 // ============================================================================
 // All reads and writes go through the admin-gateway Edge Function.
 // No supabase.from('modifiers') calls exist anywhere in this file.
-//
-// Why: The `modifiers` table is RLS-protected (service-role only for writes).
-// The admin-gateway Edge Function holds the service-role key and owns all
-// modifier mutations. Browser anon/user tokens cannot write to this table,
-// which caused the 403 Forbidden errors on /rest/v1/modifiers.
-//
-// Gateway action map (src/supabase/functions/admin-gateway/index.ts):
-//   menu:modifiers:list-for-group           → { group_id }
-//   menu:modifiers:list-available-for-group → { group_id }
-//   menu:modifiers:get                      → { id }
-//   menu:modifiers:create                   → ModifierCreatePayload
-//   menu:modifiers:create-batch             → { group_id, modifiers[] }
-//   menu:modifiers:update                   → { id, ...patch }
-//   menu:modifiers:toggle-availability      → { id, available }
-//   menu:modifiers:toggle-group-availability→ { group_id, available }
-//   menu:modifiers:delete                   → { id }
-//   menu:modifiers:delete-all-in-group      → { group_id }
-//   menu:modifiers:reorder                  → { items: { id, sort_order }[] }
-//
-// Return contracts:
-//   Read-many  → Modifier[]       (domain type from menu.types.ts)
-//   Read-one   → Modifier | null
-//   Mutations  → AdminModifier    (includes created_at / updated_at)
-//   Void ops   → void
 // ============================================================================
 
 import { invokeEdge } from '@/lib/supabase/invoke';
@@ -52,11 +28,8 @@ export class ModifierServiceError extends Error {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Gateway response shapes (matches what the Edge Function returns)
+// Gateway response shapes
 // ─────────────────────────────────────────────────────────────────────────────
-
-// The gateway returns raw DB rows. We keep these types private to this file;
-// consumers always receive the domain Modifier / AdminModifier types.
 
 interface RawModifierRow {
   id: string;
@@ -87,7 +60,7 @@ function isRawModifierRow(v: unknown): v is RawModifierRow {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Mappers  (raw gateway row → domain type)
+// Mappers
 // ─────────────────────────────────────────────────────────────────────────────
 
 function rawToModifier(row: RawModifierRow): Modifier {
@@ -115,14 +88,27 @@ function rawToAdminModifier(row: RawModifierRow): AdminModifier {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Gateway call helpers
+// Gateway call helper
 // ─────────────────────────────────────────────────────────────────────────────
 
-// invokeEdge returns the unwrapped `data` field from the gateway Ok envelope.
-// All calls below use this; error handling propagates via invokeEdge's throw.
-
+/**
+ * THE FIX: The admin-gateway Edge Function returns { data, meta } envelopes.
+ * invokeEdge returns the full JSON response — it does NOT unwrap `data`.
+ * We must unwrap it here so coercers always receive the actual payload.
+ *
+ * If the response IS already a plain value (array/object without meta),
+ * we return it as-is for forward compatibility.
+ */
 async function callGateway<T>(body: Record<string, unknown>): Promise<T> {
-  return invokeEdge<T>('admin-gateway', body);
+  const response = await invokeEdge<unknown>('admin-gateway', body);
+
+  // Unwrap { data, meta } envelope from admin-gateway
+  if (isRecord(response) && 'data' in response && 'meta' in response) {
+    return response.data as T;
+  }
+
+  // Already unwrapped (shouldn't happen, but safe fallback)
+  return response as T;
 }
 
 function gatewayError(message: string, cause?: unknown): ModifierServiceError {
@@ -132,7 +118,7 @@ function gatewayError(message: string, cause?: unknown): ModifierServiceError {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Row coercers with safe fallback
+// Row coercers
 // ─────────────────────────────────────────────────────────────────────────────
 
 function coerceToModifierArray(raw: unknown, context: string): Modifier[] {
@@ -161,29 +147,12 @@ function coerceToAdminModifierArray(raw: unknown, context: string): AdminModifie
 // ─────────────────────────────────────────────────────────────────────────────
 
 export class ModifierService {
-  // ─────────────────────────────────────────────────────────────
-  // READ
-  // ─────────────────────────────────────────────────────────────
-
-  /** All modifiers for a group, including unavailable (admin view). */
   static async getForGroup(groupId: string): Promise<Modifier[]> {
-    // Hard guard: an empty groupId would reach the gateway as { group_id: '' }
-    // which the parser correctly rejects with a 400. Fail fast here instead.
     if (!groupId || !groupId.trim()) {
       throw new ModifierServiceError('Modifier group id is required.', 'INVALID_GROUP_ID');
     }
-
     let raw: unknown;
-
     try {
-      console.log(
-        'MODIFIER_GET_FOR_GROUP_REQUEST',
-        JSON.stringify({
-          action: 'menu:modifiers:list-for-group',
-          payload: { group_id: groupId },
-        }),
-      );
-
       raw = await callGateway({
         action: 'menu:modifiers:list-for-group',
         payload: { group_id: groupId },
@@ -191,18 +160,14 @@ export class ModifierService {
     } catch (e) {
       throw gatewayError('Failed to load modifiers', e);
     }
-
     return coerceToModifierArray(raw, 'getForGroup');
   }
 
-  /** Available modifiers only (customer-facing). */
   static async getAvailableForGroup(groupId: string): Promise<Modifier[]> {
     if (!groupId || !groupId.trim()) {
       throw new ModifierServiceError('Modifier group id is required.', 'INVALID_GROUP_ID');
     }
-
     let raw: unknown;
-
     try {
       raw = await callGateway({
         action: 'menu:modifiers:list-available-for-group',
@@ -211,14 +176,11 @@ export class ModifierService {
     } catch (e) {
       throw gatewayError('Failed to load available modifiers', e);
     }
-
     return coerceToModifierArray(raw, 'getAvailableForGroup');
   }
 
-  /** Single modifier by id. Returns null if not found. */
   static async getById(id: string): Promise<Modifier | null> {
     let raw: unknown;
-
     try {
       raw = await callGateway({
         action: 'menu:modifiers:get',
@@ -227,29 +189,20 @@ export class ModifierService {
     } catch (e) {
       throw gatewayError('Failed to load modifier', e);
     }
-
     if (raw === null || raw === undefined) return null;
     if (!isRawModifierRow(raw)) {
       throw new ModifierServiceError('Unexpected response for getById', 'UNEXPECTED_RESPONSE');
     }
-
     return rawToModifier(raw);
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // CREATE
-  // ─────────────────────────────────────────────────────────────
-
   static async create(payload: ModifierWritePayload): Promise<AdminModifier> {
     const validation = validateModifierPayload(payload);
-
     if (!validation.valid) {
       const message = Object.values(validation.errors).filter(Boolean).join('; ');
       throw new ModifierServiceError(`Validation failed: ${message}`);
     }
-
     let raw: unknown;
-
     try {
       raw = await callGateway({
         action: 'menu:modifiers:create',
@@ -264,22 +217,15 @@ export class ModifierService {
     } catch (e) {
       throw gatewayError('Failed to create modifier', e);
     }
-
     return coerceToAdminModifier(raw, 'create');
   }
 
-  /**
-   * Batch create modifiers in a single gateway round-trip.
-   * Returns an empty array when modifiers is empty (no gateway call made).
-   */
   static async createBatch(
     groupId: string,
     modifiers: Omit<ModifierWritePayload, 'modifier_group_id'>[],
   ): Promise<AdminModifier[]> {
     if (modifiers.length === 0) return [];
-
     let raw: unknown;
-
     try {
       raw = await callGateway({
         action: 'menu:modifiers:create-batch',
@@ -296,46 +242,32 @@ export class ModifierService {
     } catch (e) {
       throw gatewayError('Failed to batch create modifiers', e);
     }
-
     return coerceToAdminModifierArray(raw, 'createBatch');
   }
-
-  // ─────────────────────────────────────────────────────────────
-  // UPDATE
-  // ─────────────────────────────────────────────────────────────
 
   static async update(
     id: string,
     payload: Partial<Omit<ModifierWritePayload, 'modifier_group_id'>>,
   ): Promise<AdminModifier> {
     const validation = validateModifierPayload(payload);
-
     if (!validation.valid) {
       const message = Object.values(validation.errors).filter(Boolean).join('; ');
       throw new ModifierServiceError(`Validation failed: ${message}`);
     }
-
-    // Build the patch — only include fields that were explicitly provided so
-    // the gateway's `'field' in payload` checks work correctly.
     const patch: Record<string, unknown> = { id };
-
     if (payload.name !== undefined) patch.name = payload.name.trim();
     if (payload.price_adjustment !== undefined) patch.price_adjustment = payload.price_adjustment;
     if (payload.available !== undefined) patch.available = payload.available;
     if (payload.sort_order !== undefined) patch.sort_order = payload.sort_order;
-
     let raw: unknown;
-
     try {
       raw = await callGateway({ action: 'menu:modifiers:update', payload: patch });
     } catch (e) {
       throw gatewayError('Failed to update modifier', e);
     }
-
     return coerceToAdminModifier(raw, 'update');
   }
 
-  /** Toggle a single modifier's availability. */
   static async toggleAvailability(id: string, available: boolean): Promise<void> {
     try {
       await callGateway({
@@ -347,7 +279,6 @@ export class ModifierService {
     }
   }
 
-  /** Toggle availability for every modifier in a group in one call. */
   static async toggleGroupAvailability(groupId: string, available: boolean): Promise<void> {
     try {
       await callGateway({
@@ -358,10 +289,6 @@ export class ModifierService {
       throw gatewayError('Failed to bulk toggle modifier availability', e);
     }
   }
-
-  // ─────────────────────────────────────────────────────────────
-  // DELETE
-  // ─────────────────────────────────────────────────────────────
 
   static async delete(id: string): Promise<void> {
     try {
@@ -382,13 +309,8 @@ export class ModifierService {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // REORDER
-  // ─────────────────────────────────────────────────────────────
-
   static async reorder(items: ReorderPayload[]): Promise<void> {
     if (items.length === 0) return;
-
     try {
       await callGateway({
         action: 'menu:modifiers:reorder',

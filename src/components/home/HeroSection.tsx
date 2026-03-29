@@ -7,7 +7,7 @@
 //     site-wide reduced-motion handling. useReducedMotion() still used for
 //     imperative logic (video play, parallax, autoAdvance).
 //   • All motion.* imports replaced with the named motion object (no `m` alias
-//     needed when you import `motion` directly from "motion/react").
+//     needed when you import `motion` directly from "framer-motion").
 //   • useReducedMotion coercion kept (??false) for safe boolean comparison.
 //   • AnimatePresence mode="sync" kept — correct for crossfade slides.
 //   • layoutAnchor noted (not needed here; no layout projection animations).
@@ -27,10 +27,10 @@ import {
   useReducedMotion,
   useSpring,
   useTransform,
-} from 'motion/react';
+} from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { APP_TAGLINE, type BrandTheme } from '@/assets/logo';
-import { HERO_IMAGES } from '@/assets/images';
+import { HERO_IMAGES, type HeroImage } from '@/assets/images';
 import { EASE_LUXURY, heroText, staggerContainer } from '@/lib/motion';
 import SlideDots from '@/components/home/SlideDots';
 import { useTranslation } from '@/i18n/useTranslation';
@@ -89,7 +89,7 @@ interface BaseHeroSlide {
 
 interface ImageHeroSlide extends BaseHeroSlide {
   kind: 'image';
-  image: string;
+  image: HeroImage;
 }
 
 interface VideoHeroSlide extends BaseHeroSlide {
@@ -120,7 +120,7 @@ const SLIDES: HeroSlide[] = [
     image: HERO_IMAGES.hero3,
     imageKey: '3',
   },
-];
+] as const;
 
 const SLIDE_COUNT = SLIDES.length;
 const SLIDE_DURATION = 5500;
@@ -131,9 +131,13 @@ interface SlideMediaProps {
   slide: HeroSlide;
   kenBurnsActive: boolean;
   shouldReduceMotion: boolean;
+  /** 0-based slide index — used for loading="eager" + fetchpriority="high" on first slide. */
+  index: number;
+  /** Bound translation helper for per-slide copy fields (ariaLabel used as img alt). */
+  tSlide: (slide: Pick<BaseHeroSlide, 'imageKey'>, field: SlideCopyField) => string;
 }
 
-function SlideMedia({ slide, kenBurnsActive, shouldReduceMotion }: SlideMediaProps) {
+function SlideMedia({ slide, kenBurnsActive, shouldReduceMotion, index, tSlide }: SlideMediaProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
@@ -157,9 +161,10 @@ function SlideMedia({ slide, kenBurnsActive, shouldReduceMotion }: SlideMediaPro
       aria-hidden="true"
     >
       {slide.kind === 'image' ? (
+        // Ken Burns wrapper — motion.div applies the scale animation,
+        // the <picture> inside fills it absolutely.
         <motion.div
-          className="absolute inset-0 bg-cover bg-center"
-          style={{ backgroundImage: `url(${slide.image})` }}
+          className="absolute inset-0 overflow-hidden"
           initial={kenBurnsActive ? { scale: 1.12 } : { scale: 1 }}
           animate={{ scale: kenBurnsActive ? 1.02 : 1 }}
           transition={
@@ -167,7 +172,33 @@ function SlideMedia({ slide, kenBurnsActive, shouldReduceMotion }: SlideMediaPro
               ? { duration: SLIDE_DURATION / 1000 + 1.5, ease: 'linear' }
               : { duration: 0.4, ease: 'easeOut' }
           }
-        />
+        >
+          {/*
+            <picture> provides format negotiation without JS:
+            - Browser picks the first <source> it supports
+            - avif → best compression (Chrome 85+, Firefox 93+, Safari 16+)
+            - webp → good compression (all modern browsers)
+            - jpeg → universal fallback
+            The <img> carries the alt text and LCP/loading hints.
+          */}
+          <picture className="absolute inset-0">
+            <source srcSet={slide.image.avif} type="image/avif" />
+            <source srcSet={slide.image.webp} type="image/webp" />
+            <img
+              src={slide.image.jpeg}
+              alt={tSlide(slide, 'ariaLabel')}
+              width={slide.image.width}
+              height={slide.image.height}
+              // First slide is above the fold → eager + high priority for LCP
+              // Subsequent slides are below the fold → lazy
+              loading={index === 0 ? 'eager' : 'lazy'}
+              fetchPriority={index === 0 ? 'high' : 'auto'}
+              decoding={index === 0 ? 'sync' : 'async'}
+              draggable={false}
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+          </picture>
+        </motion.div>
       ) : (
         <motion.video
           ref={videoRef}
@@ -220,7 +251,7 @@ function ScrollHint({ label }: ScrollHintProps) {
         }}
       />
       <span
-        className="font-body text-[0.55rem] uppercase tracking-[0.24em] text-white/35"
+        className="font-body text-[0.55rem] uppercase tracking-[0.24em] text-white/0.35"
         style={{ writingMode: 'vertical-rl' }}
       >
         {label}
@@ -389,8 +420,10 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
               <SlideMedia
                 key={slide.id}
                 slide={slide}
+                index={current}
                 kenBurnsActive={!shouldReduceMotion && slide.kind === 'image'}
                 shouldReduceMotion={shouldReduceMotion}
+                tSlide={tSlide}
               />
             </AnimatePresence>
           </motion.div>
@@ -473,7 +506,7 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
                 className="font-body max-w-28rem text-[1rem] font-light leading-[1.75] text-white/60 sm:text-[1.05rem]"
               >
                 {tSlide(slide, 'sub')}
-                {APP_TAGLINE && <span className="text-white/35"> · {APP_TAGLINE}</span>}
+                {APP_TAGLINE && <span className="text-white/0.35"> · {APP_TAGLINE}</span>}
               </motion.p>
 
               {/* CTA buttons */}
@@ -515,7 +548,7 @@ export function HeroSection({ onMenuClick, onReservationClick, theme = 'dark' }:
                     'px-7 py-3.5 font-body text-[0.78rem] font-medium uppercase tracking-[0.12em]',
                     'transition-all duration-300',
                     theme === 'dark'
-                      ? 'border border-white/28 text-white/80 hover:border-[#d4af37] hover:text-[#e8c46a]'
+                      ? 'border border-white/[0.28] text-white/80 hover:border-[#d4af37] hover:text-[#e8c46a]'
                       : 'border border-stone/40 text-stone/80 hover:border-[#e8c46a] hover:text-[#1c1915]',
                     'focus-visible:outline-none focus-visible:ring-2',
                     'focus-visible:ring-[#d4af37] focus-visible:ring-offset-2 focus-visible:ring-offset-[#1c1915]',

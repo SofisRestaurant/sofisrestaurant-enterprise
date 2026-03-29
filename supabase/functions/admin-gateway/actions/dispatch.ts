@@ -14,6 +14,7 @@ import type { GatewayRequest, AdminAction } from '../types.ts';
 
 import * as ModifierGroups from './modifier-groups.ts';
 import * as Modifiers from './modifiers.ts';
+import * as Menu from './menu.ts';
 
 import {
   listCampaigns,
@@ -90,6 +91,29 @@ export async function dispatch(
 
       return { action: 'menu:full', result: data ?? [] };
     }
+
+    // ── Menu CRUD ────────────────────────────────────────────────────────────
+    // These cases use the service role via menu.ts, bypassing RLS.
+    // The gateway has already authenticated the caller and verified admin
+    // status before dispatch is invoked — service-role access is safe here.
+
+    case 'menu:create':
+      return {
+        action: req.action,
+        result: await Menu.createMenuItem(req.payload),
+      };
+
+    case 'menu:update': {
+      const { id, data } = req.payload;
+      return {
+        action: req.action,
+        result: await Menu.updateMenuItem(id, data),
+      };
+    }
+
+    case 'menu:delete':
+      await Menu.deleteMenuItem(req.payload.id);
+      return { action: req.action, result: null };
 
     // ── Modifier groups ──────────────────────────────────────────────────────
 

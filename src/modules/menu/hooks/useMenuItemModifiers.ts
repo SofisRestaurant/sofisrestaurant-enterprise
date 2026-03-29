@@ -66,6 +66,8 @@ export function useMenuItemModifiers(
       }
 
       const raw = isRecord(invokeData) ? invokeData.modifier_groups : null;
+      console.log('raw modifier_groups from API:', raw);
+
       const groups = normalizeGroups(raw);
 
       setModifierGroups(groups);

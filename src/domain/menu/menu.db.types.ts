@@ -1,6 +1,7 @@
 // src/domain/menu/menu.db.types.ts
 
-import type { Database } from '@/types/supabase';
+import type { Database } from '@/lib/supabase/database.types';
+
 export type MenuItemPublicRow = Database['public']['Views']['menu_items_public']['Row'];
 
 export type MenuItemAdminRow = Database['public']['Views']['menu_items_admin_full']['Row'];
