@@ -106,11 +106,11 @@ export default function AdminMenuEditor() {
     }
   }, []);
 
-useEffect(() => {
-  void fetchItems().catch((error: unknown) => {
-    console.error('Failed to fetch menu items:', error);
-  });
-}, [fetchItems]);
+  useEffect(() => {
+    void fetchItems().catch((error: unknown) => {
+      console.error('Failed to fetch menu items:', error);
+    });
+  }, [fetchItems]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Modal helpers
@@ -203,7 +203,23 @@ useEffect(() => {
 
         setItems((prev) => prev.map((i) => (i.id === result.id ? result : i)));
       } else {
-        result = await MenuWriteService.create(payload);
+        // Compute a unique sort_order for this category to avoid the
+        // "duplicate key value violates unique constraint menu_items_category_sort_order_unique" error.
+        // Use the highest existing sort_order in the same category + 10 as a safe gap.
+        const sameCategoryItems = items.filter(
+          (it) =>
+            String((it as unknown as Record<string, unknown>).category) === String(form.category),
+        );
+        const maxSortOrder = sameCategoryItems.reduce((max, it) => {
+          const s =
+            typeof (it as unknown as Record<string, unknown>).sort_order === 'number'
+              ? ((it as unknown as Record<string, unknown>).sort_order as number)
+              : 0;
+          return s > max ? s : max;
+        }, 0);
+        const autoSortOrder = payload.sort_order ?? maxSortOrder + 10;
+
+        result = await MenuWriteService.create({ ...payload, sort_order: autoSortOrder });
 
         setItems((prev) => [result, ...prev]);
         setActiveTab('modifiers'); // unlock modifiers for new item
@@ -214,9 +230,12 @@ useEffect(() => {
       setIsDirty(false);
     } catch (err: unknown) {
       if (err instanceof Error) {
+        // AdminGatewayClientError has a meaningful .message — use it directly
         setModalError(err.message);
+      } else if (typeof err === 'string' && err.trim()) {
+        setModalError(err);
       } else {
-        setModalError('Failed to save.');
+        setModalError('Failed to save. Please try again.');
       }
     } finally {
       setSaving(false);

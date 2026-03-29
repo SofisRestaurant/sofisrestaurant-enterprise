@@ -64,6 +64,42 @@ export function parseGatewayRequest(v: unknown): GatewayRequest | null {
     return { action, payload: { page: toInt(p.page, 0), pageSize: toInt(p.pageSize, 200) } };
   }
 
+  // ── Menu CRUD ─────────────────────────────────────────────────────────────
+  // FIX: These three actions were missing — parseGatewayRequest returned null
+  // for menu:create, menu:update, menu:delete → gateway returned 400.
+
+  if (action === 'menu:create') {
+    if (!isRecord(v.payload)) return null;
+    return { action, payload: v.payload };
+  }
+
+  if (action === 'menu:update') {
+    if (!isRecord(v.payload)) return null;
+    const id = parseId(v.payload.id);
+    if (!id) return null;
+    if (!isRecord(v.payload.data)) return null;
+    return { action, payload: { id, data: v.payload.data } };
+  }
+
+  if (action === 'menu:delete') {
+    const id = parseId(isRecord(v.payload) ? v.payload.id : null);
+    if (!id) return null;
+    return { action, payload: { id } };
+  }
+
+  if (action === 'menu:duplicate') {
+    if (!isRecord(v.payload)) return null;
+    const source_id = parseId(v.payload.source_id);
+    if (!source_id) return null;
+    return {
+      action,
+      payload: {
+        source_id,
+        overrides: isRecord(v.payload.overrides) ? v.payload.overrides : {},
+      },
+    };
+  }
+
   // ── Modifier groups ───────────────────────────────────────────────────────
   if (action === 'menu:modifier-groups:list') {
     return { action, payload: parseModifierGroupListPayload(v.payload) };

@@ -2,7 +2,7 @@
 // ─── Premium CTA button with gold shimmer and spring hover ────────────────
 
 import React from 'react';
-import { motion, MotionConfig, useReducedMotion } from 'motion/react';
+import { motion, MotionConfig, useReducedMotion } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { EASE_SPRING } from '@/lib/motion';
 

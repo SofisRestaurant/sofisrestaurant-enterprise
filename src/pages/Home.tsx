@@ -267,7 +267,7 @@ export default function HomePage() {
       <PullQuoteBand
         quote="Every detail matters."
         attribution="— Chef's Philosophy"
-        backgroundImage="/src/assets/images/atmosphere-band/bg1.jpg"
+        backgroundImage="/images/atmosphere/bg1.jpg"
       />
 
       {/* ── 8 · Testimonials ──────────────────────────────────────────────── */}

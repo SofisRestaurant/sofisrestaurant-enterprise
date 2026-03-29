@@ -1,28 +1,223 @@
-// src/pages/Admin/components/MenuGeneralTab.tsx
+// src/features/admin/menu/MenuGeneralTab.tsx
 // ============================================================================
 // MENU GENERAL TAB — Pure presenter
 // ============================================================================
-// Renders the "General" tab for a menu item in the tabbed admin editor.
-// This component owns NO types, NO validation logic, NO constants.
-// All domain logic lives in the domain layer.
-//
-// Dependency flow:
-//   MenuGeneralTab → domain/menu/menu-general.types
-//   MenuGeneralTab → domain/menu/menu-general.schema
-//   domain         → never imports from pages/
-// ============================================================================
 
+import { useState, useRef, useCallback } from 'react';
 import type { GeneralTabFormState } from '@/domain/menu/menu-general.types';
 import type { MenuCategory } from '@/domain/menu/menu.types';
-
 import { InlineToggle } from '@/components/ui/InlineToggle';
 import { FormSection } from '@/components/ui/FormSection';
 import { formStyles } from '@/components/ui/formStyles';
 import { VALID_CATEGORIES } from '@/domain/menu/menu-general.schema';
+import { uploadMenuImage } from '@/lib/supabase/storage/uploadImage';
 
-// Re-export domain types for upstream consumers
 export type { GeneralTabFormState } from '@/domain/menu/menu-general.types';
 export { GENERAL_TAB_EMPTY } from '@/domain/menu/menu-general.types';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Image Uploader
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ImageUploaderProps {
+  value: string;
+  onChange: (url: string) => void;
+  disabled?: boolean;
+}
+
+function ImageUploader({ value, onChange, disabled }: ImageUploaderProps) {
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [compressionInfo, setCompressionInfo] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleFile = useCallback(
+    async (file: File) => {
+      // Accept image files including HEIC/HEIF from iPhone
+      const isImage =
+        file.type.startsWith('image/') ||
+        file.name.toLowerCase().endsWith('.heic') ||
+        file.name.toLowerCase().endsWith('.heif');
+      if (!isImage) {
+        setUploadError('Please select an image file.');
+        return;
+      }
+
+      setUploading(true);
+      setUploadError(null);
+      setCompressionInfo(null);
+
+      try {
+        // Build a unique filename: timestamp + sanitised original name
+        const ext = file.name.split('.').pop()?.toLowerCase() ?? 'jpg';
+        const base = file.name
+          .replace(/\.[^.]+$/, '')
+          .replace(/[^a-zA-Z0-9-_]/g, '-')
+          .slice(0, 40);
+        const path = `${Date.now()}-${base}.${ext}`;
+
+        const result = await uploadMenuImage(file, path);
+
+        if (!result.ok) {
+          setUploadError(result.error);
+          return;
+        }
+
+        onChange(result.url);
+
+        // Show compression savings if meaningful
+        if (result.compression.wasCompressed && result.compression.savingPercent >= 5) {
+          const origKB = Math.round(result.compression.originalSizeBytes / 1024);
+          const compKB = Math.round(result.compression.compressedSizeBytes / 1024);
+          setCompressionInfo(
+            `Compressed ${origKB} KB → ${compKB} KB (${result.compression.savingPercent}% smaller)`,
+          );
+        }
+      } catch (err) {
+        setUploadError(err instanceof Error ? err.message : 'Upload failed.');
+      } finally {
+        setUploading(false);
+      }
+    },
+    [onChange],
+  );
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) void handleFile(file);
+    // Reset so the same file can be re-selected
+    e.target.value = '';
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    if (disabled || uploading) return;
+    const file = e.dataTransfer.files[0];
+    if (file) void handleFile(file);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (!disabled && !uploading) setDragOver(true);
+  };
+
+  const handleDragLeave = () => setDragOver(false);
+
+  const handleUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setCompressionInfo(null);
+    onChange(e.target.value);
+  };
+
+  const handleRemove = () => {
+    onChange('');
+    setCompressionInfo(null);
+    setUploadError(null);
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Drop zone */}
+      <div
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onClick={() => !disabled && !uploading && inputRef.current?.click()}
+        className={[
+          'relative flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-6 text-center transition cursor-pointer select-none',
+          dragOver
+            ? 'border-amber-400 bg-amber-50'
+            : uploading
+              ? 'border-gray-200 bg-gray-50 cursor-not-allowed'
+              : disabled
+                ? 'border-gray-100 bg-gray-50 cursor-not-allowed opacity-60'
+                : 'border-gray-200 bg-gray-50 hover:border-gray-300 hover:bg-gray-100',
+        ].join(' ')}
+      >
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/*,.heic,.heif"
+          className="hidden"
+          onChange={handleInputChange}
+          disabled={disabled || uploading}
+        />
+
+        {uploading ? (
+          <>
+            <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-amber-500" />
+            <p className="text-xs text-gray-500">Compressing &amp; uploading…</p>
+          </>
+        ) : value ? (
+          <>
+            <img
+              src={value}
+              alt="Menu item preview"
+              className="h-24 w-24 rounded-lg object-cover border border-gray-100 shadow-sm"
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = 'none';
+              }}
+            />
+            <p className="text-xs text-gray-400">Click or drop to replace</p>
+          </>
+        ) : (
+          <>
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white border border-gray-200 text-gray-400 text-xl shadow-sm">
+              📷
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-700">
+                Drop a photo here, or <span className="text-amber-600">click to browse</span>
+              </p>
+              <p className="text-xs text-gray-400 mt-0.5">
+                JPEG, PNG, WebP, AVIF — auto-compressed to WebP
+              </p>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Compression info */}
+      {compressionInfo && (
+        <p className="text-xs text-green-600 flex items-center gap-1">
+          <span>✓</span> {compressionInfo}
+        </p>
+      )}
+
+      {/* Upload error */}
+      {uploadError && <p className="text-xs text-red-500">{uploadError}</p>}
+
+      {/* URL field — keep so admins can also paste a CDN URL directly */}
+      <div>
+        <label className={formStyles.label} htmlFor="menu-image-url">
+          Or paste image URL
+        </label>
+        <div className="flex gap-2">
+          <input
+            id="menu-image-url"
+            value={value}
+            onChange={handleUrlChange}
+            placeholder="https://..."
+            className={`${formStyles.input} flex-1`}
+            disabled={disabled || uploading}
+          />
+          {value && (
+            <button
+              type="button"
+              onClick={handleRemove}
+              disabled={disabled || uploading}
+              className="px-3 py-2 text-xs text-red-500 hover:text-red-700 border border-gray-200 rounded-lg transition disabled:opacity-40"
+              title="Remove image"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Props
@@ -60,7 +255,6 @@ export function MenuGeneralTab({ form, onChange, disabled = false }: MenuGeneral
             disabled={disabled}
           />
         </div>
-
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className={formStyles.label} htmlFor="menu-category">
@@ -80,7 +274,6 @@ export function MenuGeneralTab({ form, onChange, disabled = false }: MenuGeneral
               ))}
             </select>
           </div>
-
           <div>
             <label className={formStyles.label} htmlFor="menu-price">
               Price (USD) *
@@ -98,7 +291,6 @@ export function MenuGeneralTab({ form, onChange, disabled = false }: MenuGeneral
             />
           </div>
         </div>
-
         <div>
           <label className={formStyles.label} htmlFor="menu-description">
             Description
@@ -114,29 +306,14 @@ export function MenuGeneralTab({ form, onChange, disabled = false }: MenuGeneral
           />
         </div>
 
+        {/* ── Image uploader ─────────────────────────────────────────────── */}
         <div>
-          <label className={formStyles.label} htmlFor="menu-image">
-            Image URL
-          </label>
-          <input
-            id="menu-image"
+          <label className={formStyles.label}>Item Photo</label>
+          <ImageUploader
             value={form.image_url}
-            onChange={(e) => field('image_url', e.target.value)}
-            placeholder="https://..."
-            className={formStyles.input}
+            onChange={(url) => field('image_url', url)}
             disabled={disabled}
           />
-
-          {form.image_url && (
-            <img
-              src={form.image_url}
-              alt="Menu preview"
-              className="mt-3 h-20 w-20 rounded-lg object-cover border border-gray-100"
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.display = 'none';
-              }}
-            />
-          )}
         </div>
       </FormSection>
 
@@ -194,7 +371,6 @@ export function MenuGeneralTab({ form, onChange, disabled = false }: MenuGeneral
               disabled={disabled}
             />
           </div>
-
           <div>
             <label className={formStyles.label} htmlFor="menu-spicy">
               Spicy Level (0–5)
@@ -211,7 +387,6 @@ export function MenuGeneralTab({ form, onChange, disabled = false }: MenuGeneral
               disabled={disabled}
             />
           </div>
-
           <div>
             <label className={formStyles.label} htmlFor="menu-inventory">
               Inventory Count
@@ -227,7 +402,6 @@ export function MenuGeneralTab({ form, onChange, disabled = false }: MenuGeneral
               disabled={disabled}
             />
           </div>
-
           <div>
             <label className={formStyles.label} htmlFor="menu-lowstock">
               Low Stock Threshold
@@ -244,7 +418,6 @@ export function MenuGeneralTab({ form, onChange, disabled = false }: MenuGeneral
             />
           </div>
         </div>
-
         <div>
           <label className={formStyles.label} htmlFor="menu-popularity">
             Popularity Score

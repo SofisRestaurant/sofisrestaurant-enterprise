@@ -3,11 +3,7 @@ import { m, AnimatePresence } from 'framer-motion';
 
 import { MenuPublicService } from '@/domain/menu/menu.service.public';
 import type { MenuCategory, MenuItemPublic } from '@/domain/menu/menu.types';
-import type {
-  MenuPriceRangeKey,
-  MenuSortKey,
-  MenuTagKey,
-} from '@/modules/menu/types/menu-ui.types';
+import type { MenuPriceRangeKey, MenuSortKey, MenuTagKey } from '@/types/menu-ui.types';
 
 import { Spinner } from '@/components/ui/Spinner';
 import { useMenuUi } from '@/modules/menu/store/menuUi.store';

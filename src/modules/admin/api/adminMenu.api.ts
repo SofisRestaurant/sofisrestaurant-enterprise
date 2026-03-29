@@ -4,6 +4,7 @@ import {
   callAdminGateway,
   formatAdminGatewayError,
 } from '@/features/admin/api/adminGateway.client';
+import { MenuWriteService } from '@/domain/menu/menu.service.write';
 
 import type {
   AdminMenuCategory,
@@ -424,6 +425,15 @@ export async function getAdminMenuSnapshot(): Promise<AdminMenuSnapshot> {
     asOf: nowIso(),
     requestId,
   };
+}
+
+
+export async function deleteAdminMenuItem(id: string): Promise<void> {
+  try {
+    await MenuWriteService.delete(id);
+  } catch (err) {
+    throw new Error(`Failed to delete menu item: ${err instanceof Error ? err.message : err}`);
+  }
 }
 
 export async function listAdminMenuCategories(): Promise<AdminMenuCategory[]> {

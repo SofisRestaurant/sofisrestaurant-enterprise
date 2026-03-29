@@ -484,14 +484,14 @@ export async function updateOrderStatus(
       });
     }
 
-    const nowIso = new Date().toISOString();
+const nowIso = (): string => new Date().toISOString();
 
-    const { error } = await client
-      .from('orders')
-      .update({
-        status: normalizedStatus,
-        updated_at: nowIso,
-      })
+const { error } = await client
+  .from('orders')
+  .update({
+    status: normalizedStatus,
+    updated_at: nowIso(), // ✅ now it's callable
+  })
       .eq('id', orderIdValidation.value);
 
     if (error !== null) {
