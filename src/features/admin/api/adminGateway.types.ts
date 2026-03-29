@@ -319,7 +319,16 @@ export type AdminGatewayActionMap = {
     payload: PromoCreatePayload;
     response: PromoGatewayRow;
   };
+  'promos:delete': {
+  payload: { id: string };
+  response: { ok: true };
 };
+'campaigns:delete': {
+  payload: { id: string };
+  response: { ok: true };
+};
+};
+
 
 /* -------------------------------------------------------------------------- */
 /* Derived Action Types                                                       */

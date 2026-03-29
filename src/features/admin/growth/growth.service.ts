@@ -20,6 +20,7 @@ import {
   callAdminGateway,
   formatAdminGatewayError,
 } from '@/features/admin/api/adminGateway.client';
+import { invokeEdge } from '@/lib/supabase/invoke';
 import type {
   CampaignCreatePayload,
   CampaignUpdatePayload,
@@ -339,6 +340,14 @@ export async function runCampaignRotation(): Promise<void> {
   }
 }
 
+export async function deleteCampaign(id: string): Promise<void> {
+  try {
+    await callAdminGateway('campaigns:delete', { id });
+  } catch (e) {
+    throw normalizeError(e, 'Failed to delete campaign');
+  }
+}
+
 export async function createCampaign(payload: CampaignCreatePayload): Promise<unknown> {
   try {
     return await callAdminGateway('campaigns:create', payload);
@@ -390,6 +399,31 @@ export async function togglePromoCode(id: string, active: boolean): Promise<void
     throw normalizeError(e, 'Failed to update promo code');
   }
 }
+
+export async function createPromoCode(
+  payload: import('@/features/admin/api/adminGateway.types').PromoCreatePayload,
+): Promise<PromoCode> {
+  try {
+    const row = await callAdminGateway('promos:create', payload);
+    const mapped = mapPromoFromGatewayRow(row);
+    if (!mapped) throw new Error('Invalid response from gateway after promo create');
+    return mapped;
+  } catch (e) {
+    throw normalizeError(e, 'Failed to create promo code');
+  }
+}
+
+export async function deletePromoCode(id: string): Promise<void> {
+  // Uses invokeEdge directly because 'promos:delete' is registered in the
+  // Edge Function types but not yet in the frontend AdminGatewayActionMap.
+  // Add it to adminGateway.types.ts AdminGatewayActionMap to use callAdminGateway instead.
+  try {
+    await invokeEdge('admin-gateway', { action: 'promos:delete', payload: { id } });
+  } catch (e) {
+    throw normalizeError(e, 'Failed to delete promo code');
+  }
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Abandoned carts (read-only; not routed through gateway yet)

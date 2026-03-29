@@ -24,6 +24,7 @@ import {
   updateCampaign,
   pinFeaturedCampaign,
   runCampaignRotation,
+  deleteCampaign,
 } from '@/features/admin/growth/growth.service';
 import {
   Panel,
@@ -806,6 +807,9 @@ export const CampaignManager = memo(function CampaignManager() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const [filters, setFilters] = useState<{
     q: string;
@@ -1051,6 +1055,29 @@ export const CampaignManager = memo(function CampaignManager() {
     });
     setModalOpen(true);
   }, []);
+
+  const handleDelete = useCallback(async (c: Campaign) => {
+    const name = (c.name ?? 'this campaign').trim();
+    setDeleteTarget({ id: c.id, name });
+    setDeleteConfirmOpen(true);
+  }, []);
+
+  const confirmDelete = useCallback(async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteCampaign(deleteTarget.id);
+      setCampaigns((prev) => prev.filter((x) => x.id !== deleteTarget.id));
+      setDeleteConfirmOpen(false);
+      setDeleteTarget(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete campaign');
+      setDeleteConfirmOpen(false);
+    } finally {
+      setDeleting(false);
+    }
+  }, [deleteTarget]);
 
   const handlePreview = useCallback((draft: CampaignDraft) => {
     const base = typeof window !== 'undefined' ? window.location.origin : '';
@@ -1657,6 +1684,15 @@ export const CampaignManager = memo(function CampaignManager() {
                           Duplicate
                         </ActionButton>
 
+                        <ActionButton
+                          size="sm"
+                          disabled={isBusy || deleting}
+                          onClick={() => void handleDelete(c)}
+                          className="text-red-400 hover:bg-red-500/10 hover:text-red-300 border-red-500/20"
+                        >
+                          Delete
+                        </ActionButton>
+
                         {deep ? (
                           <ActionButton
                             size="sm"
@@ -1686,6 +1722,74 @@ export const CampaignManager = memo(function CampaignManager() {
         onSave={handleSave}
         onPreview={handlePreview}
       />
+
+      {/* ── Delete confirmation dialog ───────────────────────────────────── */}
+      {deleteConfirmOpen && deleteTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-dialog-title"
+        >
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            onClick={() => !deleting && setDeleteConfirmOpen(false)}
+          />
+
+          {/* Dialog */}
+          <div className="relative z-10 w-full max-w-sm rounded-2xl border border-zinc-700/60 bg-zinc-900 p-6 shadow-2xl">
+            {/* Icon */}
+            <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-full bg-red-500/10 border border-red-500/20">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 20 20"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                className="text-red-400"
+              >
+                <path d="M3 5h14M8 2h4M7 5v11a1 1 0 001 1h4a1 1 0 001-1V5" strokeLinecap="round" />
+              </svg>
+            </div>
+
+            <h2 id="delete-dialog-title" className="text-base font-semibold text-zinc-100">
+              Delete campaign?
+            </h2>
+            <p className="mt-1.5 text-sm text-zinc-400">
+              <span className="font-medium text-zinc-200">{deleteTarget.name}</span> will be
+              permanently removed. This cannot be undone.
+            </p>
+
+            <div className="mt-6 flex gap-3">
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={() => setDeleteConfirmOpen(false)}
+                className="flex-1 rounded-xl border border-zinc-700 bg-zinc-800 px-4 py-2.5 text-sm font-semibold text-zinc-200 transition hover:bg-zinc-700 disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={() => void confirmDelete()}
+                className="flex-1 rounded-xl bg-red-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-red-400 disabled:opacity-60 flex items-center justify-center gap-2"
+              >
+                {deleting ? (
+                  <>
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                    Deleting…
+                  </>
+                ) : (
+                  'Delete'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 });

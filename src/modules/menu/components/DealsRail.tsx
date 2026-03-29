@@ -44,6 +44,10 @@ export type DealsRailProps = {
   onActivateDeal?: (deal: DealCard) => void;
   onNavigate?: (deepLink: string, deal: DealCard) => void;
   onViewAll?: () => void;
+  /** Called when a deal card is clicked — use for analytics/event tracking */
+  onTrackActivation?: (dealId: string, placement: string | null | undefined) => void;
+  /** Called when a deal card enters the viewport — use for impression tracking */
+  onTrackImpression?: (dealId: string, placement: string | null | undefined) => void;
   className?: string;
   loading?: boolean;
   emptyHint?: string;
@@ -256,6 +260,8 @@ function DealsRailImpl({
   onViewAll,
   className,
   loading = false,
+  onTrackActivation,
+  onTrackImpression,
   emptyHint = 'No active deals right now. Check back soon!',
   emptyTitle = 'No active deals',
   ariaLabel = 'Deals',
@@ -285,9 +291,42 @@ function DealsRailImpl({
     (deal: DealCard) => {
       onSelect?.(deal.id);
       onActivateDeal?.(deal);
+      // Emit analytics event — wire to your analytics provider or Supabase event table
+      onTrackActivation?.(deal.id, deal.placement);
     },
-    [onActivateDeal, onSelect],
+    [onActivateDeal, onSelect, onTrackActivation],
   );
+
+  // Impression tracking via IntersectionObserver — uses the existing railRef
+  const observedDeals = useRef<Map<string, boolean>>(new Map());
+
+  useEffect(() => {
+    if (!onTrackImpression || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const dealId = (entry.target as HTMLElement).dataset.dealId;
+          const placement = (entry.target as HTMLElement).dataset.dealPlacement;
+          if (!dealId || observedDeals.current.get(dealId)) continue;
+          observedDeals.current.set(dealId, true);
+          onTrackImpression(dealId, placement ?? null);
+          observer.unobserve(entry.target);
+        }
+      },
+      { threshold: 0.5 },
+    );
+
+    // Observe all deal cards in the rail
+    const rail = railRef.current;
+    if (rail) {
+      for (const card of Array.from(rail.querySelectorAll('[data-deal-id]'))) {
+        observer.observe(card);
+      }
+    }
+
+    return () => observer.disconnect();
+  }, [deals, onTrackImpression]);
 
   const renderCard = useCallback(
     (deal: DealCard) => {
@@ -516,7 +555,13 @@ function DealsRailImpl({
             }}
           >
             {deals.map((deal) => (
-              <div key={deal.id} role="listitem" className="shrink-0">
+              <div
+                key={deal.id}
+                role="listitem"
+                className="shrink-0"
+                data-deal-id={deal.id}
+                data-deal-placement={deal.placement ?? undefined}
+              >
                 {renderCard(deal)}
               </div>
             ))}

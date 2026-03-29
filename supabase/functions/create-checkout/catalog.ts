@@ -191,7 +191,9 @@ export async function loadCanonicalCartItems(
         id: modifier.id,
         groupId: modifier.modifier_group_id,
         name: modifier.name,
-        priceAdjustmentCents: Math.trunc(modifier.price_adjustment),
+        // DB stores price_adjustment as dollar float (e.g. 0.5 = $0.50, 1 = $1.00).
+        // Convert to integer cents: multiply by 100 then truncate.
+        priceAdjustmentCents: Math.trunc(Math.round(modifier.price_adjustment * 100)),
       });
     }
 

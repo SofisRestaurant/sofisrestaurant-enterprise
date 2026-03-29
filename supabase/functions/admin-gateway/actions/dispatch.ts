@@ -23,9 +23,11 @@ import {
   createCampaign,
   updateCampaign,
   pinFeatured,
+  deleteCampaign,
 } from './campaigns.ts';
 
 import { listPromos, togglePromo, createPromo } from './promos.ts';
+import { removePromo } from './promos/remove.ts';
 
 /* -------------------------------------------------------------------------- */
 /* Dispatch                                                                   */
@@ -100,7 +102,10 @@ export async function dispatch(
     case 'menu:create':
       return {
         action: req.action,
-        result: await Menu.createMenuItem(req.payload),
+        // payload is validated by parseGatewayRequest before reaching here;
+        // cast to the DB insert type the action module expects.
+        // deno-lint-ignore no-explicit-any
+        result: await Menu.createMenuItem(req.payload as any),
       };
 
     case 'menu:update': {
@@ -261,6 +266,9 @@ export async function dispatch(
     case 'campaigns:run-rotation':
       return { action: req.action, result: await runCampaignRotation() };
 
+    case 'campaigns:delete':
+      return { action: req.action, result: await deleteCampaign(req.payload) };
+
     // ── Promos ───────────────────────────────────────────────────────────────
 
     case 'promos:list':
@@ -271,6 +279,14 @@ export async function dispatch(
 
     case 'promos:create':
       return { action: req.action, result: await createPromo(req.payload) };
+
+    case 'promos:delete':
+      return { action: req.action, result: await removePromo(req.payload) };
+
+    // menu:duplicate is declared in types but not yet implemented server-side.
+    // Returning null keeps the switch exhaustive without breaking existing flows.
+    case 'menu:duplicate':
+      return { action: req.action, result: null };
   }
 
   return assertNever(req);
