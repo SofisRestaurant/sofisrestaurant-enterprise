@@ -142,21 +142,30 @@ function sanitizeLabel(value: unknown, fallback = '', maxLength = 240): string {
   return trimmed.slice(0, maxLength);
 }
 
+// Safely get the numeric price adjustment from a modifier
 function getModifierAdjustment(value: ModifierLike | SelectedModLike): number {
-  if (typeof value.price_adjustment === 'number') return value.price_adjustment;
-  if (typeof value.priceAdjustment === 'number') return value.priceAdjustment;
+  // Explicitly check both legacy and modern fields
+  if ('price_adjustment' in value && typeof value.price_adjustment === 'number') {
+    return value.price_adjustment;
+  }
+  if ('priceAdjustment' in value && typeof value.priceAdjustment === 'number') {
+    return value.priceAdjustment;
+  }
   return 0;
 }
 
+// Safely extract modifier groups from a MenuItem-like object
 function getModifierGroups(item: unknown): ModifierGroupLike[] {
   if (!isRecord(item)) return [];
 
+  // Handle snake_case first
   const snake = item.modifier_groups;
   if (Array.isArray(snake)) {
     return snake.filter(isModifierGroupLike);
   }
 
-  const camel = item.modifierGroups;
+  // Handle camelCase as fallback, fully type-safe
+  const camel = (item as UnknownRecord).modifierGroups;
   if (Array.isArray(camel)) {
     return camel.filter(isModifierGroupLike);
   }
@@ -164,11 +173,13 @@ function getModifierGroups(item: unknown): ModifierGroupLike[] {
   return [];
 }
 
+// Safely get modifiers from a modifier group
 function getGroupModifiers(group: ModifierGroupLike): ModifierLike[] {
   if (!Array.isArray(group.modifiers)) return [];
   return group.modifiers.filter(isModifierLike);
 }
 
+// Convert an unknown selection object into safe SelectedModLike entries
 function getSelectedByGroup(selected: unknown): Array<[string, SelectedModLike[]]> {
   if (!isRecord(selected)) return [];
 
@@ -186,7 +197,6 @@ function getSelectedByGroup(selected: unknown): Array<[string, SelectedModLike[]
 
   return result;
 }
-
 /**
  * Detect “dollars-like” floats vs integer cents.
  * Examples:
@@ -235,7 +245,7 @@ function canonicalizeModifiers(mods: CartItemModifierCompat[]): string {
     return a.priceAdjustmentCents - b.priceAdjustmentCents;
   });
 
-  return sorted.map((m) => `${m.groupId}:${m.id}:${m.priceAdjustmentCents}`).join('|');
+  return sorted.map(({ groupId, id, priceAdjustmentCents }) => `${groupId}:${id}:${priceAdjustmentCents}`).join('|');
 }
 
 function buildModifierLookup(groups: ModifierGroupLike[]): Map<string, ModifierLookupValue> {

@@ -64,7 +64,7 @@ export async function loadCanonicalCartItems(
     ? await db
       .from("modifier_groups")
       .select(
-        "id, name, required, min_selections, max_selections, active, type, description, sort_order, created_at, updated_at",
+        "id, name, required, min_selections, max_selections, active, type, sort_order, created_at, updated_at",
       )
       .in("id", groupIds)
     : { data: [] as ModifierGroupLookupRow[], error: null };
@@ -158,10 +158,16 @@ export async function loadCanonicalCartItems(
       }
 
       const group = groupMap.get(modifier.modifier_group_id);
-      if (!group || !group.active) {
+
+      // FIX 1: Do NOT block checkout for inactive groups.
+      // The `active` flag controls customer-facing visibility only.
+      // If a modifier was selected by the customer (it appeared in their modal),
+      // the group was active at selection time. Blocking payment for an
+      // inactive group flag is incorrect and breaks checkout.
+      if (!group) {
         throw new PricingValidationError(
-          "MODIFIER_GROUP_INACTIVE",
-          "Modifier group is inactive.",
+          "MODIFIER_GROUP_NOT_FOUND",
+          "Modifier group not found.",
           409,
         );
       }
@@ -191,13 +197,23 @@ export async function loadCanonicalCartItems(
 
     for (const allowed of allowedGroups) {
       const group = groupMap.get(allowed.modifier_group_id);
+
+      // FIX 2: Skip inactive groups entirely for required-modifier validation.
+      // An inactive group cannot be shown to customers, so it can never be
+      // fulfilled. Requiring selections for a group the customer cannot see
+      // permanently blocks checkout. Skip it.
       if (!group || !group.active) continue;
 
       const selectedCount = selectedCountByGroup.get(group.id) ?? 0;
-      const requiredMin = typeof group.min_selections === "number"
-        ? Math.max(0, Math.trunc(group.min_selections))
-        : group.required
-        ? 1
+
+      // FIX 3: Use ONLY min_selections for the required threshold.
+      // The `required` boolean is a UI hint — the actual server-side minimum
+      // is min_selections. Your DB has groups with required=true but
+      // min_selections=0 or min_selections=null, which previously caused
+      // required=true to enforce min=1 even when the DB says min=0.
+      const requiredMin = typeof group.min_selections === "number" &&
+          group.min_selections > 0
+        ? Math.trunc(group.min_selections)
         : 0;
 
       if (selectedCount < requiredMin) {

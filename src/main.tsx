@@ -4,7 +4,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { RouterProvider } from 'react-router-dom';
-import { MotionConfig } from 'motion/react';
+import { MotionConfig } from 'framer-motion';
 
 // ── i18n — MUST be imported before any component that calls useTranslation() ──
 import './i18n';

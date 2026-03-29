@@ -39,8 +39,16 @@ export { parseToggleActivePayload };
 /* Modifier group parsers                                                     */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Accepts the DB's actual stored values ('single', 'checkbox') as well as
+ * the UI values ('radio', 'quantity') so nothing is ever rejected.
+ * Normalises to the ModifierGroupType union used in types.ts.
+ */
 function parseModifierGroupType(v: unknown): ModifierGroupType | null {
-  if (v === 'radio' || v === 'checkbox' || v === 'quantity') return v;
+  if (v === 'checkbox') return 'checkbox';
+  if (v === 'quantity') return 'quantity';
+  // 'radio' and 'single' both mean single-pick — map both to 'radio'
+  if (v === 'radio' || v === 'single') return 'radio';
   return null;
 }
 
@@ -57,7 +65,7 @@ export function parseModifierGroupCreatePayload(v: unknown): ModifierGroupCreate
   const type = parseModifierGroupType(v.type);
   if (!name || !type) return null;
 
-  const description = 'description' in v ? safeStr(v.description, 500) : undefined;
+  // description is intentionally excluded — column does not exist in modifier_groups table
   const required = 'required' in v ? safeBool(v.required) ?? undefined : undefined;
   const min = 'min_selections' in v ? safeNum(v.min_selections) : null;
   const max =
@@ -72,7 +80,6 @@ export function parseModifierGroupCreatePayload(v: unknown): ModifierGroupCreate
   return {
     name,
     type,
-    description: description ?? null,
     required,
     min_selections: min !== null && min !== undefined ? Math.trunc(min) : undefined,
     max_selections:
@@ -102,9 +109,7 @@ export function parseModifierGroupUpdatePayload(v: unknown): ModifierGroupUpdate
     payload.type = type;
   }
 
-  if ('description' in v) {
-    payload.description = v.description === null ? null : safeStr(v.description, 500);
-  }
+  // description field intentionally omitted — column does not exist in DB
 
   if ('required' in v) {
     const required = safeBool(v.required);

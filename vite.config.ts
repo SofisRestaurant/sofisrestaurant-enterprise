@@ -1,71 +1,104 @@
-import { defineConfig, loadEnv, UserConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import viteCompression from 'vite-plugin-compression'
 import { imagetools } from 'vite-imagetools'
+import path from 'path'
 
-// Example async function for feature flags or remote config
-async function getAsyncData() {
-  return { featureFlag: true }
-}
-
-export default defineConfig(async ({ command, mode, isSsrBuild, isPreview }) => {
-  // Load environment variables
+export default defineConfig(({ command, mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
+  const isDev = command === 'serve'
 
-  // Fetch async initialization data
-  const asyncData = await getAsyncData()
-
-  // Base Vite config
-  const config: UserConfig = {
+  return {
     plugins: [
       react(),
-      viteCompression(),     // Gzip/ Brotli for production
-      imagetools()           // Optimize images on import
-    ],
+
+      // Production compression (Brotli + Gzip)
+      !isDev &&
+        viteCompression({
+          algorithm: 'brotliCompress',
+          ext: '.br',
+        }),
+
+      !isDev &&
+        viteCompression({
+          algorithm: 'gzip',
+          ext: '.gz',
+        }),
+
+      imagetools(),
+    ].filter(Boolean),
+
     define: {
       __APP_ENV__: JSON.stringify(env.APP_ENV || 'development'),
-      __FEATURE_FLAG__: JSON.stringify(asyncData.featureFlag),
+      __FEATURE_FLAG__: JSON.stringify(true),
     },
+
+    resolve: {
+      alias: {
+        '@': path.resolve(__dirname, 'src'),
+      },
+    },
+
     server: {
       port: env.APP_PORT ? Number(env.APP_PORT) : 5173,
       open: true,
-      strictPort: command === 'serve',
+      strictPort: true,
     },
-    resolve: {
-      alias: {
-        '@': `${process.cwd()}/src`,
-      },
+
+    preview: {
+      port: 4173,
+      strictPort: true,
     },
+
     build: {
+      target: 'esnext',
       outDir: 'dist',
-      sourcemap: false,       // Disable sourcemaps in production
-      minify: 'esbuild',
-      chunkSizeWarningLimit: 1000, // Adjust warning for large chunks
+      sourcemap: false,
+
+      // ✅ Use OXC properly (fixes warning)
+      minify: 'oxc',
+
+      cssCodeSplit: true,
+      reportCompressedSize: false,
+      chunkSizeWarningLimit: 800,
+
       rollupOptions: {
         output: {
           manualChunks(id) {
-            if (id.includes('node_modules')) return 'vendor'
+            if (id.includes('node_modules')) {
+              if (id.includes('react')) return 'react-vendor'
+              if (id.includes('framer-motion')) return 'motion'
+              if (id.includes('@tanstack')) return 'query'
+              if (id.includes('lucide-react')) return 'icons'
+              if (id.includes('stripe')) return 'payments'
+              return 'vendor'
+            }
+
             if (id.includes('Dashboard')) return 'dashboard'
             if (id.includes('LoyaltyScan')) return 'loyalty'
           },
+
           entryFileNames: 'assets/[name]-[hash].js',
           chunkFileNames: 'assets/[name]-[hash].js',
-          assetFileNames: 'assets/[name]-[hash].[ext]'
-        }
-      }
+          assetFileNames: 'assets/[name]-[hash].[ext]',
+        },
+      },
     },
+
     optimizeDeps: {
-      include: ['react', 'react-dom', 'clsx'], // pre-bundle critical deps
-    }
-  }
+      include: [
+        'react',
+        'react-dom',
+        'react-router-dom',
+        'framer-motion',
+        '@tanstack/react-query',
+        'zustand',
+      ],
+    },
 
-  // Dev-specific overrides
-  if (command === 'serve') {
-    config.server!.strictPort = true
-  } else {
-    // Production-specific overrides
-    config.build!.sourcemap = false
+    // ✅ Keep esbuild ONLY for console stripping
+    esbuild: {
+      drop: isDev ? [] : ['console', 'debugger'],
+    },
   }
-
-  return config
 })

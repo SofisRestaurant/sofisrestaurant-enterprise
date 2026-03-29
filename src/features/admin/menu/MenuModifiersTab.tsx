@@ -1,25 +1,10 @@
-// src/pages/Admin/components/MenuModifiersTab.tsx
+// src/features/admin/menu/MenuModifiersTab.tsx
 // ============================================================================
-// MENU MODIFIERS TAB
+// MENU MODIFIERS TAB — Fully upgraded 2026
 // ============================================================================
-// Complete modifier management interface for a single menu item.
-//
-// Features:
-//   - List all modifier groups with their modifiers
-//   - Add / edit / delete groups (via ModifierGroupModal)
-//   - Add / edit / delete individual modifiers (via ModifierModal)
-//   - Toggle group active / modifier available (optimistic + safe)
-//   - Drag-and-drop reorder groups (via ModifierGroupReorderList)
-//   - Template library (via ModifierTemplateLibrary)
-//   - Realtime sync (via useModifierRealtime)
-//   - Confirm dialog on destructive actions
-//
-// Notes:
-//   - Avoids promise-returning functions in JSX handlers (no-misused-promises)
-//   - Avoids unstable callbacks (react-hooks/exhaustive-deps)
-//   - Avoids "used before declaration" by ordering callbacks correctly
-//   - Groups with missing/empty ids are filtered before rendering and before
-//     any modifier fetch — prevents duplicate React keys and 400 gateway errors
+// All mutations now re-fetch from DB via loadGroups() instead of manually
+// patching local state. This eliminates all group/modifier map drift that
+// caused newly added modifiers to not appear without a full page reload.
 // ============================================================================
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
@@ -61,7 +46,6 @@ interface MenuModifiersTabProps {
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Returns true only for groups with a non-empty trimmed id and name. */
 function isValidGroup(group: AdminModifierGroup): boolean {
   return (
     typeof group.id === 'string' &&
@@ -69,6 +53,12 @@ function isValidGroup(group: AdminModifierGroup): boolean {
     typeof group.name === 'string' &&
     group.name.trim().length > 0
   );
+}
+
+function extractErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'string' && err.trim()) return err;
+  return 'An unexpected error occurred.';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -109,7 +99,7 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
   const modifiersByGroup = useMemo(() => modifiers, [modifiers]);
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Data loading
+  // Data loading — single source of truth
   // ─────────────────────────────────────────────────────────────────────────
 
   const loadGroups = useCallback(async () => {
@@ -118,12 +108,7 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
 
     try {
       const raw = await ModifierGroupService.getForMenuItem(menuItemId);
-
-      // Filter out any groups with invalid/empty ids before storing them.
-      // An empty id would produce duplicate React keys and a 400 on the
-      // subsequent modifier fetch (gateway rejects { group_id: '' }).
       const gs = raw.filter(isValidGroup);
-
       setGroups(gs);
 
       const entries = await Promise.all(
@@ -134,7 +119,7 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
       );
       setModifiers(Object.fromEntries(entries));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load modifiers');
+      setError(extractErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -147,8 +132,6 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
   // ─────────────────────────────────────────────────────────────────────────
   // Realtime sync
   // ─────────────────────────────────────────────────────────────────────────
-  // IMPORTANT: onAnyChange expects a void-returning function.
-  // We trigger async work with `void` inside the handler.
 
   const handleRealtimeAnyChange = useCallback((): void => {
     void loadGroups();
@@ -177,7 +160,7 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
       await confirmAction();
       setConfirmOpen(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Operation failed');
+      setError(extractErrorMessage(err));
       setConfirmOpen(false);
     } finally {
       setConfirmLoading(false);
@@ -185,7 +168,7 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
   }, [confirmAction]);
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Group actions (stable callbacks)
+  // Group actions
   // ─────────────────────────────────────────────────────────────────────────
 
   const openCreateGroup = useCallback(() => {
@@ -201,22 +184,22 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
   const handleSaveGroup = useCallback(
     async (payload: ModifierGroupWritePayload) => {
       if (editingGroup) {
+        // Update: patch local state optimistically for instant feedback
         const updated = await ModifierGroupService.update(editingGroup.id, payload);
         setGroups((p) => p.map((g) => (g.id === updated.id ? updated : g)));
         return;
       }
 
+      // Create: always re-fetch so the new group appears with correct state
       const created = await ModifierGroupService.create(payload);
       await ModifierGroupService.attachToMenuItem({
         menu_item_id: menuItemId,
         modifier_group_id: created.id,
         sort_order: groups.length,
       });
-
-      setGroups((p) => [...p, created]);
-      setModifiers((p) => ({ ...p, [created.id]: [] }));
+      await loadGroups();
     },
-    [editingGroup, menuItemId, groups.length],
+    [editingGroup, menuItemId, groups.length, loadGroups],
   );
 
   const handleDeleteGroup = useCallback(
@@ -232,17 +215,12 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
           await ModifierService.deleteAllInGroup(group.id);
           await ModifierGroupService.detachFromMenuItem(menuItemId, group.id);
           await ModifierGroupService.delete(group.id);
-
-          setGroups((p) => p.filter((g) => g.id !== group.id));
-          setModifiers((p) => {
-            const next = { ...p };
-            delete next[group.id];
-            return next;
-          });
+          // Re-fetch to ensure state matches DB
+          await loadGroups();
         },
       );
     },
-    [menuItemId, modifiersByGroup, openConfirm],
+    [menuItemId, modifiersByGroup, openConfirm, loadGroups],
   );
 
   const handleToggleGroup = useCallback(async (group: AdminModifierGroup, active: boolean) => {
@@ -250,9 +228,10 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
     setError(null);
     try {
       await ModifierGroupService.toggleActive(group.id, active);
+      // Optimistic update — no full reload needed for a toggle
       setGroups((p) => p.map((g) => (g.id === group.id ? { ...g, active } : g)));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update');
+      setError(extractErrorMessage(err));
     } finally {
       setSaving(false);
     }
@@ -263,7 +242,7 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
       setSaving(true);
       setError(null);
       try {
-        const items = orderedIds.map((id, i) => ({ id, sort_order: i }));
+        const items = orderedIds.map((id, i) => ({ id, sort_order: i * 10 }));
         await ModifierGroupService.reorderForMenuItem(menuItemId, items);
 
         setGroups((prev) => {
@@ -271,7 +250,7 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
           return orderedIds.map((id) => byId.get(id)).filter(Boolean) as AdminModifierGroup[];
         });
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to reorder');
+        setError(extractErrorMessage(err));
       } finally {
         setSaving(false);
       }
@@ -280,7 +259,7 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
   );
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Modifier actions (stable callbacks)
+  // Modifier actions
   // ─────────────────────────────────────────────────────────────────────────
 
   const openAddModifier = useCallback((groupId: string) => {
@@ -300,22 +279,19 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
       if (!targetGroupId) throw new Error('No group selected');
 
       if (editingModifier) {
-        const updated = await ModifierService.update(editingModifier.id, payload);
-        setModifiers((p) => ({
-          ...p,
-          [targetGroupId]: (p[targetGroupId] ?? []).map((m) => (m.id === updated.id ? updated : m)),
-        }));
-        return;
+        await ModifierService.update(editingModifier.id, payload);
+      } else {
+        const full: ModifierWritePayload = { ...payload, modifier_group_id: targetGroupId };
+        await ModifierService.create(full);
       }
 
-      const full: ModifierWritePayload = { ...payload, modifier_group_id: targetGroupId };
-      const created = await ModifierService.create(full);
-      setModifiers((p) => ({
-        ...p,
-        [targetGroupId]: [...(p[targetGroupId] ?? []), created],
-      }));
+      // Always re-fetch from DB after any modifier mutation.
+      // Manual state patching was causing drift — new modifiers wouldn't
+      // appear because the modifier_group_id on the returned object didn't
+      // always match the key used in the modifiers state map.
+      await loadGroups();
     },
-    [editingModifier, targetGroupId],
+    [editingModifier, targetGroupId, loadGroups],
   );
 
   const handleDeleteModifier = useCallback(
@@ -325,16 +301,12 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
         `Delete "${modifier.name}"? This cannot be undone.`,
         async () => {
           await ModifierService.delete(modifier.id);
-          setModifiers((p) => ({
-            ...p,
-            [modifier.modifier_group_id]: (p[modifier.modifier_group_id] ?? []).filter(
-              (m) => m.id !== modifier.id,
-            ),
-          }));
+          // Re-fetch to keep state in sync
+          await loadGroups();
         },
       );
     },
-    [openConfirm],
+    [openConfirm, loadGroups],
   );
 
   const handleToggleModifier = useCallback(async (modifier: AdminModifier, available: boolean) => {
@@ -342,6 +314,7 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
     setError(null);
     try {
       await ModifierService.toggleAvailability(modifier.id, available);
+      // Optimistic update for toggles — no full reload needed
       setModifiers((p) => ({
         ...p,
         [modifier.modifier_group_id]: (p[modifier.modifier_group_id] ?? []).map((m) =>
@@ -349,13 +322,13 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
         ),
       }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update');
+      setError(extractErrorMessage(err));
     } finally {
       setSaving(false);
     }
   }, []);
 
-  // UI-safe wrappers (voiding promises for JSX)
+  // UI-safe wrappers (void-returning for JSX handlers)
   const onToggleGroupActive = useCallback(
     (group: AdminModifierGroup, active: boolean) => {
       void handleToggleGroup(group, active);
@@ -383,7 +356,7 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
         await loadGroups();
         setActivePanel('groups');
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to apply template');
+        setError(extractErrorMessage(err));
       } finally {
         setSaving(false);
       }
@@ -477,7 +450,6 @@ export function MenuModifiersTab({ menuItemId }: MenuModifiersTabProps) {
           <p className="text-xs text-gray-500">
             Drag groups into your preferred display order. Changes save automatically.
           </p>
-
           <ModifierGroupReorderList
             groups={groups}
             disabled={saving}

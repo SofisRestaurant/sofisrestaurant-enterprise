@@ -12,7 +12,7 @@
 //   already-subscribed → ✅ "You're already on the list." + browse CTA
 //   error              → ⚠️ shake, red border, inline message, optional retry button
 //
-// Animations (Framer Motion — import from 'framer-motion', never 'motion/react'):
+// Animations (Framer Motion — import from 'framer-motion', never 'framer-motion'):
 //   • Staggered section entrance via whileInView
 //   • Animated radial-gradient glow background (continuous pulse)
 //   • AnimatePresence form ↔ success/already-subscribed swap

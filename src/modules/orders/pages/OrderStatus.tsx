@@ -19,7 +19,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft, Package, Clock, CheckCircle2, ChefHat, AlertCircle } from 'lucide-react';
-// Import directly from framer-motion (motion/react is a thin re-export shim
+// Import directly from framer-motion (framer-motion is a thin re-export shim
 // that can resolve to undefined in Vite's ESM bundling — framer-motion is
 // the actual package and always resolves correctly).
 import {

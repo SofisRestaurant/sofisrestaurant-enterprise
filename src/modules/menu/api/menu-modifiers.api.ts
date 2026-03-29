@@ -281,6 +281,7 @@ export async function getMenuModifierGroupsForItem(
   itemId: string,
   options: ListMenuModifierGroupsOptions = {},
 ): Promise<MenuModifierGroup[]> {
+  
   const normalizedItemId = sanitizePlainText(itemId, 128);
 
   if (!normalizedItemId) throwInvalidInputError('Menu item id is required.');
@@ -289,13 +290,14 @@ export async function getMenuModifierGroupsForItem(
   const cacheTtlMs = options.cacheTtlMs ?? 30_000;
 
   const [groupRows, optionRows, linkRows] = await Promise.all([
-    fetchMenuTableRows('menu_modifier_groups', {
+    fetchMenuTableRows('modifier_groups', {
       signal: options.signal,
       cacheTtlMs,
       allowMissing: true,
       limit: 1_000,
     }),
-    fetchMenuTableRows('menu_modifiers', {
+    
+    fetchMenuTableRows('modifiers', {
       signal: options.signal,
       cacheTtlMs,
       allowMissing: true,

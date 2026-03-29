@@ -215,6 +215,62 @@ export type AdminGatewayActionMap = {
     response: unknown[];
   };
 
+  /* ───────── Menu CRUD ───────── */
+
+  'menu:create': {
+    payload: unknown;
+    response: unknown;
+  };
+
+  'menu:update': {
+    payload: { id: string; data: unknown };
+    response: unknown;
+  };
+
+  'menu:delete': {
+    payload: { id: string };
+    response: { ok: true };
+  };
+
+  /* ───────── Modifier Groups ───────── */
+
+  'menu:modifier-groups:list': {
+    payload: { activeOnly?: boolean } | undefined;
+    response: unknown[];
+  };
+
+  'menu:modifier-groups:create': {
+    payload: unknown;
+    response: unknown;
+  };
+
+  'menu:modifier-groups:update': {
+    payload: unknown;
+    response: unknown;
+  };
+
+  'menu:modifier-groups:delete': {
+    payload: { id: string };
+    response: { ok: true };
+  };
+
+  /* ───────── Modifiers ───────── */
+
+  'menu:modifiers:create': {
+    payload: unknown;
+    response: unknown;
+  };
+
+  'menu:modifiers:update': {
+    payload: unknown;
+    response: unknown;
+  };
+
+  'menu:modifiers:delete': {
+    payload: { id: string };
+    response: { ok: true };
+  };
+
   /* ───────── Campaign Management ───────── */
 
   'campaigns:list': {
@@ -244,7 +300,7 @@ export type AdminGatewayActionMap = {
 
   'campaigns:run-rotation': {
     payload: undefined;
-    response: CampaignRotationResult ;
+    response: CampaignRotationResult;
   };
 
   /* ───────── Promo Management ───────── */
@@ -256,7 +312,7 @@ export type AdminGatewayActionMap = {
 
   'promos:toggle': {
     payload: PromoTogglePayload;
-    response: { ok: true } ;
+    response: { ok: true };
   };
 
   'promos:create': {
