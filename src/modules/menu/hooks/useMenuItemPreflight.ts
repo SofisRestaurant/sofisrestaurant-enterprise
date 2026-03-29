@@ -3,22 +3,23 @@
 // =============================================================================
 // Manages the server preflight call for a single menu item + quantity.
 // Authoritative source of truth for unit price, availability, and stock.
+// Fully TypeScript-safe and aligned with menu-modal.types.ts
 // =============================================================================
 
 import { useCallback, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase/supabaseClient';
-import type { PreflightOk, PreflightResponse } from '../utils/modifierGuards';
-import { isRecord, safeStr, safeCents, clampInt, errMsg } from '../utils/menuItemGuards';
+import type { PreflightOk, PreflightFail, PreflightResult } from '@/domain/menu/menu-modal.types';
+import { isRecord, safeCents, clampInt, errMsg } from '../utils/menuItemGuards';
 import { MAX_QTY_HARD_CAP } from '../constants';
 
 interface UseMenuItemPreflightReturn {
-  preflight: PreflightResponse | null;
+  preflight: PreflightResult | null;
   preflightLoading: boolean;
   preflightError: string | null;
   /** Call this with the desired qty to (re-)run the preflight. Debounce in the caller. */
   runPreflight: (requestedQty: number) => Promise<void>;
   /** Expose so the qty hook can clamp against server-confirmed max. */
-  abortRef: React.MutableRefObject<AbortController | null>;
+  abortRef: React.RefObject<AbortController | null>;
 }
 
 export function useMenuItemPreflight(
@@ -26,7 +27,7 @@ export function useMenuItemPreflight(
   onLiveStatus: (msg: string) => void,
   onQtyClamp: (serverMax: number) => void,
 ): UseMenuItemPreflightReturn {
-  const [preflight, setPreflight] = useState<PreflightResponse | null>(null);
+  const [preflight, setPreflight] = useState<PreflightResult | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [preflightError, setPreflightError] = useState<string | null>(null);
 
@@ -36,17 +37,19 @@ export function useMenuItemPreflight(
   const runPreflight = useCallback(
     async (requestedQty: number) => {
       if (!itemId) {
-        setPreflight({ ok: false, error: 'Invalid item.' });
-        setPreflightError('Invalid item.');
+        const msg = 'Invalid item.';
+        setPreflight({ ok: false, error: msg });
+        setPreflightError(msg);
+        onLiveStatus(msg);
         return;
       }
 
+      // Abort any previous request
       abortRef.current?.abort();
       const ac = new AbortController();
       abortRef.current = ac;
 
       const seq = ++requestSeq.current;
-
       setPreflightLoading(true);
       setPreflightError(null);
 
@@ -62,9 +65,9 @@ export function useMenuItemPreflight(
         const invokeError: unknown = invokeResult.error;
         const invokeData: unknown = invokeResult.data;
 
-        // Guard error.message — invoke error is typed as `any` by Supabase SDK
-        if (invokeError !== null && invokeError !== undefined) {
-          const msg: string =
+        // Handle Supabase SDK error
+        if (invokeError) {
+          const msg =
             isRecord(invokeError) && typeof invokeError.message === 'string'
               ? invokeError.message
               : 'Preflight failed';
@@ -76,7 +79,7 @@ export function useMenuItemPreflight(
           throw new Error('Invalid preflight response');
         }
 
-        if (payload.ok !== true) {
+        if (!payload.ok) {
           const msg = typeof payload.error === 'string' ? payload.error : 'Item unavailable';
           setPreflight({ ok: false, error: msg });
           setPreflightError(msg);
@@ -84,9 +87,9 @@ export function useMenuItemPreflight(
           return;
         }
 
+        // Normalize PreflightOk
         const normalized: PreflightOk = {
           ok: true,
-          item_id: safeStr(payload.item_id, itemId, 128),
           available: Boolean(payload.available),
           unit_price_cents: safeCents(payload.unit_price_cents, 0),
           stock_count:
@@ -95,11 +98,14 @@ export function useMenuItemPreflight(
             payload.low_stock_threshold == null
               ? null
               : clampInt(payload.low_stock_threshold, 1, 1_000_000),
-          max_qty: clampInt(payload.max_qty ?? 1, 1, MAX_QTY_HARD_CAP),
         };
 
         setPreflight(normalized);
-        onQtyClamp(normalized.max_qty);
+
+        // Clamp quantity using server-provided max_qty if present, otherwise use hard cap
+        const serverMax =
+          payload.max_qty != null ? clampInt(payload.max_qty, 1, MAX_QTY_HARD_CAP) : MAX_QTY_HARD_CAP;
+        onQtyClamp(serverMax);
       } catch (e) {
         const msg = errMsg(e);
         if (msg === 'aborted') return;

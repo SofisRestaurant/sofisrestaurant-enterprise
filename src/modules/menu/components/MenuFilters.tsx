@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef } from 'react';
 import { m, AnimatePresence } from 'framer-motion';
 import { SlidersHorizontal, X } from 'lucide-react';
-import type {
-  MenuPriceRangeKey,
-  MenuSortKey,
-  MenuTagKey,
-} from '@/modules/menu/types/menu-ui.types';
+import { MenuPriceRangeKey, MenuSortKey, MenuTagKey } from '@/types/menu-ui.types';
 
 // ── Animation constants ───────────────────────────────────────────────────────
 
@@ -50,9 +46,11 @@ function labelForTag(tag: MenuTagKey): string {
     case 'vegetarian':
       return 'Vegetarian';
     case 'gluten_free':
-      return 'Gluten Free';
+      return 'Gluten-Free';
     case 'kids':
       return 'Kids';
+    default:
+      return tag; // fallback (prevents TS error)
   }
 }
 
@@ -68,6 +66,8 @@ function labelForPriceRange(key: MenuPriceRangeKey): string {
       return '$20–$30';
     case '30_plus':
       return '$30+';
+    default:
+      return key;
   }
 }
 
@@ -75,10 +75,6 @@ function labelForSort(key: MenuSortKey): string {
   switch (key) {
     case 'recommended':
       return 'Recommended';
-    case 'featured':
-      return 'Featured';
-    case 'popular':
-      return 'Popular';
     case 'price_low':
       return 'Price: Low to High';
     case 'price_high':
@@ -87,6 +83,8 @@ function labelForSort(key: MenuSortKey): string {
       return 'Name: A to Z';
     case 'name_za':
       return 'Name: Z to A';
+    default:
+      return key;
   }
 }
 
@@ -121,7 +119,7 @@ export default function MenuFilters(props: MenuFiltersProps) {
     [],
   );
   const allSorts = useMemo<MenuSortKey[]>(
-    () => ['recommended', 'featured', 'popular', 'price_low', 'price_high', 'name_az', 'name_za'],
+    () => ['recommended', 'price_low', 'price_high', 'name_az', 'name_za'],
     [],
   );
 

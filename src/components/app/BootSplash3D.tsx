@@ -7,7 +7,11 @@ import {
   useReducedMotion,
   useSpring,
   useTransform,
+<<<<<<< HEAD
+} from 'framer-motion';
+=======
 } from 'motion/react';
+>>>>>>> dc67b4bd64ee091c16c830047bfb858f419eb54d
 
 type BootSplash3DProps = {
   visible: boolean;

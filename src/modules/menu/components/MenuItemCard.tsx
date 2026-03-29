@@ -304,7 +304,7 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
             <m.div
               key="overlay"
               className="absolute inset-0 flex items-center justify-center
-                         bg-black/45 backdrop-blur-[2px]"
+                         bg-black/0.45 backdrop-blur-[2px]"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}

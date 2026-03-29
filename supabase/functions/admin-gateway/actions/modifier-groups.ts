@@ -1,7 +1,7 @@
 // =============================================================================
 // PATH: supabase/functions/admin-gateway/actions/modifier-groups.ts
 // =============================================================================
-// All DB operations for the modifier_groups table and the
+// All DB operations for the menu_modifier_groups table and the
 // menu_item_modifier_groups join table.
 // =============================================================================
 
@@ -42,16 +42,20 @@ export async function list(activeOnly = false): Promise<unknown[]> {
 }
 
 export async function listForItem(menuItemId: string): Promise<unknown[]> {
-  // Join through the join table so results are ordered by that table's
-  // sort_order, not the group's own sort_order — this is what the UI saved.
   const { data, error } = await service
     .from('menu_item_modifier_groups')
     .select('sort_order, modifier_groups(*)')
     .eq('menu_item_id', menuItemId)
     .order('sort_order', { ascending: true });
 
-  if (error) dbError(error.message, 'DB_MOD_GROUPS_LIST_FOR_ITEM');
-  return (data ?? []) as unknown[];
+  if (error) dbError(error.message, 'DB_MOD_GROUP_LIST_FOR_ITEM');
+
+  // The query returns join rows shaped: { sort_order, modifier_groups: {...} }
+  // Unwrap to flat group objects so the client mapper receives [{ id, name, ... }].
+  // Type-cast through unknown to satisfy Deno/TS strict mode.
+  return (data ?? [])
+    .map((row) => (row as unknown as Record<string, unknown>).modifier_groups)
+    .filter((g): g is Record<string, unknown> => g != null) as unknown[];
 }
 
 export async function getById(id: string): Promise<unknown> {
@@ -87,8 +91,8 @@ export async function create(payload: ModifierGroupCreatePayload): Promise<unkno
     .from('modifier_groups')
     .insert({
       name: payload.name,
-      type: payload.type,
-      description: payload.description ?? null,
+      type: payload.type === 'checkbox' ? 'checkbox' : 'single',
+      // description column does not exist in modifier_groups table — omitted
       required: payload.required ?? false,
       min_selections: payload.min_selections ?? 0,
       max_selections: payload.max_selections ?? null,
@@ -115,8 +119,8 @@ export async function update(
   const set: Record<string, unknown> = { updated_at: nowIso() };
 
   if (patch.name !== undefined) set.name = patch.name;
-  if (patch.type !== undefined) set.type = patch.type;
-  if ('description' in patch) set.description = patch.description ?? null;
+  if (patch.type !== undefined) set.type = patch.type === 'checkbox' ? 'checkbox' : 'single';
+
   if (patch.required !== undefined) set.required = patch.required;
   if (patch.min_selections !== undefined) set.min_selections = patch.min_selections;
   if ('max_selections' in patch) set.max_selections = patch.max_selections ?? null;
@@ -147,10 +151,6 @@ export async function toggleActive(id: string, active: boolean): Promise<void> {
 /* REORDER (standalone — updates modifier_groups.sort_order)                 */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Bulk-updates sort_order on modifier_groups rows directly.
- * Runs updates in parallel; throws on any failure.
- */
 export async function reorder(items: ReorderItem[]): Promise<void> {
   const results = await Promise.allSettled(
     items.map(({ id, sort_order }) =>
@@ -168,10 +168,9 @@ export async function reorder(items: ReorderItem[]): Promise<void> {
 }
 
 /* -------------------------------------------------------------------------- */
-/* JOIN TABLE — attach / detach / set / reorder                              */
+/* JOIN TABLE — attach / detach / set / reorder                               */
 /* -------------------------------------------------------------------------- */
 
-/** Upsert on (menu_item_id, modifier_group_id) — idempotent. */
 export async function attachToItem(payload: ModifierGroupAttachPayload): Promise<void> {
   const { error } = await service
     .from('menu_item_modifier_groups')
@@ -197,11 +196,6 @@ export async function detachFromItem(payload: ModifierGroupDetachPayload): Promi
   if (error) dbError(error.message, 'DB_MOD_GROUP_DETACH');
 }
 
-/**
- * Replaces all modifier group links for a menu item atomically:
- * deletes existing links then inserts the new set in sort_order increments of 10.
- * Passing an empty group_ids array clears all links.
- */
 export async function setItemGroups(payload: ModifierGroupSetItemGroupsPayload): Promise<void> {
   const { error: deleteError } = await service
     .from('menu_item_modifier_groups')
@@ -246,7 +240,6 @@ export async function reorderForItem(menuItemId: string, items: ReorderItem[]): 
 /* DELETE                                                                     */
 /* -------------------------------------------------------------------------- */
 
-/** Detaches from all menu items before deleting the group itself. */
 export async function deleteGroup(id: string): Promise<void> {
   const { error: detachError } = await service
     .from('menu_item_modifier_groups')

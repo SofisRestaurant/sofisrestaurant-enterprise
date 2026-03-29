@@ -4,6 +4,7 @@
 // ============================================================================
 // Goals:
 // - Ensure MenuItemPublic.modifier_groups is ALWAYS ModifierGroup[] (never {} / null)
+// - Add modifierGroups for UI-friendly structure
 // - Ensure image_url is string | null (so cart payload can map safely)
 // - Provide CartItemModifier / SelectedModifier types used by PricingEngine + services
 // - Provide MenuItem alias used by legacy imports
@@ -25,7 +26,7 @@ export type MenuCategory =
 export type ModifierGroupType = 'radio' | 'checkbox' | 'quantity';
 
 /* ─────────────────────────────────────────────────────────────
-   Modifier Layer
+   Modifier Layer (LEGACY / DB STRUCTURE)
 ──────────────────────────────────────────────────────────── */
 
 export interface Modifier {
@@ -52,7 +53,25 @@ export interface ModifierGroup {
 }
 
 /* ─────────────────────────────────────────────────────────────
-   Base Menu Model (DB-compatible shape)
+   UI Modifier Layer (NEW STRUCTURE)
+──────────────────────────────────────────────────────────── */
+
+export interface ModifierOptionUI {
+  id: string;
+  name: string;
+  priceDelta: number;
+  isDefault: boolean;
+}
+
+export interface ModifierGroupUI {
+  id: string;
+  name: string;
+  sortOrder: number;
+  options: ModifierOptionUI[];
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Base Menu Model (DB-compatible + UI-safe)
 ──────────────────────────────────────────────────────────── */
 
 export interface MenuItemBase {
@@ -76,8 +95,11 @@ export interface MenuItemBase {
   allergens: string[];
   pairs_with: string[];
 
-  /** IMPORTANT: ALWAYS an array */
+  /** 🔒 LEGACY DB STRUCTURE (used by pricing engine, etc.) */
   modifier_groups: ModifierGroup[];
+
+  /** 🎨 NEW UI STRUCTURE (used by frontend rendering) */
+  modifierGroups?: ModifierGroupUI[];
 
   created_at: string;
   updated_at: string | null;
@@ -137,6 +159,7 @@ export interface ConfigurationValidation {
   valid: boolean;
   errors: Record<string, string>;
 }
+
 export interface ModifierValidationResult {
   ok: boolean;
   code?: string;
