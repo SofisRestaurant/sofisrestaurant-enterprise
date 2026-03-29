@@ -1,5 +1,5 @@
 // src/components/ui/ModalProvider.tsx
-import { type ReactNode, useCallback, useMemo, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ModalContext } from '@/components/ui/ModalContext';
 import type { ModalConfig, ModalType } from '@/components/ui/modalTypes';
 
@@ -18,12 +18,22 @@ interface ModalProviderProps {
 export function ModalProvider({ children }: ModalProviderProps) {
   const [activeModal, setActiveModal] = useState<ModalType | null>(null);
   const [modalConfig, setModalConfig] = useState<AnyConfig>({});
+  const isMounted = useRef(true);
+
+  // Guard: prevent setState calls after unmount (async modal handlers)
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
 
   const openModal = useCallback(
     <T extends Record<string, unknown> = Record<string, unknown>>(
       modal: ModalType,
       config?: ModalConfig<T>,
     ) => {
+      if (!isMounted.current) return;
       setActiveModal(modal);
 
       // Store config in a normalized shape (no mutation)
@@ -46,6 +56,7 @@ export function ModalProvider({ children }: ModalProviderProps) {
   );
 
   const closeModal = useCallback(() => {
+    if (!isMounted.current) return;
     setActiveModal(null);
     setModalConfig({});
   }, []);

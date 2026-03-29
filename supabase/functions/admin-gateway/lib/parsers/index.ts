@@ -248,6 +248,12 @@ export function parseGatewayRequest(v: unknown): GatewayRequest | null {
   if (action === 'campaigns:list') return { action };
   if (action === 'campaigns:run-rotation') return { action };
 
+  if (action === 'campaigns:delete') {
+    const id = parseId(isRecord(v.payload) ? v.payload.id : null);
+    if (!id) return null;
+    return { action, payload: { id } };
+  }
+
   if (action === 'campaigns:pin-featured') {
     const payload = parsePinFeaturedPayload(v.payload);
     if (!payload) return null;
@@ -285,6 +291,12 @@ export function parseGatewayRequest(v: unknown): GatewayRequest | null {
     const payload = parseCreatePromoPayload(v.payload);
     if (!payload) return null;
     return { action, payload };
+  }
+
+  if (action === 'promos:delete') {
+    const id = parseId(isRecord(v.payload) ? v.payload.id : null);
+    if (!id) return null;
+    return { action, payload: { id } };
   }
 
   return null;

@@ -65,9 +65,11 @@ export type AdminAction =
   | 'campaigns:pin-featured'
   | 'campaigns:toggle'
   | 'campaigns:run-rotation'
+  | 'campaigns:delete'
   | 'promos:list'
   | 'promos:toggle'
-  | 'promos:create';
+  | 'promos:create'
+  | 'promos:delete';
 
 /* -------------------------------------------------------------------------- */
 /* Menu item CRUD payload types                                               */
@@ -268,10 +270,12 @@ export type GatewayRequest =
   | { action: 'menu:modifiers:reorder'; payload: ModifierReorderPayload }
   | { action: 'campaigns:list' }
   | { action: 'campaigns:run-rotation' }
+  | { action: 'campaigns:delete'; payload: { id: string } }
   | { action: 'campaigns:toggle'; payload: ToggleCampaignPayload }
   | { action: 'campaigns:create'; payload: CreateCampaignPayload }
   | { action: 'campaigns:update'; payload: UpdateCampaignPayload }
   | { action: 'campaigns:pin-featured'; payload: PinFeaturedPayload }
   | { action: 'promos:list' }
   | { action: 'promos:toggle'; payload: TogglePromoPayload }
-  | { action: 'promos:create'; payload: CreatePromoPayload };
+  | { action: 'promos:create'; payload: CreatePromoPayload }
+  | { action: 'promos:delete'; payload: { id: string } };

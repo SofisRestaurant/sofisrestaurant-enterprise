@@ -184,3 +184,37 @@ export async function runCampaignRotation(): Promise<{ ok: true }> {
 
   return { ok: true };
 }
+
+export async function deleteCampaign(payload: { id: string }): Promise<{ ok: true }> {
+  if (!payload.id || typeof payload.id !== 'string' || !payload.id.trim()) {
+    throw Object.assign(new Error('Campaign id is required.'), { code: 'BAD_REQUEST' });
+  }
+
+  const svc = createServiceClient();
+
+  const { data: existing, error: lookupError } = await svc
+    .from('growth_campaigns')
+    .select('id')
+    .eq('id', payload.id)
+    .maybeSingle();
+
+  if (lookupError) {
+    throw Object.assign(new Error(lookupError.message), { code: 'DB_CAMPAIGN_LOOKUP' });
+  }
+
+  if (!existing) {
+    throw Object.assign(
+      new Error(`Campaign "${payload.id}" not found.`),
+      { code: 'CAMPAIGN_NOT_FOUND' },
+    );
+  }
+
+  const { error } = await svc
+    .from('growth_campaigns')
+    .delete()
+    .eq('id', payload.id);
+
+  if (error) throw Object.assign(new Error(error.message), { code: 'DB_CAMPAIGN_DELETE' });
+
+  return { ok: true };
+}
