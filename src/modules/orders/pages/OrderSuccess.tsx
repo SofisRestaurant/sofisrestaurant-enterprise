@@ -578,9 +578,50 @@ function StickyNextSteps({
 // Auth helper (unchanged)
 // ---------------------------------------------------------------------------
 
+/**
+ * Get a valid JWT, waiting up to 4 s for the session to be restored after
+ * a Stripe redirect. Supabase restores the session from localStorage
+ * asynchronously — calling getSession() immediately on page load can return
+ * null even when the user is logged in.
+ */
 async function getJwt(): Promise<string | null> {
-  const { data } = await supabase.auth.getSession();
-  return data?.session?.access_token ?? null;
+  // Fast path — session already in memory
+  const { data: immediate } = await supabase.auth.getSession();
+  if (immediate?.session?.access_token) {
+    return immediate.session.access_token;
+  }
+
+  // Try a single forced refresh in case the token is stale
+  try {
+    const { data: refreshed } = await supabase.auth.refreshSession();
+    if (refreshed?.session?.access_token) {
+      return refreshed.session.access_token;
+    }
+  } catch {
+    // ignore — fall through to event listener
+  }
+
+  // Wait up to 4 s for the session to be restored from storage
+  return new Promise<string | null>((resolve) => {
+    let sub: { unsubscribe: () => void } | null = null;
+
+    const deadline = setTimeout(() => {
+      sub?.unsubscribe();
+      resolve(null);
+    }, 4_000);
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session?.access_token) {
+        clearTimeout(deadline);
+        subscription.unsubscribe();
+        resolve(session.access_token);
+      }
+    });
+
+    sub = subscription;
+  });
 }
 
 // ---------------------------------------------------------------------------

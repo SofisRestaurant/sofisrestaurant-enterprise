@@ -220,7 +220,10 @@ function buildCheckoutUrls(): { successUrl: string; cancelUrl: string } {
     };
   }
 
-  const origin = window.location.origin;
+ const origin =
+  typeof window !== 'undefined'
+    ? window.location.origin
+    : 'https://sofisrestaurant-enterprise.vercel.app';
 
   return {
     successUrl: `${origin}/order-success?session_id={CHECKOUT_SESSION_ID}`,
