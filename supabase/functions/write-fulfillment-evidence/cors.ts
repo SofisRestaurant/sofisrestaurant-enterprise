@@ -9,7 +9,9 @@ const ALLOWED_HEADERS = [
 ] as const;
 
 export function corsHeadersFor(origin: string | null): HeadersInit | null {
-  if (origin === null || !ALLOWED_ORIGINS.has(origin)) {
+  // Also allow Vercel preview deployments (secure — project-scoped anchored regex)
+  const isVercelPreview = /^https:\/\/sofisrestaurant-enterprise(-[a-z0-9]+-leonel-mezas-projects)?\.vercel\.app$/.test(origin ?? '');
+  if (origin === null || (!ALLOWED_ORIGINS.has(origin) && !isVercelPreview)) {
     return null;
   }
 
