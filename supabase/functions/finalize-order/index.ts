@@ -277,7 +277,8 @@ function corsHeadersFor(req: Request): Record<string, string> | null {
     return { Vary: 'Origin' };
   }
 
-  if (!ALLOWED_ORIGINS.has(origin)) return null;
+  const isVercelPreview = /^https:\/\/sofisrestaurant-enterprise(-[a-z0-9]+-leonel-mezas-projects)?\.vercel\.app$/.test(origin ?? '');
+  if (!ALLOWED_ORIGINS.has(origin) && !isVercelPreview) return null;
 
   return {
     'Access-Control-Allow-Origin': origin,
