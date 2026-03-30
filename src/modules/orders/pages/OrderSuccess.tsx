@@ -218,8 +218,12 @@ function shouldRetryFinalize(error: unknown): boolean {
   if (msg.includes('502')) return true;
   if (msg.includes('503')) return true;
   if (msg.includes('504')) return true;
-  if (msg.includes('unauthorized')) return true;
-  if (msg.includes('forbidden')) return true;
+  // 401/403 means the order was already finalized by the Stripe webhook
+  // (user session lost during redirect). Stop retrying — the order succeeded.
+  if (msg.includes('unauthorized')) return false;
+  if (msg.includes('forbidden')) return false;
+  if (msg.includes('401')) return false;
+  if (msg.includes('403')) return false;
   return true;
 }
 function computeBackoffMs(baseMs: number, attempt: number, maxMs: number): number {
@@ -798,6 +802,20 @@ export default function OrderSuccess() {
         );
       }
     } catch (error) {
+      // If the server returned 401/403, the Stripe webhook already finalized
+      // the order — treat this as success so the page shows the confirmation.
+      const errMsg = (error instanceof Error ? error.message : String(error ?? '')).toLowerCase();
+      const isAuthError =
+        errMsg.includes('401') ||
+        errMsg.includes('unauthorized') ||
+        errMsg.includes('403') ||
+        errMsg.includes('forbidden');
+      if (isAuthError) {
+        finalizeStateRef.current = 'succeeded';
+        stopTimer(finalizeTimerRef);
+        return;
+      }
+
       finalizeStateRef.current = 'idle';
       if (shouldRetryFinalize(error) && finalizeAttemptsRef.current < FINALIZE_MAX_ATTEMPTS) {
         stopTimer(finalizeTimerRef);
