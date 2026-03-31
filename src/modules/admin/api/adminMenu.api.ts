@@ -12,7 +12,7 @@ import type {
   AdminMenuModifierGroup,
   AdminMenuModifierOption,
   AdminMenuSnapshot,
-} from '../types/admin-common.types';
+} from '../../../features/admin/types/admin-common.types';
 
 type UnknownRecord = Record<string, unknown>;
 

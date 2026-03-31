@@ -10,7 +10,7 @@ import type {
   AdminOrderSummary,
   AdminPaymentStatus,
   AdminTableSortState,
-} from '../types/admin-common.types';
+} from '../../../features/admin/types/admin-common.types';
 import { isOrderRow } from '@/modules/orders/utils/orderValidators';
 
 type OrderRow = Database['public']['Tables']['orders']['Row'];

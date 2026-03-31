@@ -5,7 +5,7 @@ import type {
   AdminMarketingSnapshot,
   AdminPromo,
   AdminPromoStatus,
-} from '../types/admin-common.types';
+} from '../../../features/admin/types/admin-common.types';
 
 type UnknownRecord = Record<string, unknown>;
 

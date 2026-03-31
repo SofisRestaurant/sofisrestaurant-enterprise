@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Mail, Lock, User, AlertCircle, Eye, EyeOff, Loader2 } from 'lucide-react';
-import { authAPI } from '@/lib/supabase/auth.api';
+import { authAPI } from '@/features/auth/auth.api';
 
 interface SignupFormProps {
   onSuccess: () => void;

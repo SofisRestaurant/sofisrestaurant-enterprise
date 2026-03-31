@@ -14,7 +14,7 @@ import type {
   AdminDashboardSnapshot,
   AdminMetric,
   AdminModuleKey,
-} from '../types/admin-common.types';
+} from '../../../features/admin/types/admin-common.types';
 
 type UnknownRecord = Record<string, unknown>;
 

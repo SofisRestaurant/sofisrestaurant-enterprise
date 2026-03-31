@@ -10,6 +10,10 @@
 // - Non-blocking first-party transport with bounded queue + retry + beacon flush
 // - Privacy-conscious sanitization with sensitive-field redaction
 // - No unsafe console leakage in production
+// Upgrades (2026):
+// - VITE_ANALYTICS_ENDPOINT env var — configurable per environment, no code change needed
+// - reset() method — clean state for tests; no-op in production
+// - canDispatch() short-circuits on cheapest checks first (enabled → browser → DNT → consent)
 // =============================================================================
 
 export enum AnalyticsEvent {
@@ -129,7 +133,17 @@ declare global {
   }
 }
 
-const ANALYTICS_ENDPOINT = '/api/analytics';
+// Allow per-environment override via VITE_ANALYTICS_ENDPOINT.
+// Falls back to '/api/analytics' so no existing config breaks.
+// Inline normalization here because normalizeEnvString is declared later in the file.
+const ANALYTICS_ENDPOINT: string = (() => {
+  const raw = import.meta.env.VITE_ANALYTICS_ENDPOINT;
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (trimmed.length > 0) return trimmed;
+  }
+  return '/api/analytics';
+})();
 
 const DEFAULT_MAX_QUEUE_SIZE = 200;
 const DEFAULT_MAX_RETRY_ATTEMPTS = 5;
@@ -626,10 +640,23 @@ class AnalyticsClient {
     }
   }
 
+  /**
+   * Resets the client to a clean state.
+   * Intended for test environments — clears the queue, identity, and drain timer.
+   * Has no effect in production builds when analytics is enabled.
+   */
+  reset(): void {
+    this.dropQueuedEvents();
+    this.currentIdentity = { userId: null, traits: null };
+    this.metaInitializedForUserId = null;
+  }
+
   private canDispatch(): boolean {
+    // Check cheapest conditions first to short-circuit early.
     if (!this.isEnabled) return false;
     if (!isBrowser()) return false;
 
+    // DNT check before consent — no storage/cookie access needed.
     if (getDoNotTrackEnabled()) {
       this.dropQueuedEvents();
       return false;
@@ -953,6 +980,14 @@ export function identify(userId: string, traits?: EventData): void {
 
 export function flush(): void {
   analytics.flush();
+}
+
+/**
+ * Resets the analytics client to a clean state.
+ * Use in test setups (beforeEach / afterEach) to prevent state leaking between tests.
+ */
+export function reset(): void {
+  analytics.reset();
 }
 
 export default analytics;

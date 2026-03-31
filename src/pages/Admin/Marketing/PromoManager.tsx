@@ -4,7 +4,7 @@ import type { ReactElement } from 'react';
 import { Panel, KPICard, EmptyState } from '@/features/admin/ui/AdminPrimitives';
 import { callAdminGateway } from '@/features/admin/api/adminGateway.client';
 import { listAdminPromos, formatAdminMarketingError } from '@/modules/admin/api/adminMarketing.api';
-import type { AdminPromo } from '@/modules/admin/types/admin-common.types';
+import type { AdminPromo } from '@/features/admin/types/admin-common.types';
 
 import { buildPromoCsv, downloadCsv } from './promo-manager/promoManager.csv';
 import {

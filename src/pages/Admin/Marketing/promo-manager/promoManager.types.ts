@@ -1,4 +1,4 @@
-import type { AdminPromo } from '@/modules/admin/types/admin-common.types';
+import type { AdminPromo } from '@/features/admin/types/admin-common.types';
 
 export const STATUS_FILTER_OPTIONS = [
   { value: '', label: 'All statuses' },

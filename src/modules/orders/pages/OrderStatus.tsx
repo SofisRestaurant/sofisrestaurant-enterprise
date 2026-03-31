@@ -30,7 +30,7 @@ import {
 } from 'framer-motion';
 
 import { supabase } from '@/lib/supabase/supabaseClient';
-import { useAuth } from '@/modules/auth/hooks/useAuth';
+import { useAuthState } from '@/features/auth/hooks/useAuthState';
 import { OrderStatus as OrderStatusEnum, PaymentStatus } from '@/domain/orders/order.types';
 import type { Order, OrderCartItem } from '@/domain/orders/order.types';
 
@@ -217,7 +217,7 @@ const btnVariants = {
 export default function OrderStatusPage() {
   const { orderId } = useParams<{ orderId: string }>();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user } = useAuthState();
 
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [order, setOrder] = useState<Order | null>(null);

@@ -9,7 +9,7 @@ import {
 } from '@/lib/supabase/supabaseClient';
 import type { Tables } from '@/types/supabase';
 
-import type { AdminRealtimeHealth } from '../types/admin-common.types';
+import type { AdminRealtimeHealth } from '../../../features/admin/types/admin-common.types';
 
 type OrderRow = Tables<'orders'>;
 

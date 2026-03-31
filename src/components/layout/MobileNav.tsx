@@ -1,10 +1,10 @@
 import { Link, useLocation } from 'react-router-dom';
-import { useAuth } from '@/modules/auth/hooks/useAuth';
+import { useAuthState } from '@/features/auth/hooks/useAuthState';
 import { useCart } from '@/modules/cart/hooks/useCart';
 
 export function MobileNav() {
   const location = useLocation();
-  const { user } = useAuth();
+  const { user } = useAuthState();
   const { itemCount } = useCart();
 
   const isActive = (path: string) => location.pathname === path;

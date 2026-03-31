@@ -1,7 +1,7 @@
 import type { ComponentPropsWithoutRef, ReactNode } from 'react';
 import clsx from 'clsx';
 
-import type { AdminStatusTone } from '../types/admin-common.types';
+import type { AdminStatusTone } from '../../../features/admin/types/admin-common.types';
 
 // ======================================================
 // METRIC TYPE

@@ -3,18 +3,15 @@
 // USER PROVIDER — Enterprise Stable (2026) — Secure Level 10
 // ============================================================================
 // Guarantees:
-// - ✅ Single source of truth for auth/session/user/profile state
-// - ✅ StrictMode-safe (no double init storms)
-// - ✅ No signOut storms (re-entrancy guarded + reasoned signOut)
-// - ✅ Never logs JWT/session; DEV logs are minimal + deduped
-// - ✅ Token refresh does NOT wipe profile/user state
-// - ✅ Profile fetch is cancelable via request epoch
-// - ✅ Force-logout + SessionManager + Idle timeout are coordinated
-// - ✅ Security teardown ALWAYS happens before any signOut
-//
-// Optional nice-to-haves you already have:
-// - profileCache.ts for cached profile hydration
-// - SessionManager / ActivityTracker / ForceLogoutListener
+// ✅ Single source of truth for auth/session/user/profile state
+// ✅ StrictMode-safe (no double init storms)
+// ✅ No signOut storms (re-entrancy guarded + reasoned signOut)
+// ✅ Never logs JWT/session; DEV logs are minimal + deduped
+// ✅ Token refresh does NOT wipe profile/user state
+// ✅ Profile fetch is cancelable via request epoch
+// ✅ Force-logout + SessionManager + Idle timeout are coordinated
+// ✅ Security teardown ALWAYS happens before any signOut
+// ✅ resetPassword / updatePassword / refreshSession route through authAPI
 // ============================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -31,13 +28,11 @@ import { subscribeToForceLogout } from '@/security/ForceLogoutListener';
 import { mapSupabaseUser } from '@/utils/mapSupabaseUserToAppUser';
 import { getMyProfile, updateMyProfile } from '@/lib/supabase/db/profile.api';
 import type { Profile } from '@/types/profile';
-import { authAPI } from '@/lib/supabase/auth.api';
+import { authAPI } from '@/features/auth/auth.api';
 
 import { loadProfileCache, saveProfileCache, clearProfileCache } from '@/lib/cache/profileCache';
 
-// ============================================================================
-// TYPES
-// ============================================================================
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface UserProviderProps {
   children: ReactNode;
@@ -54,23 +49,17 @@ type SignOutReason =
 
 type ApplyContext = {
   event?: AuthChangeEvent;
-  // true when we are applying from initial boot sequence
   boot?: boolean;
 };
 
-// ============================================================================
-// DEV LOGGING (deduped + low-noise)
-// ============================================================================
+// ─── Dev logging (deduped, low-noise) ────────────────────────────────────────
 
 function devLog(msg: string, meta?: Record<string, unknown>) {
   if (!import.meta.env.DEV) return;
-  // avoid massive spam in StrictMode / multiple listeners
   console.log(`🔐 [AUTH] ${msg}`, meta ?? '');
 }
 
-// ============================================================================
-// PURE HELPERS
-// ============================================================================
+// ─── Pure helpers ─────────────────────────────────────────────────────────────
 
 function mergeUser(authUser: SupabaseUser | null, profile: Profile | null): AppUser | null {
   const base = mapSupabaseUser(authUser);
@@ -83,15 +72,12 @@ function mergeUser(authUser: SupabaseUser | null, profile: Profile | null): AppU
   };
 }
 
-// Events that imply "new user identity applied" (good moment to hydrate cache, refresh profile)
-const SIGN_IN_EVENTS = new Set<AuthChangeEvent>(['SIGNED_IN', 'USER_UPDATED']);
-
-// Events that are "session churn only" — do not touch profile/user besides sessionRef
+// Events that imply a new user identity (hydrate cache, refresh profile)
+const SIGN_IN_EVENTS    = new Set<AuthChangeEvent>(['SIGNED_IN', 'USER_UPDATED']);
+// Events that are session-churn only (do NOT touch profile/user)
 const SESSION_ONLY_EVENTS = new Set<AuthChangeEvent>(['TOKEN_REFRESHED']);
 
-// ============================================================================
-// PROVIDER
-// ============================================================================
+// ─── Provider ─────────────────────────────────────────────────────────────────
 
 export function UserProvider({ children }: UserProviderProps) {
   const [supabaseUser, setSupabaseUser] = useState<SupabaseUser | null>(null);
@@ -100,55 +86,39 @@ export function UserProvider({ children }: UserProviderProps) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Internal coordination refs
-  // ───────────────────────────────────────────────────────────────────────────
-
-  // Cancels in-flight profile fetches when user changes
+  // Coordination refs
   const profileEpochRef = useRef(0);
-
-  // Prevent multiple concurrent signOut sequences
   const signingOutRef = useRef(false);
-
-  // Prevent StrictMode double-init from creating multiple security systems
   const initializedRef = useRef(false);
-
-  // Keep a stable apply function reference for auth listener
   const applyRef = useRef<(u: SupabaseUser | null, s: Session | null, ctx?: ApplyContext) => void>(
     () => {},
   );
-
-  // Security systems
   const sessionManagerRef = useRef<SessionManager | null>(null);
   const activityRef = useRef<ActivityTracker | null>(null);
   const forceLogoutCleanupRef = useRef<(() => void) | null>(null);
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // SECURITY TEARDOWN (sync, always safe)
-  // ───────────────────────────────────────────────────────────────────────────
+  // ── Security teardown ──────────────────────────────────────────────────────
 
   const teardownSecurity = useCallback(() => {
     try {
       sessionManagerRef.current?.stop();
     } catch {
-      // ignore
+      /* ignore */
     }
     try {
       activityRef.current?.stop();
     } catch {
-      // ignore
+      /* ignore */
     }
     try {
       forceLogoutCleanupRef.current?.();
     } catch {
-      // ignore
+      /* ignore */
     }
     forceLogoutCleanupRef.current = null;
   }, []);
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // SAFE SIGN OUT (re-entrancy guarded)
-  // ───────────────────────────────────────────────────────────────────────────
+  // ── Safe sign out (re-entrancy guarded) ───────────────────────────────────
 
   const safeSignOut = useCallback(
     async (reason: SignOutReason) => {
@@ -156,33 +126,25 @@ export function UserProvider({ children }: UserProviderProps) {
       signingOutRef.current = true;
 
       try {
-        devLog(`signOut start`, { reason });
-
-        // Always teardown first (no security callbacks firing during signOut)
+        devLog('signOut start', { reason });
         teardownSecurity();
         clearProfileCache();
-
-        // Supabase handles local session removal + server revoke
         await supabase.auth.signOut();
-
-        // State cleanup handled by SIGNED_OUT event, but do a local safety clear too
         setSupabaseUser(null);
         setSession(null);
         setUser(null);
         setProfile(null);
       } catch {
-        // Never throw from signOut — user intent is to be signed out.
+        // Never throw — user intent is to be signed out.
       } finally {
         signingOutRef.current = false;
-        devLog(`signOut end`, { reason });
+        devLog('signOut end', { reason });
       }
     },
     [teardownSecurity],
   );
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // PROFILE MANAGEMENT (epoch-cancelable)
-  // ───────────────────────────────────────────────────────────────────────────
+  // ── Profile management (epoch-cancelable) ─────────────────────────────────
 
   const fetchProfileSafe = useCallback(async (authUser: SupabaseUser) => {
     const myEpoch = ++profileEpochRef.current;
@@ -216,13 +178,10 @@ export function UserProvider({ children }: UserProviderProps) {
     [supabaseUser],
   );
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // APPLY USER (deterministic state machine)
-  // ───────────────────────────────────────────────────────────────────────────
+  // ── Apply user (deterministic state machine) ──────────────────────────────
 
   const applyUser = useCallback(
     (u: SupabaseUser | null, s: Session | null, ctx?: ApplyContext) => {
-      // bump epoch on identity change events to cancel profile fetches
       profileEpochRef.current++;
 
       const event = ctx?.event;
@@ -231,7 +190,6 @@ export function UserProvider({ children }: UserProviderProps) {
       setSupabaseUser(u);
       setSession(s);
 
-      // ── Signed out ────────────────────────────────────────────────────────
       if (!u) {
         setUser(null);
         setProfile(null);
@@ -241,18 +199,14 @@ export function UserProvider({ children }: UserProviderProps) {
         return;
       }
 
-      // ── Session churn only (token refresh, etc.) ─────────────────────────
       if (event && SESSION_ONLY_EVENTS.has(event)) {
         if (s) sessionManagerRef.current?.start(s);
         devLog('session_only_event', { event, uid: u.id });
         return;
       }
 
-      // ── New user identity applied ─────────────────────────────────────────
-      // Optimistic user (without profile) immediately
       setUser(mergeUser(u, null));
 
-      // Apply cached profile only on boot or sign-in-like events (avoid flicker)
       if (boot || !event || SIGN_IN_EVENTS.has(event)) {
         const cached = loadProfileCache();
         if (cached) {
@@ -261,51 +215,43 @@ export function UserProvider({ children }: UserProviderProps) {
         }
       }
 
-      // Always refresh profile from server (best-effort)
       void fetchProfileSafe(u);
 
-      // Start session manager
       if (s) sessionManagerRef.current?.start(s);
 
-      // Force logout subscription (best-effort)
       try {
         forceLogoutCleanupRef.current?.();
       } catch {
-        // ignore
+        /* ignore */
       }
       forceLogoutCleanupRef.current = subscribeToForceLogout(u.id, () => {
         void safeSignOut('admin_forced_logout');
       });
 
-      // Idle tracker starts on init; no need to restart here.
       devLog('applied', { uid: u.id, event: event ?? 'init' });
     },
     [fetchProfileSafe, teardownSecurity, safeSignOut],
   );
+
   useEffect(() => {
     applyRef.current = applyUser;
   }, [applyUser]);
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // SECURITY SYSTEMS INITIALIZATION (StrictMode-safe)
-  // ───────────────────────────────────────────────────────────────────────────
+  // ── Security systems init (StrictMode-safe) ───────────────────────────────
 
   useEffect(() => {
     if (initializedRef.current) return;
     initializedRef.current = true;
 
-    // SessionManager: manages refresh/expiry behavior
     sessionManagerRef.current = new SessionManager({
       onExpire: () => void safeSignOut('session_expired'),
       onRefresh: (newSession) => {
-        // do not touch profile/user here
         setSession(newSession);
         sessionManagerRef.current?.start(newSession);
         devLog('session_refreshed');
       },
     });
 
-    // ActivityTracker: inactivity logout (kept conservative)
     activityRef.current = new ActivityTracker(60, () => void safeSignOut('idle_timeout'));
     activityRef.current.start();
 
@@ -314,9 +260,7 @@ export function UserProvider({ children }: UserProviderProps) {
     };
   }, [safeSignOut, teardownSecurity]);
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // AUTH BOOTSTRAP + AUTH LISTENER
-  // ───────────────────────────────────────────────────────────────────────────
+  // ── Auth bootstrap + listener ──────────────────────────────────────────────
 
   useEffect(() => {
     let mounted = true;
@@ -338,17 +282,11 @@ export function UserProvider({ children }: UserProviderProps) {
 
     const { data: sub } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!mounted) return;
-
-      // Keep loading false once boot completes
       if (event === 'INITIAL_SESSION') return;
-
-      // If refresh token becomes invalid, Supabase will emit SIGNED_OUT.
       if (event === 'SIGNED_OUT') {
         applyRef.current(null, null, { event });
         return;
       }
-
-      // Apply all other events
       applyRef.current(nextSession?.user ?? null, nextSession, { event });
     });
 
@@ -358,15 +296,11 @@ export function UserProvider({ children }: UserProviderProps) {
     };
   }, []);
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // AUTH ACTIONS (public API)
-  // ───────────────────────────────────────────────────────────────────────────
+  // ── Auth actions (public API) ──────────────────────────────────────────────
 
   const signIn = useCallback(async (email: string, password: string) => {
     const { error } = await authAPI.signIn({ email, password });
     if (error) throw error;
-
-    // Ensure session exists before returning (prevents route guards flicker)
     const { data } = await supabase.auth.getSession();
     if (!data.session?.user) throw new Error('Session not established after sign-in');
   }, []);
@@ -381,34 +315,35 @@ export function UserProvider({ children }: UserProviderProps) {
   }, [safeSignOut]);
 
   const resetPassword = useCallback(async (email: string, options?: { redirectTo?: string }) => {
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: options?.redirectTo,
+    // Routes through authAPI — email sanitized, redirect URL validated
+    await authAPI.requestPasswordReset({
+      email,
+      redirectPath: options?.redirectTo,
     });
-    if (error) throw error;
   }, []);
 
   const updatePassword = useCallback(async (password: string) => {
-    const { error } = await supabase.auth.updateUser({ password });
-    if (error) throw error;
+    // Routes through authAPI — password length validated (8–128 chars)
+    await authAPI.updatePassword({ password });
   }, []);
 
   const refreshSession = useCallback(async () => {
-    const { error } = await supabase.auth.refreshSession();
-    if (error) throw error;
+    // Routes through authAPI — returns typed SessionStateSnapshot
+    await authAPI.refreshSessionState();
   }, []);
 
   const updateMetadata = useCallback(async (metadata: Record<string, unknown>) => {
+    // Direct Supabase call: authAPI has no updateMetadata surface.
+    // user_metadata is intentionally untyped — callers own the shape.
     const { error } = await supabase.auth.updateUser({ data: metadata });
     if (error) throw error;
   }, []);
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // CONTEXT VALUE
-  // ───────────────────────────────────────────────────────────────────────────
+  // ── Context value ──────────────────────────────────────────────────────────
 
   const role: UserRole = (user?.role as UserRole) ?? 'guest';
-  const isAuthenticated = Boolean(user);
-  const isAdmin = role === 'admin';
+  const isAuthenticated: boolean = Boolean(user);
+  const isAdmin: boolean = role === 'admin';
 
   const value = useMemo<UserContextValue>(
     () => ({

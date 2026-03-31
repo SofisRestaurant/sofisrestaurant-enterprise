@@ -6,7 +6,7 @@ import type {
   AdminPaymentStatus,
   AdminPromoStatus,
   AdminTableSortState,
-} from './admin-common.types';
+} from '../../../features/admin/types/admin-common.types';
 
 export type AdminFilterValue =
   | string
