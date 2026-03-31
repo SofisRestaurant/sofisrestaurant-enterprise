@@ -12,6 +12,8 @@
 // ✅ Force-logout + SessionManager + Idle timeout are coordinated
 // ✅ Security teardown ALWAYS happens before any signOut
 // ✅ resetPassword / updatePassword / refreshSession route through authAPI
+// ✅ signInWithGoogle delegates to authAPI (Supabase handles the OAuth redirect)
+// ✅ signUp accepts optional name — stored as user_metadata.full_name
 // ============================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -73,7 +75,7 @@ function mergeUser(authUser: SupabaseUser | null, profile: Profile | null): AppU
 }
 
 // Events that imply a new user identity (hydrate cache, refresh profile)
-const SIGN_IN_EVENTS    = new Set<AuthChangeEvent>(['SIGNED_IN', 'USER_UPDATED']);
+const SIGN_IN_EVENTS = new Set<AuthChangeEvent>(['SIGNED_IN', 'USER_UPDATED']);
 // Events that are session-churn only (do NOT touch profile/user)
 const SESSION_ONLY_EVENTS = new Set<AuthChangeEvent>(['TOKEN_REFRESHED']);
 
@@ -86,7 +88,7 @@ export function UserProvider({ children }: UserProviderProps) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Coordination refs
+  // ── Coordination refs ──────────────────────────────────────────────────────
   const profileEpochRef = useRef(0);
   const signingOutRef = useRef(false);
   const initializedRef = useRef(false);
@@ -305,9 +307,16 @@ export function UserProvider({ children }: UserProviderProps) {
     if (!data.session?.user) throw new Error('Session not established after sign-in');
   }, []);
 
-  const signUp = useCallback(async (email: string, password: string) => {
-    const { error } = await authAPI.signUp({ email, password });
+  const signUp = useCallback(async (email: string, password: string, name?: string) => {
+    // name is stored as user_metadata.full_name via authAPI.signUp's fullName field
+    const { error } = await authAPI.signUp({ email, password, fullName: name });
     if (error) throw error;
+  }, []);
+
+  const signInWithGoogle = useCallback(async (options?: { redirectPath?: string }) => {
+    // Triggers a browser redirect to Google — page navigates away on success.
+    // UserProvider picks up the resulting SIGNED_IN event on return.
+    await authAPI.signInWithGoogle({ redirectPath: options?.redirectPath });
   }, []);
 
   const signOut = useCallback(async () => {
@@ -315,20 +324,14 @@ export function UserProvider({ children }: UserProviderProps) {
   }, [safeSignOut]);
 
   const resetPassword = useCallback(async (email: string, options?: { redirectTo?: string }) => {
-    // Routes through authAPI — email sanitized, redirect URL validated
-    await authAPI.requestPasswordReset({
-      email,
-      redirectPath: options?.redirectTo,
-    });
+    await authAPI.requestPasswordReset({ email, redirectPath: options?.redirectTo });
   }, []);
 
   const updatePassword = useCallback(async (password: string) => {
-    // Routes through authAPI — password length validated (8–128 chars)
     await authAPI.updatePassword({ password });
   }, []);
 
   const refreshSession = useCallback(async () => {
-    // Routes through authAPI — returns typed SessionStateSnapshot
     await authAPI.refreshSessionState();
   }, []);
 
@@ -359,6 +362,7 @@ export function UserProvider({ children }: UserProviderProps) {
 
       signIn,
       signUp,
+      signInWithGoogle,
       signOut,
 
       resetPassword,
@@ -380,6 +384,7 @@ export function UserProvider({ children }: UserProviderProps) {
       role,
       signIn,
       signUp,
+      signInWithGoogle,
       signOut,
       resetPassword,
       updatePassword,

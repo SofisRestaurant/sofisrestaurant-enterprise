@@ -13,11 +13,11 @@ export type UserRole = 'guest' | 'customer' | 'staff' | 'admin';
 ========================================================= */
 
 export interface AppUser {
-  id: string;
-  email: string;
-  name?: string;
-  phone?: string | null;
-  role: UserRole;
+  id:         string;
+  email:      string;
+  name?:      string;
+  phone?:     string | null;
+  role:       UserRole;
   avatarUrl?: string;
   createdAt?: string;
 }
@@ -28,7 +28,7 @@ export interface AppUser {
 
 export type UpdateProfileInput = {
   full_name: string | null;
-  phone: string | null;
+  phone:     string | null;
 };
 
 /* =========================================================
@@ -43,7 +43,7 @@ export interface UserContextValue {
   supabaseUser: SupabaseUser | null;
 
   /** Active session */
-  session: Session | null; // ⭐⭐⭐ REQUIRED FIX
+  session: Session | null;
 
   /** DB profile */
   profile: Profile | null;
@@ -56,8 +56,8 @@ export interface UserContextValue {
   ======================================================= */
 
   isAuthenticated: boolean;
-  isAdmin: boolean;
-  role: UserRole;
+  isAdmin:         boolean;
+  role:            UserRole;
 
   setUser: (user: AppUser | null) => void;
 
@@ -67,7 +67,11 @@ export interface UserContextValue {
 
   signIn: (email: string, password: string) => Promise<void>;
 
-  signUp: (email: string, password: string, name: string) => Promise<void>;
+  /** name is stored in Supabase user_metadata.full_name */
+  signUp: (email: string, password: string, name?: string) => Promise<void>;
+
+  /** Triggers Google OAuth redirect — page navigates away on success */
+  signInWithGoogle: (options?: { redirectPath?: string }) => Promise<void>;
 
   signOut: () => Promise<void>;
 
