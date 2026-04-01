@@ -497,6 +497,22 @@ export const router = createBrowserRouter([
       },
 
       // ────────────────────────────────────────────────────────
+      // AUTH CALLBACK — MUST be before * or it hits NotFound
+      // ────────────────────────────────────────────────────────
+      // Supabase redirects here after Google OAuth with ?code=xxxx
+      // AuthCallback shows a spinner while UserProvider exchanges
+      // the code, then navigates to /account (or ?redirect= param).
+      // Without this route, the * wildcard catches the URL and
+      // renders NotFound — causing the 404 flash before Google auth.
+      {
+        path: 'auth/callback',
+        lazy: async () => {
+          const m = await import('@/features/auth/components/AuthCallback');
+          return { Component: m.default };
+        },
+      },
+
+      // ────────────────────────────────────────────────────────
       // FALLBACK
       // ────────────────────────────────────────────────────────
       {

@@ -131,7 +131,11 @@ export function UserProvider({ children }: UserProviderProps) {
         devLog('signOut start', { reason });
         teardownSecurity();
         clearProfileCache();
-        await supabase.auth.signOut();
+        // scope:'local' clears only the local session — no server redirect,
+        // no browser navigation from Supabase. This prevents the 404 flash
+        // that happens when Supabase's global signOut redirects the browser
+        // to a URL that isn't a registered route.
+        await supabase.auth.signOut({ scope: 'local' });
         setSupabaseUser(null);
         setSession(null);
         setUser(null);
@@ -313,11 +317,11 @@ export function UserProvider({ children }: UserProviderProps) {
     if (error) throw error;
   }, []);
 
-  const signInWithGoogle = useCallback(async (options?: { redirectPath?: string }) => {
-    // Triggers a browser redirect to Google — page navigates away on success.
-    // UserProvider picks up the resulting SIGNED_IN event on return.
-    await authAPI.signInWithGoogle({ redirectPath: options?.redirectPath });
-  }, []);
+const signInWithGoogle = useCallback(async (options?: { redirectPath?: string }) => {
+  await authAPI.signInWithGoogle({
+    redirectPath: options?.redirectPath ?? '/auth/callback',
+  });
+}, []);
 
   const signOut = useCallback(async () => {
     await safeSignOut('manual');
@@ -398,4 +402,4 @@ export function UserProvider({ children }: UserProviderProps) {
   return <UserContext.Provider value={value}>{children}</UserContext.Provider>;
 }
 
-export default UserProvider;
+export default UserProvider; 
