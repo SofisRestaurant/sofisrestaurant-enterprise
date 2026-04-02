@@ -460,6 +460,20 @@ export type Database = {
             referencedRelation: "menu_items_public"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "cost_of_goods_menu_item_id_fkey"
+            columns: ["menu_item_id"]
+            isOneToOne: true
+            referencedRelation: "menu_items_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cost_of_goods_menu_item_id_fkey"
+            columns: ["menu_item_id"]
+            isOneToOne: true
+            referencedRelation: "menu_items_with_modifiers"
+            referencedColumns: ["id"]
+          },
         ]
       }
       daily_order_counter: {
@@ -1206,6 +1220,20 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "menu_item_modifier_groups_menu_item_id_fkey"
+            columns: ["menu_item_id"]
+            isOneToOne: false
+            referencedRelation: "menu_items_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "menu_item_modifier_groups_menu_item_id_fkey"
+            columns: ["menu_item_id"]
+            isOneToOne: false
+            referencedRelation: "menu_items_with_modifiers"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "menu_item_modifier_groups_modifier_group_id_fkey"
             columns: ["modifier_group_id"]
             isOneToOne: false
@@ -1216,6 +1244,7 @@ export type Database = {
       }
       menu_items: {
         Row: {
+          active: boolean | null
           allergens: string[] | null
           available: boolean
           category: Database["public"]["Enums"]["menu_category"]
@@ -1238,6 +1267,7 @@ export type Database = {
           updated_at: string | null
         }
         Insert: {
+          active?: boolean | null
           allergens?: string[] | null
           available?: boolean
           category: Database["public"]["Enums"]["menu_category"]
@@ -1260,6 +1290,7 @@ export type Database = {
           updated_at?: string | null
         }
         Update: {
+          active?: boolean | null
           allergens?: string[] | null
           available?: boolean
           category?: Database["public"]["Enums"]["menu_category"]
@@ -1283,27 +1314,37 @@ export type Database = {
         }
         Relationships: []
       }
-      modifier_costs: {
+      modifier_group_modifiers: {
         Row: {
-          cost_cents: number
-          last_updated: string | null
+          id: string
+          modifier_group_id: string
           modifier_id: string
+          position: number | null
         }
         Insert: {
-          cost_cents: number
-          last_updated?: string | null
+          id?: string
+          modifier_group_id: string
           modifier_id: string
+          position?: number | null
         }
         Update: {
-          cost_cents?: number
-          last_updated?: string | null
+          id?: string
+          modifier_group_id?: string
           modifier_id?: string
+          position?: number | null
         }
         Relationships: [
           {
-            foreignKeyName: "modifier_costs_modifier_id_fkey"
+            foreignKeyName: "modifier_group_modifiers_modifier_group_id_fkey"
+            columns: ["modifier_group_id"]
+            isOneToOne: false
+            referencedRelation: "modifier_groups"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "modifier_group_modifiers_modifier_id_fkey"
             columns: ["modifier_id"]
-            isOneToOne: true
+            isOneToOne: false
             referencedRelation: "modifiers"
             referencedColumns: ["id"]
           },
@@ -1311,76 +1352,127 @@ export type Database = {
       }
       modifier_groups: {
         Row: {
-          active: boolean
-          created_at: string
-          description: string | null
+          active: boolean | null
+          created_at: string | null
           id: string
           max_selections: number | null
           min_selections: number | null
           name: string
-          required: boolean
-          sort_order: number
-          type: string
-          updated_at: string
+          required: boolean | null
+          sort_order: number | null
+          type: string | null
+          updated_at: string | null
         }
         Insert: {
-          active?: boolean
-          created_at?: string
-          description?: string | null
+          active?: boolean | null
+          created_at?: string | null
           id?: string
           max_selections?: number | null
           min_selections?: number | null
           name: string
-          required?: boolean
-          sort_order?: number
-          type: string
-          updated_at?: string
+          required?: boolean | null
+          sort_order?: number | null
+          type?: string | null
+          updated_at?: string | null
         }
         Update: {
-          active?: boolean
-          created_at?: string
-          description?: string | null
+          active?: boolean | null
+          created_at?: string | null
           id?: string
           max_selections?: number | null
           min_selections?: number | null
           name?: string
-          required?: boolean
-          sort_order?: number
-          type?: string
-          updated_at?: string
+          required?: boolean | null
+          sort_order?: number | null
+          type?: string | null
+          updated_at?: string | null
         }
         Relationships: []
       }
-      modifiers: {
+      modifier_options: {
         Row: {
-          available: boolean
-          created_at: string
+          available: boolean | null
+          created_at: string | null
           id: string
+          is_default: boolean | null
           modifier_group_id: string
           name: string
-          price_adjustment: number
-          sort_order: number
-          updated_at: string
+          price_adjustment: number | null
+          sort_order: number | null
+          updated_at: string | null
         }
         Insert: {
-          available?: boolean
-          created_at?: string
+          available?: boolean | null
+          created_at?: string | null
           id?: string
+          is_default?: boolean | null
           modifier_group_id: string
           name: string
-          price_adjustment?: number
-          sort_order?: number
-          updated_at?: string
+          price_adjustment?: number | null
+          sort_order?: number | null
+          updated_at?: string | null
         }
         Update: {
-          available?: boolean
-          created_at?: string
+          available?: boolean | null
+          created_at?: string | null
           id?: string
+          is_default?: boolean | null
           modifier_group_id?: string
           name?: string
-          price_adjustment?: number
-          sort_order?: number
-          updated_at?: string
+          price_adjustment?: number | null
+          sort_order?: number | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fk_modifiers_group"
+            columns: ["modifier_group_id"]
+            isOneToOne: false
+            referencedRelation: "modifier_groups"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "menu_modifier_options_group_id_fkey"
+            columns: ["modifier_group_id"]
+            isOneToOne: false
+            referencedRelation: "modifier_groups"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      modifiers: {
+        Row: {
+          available: boolean | null
+          created_at: string | null
+          id: string
+          is_default: boolean | null
+          modifier_group_id: string
+          name: string
+          price_adjustment: number | null
+          sort_order: number | null
+          updated_at: string | null
+        }
+        Insert: {
+          available?: boolean | null
+          created_at?: string | null
+          id?: string
+          is_default?: boolean | null
+          modifier_group_id: string
+          name: string
+          price_adjustment?: number | null
+          sort_order?: number | null
+          updated_at?: string | null
+        }
+        Update: {
+          available?: boolean | null
+          created_at?: string | null
+          id?: string
+          is_default?: boolean | null
+          modifier_group_id?: string
+          name?: string
+          price_adjustment?: number | null
+          sort_order?: number | null
+          updated_at?: string | null
         }
         Relationships: [
           {
@@ -2158,6 +2250,7 @@ export type Database = {
           dispute_reason: string | null
           dispute_status: Database["public"]["Enums"]["dispute_status_enum"]
           disputed_at: string | null
+          fulfillment_type: string
           id: string
           last_payment_error: string | null
           metadata: Json | null
@@ -2209,6 +2302,7 @@ export type Database = {
           dispute_reason?: string | null
           dispute_status?: Database["public"]["Enums"]["dispute_status_enum"]
           disputed_at?: string | null
+          fulfillment_type?: string
           id?: string
           last_payment_error?: string | null
           metadata?: Json | null
@@ -2260,6 +2354,7 @@ export type Database = {
           dispute_reason?: string | null
           dispute_status?: Database["public"]["Enums"]["dispute_status_enum"]
           disputed_at?: string | null
+          fulfillment_type?: string
           id?: string
           last_payment_error?: string | null
           metadata?: Json | null
@@ -3161,69 +3256,41 @@ export type Database = {
           featured: boolean | null
           id: string | null
           image_url: string | null
-          inventory_count: number | null
           is_gluten_free: boolean | null
           is_vegan: boolean | null
           is_vegetarian: boolean | null
-          low_stock_threshold: number | null
           modifier_groups: Json | null
           name: string | null
           pairs_with: string[] | null
-          popularity_score: number | null
           price: number | null
           sort_order: number | null
           spicy_level: number | null
           updated_at: string | null
         }
-        Insert: {
-          allergens?: string[] | null
-          available?: boolean | null
-          category?: Database["public"]["Enums"]["menu_category"] | null
-          created_at?: string | null
-          description?: string | null
-          featured?: boolean | null
-          id?: string | null
-          image_url?: string | null
-          inventory_count?: number | null
-          is_gluten_free?: boolean | null
-          is_vegan?: boolean | null
-          is_vegetarian?: boolean | null
-          low_stock_threshold?: number | null
-          modifier_groups?: never
-          name?: string | null
-          pairs_with?: string[] | null
-          popularity_score?: number | null
-          price?: number | null
-          sort_order?: number | null
-          spicy_level?: number | null
-          updated_at?: string | null
-        }
-        Update: {
-          allergens?: string[] | null
-          available?: boolean | null
-          category?: Database["public"]["Enums"]["menu_category"] | null
-          created_at?: string | null
-          description?: string | null
-          featured?: boolean | null
-          id?: string | null
-          image_url?: string | null
-          inventory_count?: number | null
-          is_gluten_free?: boolean | null
-          is_vegan?: boolean | null
-          is_vegetarian?: boolean | null
-          low_stock_threshold?: number | null
-          modifier_groups?: never
-          name?: string | null
-          pairs_with?: string[] | null
-          popularity_score?: number | null
-          price?: number | null
-          sort_order?: number | null
-          spicy_level?: number | null
-          updated_at?: string | null
-        }
         Relationships: []
       }
       menu_items_public: {
+        Row: {
+          allergens: string[] | null
+          available: boolean | null
+          category: Database["public"]["Enums"]["menu_category"] | null
+          description: string | null
+          featured: boolean | null
+          id: string | null
+          image_url: string | null
+          is_gluten_free: boolean | null
+          is_vegan: boolean | null
+          is_vegetarian: boolean | null
+          modifier_groups: Json | null
+          name: string | null
+          pairs_with: string[] | null
+          price: number | null
+          sort_order: number | null
+          spicy_level: number | null
+        }
+        Relationships: []
+      }
+      menu_items_view: {
         Row: {
           allergens: string[] | null
           available: boolean | null
@@ -3247,51 +3314,31 @@ export type Database = {
           spicy_level: number | null
           updated_at: string | null
         }
-        Insert: {
-          allergens?: string[] | null
-          available?: boolean | null
-          category?: Database["public"]["Enums"]["menu_category"] | null
-          created_at?: string | null
-          description?: string | null
-          featured?: boolean | null
-          id?: string | null
-          image_url?: string | null
-          inventory_count?: number | null
-          is_gluten_free?: boolean | null
-          is_vegan?: boolean | null
-          is_vegetarian?: boolean | null
-          low_stock_threshold?: number | null
-          modifier_groups?: never
-          name?: string | null
-          pairs_with?: string[] | null
-          popularity_score?: number | null
-          price?: number | null
-          sort_order?: number | null
-          spicy_level?: number | null
-          updated_at?: string | null
-        }
-        Update: {
-          allergens?: string[] | null
-          available?: boolean | null
-          category?: Database["public"]["Enums"]["menu_category"] | null
-          created_at?: string | null
-          description?: string | null
-          featured?: boolean | null
-          id?: string | null
-          image_url?: string | null
-          inventory_count?: number | null
-          is_gluten_free?: boolean | null
-          is_vegan?: boolean | null
-          is_vegetarian?: boolean | null
-          low_stock_threshold?: number | null
-          modifier_groups?: never
-          name?: string | null
-          pairs_with?: string[] | null
-          popularity_score?: number | null
-          price?: number | null
-          sort_order?: number | null
-          spicy_level?: number | null
-          updated_at?: string | null
+        Relationships: []
+      }
+      menu_items_with_modifiers: {
+        Row: {
+          allergens: string[] | null
+          available: boolean | null
+          category: Database["public"]["Enums"]["menu_category"] | null
+          created_at: string | null
+          description: string | null
+          featured: boolean | null
+          id: string | null
+          image_url: string | null
+          inventory_count: number | null
+          is_gluten_free: boolean | null
+          is_vegan: boolean | null
+          is_vegetarian: boolean | null
+          low_stock_threshold: number | null
+          modifier_groups: Json | null
+          name: string | null
+          pairs_with: string[] | null
+          popularity_score: number | null
+          price: number | null
+          sort_order: number | null
+          spicy_level: number | null
+          updated_at: string | null
         }
         Relationships: []
       }
@@ -3328,8 +3375,10 @@ export type Database = {
           event_id: string | null
           event_time: string | null
           event_type: string | null
+          fulfillment_type: string | null
           order_id: string | null
           order_number: number | null
+          order_type: string | null
           user_id: string | null
         }
         Relationships: []
@@ -4000,6 +4049,7 @@ export type Database = {
           dispute_reason: string | null
           dispute_status: Database["public"]["Enums"]["dispute_status_enum"]
           disputed_at: string | null
+          fulfillment_type: string
           id: string
           last_payment_error: string | null
           metadata: Json | null

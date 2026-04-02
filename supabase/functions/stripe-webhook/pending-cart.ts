@@ -1,3 +1,22 @@
+// supabase/functions/stripe-webhook/pending-cart.ts
+// ============================================================================
+// PREPARE AUTHORITATIVE CART STATE
+// ============================================================================
+// NAMING CONTRACT (read before changing anything):
+//
+//   pricing.ts defines: OrderType = 'pickup' | 'delivery' | 'dine_in'
+//   PricingSnapshot.orderType: OrderType   ← this IS the fulfillment type
+//   PreparedCartState.orderType: OrderType ← same, keep the name
+//
+//   The field is named 'orderType' throughout pricing.ts for historical reasons.
+//   It means FULFILLMENT TYPE. Do not rename it here — that would break
+//   buildLegacyPricingSnapshotFromPendingCart and PricingSnapshot compatibility.
+//
+//   createOrderFromSession maps it correctly to the DB:
+//     orders.order_type       = 'food'      (WHAT was sold — order category)
+//     orders.fulfillment_type = orderType   (HOW delivered — pickup/delivery/dine_in)
+// ============================================================================
+
 import Stripe from "stripe";
 import {
   buildLegacyPricingSnapshotFromPendingCart,
@@ -58,6 +77,9 @@ export async function prepareAuthoritativeCartState(args: {
     return null;
   }
 
+  // orderType = fulfillment type ('pickup' | 'delivery' | 'dine_in').
+  // create-checkout stores this in Stripe metadata as 'order_type' (legacy name).
+  // normalizeOrderType (from utils.ts) maps the raw string → validated OrderType.
   const orderType = normalizeOrderType(
     pickMeta(session.metadata, "order_type"),
   );
@@ -238,7 +260,7 @@ export async function prepareAuthoritativeCartState(args: {
     cart,
     snapshot,
     pricingHash,
-    orderType,
+    orderType,    // fulfillment type ('pickup'|'delivery'|'dine_in') per pricing.ts contract
     currency: snapshotCurrency,
     consumedNow: Array.isArray(consumeRows) && consumeRows.length > 0,
   };
