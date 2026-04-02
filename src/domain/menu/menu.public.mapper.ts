@@ -1,32 +1,41 @@
 import type { MenuItemPublicRow } from './menu.db.types';
 import type { MenuItemPublic } from './menu.types';
 
+// Type cast needed because database.types.ts may be stale (generated before
+// updated_at and created_at were added to the menu_items select type).
+// Run `supabase gen types typescript --linked` to remove this cast.
+type MenuItemPublicRowExtended = MenuItemPublicRow & {
+  updated_at?: string | null;
+  created_at?: string | null;
+};
+
 export class MenuPublicMapper {
   static map(this: void, row: MenuItemPublicRow): MenuItemPublic {
+    const r = row as MenuItemPublicRowExtended;
     return {
-      id: row.id ?? '',
-      name: row.name ?? '',
-      price: Number(row.price),
-      category: row.category ?? 'entrees',
-      featured: row.featured ?? false,
-      available: row.available ?? true,
-      sort_order: row.sort_order ?? 0,
+      id: r.id ?? '',
+      name: r.name ?? '',
+      price: Number(r.price),
+      category: r.category ?? 'entrees',
+      featured: r.featured ?? false,
+      available: r.available ?? true,
+      sort_order: r.sort_order ?? 0,
 
-      is_vegetarian: row.is_vegetarian ?? false,
-      is_vegan: row.is_vegan ?? false,
-      is_gluten_free: row.is_gluten_free ?? false,
+      is_vegetarian: r.is_vegetarian ?? false,
+      is_vegan: r.is_vegan ?? false,
+      is_gluten_free: r.is_gluten_free ?? false,
 
-      description: row.description ?? null,
-      image_url: row.image_url ?? null,
-      spicy_level: row.spicy_level ?? null,
-      updated_at: row.updated_at ?? null,
+      description: r.description ?? null,
+      image_url: r.image_url ?? null,
+      spicy_level: r.spicy_level ?? null,
+      updated_at: r.updated_at ?? null,
 
-      allergens: row.allergens ?? [],
-      pairs_with: row.pairs_with ?? [],
+      allergens: r.allergens ?? [],
+      pairs_with: r.pairs_with ?? [],
 
       // ✅ KEEP snake_case (THIS FIXES EVERYTHING)
-      modifier_groups: Array.isArray(row.modifier_groups)
-        ? row.modifier_groups.map((group: any) => ({
+      modifier_groups: Array.isArray(r.modifier_groups)
+        ? r.modifier_groups.map((group: any) => ({
             id: group.modifier_group_id,
             name: group.modifier_group_name,
             description: null,
@@ -52,7 +61,7 @@ export class MenuPublicMapper {
           }))
         : [],
 
-      created_at: row.created_at ?? '',
+      created_at: r.created_at ?? '',
     };
   }
 

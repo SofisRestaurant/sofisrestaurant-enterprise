@@ -87,18 +87,22 @@ export function validateModifierPayload(
 
   // price_adjustment
   if (p.price_adjustment !== undefined) {
-    if (isNaN(p.price_adjustment)) {
+    const adj = p.price_adjustment ?? 0;
+    if (isNaN(adj)) {
       errors.price_adjustment = 'Price must be a number';
-    } else if (p.price_adjustment < MODIFIER_LIMITS.MIN_PRICE_ADJUSTMENT) {
+    } else if (adj < MODIFIER_LIMITS.MIN_PRICE_ADJUSTMENT) {
       errors.price_adjustment = `Price cannot be less than ${MODIFIER_LIMITS.MIN_PRICE_ADJUSTMENT}`;
-    } else if (p.price_adjustment > MODIFIER_LIMITS.MAX_PRICE_ADJUSTMENT) {
+    } else if (adj > MODIFIER_LIMITS.MAX_PRICE_ADJUSTMENT) {
       errors.price_adjustment = `Price cannot exceed ${MODIFIER_LIMITS.MAX_PRICE_ADJUSTMENT}`;
     }
   }
 
   // sort_order
-  if (p.sort_order !== undefined && (!Number.isInteger(p.sort_order) || p.sort_order < 0)) {
-    errors.sort_order = 'Sort order must be a non-negative integer';
+  if (p.sort_order !== undefined) {
+    const so = p.sort_order ?? 0;
+    if (!Number.isInteger(so) || so < 0) {
+      errors.sort_order = 'Sort order must be a non-negative integer';
+    }
   }
 
   return { valid: Object.keys(errors).length === 0, errors };

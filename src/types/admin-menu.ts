@@ -75,9 +75,14 @@ export type { ModifierGroup, Modifier, ModifierGroupType };
 
 type _ModifierGroupInsert = Database['public']['Tables']['modifier_groups']['Insert'];
 
-/** Write payload for modifier_groups. `type` is narrowed to the literal union. */
+/** Write payload for modifier_groups. `type` is narrowed to the literal union.
+ *  `description` is added as optional — the DB column will be added via migration
+ *  20260403000003_add_modifier_group_description.sql.
+ */
 export type ModifierGroupWritePayload = Omit<_ModifierGroupInsert, 'type'> & {
   type: ModifierGroupType;
+  /** Optional human-readable description shown in the admin UI. */
+  description?: string | null;
 };
 
 export type ModifierWritePayload =
