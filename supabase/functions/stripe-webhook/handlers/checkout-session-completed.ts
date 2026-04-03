@@ -11,6 +11,7 @@ import {
   recordPromoRedemptionIfMissing,
   upsertPaymentTransaction,
 } from "../side-effects.ts";
+import { notifyKitchen } from "../kitchen-notify.ts";
 import { DB_ORD_CONFIRMED, DB_PMT_PAID } from "../env.ts";
 import { log, nowIso, prefix } from "../logging.ts";
 import {
@@ -168,6 +169,16 @@ export async function handleCheckoutSessionCompleted(
         "New order confirmed via Stripe webhook.",
         requestId,
       ),
+      // ✅ Kitchen screen notification — triggers Realtime on order_events
+      // so new orders appear instantly without polling.
+      notifyKitchen({
+        db,
+        orderId,
+        userId,
+        fulfillmentType: pickMeta(session.metadata, "order_type") ?? "pickup",
+        amountTotal: orderTotal,
+        requestId,
+      }),
     );
   }
 

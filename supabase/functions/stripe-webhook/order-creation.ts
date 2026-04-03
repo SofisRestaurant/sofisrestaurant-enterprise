@@ -237,7 +237,7 @@ export async function createOrderFromSession(args: {
     snapshot,
   });
 
-  const insert: OrderInsert = {
+  const insert = {
     stripe_session_id:         session.id,
     stripe_payment_intent_id:  paymentIntentId,
     // ✅ order_type  = WHAT was sold ('food' | 'merch') — NOT the fulfillment method
@@ -248,17 +248,30 @@ export async function createOrderFromSession(args: {
     customer_email:            session.customer_details?.email ?? null,
     customer_name:             session.customer_details?.name ?? null,
     customer_phone:            session.customer_details?.phone ?? null,
+    // Stripe-named columns (amount_*)
     amount_subtotal:           pricing.subtotalCents,
     amount_tax:                pricing.taxCents,
     amount_shipping:           pricing.deliveryFeeCents,
     amount_total:              pricing.totalCents,
+    // ✅ Cents-suffixed columns — must be set to match finalize-order schema.
+    // These are the same values. The DB has both column families.
+    // Leaving these 0 causes dashboard/tax/analytics queries to show $0.
+    subtotal_cents:            pricing.subtotalCents,
+    tax_cents:                 pricing.taxCents,
+    tip_cents:                 pricing.tipCents,
+    discount_cents:            pricing.promoDiscountCents +
+                               pricing.campaignDiscountCents +
+                               pricing.creditCents,
+    delivery_fee_cents:        pricing.deliveryFeeCents,
+    service_fee_cents:         pricing.serviceFeeCents,
+    total_cents:               pricing.totalCents,
     currency:                  pricing.currency,
     payment_status:            DB_PMT_PAID,
     status:                    DB_ORD_CONFIRMED,
     cart_items:                cart.items,
     metadata,
     notes:                     snapshotString(snapshot, "orderNotes"),
-  };
+  } as OrderInsert & { fulfillment_type: string };
 
   const { data: inserted, error: insertError } = await db
     .from("orders")
