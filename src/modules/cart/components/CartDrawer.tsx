@@ -1,5 +1,5 @@
 // =============================================================================
-// src/components/cart/CartDrawer.tsx
+// src/modules/cart/components/CartDrawer.tsx
 // CartDrawer — Production (2026) (Strict TS, no unknown leaks)
 // =============================================================================
 
@@ -251,14 +251,55 @@ export function CartDrawer({ isOpen, onClose }: CartDrawerProps) {
 
                         <CartSummary />
 
-                        <Button
+                        <button
+                          type="button"
                           onClick={handleCheckout}
-                          variant="primary"
-                          className="w-full py-3 text-lg font-semibold bg-amber-500 hover:bg-amber-600 text-white rounded-lg shadow-lg"
                           disabled={computed.invalidCount > 0}
+                          style={{
+                            width: '100%',
+                            padding: '0.875rem 1rem',
+                            fontSize: '1rem',
+                            fontWeight: 600,
+                            color: '#ffffff',
+                            backgroundColor: computed.invalidCount > 0 ? '#d1d5db' : '#f59e0b',
+                            borderRadius: '0.75rem',
+                            border: 'none',
+                            cursor: computed.invalidCount > 0 ? 'not-allowed' : 'pointer',
+                            boxShadow: '0 4px 14px rgb(245 158 11 / 0.4)',
+                            transition: 'background-color 0.2s ease, box-shadow 0.2s ease',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '0.5rem',
+                          }}
+                          onMouseEnter={(e) => {
+                            if (computed.invalidCount === 0) {
+                              (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                                '#d97706';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (computed.invalidCount === 0) {
+                              (e.currentTarget as HTMLButtonElement).style.backgroundColor =
+                                '#f59e0b';
+                            }
+                          }}
                         >
+                          <svg
+                            width="18"
+                            height="18"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M5 12h14M12 5l7 7-7 7" />
+                          </svg>
                           Proceed to Checkout
-                        </Button>
+                        </button>
                         <button
                           onClick={handleClear}
                           className="w-full text-sm text-gray-500 underline decoration-dotted hover:text-gray-700 hover:no-underline"

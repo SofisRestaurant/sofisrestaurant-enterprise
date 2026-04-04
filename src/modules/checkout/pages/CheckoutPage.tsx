@@ -254,17 +254,15 @@ export default function Checkout() {
   const [creditsLoading, setCreditsLoading] = useState(true);
   const [creditsError, setCreditsError] = useState<string | null>(null);
 
-  // ── Loyalty points preview ─────────────────────────────────────────────────
+  // ── Loyalty ────────────────────────────────────────────────────────────────
   const [loyaltyProfile, setLoyaltyProfile] = useState<LoyaltyProfile | null>(null);
   const [loyaltyPreview, setLoyaltyPreview] = useState<LoyaltyPreview | null>(null);
 
-  // Load loyalty profile + compute points preview
   useEffect(() => {
     if (!isAuthenticated) return;
     let alive = true;
-    void getLoyaltyProfile().then((profile) => {
-      if (!alive) return;
-      setLoyaltyProfile(profile);
+    void getLoyaltyProfile().then((p) => {
+      if (alive) setLoyaltyProfile(p);
     });
     return () => {
       alive = false;
@@ -272,11 +270,9 @@ export default function Checkout() {
   }, [isAuthenticated]);
 
   useEffect(() => {
-    if (subtotalCents <= 0) {
-      setLoyaltyPreview(null);
-      return;
-    }
-    setLoyaltyPreview(calculatePointsPreview(subtotalCents, loyaltyProfile));
+    setLoyaltyPreview(
+      subtotalCents > 0 ? calculatePointsPreview(subtotalCents, loyaltyProfile) : null,
+    );
   }, [subtotalCents, loyaltyProfile]);
 
   const loadCredits = useCallback(async () => {
@@ -369,10 +365,10 @@ export default function Checkout() {
   // ─────────────────────────────────────────────────────────────────────────────
 
   return (
-    <main className="relative mx-auto w-full max-w-3xl px-4 py-10">
+    <main className="relative mx-auto w-full max-w-3xl px-3 py-6 sm:px-4 sm:py-10">
       {/* Header */}
-      <header className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight">Checkout</h1>
+      <header className="mb-6 sm:mb-8">
+        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Checkout</h1>
         <p className="mt-1 text-sm text-gray-500">Review your order before secure payment.</p>
       </header>
 
@@ -397,51 +393,38 @@ export default function Checkout() {
           </div>
         </section>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-3 sm:space-y-4">
           {/* Order Details (type + notes) */}
           <section className="overflow-hidden rounded-2xl border bg-white shadow-sm">
-            <div className="border-b px-6 py-4">
+            <div className="border-b px-4 py-3 sm:px-6 sm:py-4">
               <h2 className="font-semibold">Order details</h2>
               <p className="mt-0.5 text-xs text-gray-500">
                 These details help us prepare your order. Pricing is confirmed by Stripe at payment.
               </p>
             </div>
 
-            <div className="space-y-4 px-6 py-5">
+            <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-5">
               {/* Order type selector */}
               <div>
                 <label className="block text-sm font-semibold text-gray-900">Order type</label>
                 <div className="mt-2 grid grid-cols-3 gap-2">
                   {(['pickup', 'delivery', 'dine_in'] as const).map((t) => {
                     const active = orderDetails.orderType === t;
-                    const comingSoon = t === 'delivery' || t === 'dine_in';
                     return (
-                      <div key={t} className="relative">
-                        <button
-                          type="button"
-                          disabled={comingSoon}
-                          onClick={() =>
-                            !comingSoon && setOrderDetails((s) => ({ ...s, orderType: t }))
-                          }
-                          className={cx(
-                            'w-full rounded-xl border px-3 py-2 text-sm font-semibold transition',
-                            comingSoon
-                              ? 'cursor-not-allowed border-gray-100 bg-gray-50 text-gray-300'
-                              : active
-                                ? 'border-gray-900 bg-gray-900 text-white'
-                                : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50',
-                          )}
-                          aria-pressed={active}
-                          aria-disabled={comingSoon}
-                        >
-                          {formatOrderTypeLabel(t)}
-                        </button>
-                        {comingSoon ? (
-                          <span className="pointer-events-none absolute -top-2 left-1/2 -translate-x-1/2 rounded-full bg-amber-400 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white shadow-sm">
-                            Soon
-                          </span>
-                        ) : null}
-                      </div>
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => setOrderDetails((s) => ({ ...s, orderType: t }))}
+                        className={cx(
+                          'rounded-xl border px-3 py-2 text-sm font-semibold transition',
+                          active
+                            ? 'border-gray-900 bg-gray-900 text-white'
+                            : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50',
+                        )}
+                        aria-pressed={active}
+                      >
+                        {formatOrderTypeLabel(t)}
+                      </button>
                     );
                   })}
                 </div>
@@ -503,7 +486,7 @@ export default function Checkout() {
 
           {/* Order Summary */}
           <section className="overflow-hidden rounded-2xl border bg-white shadow-sm">
-            <div className="flex items-center justify-between border-b px-6 py-4">
+            <div className="flex items-center justify-between border-b px-4 py-3 sm:px-6 sm:py-4">
               <h2 className="font-semibold">Order Summary</h2>
               <span className="text-sm text-gray-500">
                 {itemCount} item{itemCount !== 1 ? 's' : ''}
@@ -518,7 +501,7 @@ export default function Checkout() {
                 return (
                   <div
                     key={stableCartKey(item)}
-                    className="flex items-start justify-between gap-4 px-6 py-4"
+                    className="flex items-start justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4"
                   >
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-medium">
@@ -554,7 +537,7 @@ export default function Checkout() {
 
             {/* Totals: only subtotal is client-side; everything else is server/Stripe */}
             {/* Totals: only subtotal is client-side; everything else is server/Stripe */}
-            <div className="space-y-2 border-t bg-gray-50 px-6 py-5 text-sm">
+            <div className="space-y-2 border-t bg-gray-50 px-4 py-4 sm:px-6 sm:py-5 text-sm">
               <div className="flex justify-between">
                 <span>Subtotal (estimated)</span>
                 <span className="tabular-nums">{formatCents(subtotalCents)}</span>
@@ -580,7 +563,7 @@ export default function Checkout() {
 
           {/* Promo Code */}
           <section className="overflow-hidden rounded-2xl border bg-white shadow-sm">
-            <div className="border-b px-6 py-4">
+            <div className="border-b px-4 py-3 sm:px-6 sm:py-4">
               <h2 className="font-semibold">Promo Code</h2>
               <p className="mt-0.5 text-xs text-gray-500">
                 Discounts are verified and applied by the server at checkout.
@@ -639,11 +622,11 @@ export default function Checkout() {
             </div>
           </section>
 
-          {/* Loyalty Credits */}
+          {/* Loyalty Rewards + Credits — unified section */}
           <section className="overflow-hidden rounded-2xl border bg-white shadow-sm">
-            <div className="border-b px-6 py-4">
+            <div className="border-b px-4 py-3 sm:px-6 sm:py-4">
               <div className="flex items-center justify-between">
-                <h2 className="font-semibold">Loyalty Credits</h2>
+                <h2 className="font-semibold">Loyalty & Credits</h2>
                 {!creditsLoading && credits.length > 0 ? (
                   <span className="text-sm font-semibold text-amber-600 tabular-nums">
                     {formatCents(creditsAvailableCents)} available
@@ -654,6 +637,52 @@ export default function Checkout() {
                 Credits are applied by the server — final balance confirmed at payment.
               </p>
             </div>
+
+            {/* Points preview — inline at top of loyalty section */}
+            {loyaltyPreview !== null && loyaltyPreview.pointsToEarn > 0 ? (
+              <div className="border-b bg-amber-50 px-4 py-3 sm:px-6">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-base" aria-hidden="true">
+                      ✨
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-amber-900">
+                        You'll earn{' '}
+                        <span className="tabular-nums">+{loyaltyPreview.pointsToEarn} pts</span> on
+                        this order
+                      </p>
+                      <p className="text-[11px] text-amber-700 mt-0.5">
+                        {loyaltyPreview.willLevelUp
+                          ? "🎉 You'll level up to the next tier!"
+                          : loyaltyPreview.pointsToNextTier !== null
+                            ? `${loyaltyPreview.pointsToNextTier} pts to next tier`
+                            : "You're at the top tier — maximum rewards!"}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-end gap-1 shrink-0 ml-3">
+                    <span className="rounded-full bg-amber-400 px-2.5 py-0.5 text-sm font-bold text-white tabular-nums">
+                      +{loyaltyPreview.pointsToEarn}
+                    </span>
+                    {loyaltyPreview.tierMultiplier > 1 || loyaltyPreview.streakMultiplier > 1 ? (
+                      <div className="flex gap-1">
+                        {loyaltyPreview.tierMultiplier > 1 ? (
+                          <span className="rounded-full bg-amber-100 px-1.5 py-px text-[10px] font-semibold text-amber-800">
+                            ×{loyaltyPreview.tierMultiplier}
+                          </span>
+                        ) : null}
+                        {loyaltyPreview.streakMultiplier > 1 ? (
+                          <span className="rounded-full bg-amber-100 px-1.5 py-px text-[10px] font-semibold text-amber-800">
+                            🔥×{loyaltyPreview.streakMultiplier}
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             <div className="px-6 py-4">
               {creditsLoading ? (
@@ -735,51 +764,8 @@ export default function Checkout() {
             </div>
           </section>
 
-          {/* Loyalty Points Preview */}
-          {loyaltyPreview !== null && loyaltyPreview.pointsToEarn > 0 ? (
-            <section className="overflow-hidden rounded-2xl border border-amber-200 bg-amber-50 shadow-sm">
-              <div className="px-6 py-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-lg">✨</span>
-                    <h2 className="font-semibold text-amber-900">Loyalty Rewards</h2>
-                  </div>
-                  <span className="rounded-full bg-amber-400 px-3 py-1 text-sm font-bold text-white tabular-nums">
-                    +{loyaltyPreview.pointsToEarn} pts
-                  </span>
-                </div>
-                <p className="mt-1 text-xs text-amber-700">
-                  You'll earn{' '}
-                  <span className="font-semibold">{loyaltyPreview.pointsToEarn} points</span> on
-                  this order.{' '}
-                  {loyaltyPreview.willLevelUp ? (
-                    <span className="font-semibold">🎉 You'll level up to the next tier!</span>
-                  ) : loyaltyPreview.pointsToNextTier !== null ? (
-                    <>{loyaltyPreview.pointsToNextTier} more points to next tier.</>
-                  ) : (
-                    <>You're at the top tier — maximum rewards!</>
-                  )}
-                </p>
-                {loyaltyPreview.streakMultiplier > 1 || loyaltyPreview.tierMultiplier > 1 ? (
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {loyaltyPreview.tierMultiplier > 1 ? (
-                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
-                        {loyaltyPreview.tier} ×{loyaltyPreview.tierMultiplier} tier bonus
-                      </span>
-                    ) : null}
-                    {loyaltyPreview.streakMultiplier > 1 ? (
-                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
-                        🔥 ×{loyaltyPreview.streakMultiplier} streak bonus
-                      </span>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-            </section>
-          ) : null}
-
           {/* Payment */}
-          <section className="space-y-4">
+          <section className="space-y-3 sm:space-y-4">
             <CheckoutButton
               promoCode={promo.applied ? promo.code : undefined}
               creditId={selectedCredit ?? undefined}
