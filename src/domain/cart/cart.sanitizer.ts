@@ -70,9 +70,8 @@ function clampCentsSigned(v: unknown, min: number, max: number, fallback = 0): n
 /**
  * Sanitizes the raw items array from the cart store.
  *
- * Handles camelCase / snake_case naming drift for `unitPriceCents` and
- * `priceAdjustment` — the DB and store may use either form depending on
- * which layer populated the value.
+ * Handles camelCase / snake_case naming drift for `unitPriceCents` —
+ * the DB and store may use either `unitPriceCents` or `unit_price_cents`.
  *
  * This function is the single runtime trust boundary between `unknown` cart
  * state and `CartItem[]`. The cast at the return site is intentional and
@@ -104,15 +103,12 @@ return items
     const modifiers = modsRaw.map((m) => {
       const mr: JsonRecord = isRecord(m) ? m : {};
 
-      const adjRaw: unknown =
-        mr.priceAdjustment !== undefined
-          ? mr.priceAdjustment
-          : mr.priceAdjustmentCents !== undefined
-            ? mr.priceAdjustmentCents
-            : mr.price_adjustment;
-
-      const priceAdjustment = clampCentsSigned(
-        adjRaw,
+      // Hard cut: priceAdjustmentCents is the only valid field.
+      // Pre-launch — no legacy data to protect. If the field is absent
+      // or not a number, clamp to 0. This fails visibly in the UI
+      // rather than silently charging the wrong amount.
+      const priceAdjustmentCents = clampCentsSigned(
+        mr.priceAdjustmentCents,
         -CART_SANITIZER_GUARDS.MAX_UNIT_PRICE_CENTS,
         CART_SANITIZER_GUARDS.MAX_UNIT_PRICE_CENTS,
         0,
@@ -120,8 +116,7 @@ return items
 
       return {
         ...mr,
-        priceAdjustment,
-        priceAdjustmentCents: priceAdjustment,
+        priceAdjustmentCents,
       };
     });
 

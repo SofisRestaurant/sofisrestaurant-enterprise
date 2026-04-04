@@ -378,7 +378,7 @@ export class MenuOrderingService {
         id: selection.id,
         groupId: group.modifier_group_id,
         name: selection.name ?? '',
-        priceAdjustment:
+        priceAdjustmentCents:
           typeof selection.price_adjustment === 'number' && Number.isFinite(selection.price_adjustment)
             ? selection.price_adjustment
             : 0,

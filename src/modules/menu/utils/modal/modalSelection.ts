@@ -26,8 +26,8 @@ import { safeCents } from '../menuItemGuards';
 export function flattenSelectionsForCart(
   modifierGroups: ModifierGroup[],
   selected: SelectionMap,
-): Array<{ id: string; groupId: string; name: string; priceAdjustment: number }> {
-  const result: Array<{ id: string; groupId: string; name: string; priceAdjustment: number }> = [];
+): Array<{ id: string; groupId: string; name: string; priceAdjustmentCents: number }> {
+  const result: Array<{ id: string; groupId: string; name: string; priceAdjustmentCents: number }> = [];
 
   for (const g of modifierGroups) {
     for (const s of selected[g.id] ?? []) {
@@ -35,7 +35,7 @@ export function flattenSelectionsForCart(
         id: s.id,
         groupId: s.groupId,
         name: s.name,
-        priceAdjustment: safeCents(s.priceAdjustment, 0),
+        priceAdjustmentCents: safeCents(s.priceAdjustment, 0),
       });
     }
   }

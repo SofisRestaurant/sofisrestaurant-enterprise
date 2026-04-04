@@ -39,6 +39,7 @@ import {
   snapshotStringArray,
   toJson,
 } from "./utils.ts";
+import type { PricingSnapshot, PricingSnapshotLine } from "../_shared/pricing.ts";
 
 // ─── Valid values (kept in sync with DB CHECK constraint) ─────────────────────
 
@@ -53,16 +54,40 @@ type ValidatedOrderState = {
   orderType:  OrderType;  // fulfillment — 'pickup' | 'delivery' | 'dine_in'
   totalCents: number;
   cart:       PreparedCartState['cart'];
-  snapshot:   PreparedCartState['snapshot'];
+  snapshot: PricingSnapshot;
   pricingHash: string;
   currency:   string;
   consumedNow: boolean;
 };
+type SnapshotGuardLine = {
+  menuItemId: string;
+  name: string;
+  quantity: number;
+  baseUnitPriceCents: number;
+  finalPretaxLineTotalCents: number;
+};
+
+
+function assertPricingSnapshot(
+  snapshot: unknown,
+  requestId: string,
+): asserts snapshot is PricingSnapshot {
+  if (
+    typeof snapshot !== "object" ||
+    snapshot === null ||
+    !("lines" in snapshot) ||
+    !Array.isArray((snapshot as { lines?: unknown }).lines)
+  ) {
+    throw new Error(`[${requestId}] invalid pricing snapshot`);
+  }
+}
 
 function buildValidatedOrderState(
   prepared: PreparedCartState,
   requestId: string,
 ): ValidatedOrderState {
+  
+  assertPricingSnapshot(prepared.snapshot, requestId);
   const { orderType } = prepared;
 
   // Runtime guard — TypeScript types are erased at runtime.
@@ -74,7 +99,7 @@ function buildValidatedOrderState(
     );
   }
 
-  const totalCents = snapshotNumber(prepared.snapshot, 'totalCents');
+ const totalCents = prepared.snapshot.totalCents;
   if (totalCents <= 0) {
     throw new Error(
       `[${requestId}] buildValidatedOrderState: totalCents ${totalCents} is not positive`,
@@ -210,7 +235,7 @@ export async function createOrderFromSession(args: {
 
   // Validate through factory — throws on invalid state.
   // Caller lets this propagate as 500 → Stripe retries. Do not catch here.
-  const state = buildValidatedOrderState(prepared, requestId);
+  const state: ValidatedOrderState = buildValidatedOrderState(prepared, requestId);
 
   const {
     orderType,  // fulfillment ('pickup' | 'delivery' | 'dine_in')
@@ -297,6 +322,7 @@ export async function createOrderFromSession(args: {
   }
 
   if (inserted !== null) {
+    
     log("info", "webhook_order_created", {
       requestId,
       orderId:          prefix(inserted.id),

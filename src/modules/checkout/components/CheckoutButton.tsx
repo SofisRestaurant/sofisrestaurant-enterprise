@@ -134,8 +134,8 @@ function isCartModifier(value: unknown): value is CartModifier {
   const groupOk = value.groupId === undefined || typeof value.groupId === 'string';
   const nameOk = value.name === undefined || typeof value.name === 'string';
   const priceOk =
-    value.priceAdjustment === undefined ||
-    (typeof value.priceAdjustment === 'number' && Number.isFinite(value.priceAdjustment));
+    value.priceAdjustmentCents === undefined ||
+    (typeof value.priceAdjustmentCents === 'number' && Number.isFinite(value.priceAdjustmentCents));
 
   return idOk && groupOk && nameOk && priceOk;
 }
@@ -156,8 +156,9 @@ function isCartItem(value: unknown): value is CartItem {
 }
 
 function safeModifierPriceAdjustment(modifier: CartModifier): number {
-  return typeof modifier.priceAdjustment === 'number' && Number.isFinite(modifier.priceAdjustment)
-    ? Math.round(modifier.priceAdjustment)
+  return typeof modifier.priceAdjustmentCents === 'number' &&
+    Number.isFinite(modifier.priceAdjustmentCents)
+    ? Math.round(modifier.priceAdjustmentCents)
     : 0;
 }
 

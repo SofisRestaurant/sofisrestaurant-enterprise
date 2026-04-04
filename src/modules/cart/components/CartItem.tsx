@@ -45,7 +45,7 @@ function CartItemComponent({ item }: Props) {
   const unitCents = useMemo(() => safeCents(item.unitPriceCents, 0), [item.unitPriceCents]);
 
   const extrasCents = useMemo(() => {
-    return (item.modifiers ?? []).reduce((sum, m) => sum + safeCents(m.priceAdjustment, 0), 0);
+    return (item.modifiers ?? []).reduce((sum, m) => sum + safeCents(m.priceAdjustmentCents, 0), 0);
   }, [item.modifiers]);
 
   const lineTotalCents = useMemo(() => {
@@ -139,9 +139,9 @@ function CartItemComponent({ item }: Props) {
                   className="flex items-baseline justify-between gap-2"
                 >
                   <span className="truncate text-xs text-zinc-700">{m.name}</span>
-                  {safeCents(m.priceAdjustment, 0) !== 0 ? (
+                  {safeCents(m.priceAdjustmentCents, 0) !== 0 ? (
                     <span className="shrink-0 text-[11px] text-zinc-500">
-                      + {formatCents(safeCents(m.priceAdjustment, 0))}
+                      + {formatCents(safeCents(m.priceAdjustmentCents, 0))}
                     </span>
                   ) : null}
                 </li>

@@ -133,7 +133,7 @@ function serializeCartModifier(modifier: CartItem['modifiers'][number]): Json {
     id: modifier.id,
     groupId: modifier.groupId,
     name: modifier.name,
-    priceAdjustment: modifier.priceAdjustment,
+    priceAdjustmentCents: modifier.priceAdjustmentCents,
   };
 }
 
@@ -204,7 +204,7 @@ function buildPricingSnapshot(
         id: modifier.id,
         groupId: modifier.groupId,
         name: modifier.name,
-        priceAdjustment: modifier.priceAdjustment,
+        priceAdjustmentCents: modifier.priceAdjustmentCents,
       })),
     })),
   };
@@ -259,7 +259,7 @@ function isCartModifierLike(value: unknown): value is CartItem['modifiers'][numb
     typeof value.id === 'string' &&
     typeof value.groupId === 'string' &&
     typeof value.name === 'string' &&
-    typeof value.priceAdjustment === 'number'
+    typeof value.priceAdjustmentCents === 'number'
   );
 }
 

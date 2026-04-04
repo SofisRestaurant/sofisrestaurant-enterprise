@@ -1,64 +1,16 @@
-// =============================================================================
-// src/domain/pricing/pricing.engine.ts
-// =============================================================================
-// PricingEngine — Cents-first, production-grade pricing utilities.
-//
-// Key principles:
-// - All internal math is integer cents.
-// - No floating point is used for totals.
-// - `formatPrice()` is cents-based (for backward compatibility in UI).
-// - `normalizeMoney()` supports future merch needs (explicit dollars vs cents).
-// - `pricing_hash` is a client-side integrity tag (NOT security). Server must
-//   validate prices against DB regardless.
-//
-// Public API (kept stable):
-// - PricingEngine.formatPrice(cents) => "$x.xx"
-// - PricingEngine.formatDollars(dollars) => "$x.xx"
-// - PricingEngine.calculate(itemId, unitPriceCents, compatModifiers, qty)
-// - PricingEngine.buildCartModifiers(item, selectedByGroup)
-//
-// ALSO provides stock helpers used by Admin/Menu UI + inventory engine:
-// - PricingEngine.getStockStatus(item)
-// - PricingEngine.getStockMessage(item)
-// - PricingEngine.isLowStock(item) / isOutOfStock(item)
-// =============================================================================
 
-export type MoneyUnit = 'cents' | 'dollars';
+export type {
+  MoneyUnit,
+  CartItemModifierCompat,
+  CartItemModifierGroupCompat,
+  CartItemModifiersCompat,
+  SelectedModLike,
+  SelectedByGroup,
+  StockStatus,
+} from './pricing.types';
 
-export type CartItemModifierCompat = {
-  id: string;
-  groupId: string;
-  name: string;
-  /** integer cents; may be negative */
-  priceAdjustmentCents: number;
-
-  // legacy aliases (old code paths)
-  modifier_group_id?: string;
-  group_id?: string;
-};
-
-export type CartItemModifierGroupCompat = {
-  groupId: string;
-  // legacy aliases
-  modifier_group_id?: string;
-  group_id?: string;
-
-  selections: CartItemModifierCompat[];
-};
-
-export type CartItemModifiersCompat = Array<CartItemModifierCompat | CartItemModifierGroupCompat>;
-
-export type SelectedModLike = {
-  id: string;
-  name: string;
-  // domain drift support
-  price_adjustment?: number;
-  priceAdjustment?: number;
-};
-
-export type SelectedByGroup = Record<string, SelectedModLike[]>;
-
-export type StockStatus = 'unknown' | 'in_stock' | 'low_stock' | 'out_of_stock';
+import type { MoneyUnit, CartItemModifierCompat, StockStatus } from './pricing.types';
+import type { SelectedModLike, SelectedByGroup } from './pricing.input.types';
 
 type ModifierLike = {
   id: string;
@@ -81,9 +33,6 @@ type ModifierLookupValue = {
   adjCents: number;
 };
 
-// -----------------------------------------------------------------------------
-// Guards / helpers
-// -----------------------------------------------------------------------------
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -142,9 +91,7 @@ function sanitizeLabel(value: unknown, fallback = '', maxLength = 240): string {
   return trimmed.slice(0, maxLength);
 }
 
-// Safely get the numeric price adjustment from a modifier
 function getModifierAdjustment(value: ModifierLike | SelectedModLike): number {
-  // Explicitly check both legacy and modern fields
   if ('price_adjustment' in value && typeof value.price_adjustment === 'number') {
     return value.price_adjustment;
   }
@@ -154,17 +101,14 @@ function getModifierAdjustment(value: ModifierLike | SelectedModLike): number {
   return 0;
 }
 
-// Safely extract modifier groups from a MenuItem-like object
 function getModifierGroups(item: unknown): ModifierGroupLike[] {
   if (!isRecord(item)) return [];
 
-  // Handle snake_case first
   const snake = item.modifier_groups;
   if (Array.isArray(snake)) {
     return snake.filter(isModifierGroupLike);
   }
 
-  // Handle camelCase as fallback, fully type-safe
   const camel = (item as UnknownRecord).modifierGroups;
   if (Array.isArray(camel)) {
     return camel.filter(isModifierGroupLike);
@@ -173,13 +117,11 @@ function getModifierGroups(item: unknown): ModifierGroupLike[] {
   return [];
 }
 
-// Safely get modifiers from a modifier group
 function getGroupModifiers(group: ModifierGroupLike): ModifierLike[] {
   if (!Array.isArray(group.modifiers)) return [];
   return group.modifiers.filter(isModifierLike);
 }
 
-// Convert an unknown selection object into safe SelectedModLike entries
 function getSelectedByGroup(selected: unknown): Array<[string, SelectedModLike[]]> {
   if (!isRecord(selected)) return [];
 
@@ -197,21 +139,15 @@ function getSelectedByGroup(selected: unknown): Array<[string, SelectedModLike[]
 
   return result;
 }
-/**
- * Detect “dollars-like” floats vs integer cents.
- * Examples:
- * - 3.99 -> dollars-like
- * - 399  -> cents-like
- */
+
+
 function guessMoneyUnit(value: number): MoneyUnit {
   if (Math.abs(value % 1) > 0) return 'dollars';
   if (Math.abs(value) > 0 && Math.abs(value) < 50) return 'dollars';
   return 'cents';
 }
 
-/**
- * Normalize money input to integer cents.
- */
+
 export function normalizeMoney(value: unknown, unit?: MoneyUnit): number {
   const raw = asNumber(value, 0);
   const resolvedUnit = unit ?? guessMoneyUnit(raw);
@@ -245,7 +181,9 @@ function canonicalizeModifiers(mods: CartItemModifierCompat[]): string {
     return a.priceAdjustmentCents - b.priceAdjustmentCents;
   });
 
-  return sorted.map(({ groupId, id, priceAdjustmentCents }) => `${groupId}:${id}:${priceAdjustmentCents}`).join('|');
+  return sorted
+    .map(({ groupId, id, priceAdjustmentCents }) => `${groupId}:${id}:${priceAdjustmentCents}`)
+    .join('|');
 }
 
 function buildModifierLookup(groups: ModifierGroupLike[]): Map<string, ModifierLookupValue> {
@@ -276,9 +214,9 @@ function buildModifierLookup(groups: ModifierGroupLike[]): Map<string, ModifierL
   return lookup;
 }
 
-// -----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // PricingEngine
-// -----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 export class PricingEngine {
   static formatPrice(cents: number): string {
@@ -300,9 +238,9 @@ export class PricingEngine {
     return PricingEngine.formatPrice(cents);
   }
 
-  // ===========================================================================
+  // =========================================================================
   // Stock helpers
-  // ===========================================================================
+  // =========================================================================
 
   static getStockCount(item: unknown): number | null {
     if (!isRecord(item)) return null;
@@ -318,7 +256,8 @@ export class PricingEngine {
       item.inventory ??
       null;
 
-    const parsed = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+    const parsed =
+      typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
     if (!Number.isFinite(parsed)) return null;
 
     return Math.trunc(parsed);
@@ -328,7 +267,8 @@ export class PricingEngine {
     if (!isRecord(item)) return 5;
 
     const raw = item.low_stock_threshold ?? item.lowStockThreshold ?? null;
-    const parsed = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+    const parsed =
+      typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
     if (!Number.isFinite(parsed)) return 5;
 
     return Math.max(1, Math.trunc(parsed));
@@ -364,11 +304,8 @@ export class PricingEngine {
   }
 
   /**
-   * Build compat modifiers array from:
-   * - MenuItem-like object with modifier groups
-   * - SelectedByGroup
-   *
-   * Client-display math only. Server must re-price from DB.
+   * Build compat modifiers array from a MenuItem-like object + SelectedByGroup.
+   * Client-display math only. Server re-prices from DB on every order.
    */
   static buildCartModifiers(item: unknown, selected: unknown): CartItemModifierCompat[] {
     const out: CartItemModifierCompat[] = [];
@@ -411,7 +348,8 @@ export class PricingEngine {
   }
 
   /**
-   * Core pricing math (CLIENT DISPLAY ONLY)
+   * Core pricing math — CLIENT DISPLAY ONLY.
+   * The server always re-prices from the DB; this is for UI feedback only.
    */
   static calculate(
     itemId: string,

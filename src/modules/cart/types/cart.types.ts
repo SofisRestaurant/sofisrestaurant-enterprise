@@ -1,5 +1,5 @@
 // =============================================================================
-// src/features/cart/cart.types.ts
+// src/modules/cart/types/cart.types.ts
 // Cart domain types — aligned 1:1 with database.types.ts
 // =============================================================================
 //
@@ -14,6 +14,7 @@
 // =============================================================================
 
 import type { Database } from '@/types/supabase';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Raw DB row aliases (for service layer use)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -36,8 +37,8 @@ export interface CartModifier {
   groupId: string;
   /** modifiers.name */
   name: string;
-  /** modifiers.price_adjustment (in cents) */
-  priceAdjustment: number;
+  /** modifiers.price_adjustment — integer cents, may be negative. */
+  priceAdjustmentCents: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -48,19 +49,20 @@ export interface CartModifier {
 export interface CartItem {
   menuItemId: string;
   name: string;
+  /** Integer cents. */
   unitPriceCents: number;
   imageUrl: string | null;
   category: Database['public']['Enums']['menu_category'];
   modifiers: CartModifier[];
   quantity: number;
   notes: string | null;
+  /** Integer cents. Always derived — never trust stored value. */
   lineTotalCents: number;
   pricingHash: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Applied Promotion
-// Derived from promotions row + promo_redemptions lookup
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface CartPromotion {
@@ -72,18 +74,15 @@ export interface CartPromotion {
   expiresAt: string | null;
   discountCents: number;
 }
+
 export type AddToCartPayload = Omit<CartItem, 'lineTotalCents'>;
 
-// (2) CartStore — public interface for your Zustand store (useCartStore)
-//     Keep this aligned with src/features/cart/cart.store.ts
 export interface CartStore {
-  // state
   items: CartItem[];
   promotion: CartPromotion | null;
   credit: CartCredit | null;
   totals: CartTotals;
 
-  // actions
   addItem: (payload: AddToCartPayload) => void;
   removeItem: (menuItemId: string, modifierKey: string) => void;
   updateQuantity: (menuItemId: string, modifierKey: string, quantity: number) => void;
@@ -98,15 +97,15 @@ export interface CartStore {
   clearCart: () => void;
   hydrate: (state: CartState) => void;
 }
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Applied Store Credit
-// Derived from user_credits row
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface CartCredit {
   /** user_credits.id */
   id: string;
-  /** user_credits.amount_cents */
+  /** user_credits.amount_cents — integer cents. */
   amountCents: number;
   /** user_credits.source */
   source: string;
@@ -119,30 +118,26 @@ export interface CartCredit {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface CartTotals {
-  /** Sum of all lineTotalCents, pre-discount */
+  /** Sum of all lineTotalCents, pre-discount. Integer cents. */
   subtotalCents: number;
-  /** Discount from promotion */
+  /** Discount from promotion. Integer cents. */
   discountCents: number;
-  /** Discount from store credit */
+  /** Discount from store credit. Integer cents. */
   creditCents: number;
-  /** Tax applied after discounts (matches orders.amount_tax) */
+  /** Tax applied after discounts. Integer cents. */
   taxCents: number;
-  /** Final amount the customer pays (matches orders.amount_total) */
+  /** Final amount the customer pays. Integer cents. */
   totalCents: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Cart State (in-memory, managed by cart store / context)
+// Cart State
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface CartState {
-  /** Keyed by menuItemId + serialized modifier IDs for deduplication */
   items: CartItem[];
-  /** Applied promotion, or null */
   promotion: CartPromotion | null;
-  /** Applied store credit, or null */
   credit: CartCredit | null;
-  /** Computed totals — always derived from items + promotion + credit */
   totals: CartTotals;
 }
 
@@ -151,33 +146,21 @@ export interface CartState {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface CartSession {
-  /** pending_carts.id (= checkout session ID from Stripe) */
   id: string;
-  /** pending_carts.user_id */
   userId: string;
-  /** pending_carts.items — JSON array of CartItem[] */
   items: CartItem[];
-  /** pending_carts.subtotal_cents */
   subtotalCents: number;
-  /** pending_carts.discount_cents */
   discountCents: number;
-  /** pending_carts.tax_cents */
   taxCents: number;
-  /** pending_carts.total_cents */
   totalCents: number;
-  /** pending_carts.promo_id */
   promoId: string | null;
-  /** pending_carts.credit_id */
   creditId: string | null;
-  /** pending_carts.expires_at */
   expiresAt: string | null;
-  /** pending_carts.created_at */
   createdAt: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Checkout Payload
-// Sent to Stripe / checkout Edge Function
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface CheckoutPayload {
@@ -190,16 +173,13 @@ export interface CheckoutPayload {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Cart Action Types (for reducer / store)
+// Cart Action Types
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type CartAction =
   | { type: 'ADD_ITEM'; payload: CartItem }
   | { type: 'REMOVE_ITEM'; payload: { menuItemId: string; modifierKey: string } }
-  | {
-      type: 'UPDATE_QUANTITY';
-      payload: { menuItemId: string; modifierKey: string; quantity: number };
-    }
+  | { type: 'UPDATE_QUANTITY'; payload: { menuItemId: string; modifierKey: string; quantity: number } }
   | { type: 'UPDATE_NOTES'; payload: { menuItemId: string; modifierKey: string; notes: string } }
   | { type: 'APPLY_PROMO'; payload: CartPromotion }
   | { type: 'REMOVE_PROMO' }
@@ -209,7 +189,7 @@ export type CartAction =
   | { type: 'HYDRATE'; payload: CartState };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Promo Validation Result
+// Promo Validation
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type PromoValidationError =
@@ -243,18 +223,19 @@ export function cartItemKey(menuItemId: string, modifiers: Pick<CartModifier, 'i
 }
 
 /**
- * Compute line total for a single cart item in cents.
+ * Compute line total for a single cart item.
+ * All values are integer cents.
  */
 export function computeLineTotalCents(
   item: Pick<CartItem, 'unitPriceCents' | 'modifiers' | 'quantity'>,
 ): number {
-  const modifierSum = item.modifiers.reduce((sum, m) => sum + m.priceAdjustment, 0);
+  const modifierSum = item.modifiers.reduce((sum, m) => sum + m.priceAdjustmentCents, 0);
   return (item.unitPriceCents + modifierSum) * item.quantity;
 }
 
 /**
  * Compute full cart totals from items + optional promotion + optional credit.
- * Tax rate matches Stripe tax calculation convention (8.25% example — override as needed).
+ * All values are integer cents.
  */
 export function computeCartTotals(
   items: CartItem[],
@@ -274,9 +255,7 @@ export function computeCartTotals(
     : 0;
 
   const afterDiscount = Math.max(0, subtotalCents - discountCents);
-
   const creditCents = credit ? Math.min(afterDiscount, credit.amountCents) : 0;
-
   const taxable = Math.max(0, afterDiscount - creditCents);
   const taxCents = Math.round(taxable * taxRate);
   const totalCents = taxable + taxCents;

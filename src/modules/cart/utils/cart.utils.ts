@@ -132,7 +132,7 @@ function deterministicPricingHash(
         stableHashPart(modifier.id),
         stableHashPart(modifier.groupId),
         stableHashPart(modifier.name),
-        String(modifier.priceAdjustment),
+        String(modifier.priceAdjustmentCents),
       ].join(':'),
     )
     .sort()
@@ -154,9 +154,9 @@ function parseRawModifier(value: unknown): CartModifier | null {
   const id = toTrimmedString(value.id);
   const groupId = toTrimmedString(value.groupId);
   const name = toTrimmedString(value.name);
-  const priceAdjustment = toInteger(value.priceAdjustment);
+  const priceAdjustmentCents = toInteger(value.priceAdjustmentCents);
 
-  if (id === null || groupId === null || name === null || priceAdjustment === null) {
+  if (id === null || groupId === null || name === null || priceAdjustmentCents === null) {
     return null;
   }
 
@@ -164,7 +164,7 @@ function parseRawModifier(value: unknown): CartModifier | null {
     id,
     groupId,
     name,
-    priceAdjustment,
+    priceAdjustmentCents,
   };
 }
 
@@ -409,7 +409,7 @@ export function formatCartTotals(totals: CartTotals): CartTotalsDisplay {
 
 export function formatLineItemBreakdown(item: CartItem): string {
   const base = formatCents(item.unitPriceCents);
-  const pricedModifiers = item.modifiers.filter((modifier) => modifier.priceAdjustment !== 0);
+  const pricedModifiers = item.modifiers.filter((modifier) => modifier.priceAdjustmentCents !== 0);
 
   if (pricedModifiers.length === 0) {
     return base;
@@ -417,8 +417,8 @@ export function formatLineItemBreakdown(item: CartItem): string {
 
   const breakdown = pricedModifiers
     .map((modifier) => {
-      const prefix = modifier.priceAdjustment >= 0 ? '+' : '-';
-      return `${prefix}${formatCents(Math.abs(modifier.priceAdjustment))} (${modifier.name})`;
+      const prefix = modifier.priceAdjustmentCents >= 0 ? '+' : '-';
+      return `${prefix}${formatCents(Math.abs(modifier.priceAdjustmentCents))} (${modifier.name})`;
     })
     .join(', ');
 
@@ -467,5 +467,5 @@ export function modifierSummary(modifiers: CartModifier[]): string {
 }
 
 export function totalModifierAdjustment(modifiers: CartModifier[]): number {
-  return modifiers.reduce((sum, modifier) => sum + modifier.priceAdjustment, 0);
+  return modifiers.reduce((sum, modifier) => sum + modifier.priceAdjustmentCents, 0);
 }
