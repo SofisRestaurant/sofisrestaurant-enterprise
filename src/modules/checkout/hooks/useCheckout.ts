@@ -1,5 +1,5 @@
 // =============================================================================
-// src/hooks/useCheckout.ts
+// src/modules/checkout/hooks/useCheckout.ts
 // CHECKOUT HOOK — Production (2026)
 // =============================================================================
 // - Single source of truth for checkout state
@@ -69,6 +69,58 @@ type CreateCheckoutPayload = Parameters<typeof createCheckoutSession>[0];
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_NOTES_LEN = 1_200;
 const MAX_REDEEM_POINTS = 1_000_000;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Checkout lock — persists across page refreshes
+// Prevents duplicate Stripe sessions when the user refreshes during payment.
+// TTL matches Stripe's session expiry (30 min).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const CHECKOUT_LOCK_KEY = 'sofis.checkout.lock.v1';
+const CHECKOUT_LOCK_TTL_MS = 30 * 60 * 1000;
+
+type CheckoutLock = { sessionId: string; expiresAt: number };
+
+export function writeCheckoutLock(sessionId: string): void {
+  try {
+    localStorage.setItem(
+      CHECKOUT_LOCK_KEY,
+      JSON.stringify({ sessionId, expiresAt: Date.now() + CHECKOUT_LOCK_TTL_MS }),
+    );
+  } catch { /* localStorage unavailable */ }
+}
+
+export function readCheckoutLock(): CheckoutLock | null {
+  try {
+    const raw = localStorage.getItem(CHECKOUT_LOCK_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      typeof parsed !== 'object' || parsed === null ||
+      typeof (parsed as CheckoutLock).sessionId !== 'string' ||
+      typeof (parsed as CheckoutLock).expiresAt !== 'number'
+    ) return null;
+    const lock = parsed as CheckoutLock;
+    if (Date.now() > lock.expiresAt) {
+      localStorage.removeItem(CHECKOUT_LOCK_KEY);
+      return null;
+    }
+    return lock;
+  } catch { return null; }
+}
+
+export function clearCheckoutLock(): void {
+  try { localStorage.removeItem(CHECKOUT_LOCK_KEY); } catch { /* ignore */ }
+}
+
+export function clearCheckoutFormState(): void {
+  try {
+    localStorage.removeItem('sofis.checkout.orderType.v1');
+    localStorage.removeItem('sofis.checkout.notes.v1');
+    localStorage.removeItem('sofis.checkout.promo.v1');
+    localStorage.removeItem('sofis.checkout.credit.v1');
+  } catch { /* ignore */ }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Runtime helpers
@@ -513,6 +565,8 @@ export function useCheckout() {
         if (!session.url || !session.id) {
           throw new Error('Stripe checkout URL missing.');
         }
+
+        writeCheckoutLock(session.id);
 
         return {
           ok: true,

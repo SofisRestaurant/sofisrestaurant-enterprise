@@ -134,8 +134,8 @@ function isCartModifier(value: unknown): value is CartModifier {
   const groupOk = value.groupId === undefined || typeof value.groupId === 'string';
   const nameOk = value.name === undefined || typeof value.name === 'string';
   const priceOk =
-    value.priceAdjustmentCents === undefined ||
-    (typeof value.priceAdjustmentCents === 'number' && Number.isFinite(value.priceAdjustmentCents));
+    value.priceAdjustment === undefined ||
+    (typeof value.priceAdjustment === 'number' && Number.isFinite(value.priceAdjustment));
 
   return idOk && groupOk && nameOk && priceOk;
 }
