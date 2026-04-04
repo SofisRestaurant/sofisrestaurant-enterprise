@@ -31,7 +31,8 @@ import type {
   OrderLocated,
   PreparedCartState,
 } from "./types.ts";
-import type { OrderType } from "../_shared/pricing.ts";
+import type { OrderType, PricingSnapshot } from "../_shared/pricing.ts";
+import { buildStoredOrderCartItemsFromSnapshot } from "../_shared/order-cart-items-builder.ts";
 import {
   normCurrency,
   snapshotNumber,
@@ -39,34 +40,22 @@ import {
   snapshotStringArray,
   toJson,
 } from "./utils.ts";
-import type { PricingSnapshot, PricingSnapshotLine } from "../_shared/pricing.ts";
 
 // ─── Valid values (kept in sync with DB CHECK constraint) ─────────────────────
 
 const VALID_ORDER_TYPES = new Set<OrderType>(['pickup', 'delivery', 'dine_in'] as const);
 
 // ─── Order state validation factory ──────────────────────────────────────────
-// Single checkpoint between prepareAuthoritativeCartState and the DB write.
-// If this throws, the webhook returns 500 → Stripe retries.
-// This is intentional: bad state should retry, not insert silently.
 
 type ValidatedOrderState = {
-  orderType:  OrderType;  // fulfillment — 'pickup' | 'delivery' | 'dine_in'
-  totalCents: number;
-  cart:       PreparedCartState['cart'];
-  snapshot: PricingSnapshot;
+  orderType:   OrderType;
+  totalCents:  number;
+  cart:        PreparedCartState['cart'];
+  snapshot:    PricingSnapshot;
   pricingHash: string;
-  currency:   string;
+  currency:    string;
   consumedNow: boolean;
 };
-type SnapshotGuardLine = {
-  menuItemId: string;
-  name: string;
-  quantity: number;
-  baseUnitPriceCents: number;
-  finalPretaxLineTotalCents: number;
-};
-
 
 function assertPricingSnapshot(
   snapshot: unknown,
@@ -86,12 +75,9 @@ function buildValidatedOrderState(
   prepared: PreparedCartState,
   requestId: string,
 ): ValidatedOrderState {
-  
   assertPricingSnapshot(prepared.snapshot, requestId);
   const { orderType } = prepared;
 
-  // Runtime guard — TypeScript types are erased at runtime.
-  // Values come from external Stripe metadata and must be validated at this boundary.
   if (!VALID_ORDER_TYPES.has(orderType)) {
     throw new Error(
       `[${requestId}] buildValidatedOrderState: invalid orderType` +
@@ -99,7 +85,7 @@ function buildValidatedOrderState(
     );
   }
 
- const totalCents = prepared.snapshot.totalCents;
+  const totalCents = prepared.snapshot.totalCents;
   if (totalCents <= 0) {
     throw new Error(
       `[${requestId}] buildValidatedOrderState: totalCents ${totalCents} is not positive`,
@@ -155,14 +141,14 @@ function buildOrderCreationPricing(
 // ─── Metadata ─────────────────────────────────────────────────────────────────
 
 function buildOrderMetadata(args: {
-  requestId:    string;
-  session:      Stripe.Checkout.Session;
-  cartId:       string;
-  orderType:    OrderType;   // fulfillment type
-  pricingHash:  string;
-  consumedNow:  boolean;
-  pricing:      OrderCreationPricing;
-  snapshot:     unknown;
+  requestId:   string;
+  session:     Stripe.Checkout.Session;
+  cartId:      string;
+  orderType:   OrderType;
+  pricingHash: string;
+  consumedNow: boolean;
+  pricing:     OrderCreationPricing;
+  snapshot:    unknown;
 }): ReturnType<typeof toJson> {
   const {
     requestId, session, cartId, orderType,
@@ -174,22 +160,21 @@ function buildOrderMetadata(args: {
     : session.payment_intent?.id ?? null;
 
   return toJson({
-    source:                    "stripe-webhook",
-    request_id:                requestId,
-    stripe_api_version:        STRIPE_API_VERSION,
-    pending_cart_id:           cartId,
-    stripe_session_id:         session.id,
-    stripe_payment_intent_id:  paymentIntentId,
-    stripe_session_status:     session.status ?? null,
-    stripe_payment_status:     session.payment_status ?? null,
-    // ✅ Both axes stored in metadata for analytics and debugging
-    order_category:            "food",      // WHAT was sold (hardcoded — all current orders)
-    fulfillment_type:          orderType,   // HOW delivered ('pickup' | 'delivery' | 'dine_in')
-    promo_id:                  snapshotString(snapshot, "promoId"),
-    credit_id:                 snapshotString(snapshot, "creditId"),
-    applied_campaign_ids:      snapshotStringArray(snapshot, "appliedCampaignIds"),
-    pricing_hash:              pricingHash,
-    pricing_snapshot:          toJson(snapshot),
+    source:                   "stripe-webhook",
+    request_id:               requestId,
+    stripe_api_version:       STRIPE_API_VERSION,
+    pending_cart_id:          cartId,
+    stripe_session_id:        session.id,
+    stripe_payment_intent_id: paymentIntentId,
+    stripe_session_status:    session.status ?? null,
+    stripe_payment_status:    session.payment_status ?? null,
+    order_category:           "food",
+    fulfillment_type:         orderType,
+    promo_id:                 snapshotString(snapshot, "promoId"),
+    credit_id:                snapshotString(snapshot, "creditId"),
+    applied_campaign_ids:     snapshotStringArray(snapshot, "appliedCampaignIds"),
+    pricing_hash:             pricingHash,
+    pricing_snapshot:         toJson(snapshot),
     pricing_summary: toJson({
       subtotalCents:         pricing.subtotalCents,
       promoDiscountCents:    pricing.promoDiscountCents,
@@ -199,17 +184,91 @@ function buildOrderMetadata(args: {
         pricing.promoDiscountCents +
         pricing.campaignDiscountCents +
         pricing.creditCents,
-      taxCents:              pricing.taxCents,
-      deliveryFeeCents:      pricing.deliveryFeeCents,
-      serviceFeeCents:       pricing.serviceFeeCents,
-      tipCents:              pricing.tipCents,
-      totalCents:            pricing.totalCents,
-      currency:              pricing.currency,
+      taxCents:          pricing.taxCents,
+      deliveryFeeCents:  pricing.deliveryFeeCents,
+      serviceFeeCents:   pricing.serviceFeeCents,
+      tipCents:          pricing.tipCents,
+      totalCents:        pricing.totalCents,
+      currency:          pricing.currency,
     }),
-    stripe_amount_total:       pricing.totalCents,
-    stripe_currency:           pricing.currency,
+    stripe_amount_total:      pricing.totalCents,
+    stripe_currency:          pricing.currency,
     pending_cart_consumed_now: consumedNow,
   });
+}
+
+// ─── Order items ──────────────────────────────────────────────────────────────
+// Inserts order_items rows from the authoritative pricing snapshot.
+// This is the ONLY correct source — never use cart.items or raw session metadata.
+// Best-effort: failures are logged but do not block order creation.
+
+async function insertOrderItemsFromSnapshot(args: {
+  db:          DbClient;
+  orderId:     string;
+  snapshot:    PricingSnapshot;
+  pricingHash: string;
+  requestId:   string;
+}): Promise<void> {
+  const { db, orderId, snapshot, pricingHash, requestId } = args;
+
+  try {
+    // Idempotency check — do not double-insert on webhook retries
+    const { data: existing } = await db
+      .from("order_items")
+      .select("id")
+      .eq("order_id", orderId)
+      .limit(1)
+      .maybeSingle();
+
+    if (existing?.id) return;
+
+    const builtItems = buildStoredOrderCartItemsFromSnapshot(snapshot, pricingHash);
+
+    if (builtItems.length === 0) {
+      log("warn", "webhook_order_items_empty", {
+        requestId,
+        orderId: prefix(orderId),
+      });
+      return;
+    }
+
+    const rows = builtItems.map((item, index) => ({
+      order_id:         orderId,
+      line_index:       index,
+      menu_item_id:     item.menuItemId,
+      name:             item.name,
+      quantity:         item.quantity,
+      unit_price_cents: item.unitPriceCents,
+      line_total_cents: item.lineTotalCents,
+      modifiers:        item.modifiers as unknown as import("../_shared/database.types.ts").Json,
+      notes:            item.notes,
+      pricing_hash:     item.pricingHash,
+    }));
+
+    const { error } = await db.from("order_items").insert(rows);
+
+    if (error !== null) {
+      log("warn", "webhook_order_items_insert_failed", {
+        requestId,
+        orderId: prefix(orderId),
+        code:    error.code ?? null,
+        message: error.message,
+      });
+      return;
+    }
+
+    log("info", "webhook_order_items_inserted", {
+      requestId,
+      orderId: prefix(orderId),
+      count:   rows.length,
+    });
+  } catch (err) {
+    log("warn", "webhook_order_items_crash", {
+      requestId,
+      orderId: prefix(orderId),
+      error:   err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -233,12 +292,10 @@ export async function createOrderFromSession(args: {
     return null;
   }
 
-  // Validate through factory — throws on invalid state.
-  // Caller lets this propagate as 500 → Stripe retries. Do not catch here.
   const state: ValidatedOrderState = buildValidatedOrderState(prepared, requestId);
 
   const {
-    orderType,  // fulfillment ('pickup' | 'delivery' | 'dine_in')
+    orderType,
     cart,
     snapshot,
     pricingHash,
@@ -265,28 +322,23 @@ export async function createOrderFromSession(args: {
   const insert = {
     stripe_session_id:         session.id,
     stripe_payment_intent_id:  paymentIntentId,
-    // ✅ order_type  = WHAT was sold ('food' | 'merch') — NOT the fulfillment method
     order_type:                "food",
-    // ✅ fulfillment_type = HOW it is delivered — this is what orderType actually holds
     fulfillment_type:          orderType,
     customer_uid:              userId,
     customer_email:            session.customer_details?.email ?? null,
     customer_name:             session.customer_details?.name ?? null,
     customer_phone:            session.customer_details?.phone ?? null,
-    // Stripe-named columns (amount_*)
     amount_subtotal:           pricing.subtotalCents,
     amount_tax:                pricing.taxCents,
     amount_shipping:           pricing.deliveryFeeCents,
     amount_total:              pricing.totalCents,
-    // ✅ Cents-suffixed columns — must be set to match finalize-order schema.
-    // These are the same values. The DB has both column families.
-    // Leaving these 0 causes dashboard/tax/analytics queries to show $0.
     subtotal_cents:            pricing.subtotalCents,
     tax_cents:                 pricing.taxCents,
     tip_cents:                 pricing.tipCents,
-    discount_cents:            pricing.promoDiscountCents +
-                               pricing.campaignDiscountCents +
-                               pricing.creditCents,
+    discount_cents:
+      pricing.promoDiscountCents +
+      pricing.campaignDiscountCents +
+      pricing.creditCents,
     delivery_fee_cents:        pricing.deliveryFeeCents,
     service_fee_cents:         pricing.serviceFeeCents,
     total_cents:               pricing.totalCents,
@@ -305,7 +357,7 @@ export async function createOrderFromSession(args: {
     .returns<OrderLocated[]>()
     .maybeSingle();
 
-  // 23505 = unique_violation (stripe_session_id UNIQUE) → Stripe retry hit existing order
+  // 23505 = unique_violation (stripe_session_id UNIQUE) → already exists
   if (insertError !== null && insertError.code !== "23505") {
     log("error", "webhook_order_insert_failed", {
       requestId,
@@ -322,24 +374,32 @@ export async function createOrderFromSession(args: {
   }
 
   if (inserted !== null) {
-    
     log("info", "webhook_order_created", {
       requestId,
-      orderId:          prefix(inserted.id),
-      sessionId:        prefix(session.id),
-      orderCategory:    "food",
-      fulfillmentType:  orderType,
-      amountTotal:      pricing.totalCents,
-      subtotalCents:    pricing.subtotalCents,
-      taxCents:         pricing.taxCents,
-      deliveryFeeCents: pricing.deliveryFeeCents,
+      orderId:         prefix(inserted.id),
+      sessionId:       prefix(session.id),
+      orderCategory:   "food",
+      fulfillmentType: orderType,
+      amountTotal:     pricing.totalCents,
+      subtotalCents:   pricing.subtotalCents,
+      taxCents:        pricing.taxCents,
       consumedNow,
+    });
+
+    // ✅ Insert order_items from pricing snapshot — the ONLY correct source.
+    // Best-effort: does not throw. Idempotent: skips if rows already exist.
+    await insertOrderItemsFromSnapshot({
+      db,
+      orderId:     inserted.id,
+      snapshot,
+      pricingHash,
+      requestId,
     });
 
     return inserted;
   }
 
-  // Stripe retry path — return the already-created order
+  // Stripe retry path — order already exists, return it
   const existing = await findOrderBySessionId(db, session.id);
 
   if (existing !== null) {
@@ -347,6 +407,15 @@ export async function createOrderFromSession(args: {
       requestId,
       orderId:   prefix(existing.id),
       sessionId: prefix(session.id),
+    });
+
+    // Idempotent: insertOrderItemsFromSnapshot skips if rows already exist
+    await insertOrderItemsFromSnapshot({
+      db,
+      orderId:     existing.id,
+      snapshot,
+      pricingHash,
+      requestId,
     });
   }
 

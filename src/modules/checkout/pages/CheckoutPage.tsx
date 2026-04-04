@@ -30,7 +30,15 @@ import { useNavigate, Link } from 'react-router-dom';
 
 import CheckoutButton from '@/modules/checkout/components/CheckoutButton';
 import { useCart } from '@/modules/cart/hooks/useCart';
-import { getAvailableCredits, type UserCredit } from '@/modules/checkout/api/checkout.api';
+import {
+  getAvailableCredits,
+  getLoyaltyProfile,
+  calculatePointsPreview,
+  type UserCredit,
+  type LoyaltyProfile,
+  type LoyaltyPreview,
+} from '@/modules/checkout/api/checkout.api';
+import { useUserContext } from '@/contexts/useUserContext';
 
 import { computeLineTotalCents, cartItemKey } from '@/modules/cart/types/cart.types';
 import type { CartItem } from '@/modules/cart/types/cart.types';
@@ -155,6 +163,7 @@ function cx(...classes: Array<string | false | null | undefined>) {
 export default function Checkout() {
   const navigate = useNavigate();
   const { items } = useCart();
+  const { isAuthenticated } = useUserContext();
 
   const hasItems = Array.isArray(items) && items.length > 0;
 
@@ -171,7 +180,6 @@ export default function Checkout() {
   const estimatedTotalCents = useMemo(() => {
     return subtotalCents + estimatedTaxCents;
   }, [subtotalCents, estimatedTaxCents]);
-
 
   const itemCount = useMemo(() => {
     if (!hasItems) return 0;
@@ -245,6 +253,31 @@ export default function Checkout() {
   });
   const [creditsLoading, setCreditsLoading] = useState(true);
   const [creditsError, setCreditsError] = useState<string | null>(null);
+
+  // ── Loyalty points preview ─────────────────────────────────────────────────
+  const [loyaltyProfile, setLoyaltyProfile] = useState<LoyaltyProfile | null>(null);
+  const [loyaltyPreview, setLoyaltyPreview] = useState<LoyaltyPreview | null>(null);
+
+  // Load loyalty profile + compute points preview
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let alive = true;
+    void getLoyaltyProfile().then((profile) => {
+      if (!alive) return;
+      setLoyaltyProfile(profile);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (subtotalCents <= 0) {
+      setLoyaltyPreview(null);
+      return;
+    }
+    setLoyaltyPreview(calculatePointsPreview(subtotalCents, loyaltyProfile));
+  }, [subtotalCents, loyaltyProfile]);
 
   const loadCredits = useCallback(async () => {
     setCreditsLoading(true);
@@ -381,21 +414,34 @@ export default function Checkout() {
                 <div className="mt-2 grid grid-cols-3 gap-2">
                   {(['pickup', 'delivery', 'dine_in'] as const).map((t) => {
                     const active = orderDetails.orderType === t;
+                    const comingSoon = t === 'delivery' || t === 'dine_in';
                     return (
-                      <button
-                        key={t}
-                        type="button"
-                        onClick={() => setOrderDetails((s) => ({ ...s, orderType: t }))}
-                        className={cx(
-                          'rounded-xl border px-3 py-2 text-sm font-semibold transition',
-                          active
-                            ? 'border-gray-900 bg-gray-900 text-white'
-                            : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50',
-                        )}
-                        aria-pressed={active}
-                      >
-                        {formatOrderTypeLabel(t)}
-                      </button>
+                      <div key={t} className="relative">
+                        <button
+                          type="button"
+                          disabled={comingSoon}
+                          onClick={() =>
+                            !comingSoon && setOrderDetails((s) => ({ ...s, orderType: t }))
+                          }
+                          className={cx(
+                            'w-full rounded-xl border px-3 py-2 text-sm font-semibold transition',
+                            comingSoon
+                              ? 'cursor-not-allowed border-gray-100 bg-gray-50 text-gray-300'
+                              : active
+                                ? 'border-gray-900 bg-gray-900 text-white'
+                                : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50',
+                          )}
+                          aria-pressed={active}
+                          aria-disabled={comingSoon}
+                        >
+                          {formatOrderTypeLabel(t)}
+                        </button>
+                        {comingSoon ? (
+                          <span className="pointer-events-none absolute -top-2 left-1/2 -translate-x-1/2 rounded-full bg-amber-400 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white shadow-sm">
+                            Soon
+                          </span>
+                        ) : null}
+                      </div>
                     );
                   })}
                 </div>
@@ -688,6 +734,49 @@ export default function Checkout() {
               )}
             </div>
           </section>
+
+          {/* Loyalty Points Preview */}
+          {loyaltyPreview !== null && loyaltyPreview.pointsToEarn > 0 ? (
+            <section className="overflow-hidden rounded-2xl border border-amber-200 bg-amber-50 shadow-sm">
+              <div className="px-6 py-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">✨</span>
+                    <h2 className="font-semibold text-amber-900">Loyalty Rewards</h2>
+                  </div>
+                  <span className="rounded-full bg-amber-400 px-3 py-1 text-sm font-bold text-white tabular-nums">
+                    +{loyaltyPreview.pointsToEarn} pts
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-amber-700">
+                  You'll earn{' '}
+                  <span className="font-semibold">{loyaltyPreview.pointsToEarn} points</span> on
+                  this order.{' '}
+                  {loyaltyPreview.willLevelUp ? (
+                    <span className="font-semibold">🎉 You'll level up to the next tier!</span>
+                  ) : loyaltyPreview.pointsToNextTier !== null ? (
+                    <>{loyaltyPreview.pointsToNextTier} more points to next tier.</>
+                  ) : (
+                    <>You're at the top tier — maximum rewards!</>
+                  )}
+                </p>
+                {loyaltyPreview.streakMultiplier > 1 || loyaltyPreview.tierMultiplier > 1 ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {loyaltyPreview.tierMultiplier > 1 ? (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                        {loyaltyPreview.tier} ×{loyaltyPreview.tierMultiplier} tier bonus
+                      </span>
+                    ) : null}
+                    {loyaltyPreview.streakMultiplier > 1 ? (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                        🔥 ×{loyaltyPreview.streakMultiplier} streak bonus
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </section>
+          ) : null}
 
           {/* Payment */}
           <section className="space-y-4">
