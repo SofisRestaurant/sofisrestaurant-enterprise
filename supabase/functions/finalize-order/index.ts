@@ -1,35 +1,3 @@
-// =============================================================================
-// PATH: supabase/functions/finalize-order/index.ts
-// =============================================================================
-// finalize-order — Production Hardened (2026, fully upgraded)
-//
-// Responsibilities
-//   1. Enforce CORS (fail-closed when Origin is present and not allowlisted)
-//   2. Require JWT auth and verify customer ownership
-//   3. Retrieve Stripe Checkout Session and verify payment success
-//   4. Locate pending_carts row via Stripe metadata, then fallback by stripe_session_id
-//   5. Rebuild / validate authoritative pricing snapshot and pricing hash
-//   6. Repair pending cart snapshot/hash if missing or invalid
-//   7. Atomically consume pending cart (consumed_at) with race-safe semantics
-//   8. Insert orders idempotently using stripe_session_id uniqueness
-//   9. Backfill loyalty, promo redemption, growth events, and credit usage best-effort
-//  10. Return a stable, ownership-checked success payload for OrderSuccess.tsx
-//
-// Security
-//   - Never trusts client totals
-//   - Requires auth, verifies Stripe metadata owner matches auth user
-//   - Validates Stripe total + currency against authoritative pricing snapshot
-//   - Never writes empty pricing snapshots
-//   - Race-safe under retries and concurrent finalize calls
-//   - Does not log secrets, raw JWTs, or full Stripe ids
-//
-// Important DB alignment
-//   - orders.order_type is constrained to 'food' | 'merch' in your schema.
-//   - Service type ('pickup' | 'delivery' | 'dine_in') is stored in metadata,
-//     NOT in orders.order_type.
-//   - net_amount_cents is a generated column and MUST NOT be inserted/updated.
-// =============================================================================
-
 import Stripe from 'stripe';
 import { authenticate, AuthError } from '../_shared/auth.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
@@ -41,6 +9,7 @@ import {
   type OrderType,
   type PricingSnapshot,
 } from '../_shared/pricing.ts';
+import { buildStoredOrderCartItemsFromSnapshot } from '../_shared/order-cart-items-builder.ts';
 
 type JsonRecord = Record<string, unknown>;
 type Db = Database;
@@ -58,6 +27,19 @@ type PendingCartUpdate = Db['public']['Tables']['pending_carts']['Update'] & {
 type OrderInsert = Db['public']['Tables']['orders']['Insert'] & {
   order_type?: string | null;
   metadata?: Json;
+};
+
+type OrderItemInsert = {
+  order_id: string;
+  line_index: number;
+  menu_item_id: string;
+  name: string;
+  quantity: number;
+  unit_price_cents: number;
+  line_total_cents: number;
+  modifiers: Json;
+  notes: string | null;
+  pricing_hash: string | null;
 };
 
 type PendingCartRecord = {
@@ -449,6 +431,72 @@ async function checkRateLimit(
 // ─────────────────────────────────────────────────────────────────────────────
 // Side effects (best effort)
 // ─────────────────────────────────────────────────────────────────────────────
+
+async function insertOrderItemsBestEffort(args: {
+  db: DbClient;
+  requestId: string;
+  orderId: string;
+  snapshot: PricingSnapshot;
+  pricingHash: string;
+}): Promise<void> {
+  const { db, requestId, orderId, snapshot, pricingHash } = args;
+
+  try {
+    // Check if order_items already exist for this order (idempotent)
+    const { data: existing } = await db
+      .from('order_items')
+      .select('id')
+      .eq('order_id', orderId)
+      .limit(1)
+      .maybeSingle();
+
+    if (existing?.id) return;
+
+    const builtItems = buildStoredOrderCartItemsFromSnapshot(snapshot, pricingHash);
+
+    if (!builtItems.length) {
+      log('warn', 'order_items_empty_snapshot', { requestId, orderId: prefix(orderId) });
+      return;
+    }
+
+    const rows: OrderItemInsert[] = builtItems.map((item, index) => ({
+      order_id: orderId,
+      line_index: index,
+      menu_item_id: item.menuItemId,
+      name: item.name,
+      quantity: item.quantity,
+      unit_price_cents: item.unitPriceCents,
+      line_total_cents: item.lineTotalCents,
+      modifiers: item.modifiers as unknown as Json,
+      notes: item.notes,
+      pricing_hash: item.pricingHash,
+    }));
+
+    const { error } = await db.from('order_items').insert(rows);
+
+    if (error) {
+      log('warn', 'order_items_insert_failed', {
+        requestId,
+        orderId: prefix(orderId),
+        code: error.code ?? null,
+        message: error.message,
+      });
+      return;
+    }
+
+    log('info', 'order_items_inserted', {
+      requestId,
+      orderId: prefix(orderId),
+      count: rows.length,
+    });
+  } catch (err) {
+    log('error', 'order_items_insert_crash', {
+      requestId,
+      orderId: prefix(orderId),
+      error: asErrorMessage(err),
+    });
+  }
+}
 
 async function backfillLoyaltyV2IfMissing(args: {
   db: DbClient;
@@ -1230,30 +1278,16 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const message = error instanceof Error ? error.message : 'INVALID_JSON_BODY';
 
     if (message === 'UNSUPPORTED_CONTENT_TYPE') {
-      return errorResponse(
-        cors,
-        requestId,
-        'UNSUPPORTED_CONTENT_TYPE',
-        'Content-Type must be application/json.',
-        415,
-      );
+      return errorResponse(cors, requestId, 'UNSUPPORTED_CONTENT_TYPE', 'Content-Type must be application/json.', 415);
     }
-
     if (message === 'BODY_TOO_LARGE') {
       return errorResponse(cors, requestId, 'BODY_TOO_LARGE', 'Request body is too large.', 413);
     }
-
     if (message === 'EMPTY_BODY') {
       return errorResponse(cors, requestId, 'EMPTY_BODY', 'Request body is required.', 400);
     }
 
-    return errorResponse(
-      cors,
-      requestId,
-      'INVALID_JSON_BODY',
-      'Request body must be valid JSON.',
-      400,
-    );
+    return errorResponse(cors, requestId, 'INVALID_JSON_BODY', 'Request body must be valid JSON.', 400);
   }
 
   let sessionId: string;
@@ -1336,13 +1370,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     });
 
     if (!pendingCart) {
-      return errorResponse(
-        cors,
-        requestId,
-        'PENDING_CART_NOT_FOUND',
-        'Pending cart not found.',
-        404,
-      );
+      return errorResponse(cors, requestId, 'PENDING_CART_NOT_FOUND', 'Pending cart not found.', 404);
     }
 
     const { snapshot, pricingHash, repaired } = await buildAuthoritativeSnapshot({
@@ -1352,32 +1380,16 @@ Deno.serve(async (req: Request): Promise<Response> => {
       stripeSession,
     });
 
-    await repairPendingCartIfNeeded({
-      db,
-      requestId,
-      pendingCart,
-      snapshot,
-      pricingHash,
-      repaired,
-    });
+    await repairPendingCartIfNeeded({ db, requestId, pendingCart, snapshot, pricingHash, repaired });
 
-    validatePendingCartAgainstSnapshot({
-      pendingCart,
-      snapshot,
-    });
+    validatePendingCartAgainstSnapshot({ pendingCart, snapshot });
 
     const { stripeAmountTotal, stripeCurrency, paymentIntentId } = validateStripeAgainstSnapshot({
       stripeSession,
       snapshot,
     });
 
-    const consumedNow = await consumePendingCart({
-      db,
-      pendingCart,
-      sessionId,
-      snapshot,
-      pricingHash,
-    });
+    const consumedNow = await consumePendingCart({ db, pendingCart, sessionId, snapshot, pricingHash });
 
     const orderMetadata = buildOrderMetadata({
       requestId,
@@ -1405,6 +1417,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
     });
 
     await Promise.all([
+      // ✅ INSERT order_items from pricing snapshot — was missing, caused Unknown Item + 0 price
+      insertOrderItemsBestEffort({
+        db,
+        requestId,
+        orderId: finalOrder.id,
+        snapshot,
+        pricingHash,
+      }),
       backfillLoyaltyV2IfMissing({
         db,
         requestId,
@@ -1459,123 +1479,43 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const message = asErrorMessage(error);
 
     if (message.startsWith('PENDING_CART_LOOKUP_FAILED')) {
-      return errorResponse(
-        cors,
-        requestId,
-        'PENDING_CART_LOOKUP_FAILED',
-        'Pending cart lookup failed.',
-        503,
-      );
+      return errorResponse(cors, requestId, 'PENDING_CART_LOOKUP_FAILED', 'Pending cart lookup failed.', 503);
     }
-
     if (message === 'PENDING_CART_INVALID') {
-      return errorResponse(
-        cors,
-        requestId,
-        'PENDING_CART_INVALID',
-        'Pending cart is invalid.',
-        500,
-      );
+      return errorResponse(cors, requestId, 'PENDING_CART_INVALID', 'Pending cart is invalid.', 500);
     }
-
     if (message === 'UNAUTHORIZED') {
       return errorResponse(cors, requestId, 'UNAUTHORIZED', 'Unauthorized.', 401);
     }
-
     if (message === 'PRICING_SNAPSHOT_INVALID') {
-      return errorResponse(
-        cors,
-        requestId,
-        'PRICING_SNAPSHOT_INVALID',
-        'Pricing snapshot is invalid.',
-        500,
-      );
+      return errorResponse(cors, requestId, 'PRICING_SNAPSHOT_INVALID', 'Pricing snapshot is invalid.', 500);
     }
-
     if (message === 'PRICING_HASH_INVALID') {
-      return errorResponse(
-        cors,
-        requestId,
-        'PRICING_HASH_INVALID',
-        'Pricing hash is invalid.',
-        500,
-      );
+      return errorResponse(cors, requestId, 'PRICING_HASH_INVALID', 'Pricing hash is invalid.', 500);
     }
-
     if (message === 'PRICING_HASH_MISMATCH') {
-      return errorResponse(
-        cors,
-        requestId,
-        'PRICING_HASH_MISMATCH',
-        'Pricing snapshot failed verification.',
-        409,
-      );
+      return errorResponse(cors, requestId, 'PRICING_HASH_MISMATCH', 'Pricing snapshot failed verification.', 409);
     }
-
     if (message.startsWith('PENDING_CART_REPAIR_FAILED')) {
-      return errorResponse(
-        cors,
-        requestId,
-        'PENDING_CART_REPAIR_FAILED',
-        'Failed to repair pending cart pricing snapshot.',
-        500,
-      );
+      return errorResponse(cors, requestId, 'PENDING_CART_REPAIR_FAILED', 'Failed to repair pending cart pricing snapshot.', 500);
     }
-
     if (message === 'PENDING_CART_TOTAL_MISMATCH') {
-      return errorResponse(
-        cors,
-        requestId,
-        'PENDING_CART_TOTAL_MISMATCH',
-        'Pending cart totals do not match snapshot.',
-        409,
-      );
+      return errorResponse(cors, requestId, 'PENDING_CART_TOTAL_MISMATCH', 'Pending cart totals do not match snapshot.', 409);
     }
-
     if (message === 'TOTAL_MISMATCH') {
-      return errorResponse(
-        cors,
-        requestId,
-        'TOTAL_MISMATCH',
-        'Charged total does not match authoritative pricing.',
-        409,
-      );
+      return errorResponse(cors, requestId, 'TOTAL_MISMATCH', 'Charged total does not match authoritative pricing.', 409);
     }
-
     if (message === 'CURRENCY_MISMATCH') {
-      return errorResponse(
-        cors,
-        requestId,
-        'CURRENCY_MISMATCH',
-        'Charged currency does not match authoritative pricing.',
-        409,
-      );
+      return errorResponse(cors, requestId, 'CURRENCY_MISMATCH', 'Charged currency does not match authoritative pricing.', 409);
     }
-
     if (message.startsWith('PENDING_CART_CONSUME_FAILED')) {
-      return errorResponse(
-        cors,
-        requestId,
-        'PENDING_CART_CONSUME_FAILED',
-        'Failed to consume pending cart.',
-        500,
-      );
+      return errorResponse(cors, requestId, 'PENDING_CART_CONSUME_FAILED', 'Failed to consume pending cart.', 500);
     }
-
     if (message === 'ORDER_CREATE_FAILED') {
-      return errorResponse(
-        cors,
-        requestId,
-        'ORDER_CREATE_FAILED',
-        'Failed to create order.',
-        500,
-      );
+      return errorResponse(cors, requestId, 'ORDER_CREATE_FAILED', 'Failed to create order.', 500);
     }
 
-    log('error', 'unhandled_exception', {
-      requestId,
-      error: message,
-    });
+    log('error', 'unhandled_exception', { requestId, error: message });
 
     return errorResponse(cors, requestId, 'INTERNAL', 'Internal server error.', 500);
   }
