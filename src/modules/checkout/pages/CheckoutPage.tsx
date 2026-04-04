@@ -425,9 +425,16 @@ export default function Checkout() {
                             comingSoon
                               ? 'cursor-not-allowed border-gray-100 bg-gray-50 text-gray-300 select-none'
                               : active
-                                ? 'border-gray-900 bg-gray-900 text-white shadow-sm'
+                                ? 'border-gray-900 text-white'
                                 : 'border-gray-200 bg-white text-gray-900 hover:border-gray-300 hover:bg-gray-50',
                           )}
+                          style={
+                            comingSoon
+                              ? {}
+                              : active
+                                ? { backgroundColor: '#1c1915', color: '#ffffff' }
+                                : {}
+                          }
                           aria-pressed={active}
                           aria-disabled={comingSoon}
                         >
@@ -435,10 +442,10 @@ export default function Checkout() {
                         </button>
                         {comingSoon ? (
                           <span
-                            className="pointer-events-none absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full px-2 py-px text-[9px] font-bold uppercase tracking-widest text-white shadow-sm"
+                            className="pointer-events-none absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full px-2 py-px text-[9px] font-bold uppercase text-white shadow-sm"
                             style={{ backgroundColor: '#d4af37', letterSpacing: '0.12em' }}
                           >
-                            Coming Soon
+                            Soon
                           </span>
                         ) : null}
                       </div>
@@ -587,7 +594,7 @@ export default function Checkout() {
               </p>
             </div>
 
-            <div className="px-4 py-3 sm:px-6 sm:py-4">
+            <div className="px-6 py-4">
               {promo.applied ? (
                 <div className="flex items-center justify-between rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
                   <div className="flex items-center gap-2">
@@ -701,7 +708,7 @@ export default function Checkout() {
               </div>
             ) : null}
 
-            <div className="px-4 py-3 sm:px-6 sm:py-4">
+            <div className="px-6 py-4">
               {creditsLoading ? (
                 <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
                   Loading credits…

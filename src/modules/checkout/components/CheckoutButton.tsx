@@ -633,13 +633,18 @@ function CheckoutButton({
         aria-disabled={disabled}
         aria-busy={isLoading ? 'true' : 'false'}
         className={cx(
-          'group relative w-full overflow-hidden rounded-xl px-6 py-4 text-white',
-          'bg-linear-to-r from-zinc-900 to-zinc-800 shadow-sm transition',
-          'hover:from-zinc-800 hover:to-zinc-700',
+          'group relative w-full overflow-hidden rounded-xl px-6 py-4 transition',
           'focus:outline-none focus:ring-2 focus:ring-zinc-900/20',
-          'disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:from-zinc-900 disabled:hover:to-zinc-800',
+          'disabled:cursor-not-allowed disabled:opacity-60',
           className,
         )}
+        style={{
+          background: disabled
+            ? 'rgb(161 161 170)'
+            : 'linear-gradient(to right, rgb(24 24 27), rgb(39 39 42))',
+          color: '#ffffff',
+          boxShadow: disabled ? 'none' : '0 1px 3px rgba(0,0,0,0.3)',
+        }}
       >
         {isLoading ? (
           <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/70">
@@ -825,10 +830,14 @@ function CheckoutButton({
                   void doCheckout();
                 }}
                 className={cx(
-                  'w-full rounded-xl bg-zinc-900 px-5 py-3 text-sm font-semibold text-white sm:w-auto',
+                  'w-full rounded-xl px-5 py-3 text-sm font-semibold sm:w-auto',
                   'hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-zinc-900/20',
                   'disabled:cursor-not-allowed disabled:opacity-60',
                 )}
+                style={{
+                  background: disabled ? 'rgb(161 161 170)' : 'rgb(24 24 27)',
+                  color: '#ffffff',
+                }}
               >
                 <span className="inline-flex items-center justify-center gap-2">
                   <ShoppingBag className="h-4 w-4" />
