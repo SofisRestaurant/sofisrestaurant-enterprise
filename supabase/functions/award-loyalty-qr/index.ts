@@ -107,6 +107,21 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+/**
+ * Returns today's date as YYYY-MM-DD in Phoenix local time (America/Phoenix, UTC-7, no DST).
+ * Replaces new Date().toISOString().slice(0, 10) which returns UTC and fires a day
+ * early for evening orders in Arizona.
+ */
+function phoenixTodayString(): string {
+  const PHOENIX_OFFSET_MS = -7 * 60 * 60 * 1000; // UTC-7, no DST
+  const phoenixMs = Date.now() + PHOENIX_OFFSET_MS;
+  const d = new Date(phoenixMs);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function isRecord(v: unknown): v is JsonRecord {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -208,7 +223,7 @@ function getCountry(req: Request): string | null {
 function geoAllowed(req: Request): boolean {
   if (!CONFIG.ENABLE_GEO_GUARD) return true;
   const c = getCountry(req);
-  if (!c) return false; // fail-closed if enabled but header missing
+  if (!c) return false;
   return (CONFIG.ALLOWED_COUNTRIES as readonly string[]).includes(c);
 }
 
@@ -220,14 +235,12 @@ async function requireAdmin(req: Request, svc: SvcClient): Promise<AdminAuth> {
   const token = readBearer(req);
   if (!token) return { ok: false, status: 401, code: 'AUTH_MISSING' };
 
-  // 1) Validate JWT + get userId (server-validated via Supabase)
   const anon = createAnonClient(token);
   const { data, error } = await anon.auth.getUser();
   const userId = data?.user?.id ?? null;
 
   if (error || !userId) return { ok: false, status: 401, code: 'AUTH_INVALID' };
 
-  // 2) Verify admin role (service role, bypasses RLS)
   const { data: profile, error: profErr } = await svc
     .from('profiles')
     .select('role')
@@ -252,10 +265,8 @@ Deno.serve(async (req: Request) => {
   const cors = corsHeaders(req);
   if (!cors) return new Response('Origin not allowed', { status: 403 });
 
-  // Preflight
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
 
-  // Method gate
   if (req.method !== 'POST') {
     return respond(
       cors,
@@ -268,7 +279,6 @@ Deno.serve(async (req: Request) => {
     );
   }
 
-  // Optional geo guard (defense in depth)
   if (!geoAllowed(req)) {
     log('warn', 'geo_blocked', { requestId, country: getCountry(req) });
     return respond(
@@ -278,7 +288,6 @@ Deno.serve(async (req: Request) => {
     );
   }
 
-  // Parse JSON safely
   let body: unknown;
   try {
     body = await readJsonWithLimit(req, CONFIG.MAX_BODY_BYTES);
@@ -359,10 +368,8 @@ Deno.serve(async (req: Request) => {
     );
   }
 
-  // Service role client (single instance per request)
   const svc = createServiceClient();
 
-  // Admin auth
   const auth = await requireAdmin(req, svc);
   if (!auth.ok) {
     const msg = auth.code === 'AUTH_FORBIDDEN' ? 'Forbidden' : 'Unauthorized';
@@ -376,7 +383,6 @@ Deno.serve(async (req: Request) => {
 
   const adminId = auth.adminId;
 
-  // Ensure account exists (clean errors)
   const { data: acct, error: acctErr } = await svc
     .from('loyalty_accounts')
     .select('id')
@@ -413,8 +419,10 @@ Deno.serve(async (req: Request) => {
 
   // Deterministic idempotency:
   // - If scanId exists: perfect idempotency per scan
-  // - Else: bucket by day (prevents accidental rapid double-awards), but scanId is strongly recommended
-  const dayBucket = new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+  // - Else: bucket by Phoenix local day (prevents accidental rapid double-awards).
+  //   Using Phoenix time (UTC-7, no DST) so the day resets at midnight Arizona time,
+  //   not midnight UTC (which would fire 7 hours early for Arizona customers).
+  const dayBucket = phoenixTodayString(); // YYYY-MM-DD in Phoenix local time
   const idempotencyKey = scanId
     ? `qr-award:${scanId}`
     : `qr-award:${adminId}:${accountId}:${amountCents}:${dayBucket}`;
@@ -427,14 +435,11 @@ Deno.serve(async (req: Request) => {
       p_idempotency_key: idempotencyKey,
     };
 
-    // ✅ Append-only safe:
-    // If scanId exists, call 5-arg overload to set reference_id=scanId at INSERT time.
     const { data: awardRaw, error: awardErr } = scanId
       ? await svc.rpc('v2_award_points', { ...rpcArgsBase, p_reference_id: scanId })
       : await svc.rpc('v2_award_points', rpcArgsBase);
 
     if (awardErr) {
-      // Don't leak internals to client
       log('warn', 'v2_award_points_failed', {
         requestId,
         adminId: prefix(adminId),

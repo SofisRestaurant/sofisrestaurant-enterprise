@@ -1354,6 +1354,7 @@ export type Database = {
         Row: {
           active: boolean | null
           created_at: string | null
+          description: string | null
           id: string
           max_selections: number | null
           min_selections: number | null
@@ -1366,6 +1367,7 @@ export type Database = {
         Insert: {
           active?: boolean | null
           created_at?: string | null
+          description?: string | null
           id?: string
           max_selections?: number | null
           min_selections?: number | null
@@ -1378,6 +1380,7 @@ export type Database = {
         Update: {
           active?: boolean | null
           created_at?: string | null
+          description?: string | null
           id?: string
           max_selections?: number | null
           min_selections?: number | null

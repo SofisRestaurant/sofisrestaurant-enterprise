@@ -1,16 +1,6 @@
-// src/features/checkout/checkout.api.ts
-// =============================================================================
-// CHECKOUT API — ENTERPRISE GRADE (PRODUCTION READY, 2026)
-// =============================================================================
-// Contract:
-// - Frontend NEVER calculates discounts, promo values, tax, or totals.
-// - Frontend ONLY sends: item IDs + quantities + notes/modifiers + pricing_hash
-//   plus optional promo_code + credit_id.
-// - Server (Edge Function create-checkout) returns Stripe session { id, url }.
-// =============================================================================
-
 import { invokeEdge } from '@/lib/supabase/invoke';
 import { supabase } from '@/lib/supabase/supabaseClient';
+import { phoenixTodayString } from '@/lib/utils/businessTime';
 import { LOYALTY_TIERS, TIER_ORDER } from '@/domain/loyalty/tiers';
 import type { LoyaltyTier } from '@/domain/loyalty/tiers';
 import type {
@@ -486,7 +476,8 @@ export function calculatePointsPreview(
     nextTierThreshold !== null ? Math.max(nextTierThreshold - lifetime, 0) : null;
   const willLevelUp = nextTierThreshold !== null && lifetime + pointsToEarn >= nextTierThreshold;
 
-  const today = new Date().toISOString().slice(0, 10);
+  // Phoenix local date — UTC slice(0,10) fires a day early for evening orders.
+  const today = phoenixTodayString();
   const willExtendStreak = profile?.lastOrderDate !== today;
 
   return {
