@@ -1,6 +1,10 @@
 // =============================================================================
 // src/modules/cart/components/CartDrawer.tsx
-// CartDrawer — Production (2026) (Strict TS, no unknown leaks)
+// CartDrawer — Premium Mobile-First (2026)
+// =============================================================================
+// Design direction: Warm, premium, feels like a high-end restaurant not a SaaS.
+// Mobile-first with safe area insets, tactile buttons, loyalty teaser to convert.
+// Buttons use inline styles so they are guaranteed visible regardless of CSS cascade.
 // =============================================================================
 
 import { Fragment, useCallback, useEffect, useMemo } from 'react';
@@ -15,6 +19,10 @@ import CartItem from './CartItem';
 import { CartSummary } from './CartSummary';
 import { Button } from '@/components/ui/Button';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+
 type CartDrawerProps = {
   isOpen: boolean;
   onClose: () => void;
@@ -27,7 +35,12 @@ type ComputedCart = {
   subtotalLabel: string;
   hasItems: boolean;
   safeItems: CartItemType[];
+  estimatedPoints: number;
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
 
 function clampInt(n: number, min: number, max: number): number {
   if (!Number.isFinite(n)) return min;
@@ -43,26 +56,33 @@ function formatDollarsFromCents(cents: number): string {
   }).format(safe / 100);
 }
 
+// Points preview: 1 pt per $1 spent (floor). Display-only — server is source of truth.
+// Matches calculatePointsPreview base rate in checkout.api.ts: floor(amountCents / 100)
+function estimateBasePoints(subtotalCents: number): number {
+  return Math.max(Math.floor(subtotalCents / 100), 0);
+}
+
 function isCartItemType(v: unknown): v is CartItemType {
   if (typeof v !== 'object' || v === null) return false;
   const r = v as Record<string, unknown>;
-
-  const hasId = typeof r.menuItemId === 'string' && r.menuItemId.length > 0;
-  const hasName = typeof r.name === 'string';
-  const hasQty = typeof r.quantity === 'number' && Number.isFinite(r.quantity);
-
-  // modifiers is required in your cart.types
-  const mods = r.modifiers;
-  const hasMods = Array.isArray(mods);
-
-  return hasId && hasName && hasQty && hasMods;
+  return (
+    typeof r.menuItemId === 'string' &&
+    r.menuItemId.length > 0 &&
+    typeof r.name === 'string' &&
+    typeof r.quantity === 'number' &&
+    Number.isFinite(r.quantity) &&
+    Array.isArray(r.modifiers)
+  );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Component
+// ─────────────────────────────────────────────────────────────────────────────
 
 export function CartDrawer({ isOpen, onClose }: CartDrawerProps) {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // IMPORTANT: do not let items become unknown[] in this component
   const cart = useCart();
   const items: CartItemType[] = useMemo(() => {
     const raw = cart.items;
@@ -74,7 +94,7 @@ export function CartDrawer({ isOpen, onClose }: CartDrawerProps) {
     typeof cart.itemCount === 'number' && Number.isFinite(cart.itemCount) ? cart.itemCount : 0;
   const clearCart = cart.clearCart;
 
-  // Close drawer on route change (prevents overlay getting “stuck”)
+  // Close on route change — prevents overlay getting stuck
   useEffect(() => {
     if (!isOpen) return;
     onClose();
@@ -82,40 +102,29 @@ export function CartDrawer({ isOpen, onClose }: CartDrawerProps) {
   }, [location.pathname]);
 
   const computed: ComputedCart = useMemo(() => {
-    // Validate minimal shape – we do NOT trust prices, only show them.
     const invalidCount = items.reduce((acc: number, item: CartItemType) => {
       const qty = clampInt(item.quantity, 0, 100);
       return acc + (!item.menuItemId || qty <= 0 ? 1 : 0);
     }, 0);
 
-    // Prefer lineTotalCents (includes modifiers)
     const subtotalCents = items.reduce((sum: number, item: CartItemType) => {
       const qty = Math.max(1, clampInt(item.quantity, 1, 100));
-
-      // lineTotalCents is the best source if present
       const line =
         typeof item.lineTotalCents === 'number' && Number.isFinite(item.lineTotalCents)
           ? Math.max(0, Math.round(item.lineTotalCents))
           : null;
-
       if (line !== null) return sum + line;
-
-      // fallback: unitPriceCents * qty
       const unit =
         typeof item.unitPriceCents === 'number' && Number.isFinite(item.unitPriceCents)
           ? Math.max(0, Math.round(item.unitPriceCents))
           : 0;
-
       return sum + unit * qty;
     }, 0);
 
     const safeCount =
       itemCount > 0
         ? itemCount
-        : items.reduce(
-            (sum: number, item: CartItemType) => sum + clampInt(item.quantity, 0, 100),
-            0,
-          );
+        : items.reduce((sum, item) => sum + clampInt(item.quantity, 0, 100), 0);
 
     return {
       safeCount,
@@ -124,33 +133,29 @@ export function CartDrawer({ isOpen, onClose }: CartDrawerProps) {
       subtotalLabel: formatDollarsFromCents(subtotalCents),
       hasItems: items.length > 0,
       safeItems: items,
+      estimatedPoints: estimateBasePoints(subtotalCents),
     };
   }, [items, itemCount]);
 
   const handleCheckout = useCallback(() => {
     if (!computed.hasItems) return;
-
     if (computed.invalidCount > 0) {
-      console.warn('[CartDrawer] blocked checkout: invalid cart items', {
-        invalidCount: computed.invalidCount,
-      });
       alert('Some items in your cart look invalid. Please remove them and try again.');
       return;
     }
-
     onClose();
     void navigate('/checkout');
   }, [computed.hasItems, computed.invalidCount, navigate, onClose]);
 
   const handleClear = useCallback(() => {
-    const ok = window.confirm('Clear your cart?');
-    if (!ok) return;
+    if (!window.confirm('Clear your cart?')) return;
     clearCart();
   }, [clearCart]);
 
   return (
     <Transition.Root show={isOpen} as={Fragment}>
       <Dialog as="div" className="relative z-50" onClose={onClose}>
+        {/* Backdrop */}
         <Transition.Child
           as={Fragment}
           enter="ease-in-out duration-300"
@@ -160,131 +165,256 @@ export function CartDrawer({ isOpen, onClose }: CartDrawerProps) {
           leaveFrom="opacity-100"
           leaveTo="opacity-0"
         >
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-[1px] transition-opacity" />
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity" />
         </Transition.Child>
-        {/* TEMP: check commit */}
+
+        {/* Drawer */}
         <div className="fixed inset-0 overflow-hidden">
           <div className="absolute inset-0 overflow-hidden">
-            <div className="pointer-events-none fixed inset-y-0 right-0 flex max-w-full pl-10">
+            <div className="pointer-events-none fixed inset-y-0 right-0 flex max-w-full">
               <Transition.Child
                 as={Fragment}
-                enter="transform transition ease-in-out duration-300"
+                enter="transform transition ease-in-out duration-350"
                 enterFrom="translate-x-full"
                 enterTo="translate-x-0"
                 leave="transform transition ease-in-out duration-300"
                 leaveFrom="translate-x-0"
                 leaveTo="translate-x-full"
               >
-                <Dialog.Panel className="pointer-events-auto w-screen max-w-md">
-                  <div className="flex h-full flex-col bg-white shadow-2xl">
-                    {/* Header */}
-                    <div className="flex items-center justify-between border-b border-gray-200 px-4 py-5">
-                      <div className="flex flex-col">
-                        <Dialog.Title className="text-lg font-semibold text-gray-900">
-                          Your Cart ({computed.safeCount})
+                <Dialog.Panel className="pointer-events-auto w-screen max-w-sm sm:max-w-md">
+                  {/*
+                    Full-height flex column. bg-[#faf8f5] = warm cream matching brand.
+                    pb-safe ensures content clears iOS home indicator.
+                  */}
+                  <div
+                    className="flex h-full flex-col shadow-2xl"
+                    style={{ backgroundColor: '#faf8f5' }}
+                  >
+                    {/* ── Header ─────────────────────────────────────────── */}
+                    <div
+                      className="flex shrink-0 items-center justify-between px-5 py-4"
+                      style={{
+                        background: 'linear-gradient(135deg, #1c1915 0%, #2e2a24 100%)',
+                        borderBottom: '1px solid rgba(212,175,55,0.2)',
+                      }}
+                    >
+                      <div>
+                        <Dialog.Title
+                          className="text-base font-semibold text-white"
+                          style={{ fontFamily: 'var(--font-sans, system-ui)' }}
+                        >
+                          Your Order
+                          {computed.safeCount > 0 ? (
+                            <span
+                              className="ml-2 inline-flex items-center justify-center rounded-full px-2 py-0.5 text-xs font-bold"
+                              style={{ backgroundColor: '#d4af37', color: '#1c1915' }}
+                            >
+                              {computed.safeCount}
+                            </span>
+                          ) : null}
                         </Dialog.Title>
-                        {computed.invalidCount > 0 && (
-                          <p className="mt-1 text-xs text-red-600">
-                            Some cart items look invalid — checkout is blocked.
+                        {computed.hasItems ? (
+                          <p className="mt-0.5 text-xs" style={{ color: 'rgba(255,255,255,0.5)' }}>
+                            {computed.safeCount} item{computed.safeCount !== 1 ? 's' : ''} ·{' '}
+                            {computed.subtotalLabel} subtotal
                           </p>
-                        )}
+                        ) : null}
                       </div>
 
                       <button
                         type="button"
-                        className="rounded-md p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-amber-500"
                         onClick={onClose}
+                        className="flex h-9 w-9 items-center justify-center rounded-full transition-colors"
+                        style={{
+                          backgroundColor: 'rgba(255,255,255,0.08)',
+                          color: 'rgba(255,255,255,0.7)',
+                        }}
+                        aria-label="Close cart"
                       >
-                        <span className="sr-only">Close panel</span>
                         <svg
-                          className="h-5 w-5"
-                          fill="none"
+                          width="16"
+                          height="16"
                           viewBox="0 0 24 24"
+                          fill="none"
                           stroke="currentColor"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
                         >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M6 18L18 6M6 6l12 12"
-                          />
+                          <path d="M18 6L6 18M6 6l12 12" />
                         </svg>
                       </button>
                     </div>
 
-                    {/* Items */}
-                    <div className="grow overflow-y-auto px-4">
+                    {/* ── Loyalty teaser banner — only when cart has items ── */}
+                    {computed.hasItems && computed.estimatedPoints > 0 ? (
+                      <div
+                        className="shrink-0 flex items-center justify-between px-5 py-2.5"
+                        style={{
+                          background: 'linear-gradient(90deg, #d4af37 0%, #e8c46a 100%)',
+                        }}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm" aria-hidden="true">
+                            ✨
+                          </span>
+                          <p className="text-xs font-semibold" style={{ color: '#1c1915' }}>
+                            Earn <span className="font-bold">+{computed.estimatedPoints} pts</span>{' '}
+                            on this order
+                          </p>
+                        </div>
+                        <p
+                          className="text-[10px] font-medium"
+                          style={{ color: 'rgba(28,25,21,0.65)' }}
+                        >
+                          $1 = 1 point
+                        </p>
+                      </div>
+                    ) : null}
+
+                    {/* ── Items scroll area ───────────────────────────────── */}
+                    <div className="min-h-0 flex-1 overflow-y-auto">
                       {!computed.hasItems ? (
-                        <div className="flex h-full flex-col items-center justify-center text-center">
-                          <h3 className="mb-2 text-lg font-medium text-gray-900">
+                        /* Empty state */
+                        <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+                          <div
+                            className="mb-4 flex h-16 w-16 items-center justify-center rounded-full"
+                            style={{ backgroundColor: 'rgba(212,175,55,0.1)' }}
+                          >
+                            <svg
+                              width="28"
+                              height="28"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="#d4af37"
+                              strokeWidth="1.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z" />
+                              <line x1="3" y1="6" x2="21" y2="6" />
+                              <path d="M16 10a4 4 0 01-8 0" />
+                            </svg>
+                          </div>
+                          <h3 className="mb-1 text-base font-semibold text-gray-900">
                             Your cart is empty
                           </h3>
-                          <p className="mb-6 text-gray-500">
-                            Add some delicious items to get started!
+                          <p className="mb-6 text-sm text-gray-500">
+                            Add something delicious from our menu.
                           </p>
-
                           <Button onClick={onClose} variant="primary">
-                            Continue Shopping
+                            Browse Menu
                           </Button>
                         </div>
                       ) : (
-                        <div className="divide-y divide-gray-200">
-                          {computed.safeItems.map((item) => (
-                            <CartItem
-                              key={cartItemKey(item.menuItemId, item.modifiers)}
-                              item={item}
-                            />
-                          ))}
+                        /* Item list */
+                        <div>
+                          {computed.invalidCount > 0 ? (
+                            <div className="mx-4 mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5">
+                              <p className="text-xs font-semibold text-red-700">
+                                Some items look invalid — checkout is blocked until resolved.
+                              </p>
+                            </div>
+                          ) : null}
+
+                          <div className="divide-y divide-gray-100 px-2">
+                            {computed.safeItems.map((item) => (
+                              <CartItem
+                                key={cartItemKey(item.menuItemId, item.modifiers)}
+                                item={item}
+                              />
+                            ))}
+                          </div>
+
+                          {/* CartSummary (promos, discounts etc) */}
+                          <div className="px-4 pb-2">
+                            <CartSummary />
+                          </div>
                         </div>
                       )}
                     </div>
 
-                    {/* Footer */}
-                    {computed.hasItems && (
-                      <div className="space-y-4 border-t border-gray-200 px-4 py-5">
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-gray-600">Subtotal</span>
-                          <span className="font-semibold text-gray-900 tabular-nums">
+                    {/* ── Footer — sticky at bottom ───────────────────────── */}
+                    {computed.hasItems ? (
+                      <div
+                        className="shrink-0 px-4 pb-6 pt-4"
+                        style={{
+                          backgroundColor: '#ffffff',
+                          borderTop: '1px solid #ede0ce',
+                          paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))',
+                        }}
+                      >
+                        {/* Subtotal row */}
+                        <div className="mb-3 flex items-baseline justify-between">
+                          <span className="text-sm text-gray-600">Subtotal</span>
+                          <span className="text-base font-bold text-gray-900 tabular-nums">
                             {computed.subtotalLabel}
                           </span>
                         </div>
 
-                        <CartSummary />
+                        {/* Tax disclaimer */}
+                        <p className="mb-4 text-[11px] text-gray-400">
+                          Tax, fees & promos calculated at checkout via Stripe.
+                        </p>
 
+                        {/* Primary CTA — inline styles guarantee visibility */}
                         <button
                           type="button"
                           onClick={handleCheckout}
                           disabled={computed.invalidCount > 0}
+                          aria-disabled={computed.invalidCount > 0}
                           style={{
-                            width: '100%',
-                            padding: '0.875rem 1rem',
-                            fontSize: '1rem',
-                            fontWeight: 600,
-                            color: '#ffffff',
-                            backgroundColor: computed.invalidCount > 0 ? '#d1d5db' : '#f59e0b',
-                            borderRadius: '0.75rem',
-                            border: 'none',
-                            cursor: computed.invalidCount > 0 ? 'not-allowed' : 'pointer',
-                            boxShadow: '0 4px 14px rgb(245 158 11 / 0.4)',
-                            transition: 'background-color 0.2s ease, box-shadow 0.2s ease',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
                             gap: '0.5rem',
+                            width: '100%',
+                            padding: '1rem',
+                            fontSize: '0.9375rem',
+                            fontWeight: 700,
+                            letterSpacing: '0.01em',
+                            color: '#ffffff',
+                            background:
+                              computed.invalidCount > 0
+                                ? '#d1d5db'
+                                : 'linear-gradient(135deg, #1c1915 0%, #3e3830 100%)',
+                            borderRadius: '0.875rem',
+                            border: 'none',
+                            cursor: computed.invalidCount > 0 ? 'not-allowed' : 'pointer',
+                            boxShadow:
+                              computed.invalidCount > 0 ? 'none' : '0 4px 20px rgba(28,25,21,0.35)',
+                            transition: 'all 0.2s ease',
+                            position: 'relative',
+                            overflow: 'hidden',
                           }}
                           onMouseEnter={(e) => {
-                            if (computed.invalidCount === 0) {
-                              (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                                '#d97706';
-                            }
+                            if (computed.invalidCount > 0) return;
+                            (e.currentTarget as HTMLButtonElement).style.background =
+                              'linear-gradient(135deg, #2e2a24 0%, #504840 100%)';
+                            (e.currentTarget as HTMLButtonElement).style.boxShadow =
+                              '0 6px 24px rgba(28,25,21,0.45)';
                           }}
                           onMouseLeave={(e) => {
-                            if (computed.invalidCount === 0) {
-                              (e.currentTarget as HTMLButtonElement).style.backgroundColor =
-                                '#f59e0b';
-                            }
+                            if (computed.invalidCount > 0) return;
+                            (e.currentTarget as HTMLButtonElement).style.background =
+                              'linear-gradient(135deg, #1c1915 0%, #3e3830 100%)';
+                            (e.currentTarget as HTMLButtonElement).style.boxShadow =
+                              '0 4px 20px rgba(28,25,21,0.35)';
                           }}
                         >
+                          {/* Gold shimmer accent */}
+                          <span
+                            aria-hidden="true"
+                            style={{
+                              position: 'absolute',
+                              top: 0,
+                              left: 0,
+                              right: 0,
+                              height: '1px',
+                              background:
+                                'linear-gradient(90deg, transparent, rgba(212,175,55,0.6), transparent)',
+                            }}
+                          />
                           <svg
                             width="18"
                             height="18"
@@ -296,18 +426,33 @@ export function CartDrawer({ isOpen, onClose }: CartDrawerProps) {
                             strokeLinejoin="round"
                             aria-hidden="true"
                           >
-                            <path d="M5 12h14M12 5l7 7-7 7" />
+                            <rect x="2" y="5" width="20" height="14" rx="2" />
+                            <line x1="2" y1="10" x2="22" y2="10" />
                           </svg>
-                          Proceed to Checkout
+                          Review Order & Pay
                         </button>
+
+                        {/* Points earn reminder below CTA */}
+                        {computed.estimatedPoints > 0 ? (
+                          <p className="mt-2.5 text-center text-[11px] text-gray-400">
+                            ✨ You&apos;ll earn{' '}
+                            <span className="font-semibold text-amber-600">
+                              +{computed.estimatedPoints} loyalty pts
+                            </span>{' '}
+                            on this order
+                          </p>
+                        ) : null}
+
+                        {/* Clear cart */}
                         <button
+                          type="button"
                           onClick={handleClear}
-                          className="w-full text-sm text-gray-500 underline decoration-dotted hover:text-gray-700 hover:no-underline"
+                          className="mt-3 w-full text-xs text-gray-400 underline decoration-dotted underline-offset-2 hover:text-gray-600"
                         >
-                          Clear Cart
+                          Clear cart
                         </button>
                       </div>
-                    )}
+                    ) : null}
                   </div>
                 </Dialog.Panel>
               </Transition.Child>

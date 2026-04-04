@@ -181,6 +181,7 @@ export default function Checkout() {
     return subtotalCents + estimatedTaxCents;
   }, [subtotalCents, estimatedTaxCents]);
 
+
   const itemCount = useMemo(() => {
     if (!hasItems) return 0;
     return items.reduce((acc, i) => acc + clampInt(i.quantity, 0, 10_000), 0);
@@ -410,21 +411,37 @@ export default function Checkout() {
                 <div className="mt-2 grid grid-cols-3 gap-2">
                   {(['pickup', 'delivery', 'dine_in'] as const).map((t) => {
                     const active = orderDetails.orderType === t;
+                    const comingSoon = t === 'delivery' || t === 'dine_in';
                     return (
-                      <button
-                        key={t}
-                        type="button"
-                        onClick={() => setOrderDetails((s) => ({ ...s, orderType: t }))}
-                        className={cx(
-                          'rounded-xl border px-3 py-2 text-sm font-semibold transition',
-                          active
-                            ? 'border-gray-900 bg-gray-900 text-white'
-                            : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50',
-                        )}
-                        aria-pressed={active}
-                      >
-                        {formatOrderTypeLabel(t)}
-                      </button>
+                      <div key={t} className="relative">
+                        <button
+                          type="button"
+                          disabled={comingSoon}
+                          onClick={() =>
+                            !comingSoon && setOrderDetails((s) => ({ ...s, orderType: t }))
+                          }
+                          className={cx(
+                            'w-full rounded-xl border px-3 py-2.5 text-sm font-semibold transition',
+                            comingSoon
+                              ? 'cursor-not-allowed border-gray-100 bg-gray-50 text-gray-300 select-none'
+                              : active
+                                ? 'border-gray-900 bg-gray-900 text-white shadow-sm'
+                                : 'border-gray-200 bg-white text-gray-900 hover:border-gray-300 hover:bg-gray-50',
+                          )}
+                          aria-pressed={active}
+                          aria-disabled={comingSoon}
+                        >
+                          {formatOrderTypeLabel(t)}
+                        </button>
+                        {comingSoon ? (
+                          <span
+                            className="pointer-events-none absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full px-2 py-px text-[9px] font-bold uppercase tracking-widest text-white shadow-sm"
+                            style={{ backgroundColor: '#d4af37', letterSpacing: '0.12em' }}
+                          >
+                            Coming Soon
+                          </span>
+                        ) : null}
+                      </div>
                     );
                   })}
                 </div>
@@ -570,7 +587,7 @@ export default function Checkout() {
               </p>
             </div>
 
-            <div className="px-6 py-4">
+            <div className="px-4 py-3 sm:px-6 sm:py-4">
               {promo.applied ? (
                 <div className="flex items-center justify-between rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
                   <div className="flex items-center gap-2">
@@ -684,7 +701,7 @@ export default function Checkout() {
               </div>
             ) : null}
 
-            <div className="px-6 py-4">
+            <div className="px-4 py-3 sm:px-6 sm:py-4">
               {creditsLoading ? (
                 <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
                   Loading credits…

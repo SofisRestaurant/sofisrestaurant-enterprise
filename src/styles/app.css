@@ -1,8 +1,8 @@
-/* ── Tailwind base (preflight) ─────────────────────────────────────────────── */
+/* ── Tailwind base — includes preflight + all utilities ──────────────────── */
+/* NOTE: @import "tailwindcss" already includes everything.                   */
+/* Adding @import "tailwindcss/utilities" a second time breaks the cascade    */
+/* in Tailwind v4 and causes utility classes (gradients, colors) to not apply.*/
 @import "tailwindcss";
-
-/* ── Tailwind utilities (forms, typography handled via tailwind.config.cjs plugins) ── */
-@import "tailwindcss/utilities";
 
 /* ── Project-specific styles ────────────────────────────────────────────────── */
 @import "./fonts.css";
@@ -27,10 +27,9 @@
   }
 
   .btn:hover {
-    background-color: #f97316; /* optional hover effect */
+    background-color: #f97316;
   }
 
-  /* Example extra custom utility */
   .card-shadow {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
     border-radius: 0.5rem;
