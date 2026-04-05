@@ -126,7 +126,6 @@ export function validatePendingCartAgainstSnapshot(args: {
     throw new Error('PENDING_CART_TOTAL_MISMATCH');
   }
 }
-
 export function validateStripeAgainstSnapshot(args: {
   stripeSession: Stripe.Checkout.Session;
   snapshot: PricingSnapshot;
@@ -137,7 +136,15 @@ export function validateStripeAgainstSnapshot(args: {
     typeof stripeSession.amount_total === 'number' ? stripeSession.amount_total : null;
   const stripeCurrency = normalizeCurrency(stripeSession.currency ?? 'usd');
 
-  if (stripeAmountTotal === null || stripeAmountTotal !== snapshot.totalCents) {
+
+  const loyaltyDiscountCents = parseInt(
+    pickString(stripeSession.metadata ?? {}, 'loyalty_discount_cents') ?? '0',
+    10,
+  ) || 0;
+
+  const expectedTotal = snapshot.totalCents - loyaltyDiscountCents;
+
+  if (stripeAmountTotal === null || stripeAmountTotal !== expectedTotal) {
     throw new Error('TOTAL_MISMATCH');
   }
   if (stripeCurrency !== snapshot.currency) throw new Error('CURRENCY_MISMATCH');
