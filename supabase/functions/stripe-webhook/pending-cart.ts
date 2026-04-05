@@ -1,22 +1,3 @@
-// supabase/functions/stripe-webhook/pending-cart.ts
-// ============================================================================
-// PREPARE AUTHORITATIVE CART STATE
-// ============================================================================
-// NAMING CONTRACT (read before changing anything):
-//
-//   pricing.ts defines: OrderType = 'pickup' | 'delivery' | 'dine_in'
-//   PricingSnapshot.orderType: OrderType   ← this IS the fulfillment type
-//   PreparedCartState.orderType: OrderType ← same, keep the name
-//
-//   The field is named 'orderType' throughout pricing.ts for historical reasons.
-//   It means FULFILLMENT TYPE. Do not rename it here — that would break
-//   buildLegacyPricingSnapshotFromPendingCart and PricingSnapshot compatibility.
-//
-//   createOrderFromSession maps it correctly to the DB:
-//     orders.order_type       = 'food'      (WHAT was sold — order category)
-//     orders.fulfillment_type = orderType   (HOW delivered — pickup/delivery/dine_in)
-// ============================================================================
-
 import Stripe from "stripe";
 import {
   buildLegacyPricingSnapshotFromPendingCart,
@@ -181,12 +162,24 @@ export async function prepareAuthoritativeCartState(args: {
     snapshotString(snapshot, "currency") ?? currency,
   );
 
-  if (stripeAmountTotal === null || stripeAmountTotal !== snapshotTotal) {
+  // When loyalty points are redeemed, a Stripe coupon reduces the charged amount
+  // below snapshot.totalCents. Read the discount from session metadata (written by
+  // create-checkout) so the comparison accounts for it correctly.
+  const loyaltyDiscountCents = parseInt(
+    pickMeta(session.metadata, "loyalty_discount_cents") ?? "0",
+    10,
+  ) || 0;
+
+  const expectedTotal = snapshotTotal - loyaltyDiscountCents;
+
+  if (stripeAmountTotal === null || stripeAmountTotal !== expectedTotal) {
     log("warn", "webhook_total_mismatch", {
       requestId,
       sessionId: prefix(session.id),
       charged: stripeAmountTotal,
-      expected: snapshotTotal,
+      expected: expectedTotal,
+      snapshotTotal,
+      loyaltyDiscountCents,
     });
     return null;
   }

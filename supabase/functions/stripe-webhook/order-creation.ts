@@ -1,23 +1,3 @@
-// supabase/functions/stripe-webhook/order-creation.ts
-// ============================================================================
-// CREATE ORDER FROM SESSION — Production hardened (2026)
-// ============================================================================
-// WHAT THIS FILE IS RESPONSIBLE FOR:
-//   Receive PreparedCartState → validate it → persist to DB.
-//   It NEVER decides order meaning. It only stores what prepareAuthoritativeCartState
-//   already determined.
-//
-// THE TWO DB COLUMN FIX (root cause of fulfillment_type = null):
-//   BEFORE: order_type: orderType  → wrote 'pickup' to orders.order_type (WRONG)
-//   AFTER:  order_type: 'food'     → correct order category
-//           fulfillment_type: orderType → correct fulfillment method
-//
-// NAMING NOTE:
-//   prepared.orderType = 'pickup' | 'delivery' | 'dine_in'  (fulfillment, per pricing.ts)
-//   orders.order_type  = 'food' | 'merch'                   (what was sold)
-//   orders.fulfillment_type = 'pickup' | 'delivery' | ...   (how it is delivered)
-// ============================================================================
-
 import type Stripe from "stripe";
 
 import { DB_ORD_CONFIRMED, DB_PMT_PAID } from "./env.ts";
@@ -35,6 +15,7 @@ import type { OrderType, PricingSnapshot } from "../_shared/pricing.ts";
 import { buildStoredOrderCartItemsFromSnapshot } from "../_shared/order-cart-items-builder.ts";
 import {
   normCurrency,
+  pickMeta,
   snapshotNumber,
   snapshotString,
   snapshotStringArray,
@@ -48,13 +29,15 @@ const VALID_ORDER_TYPES = new Set<OrderType>(['pickup', 'delivery', 'dine_in'] a
 // ─── Order state validation factory ──────────────────────────────────────────
 
 type ValidatedOrderState = {
-  orderType:   OrderType;
-  totalCents:  number;
-  cart:        PreparedCartState['cart'];
-  snapshot:    PricingSnapshot;
-  pricingHash: string;
-  currency:    string;
-  consumedNow: boolean;
+  orderType:            OrderType;
+  totalCents:           number;
+  stripeAmountTotal:    number;  // actual amount Stripe charged (post-loyalty-discount)
+  cart:                 PreparedCartState['cart'];
+  snapshot:             PricingSnapshot;
+  pricingHash:          string;
+  currency:             string;
+  consumedNow:          boolean;
+  loyaltyDiscountCents: number;
 };
 
 function assertPricingSnapshot(
@@ -73,6 +56,7 @@ function assertPricingSnapshot(
 
 function buildValidatedOrderState(
   prepared: PreparedCartState,
+  session:  Stripe.Checkout.Session,
   requestId: string,
 ): ValidatedOrderState {
   assertPricingSnapshot(prepared.snapshot, requestId);
@@ -92,14 +76,27 @@ function buildValidatedOrderState(
     );
   }
 
+  // Read the loyalty discount from session metadata so we can record the
+  // actual amount charged (not the pre-discount snapshot total).
+  const loyaltyDiscountCents = parseInt(
+    pickMeta(session.metadata, "loyalty_discount_cents") ?? "0",
+    10,
+  ) || 0;
+
+  const stripeAmountTotal = typeof session.amount_total === "number"
+    ? session.amount_total
+    : totalCents - loyaltyDiscountCents;
+
   return {
     orderType,
     totalCents,
-    cart:        prepared.cart,
-    snapshot:    prepared.snapshot,
-    pricingHash: prepared.pricingHash,
-    currency:    prepared.currency,
-    consumedNow: prepared.consumedNow,
+    stripeAmountTotal,
+    cart:                 prepared.cart,
+    snapshot:             prepared.snapshot,
+    pricingHash:          prepared.pricingHash,
+    currency:             prepared.currency,
+    consumedNow:          prepared.consumedNow,
+    loyaltyDiscountCents,
   };
 }
 
@@ -110,28 +107,34 @@ type OrderCreationPricing = {
   promoDiscountCents:    number;
   campaignDiscountCents: number;
   creditCents:           number;
+  loyaltyDiscountCents:  number;
   taxCents:              number;
   deliveryFeeCents:      number;
   serviceFeeCents:       number;
   tipCents:              number;
-  totalCents:            number;
+  totalCents:            number;  // snapshot total (pre-loyalty)
+  chargedCents:          number;  // what Stripe actually charged
   currency:              string;
 };
 
 function buildOrderCreationPricing(
-  snapshot: unknown,
-  fallbackCurrency: string,
+  snapshot:             unknown,
+  fallbackCurrency:     string,
+  loyaltyDiscountCents: number,
+  stripeAmountTotal:    number,
 ): OrderCreationPricing {
   return {
     subtotalCents:         snapshotNumber(snapshot, "subtotalCents"),
     promoDiscountCents:    snapshotNumber(snapshot, "promoDiscountCents"),
     campaignDiscountCents: snapshotNumber(snapshot, "campaignDiscountCents"),
     creditCents:           snapshotNumber(snapshot, "creditCents"),
+    loyaltyDiscountCents,
     taxCents:              snapshotNumber(snapshot, "taxCents"),
     deliveryFeeCents:      snapshotNumber(snapshot, "deliveryFeeCents"),
     serviceFeeCents:       snapshotNumber(snapshot, "serviceFeeCents"),
     tipCents:              snapshotNumber(snapshot, "tipCents"),
     totalCents:            snapshotNumber(snapshot, "totalCents"),
+    chargedCents:          stripeAmountTotal,
     currency: normCurrency(
       snapshotString(snapshot, "currency") ?? fallbackCurrency,
     ),
@@ -180,27 +183,27 @@ function buildOrderMetadata(args: {
       promoDiscountCents:    pricing.promoDiscountCents,
       campaignDiscountCents: pricing.campaignDiscountCents,
       creditCents:           pricing.creditCents,
+      loyaltyDiscountCents:  pricing.loyaltyDiscountCents,
       discountCents:
         pricing.promoDiscountCents +
         pricing.campaignDiscountCents +
-        pricing.creditCents,
+        pricing.creditCents +
+        pricing.loyaltyDiscountCents,
       taxCents:          pricing.taxCents,
       deliveryFeeCents:  pricing.deliveryFeeCents,
       serviceFeeCents:   pricing.serviceFeeCents,
       tipCents:          pricing.tipCents,
-      totalCents:        pricing.totalCents,
+      totalCents:        pricing.chargedCents,  // actual charged
+      snapshotTotal:     pricing.totalCents,    // pre-discount snapshot
       currency:          pricing.currency,
     }),
-    stripe_amount_total:      pricing.totalCents,
+    stripe_amount_total:      pricing.chargedCents,
     stripe_currency:          pricing.currency,
     pending_cart_consumed_now: consumedNow,
   });
 }
 
 // ─── Order items ──────────────────────────────────────────────────────────────
-// Inserts order_items rows from the authoritative pricing snapshot.
-// This is the ONLY correct source — never use cart.items or raw session metadata.
-// Best-effort: failures are logged but do not block order creation.
 
 async function insertOrderItemsFromSnapshot(args: {
   db:          DbClient;
@@ -212,7 +215,6 @@ async function insertOrderItemsFromSnapshot(args: {
   const { db, orderId, snapshot, pricingHash, requestId } = args;
 
   try {
-    // Idempotency check — do not double-insert on webhook retries
     const { data: existing } = await db
       .from("order_items")
       .select("id")
@@ -292,7 +294,7 @@ export async function createOrderFromSession(args: {
     return null;
   }
 
-  const state: ValidatedOrderState = buildValidatedOrderState(prepared, requestId);
+  const state: ValidatedOrderState = buildValidatedOrderState(prepared, session, requestId);
 
   const {
     orderType,
@@ -301,13 +303,15 @@ export async function createOrderFromSession(args: {
     pricingHash,
     currency,
     consumedNow,
+    stripeAmountTotal,
+    loyaltyDiscountCents,
   } = state;
 
   const paymentIntentId = typeof session.payment_intent === "string"
     ? session.payment_intent
     : session.payment_intent?.id ?? null;
 
-  const pricing  = buildOrderCreationPricing(snapshot, currency);
+  const pricing  = buildOrderCreationPricing(snapshot, currency, loyaltyDiscountCents, stripeAmountTotal);
   const metadata = buildOrderMetadata({
     requestId,
     session,
@@ -331,17 +335,18 @@ export async function createOrderFromSession(args: {
     amount_subtotal:           pricing.subtotalCents,
     amount_tax:                pricing.taxCents,
     amount_shipping:           pricing.deliveryFeeCents,
-    amount_total:              pricing.totalCents,
+    amount_total:              pricing.chargedCents,   // actual Stripe charge
     subtotal_cents:            pricing.subtotalCents,
     tax_cents:                 pricing.taxCents,
     tip_cents:                 pricing.tipCents,
     discount_cents:
       pricing.promoDiscountCents +
       pricing.campaignDiscountCents +
-      pricing.creditCents,
+      pricing.creditCents +
+      pricing.loyaltyDiscountCents,
     delivery_fee_cents:        pricing.deliveryFeeCents,
     service_fee_cents:         pricing.serviceFeeCents,
-    total_cents:               pricing.totalCents,
+    total_cents:               pricing.chargedCents,   // actual Stripe charge
     currency:                  pricing.currency,
     payment_status:            DB_PMT_PAID,
     status:                    DB_ORD_CONFIRMED,
@@ -368,7 +373,7 @@ export async function createOrderFromSession(args: {
       subtotalCents:    pricing.subtotalCents,
       taxCents:         pricing.taxCents,
       deliveryFeeCents: pricing.deliveryFeeCents,
-      totalCents:       pricing.totalCents,
+      chargedCents:     pricing.chargedCents,
     });
     return null;
   }
@@ -376,18 +381,17 @@ export async function createOrderFromSession(args: {
   if (inserted !== null) {
     log("info", "webhook_order_created", {
       requestId,
-      orderId:         prefix(inserted.id),
-      sessionId:       prefix(session.id),
-      orderCategory:   "food",
-      fulfillmentType: orderType,
-      amountTotal:     pricing.totalCents,
-      subtotalCents:   pricing.subtotalCents,
-      taxCents:        pricing.taxCents,
+      orderId:             prefix(inserted.id),
+      sessionId:           prefix(session.id),
+      orderCategory:       "food",
+      fulfillmentType:     orderType,
+      chargedCents:        pricing.chargedCents,
+      loyaltyDiscountCents: pricing.loyaltyDiscountCents,
+      subtotalCents:       pricing.subtotalCents,
+      taxCents:            pricing.taxCents,
       consumedNow,
     });
 
-    // ✅ Insert order_items from pricing snapshot — the ONLY correct source.
-    // Best-effort: does not throw. Idempotent: skips if rows already exist.
     await insertOrderItemsFromSnapshot({
       db,
       orderId:     inserted.id,
@@ -409,7 +413,6 @@ export async function createOrderFromSession(args: {
       sessionId: prefix(session.id),
     });
 
-    // Idempotent: insertOrderItemsFromSnapshot skips if rows already exist
     await insertOrderItemsFromSnapshot({
       db,
       orderId:     existing.id,
