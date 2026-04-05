@@ -23,6 +23,75 @@ import {
   toJson,
 } from "../utils.ts";
 
+// ─── Loyalty finalization ─────────────────────────────────────────────────────
+//
+// Points were atomically debited at checkout start (entry_type='checkout_reserve').
+// On payment success:
+//   1. Flip ledger entry_type to 'redeemed' for clean reporting.
+//   2. Update loyalty_accounts.last_redeem_at.
+//
+// Best-effort side-effect — failure does NOT fail the webhook.
+// Idempotent: filters on entry_type='checkout_reserve', so a second call
+// on an already-flipped row is a safe no-op.
+
+async function finalizeLoyaltyReserve(args: {
+  db:        DbClient;
+  session:   Stripe.Checkout.Session;
+  requestId: string;
+}): Promise<void> {
+  const { db, session, requestId } = args;
+
+  const loyaltyAccountId = pickMeta(session.metadata, "loyalty_account_id");
+  const preSessionKey    = pickMeta(session.metadata, "loyalty_pre_session_key");
+  const loyaltyPoints    = parseCents(pickMeta(session.metadata, "loyalty_reserved_points"));
+  const loyaltyCents     = parseCents(pickMeta(session.metadata, "loyalty_discount_cents"));
+
+  if (loyaltyAccountId === null || loyaltyPoints <= 0 || preSessionKey === null) return;
+
+  const reserveIdemKey = `reserve:${preSessionKey}`;
+
+  // Flip checkout_reserve → redeemed (idempotent: only matches checkout_reserve)
+  const { error: flipError } = await db
+    .from("loyalty_ledger")
+    .update({ entry_type: "redeemed" })
+    .eq("idempotency_key", reserveIdemKey)
+    .eq("entry_type", "checkout_reserve");
+
+  if (flipError) {
+    // Non-critical — balance already correct from the reserve debit. Log and continue.
+    log("warn", "webhook_loyalty_ledger_flip_failed", {
+      requestId,
+      sessionId:  prefix(session.id),
+      accountId:  prefix(loyaltyAccountId),
+      error:      flipError.message,
+    });
+  } else {
+    log("info", "webhook_loyalty_reserve_finalized", {
+      requestId,
+      sessionId:     prefix(session.id),
+      accountId:     prefix(loyaltyAccountId),
+      points:        loyaltyPoints,
+      discountCents: loyaltyCents,
+    });
+  }
+
+  // Update last_redeem_at — best-effort, same pattern as backfillLoyaltyIfMissing
+  const { error: acctError } = await db
+    .from("loyalty_accounts")
+    .update({ last_redeem_at: nowIso(), updated_at: nowIso() })
+    .eq("id", loyaltyAccountId);
+
+  if (acctError) {
+    log("warn", "webhook_loyalty_account_redeem_ts_failed", {
+      requestId,
+      accountId: prefix(loyaltyAccountId),
+      error:     acctError.message,
+    });
+  }
+}
+
+// ─── Handler ──────────────────────────────────────────────────────────────────
+
 export async function handleCheckoutSessionCompleted(
   db: DbClient,
   event: Stripe.Event,
@@ -38,7 +107,7 @@ export async function handleCheckoutSessionCompleted(
     return;
   }
 
-  const stripe = getStripe();
+  const stripe  = getStripe();
   const session = await stripe.checkout.sessions.retrieve(sessionRef.id, {
     expand: ["payment_intent"],
   });
@@ -46,9 +115,9 @@ export async function handleCheckoutSessionCompleted(
   if (!normalizeStripePaid(session)) {
     log("info", "webhook_session_not_paid", {
       requestId,
-      sessionId: prefix(session.id),
+      sessionId:     prefix(session.id),
       paymentStatus: session.payment_status,
-      status: session.status,
+      status:        session.status,
     });
     return;
   }
@@ -79,21 +148,19 @@ export async function handleCheckoutSessionCompleted(
       .from("orders")
       .update({
         payment_status: DB_PMT_PAID,
-        status: DB_ORD_CONFIRMED,
-        updated_at: nowIso(),
+        status:         DB_ORD_CONFIRMED,
+        updated_at:     nowIso(),
       })
       .eq("id", order.id);
   }
 
-  const orderId = order.id;
-  const orderTotal = order.amount_total;
-  const promoId = pickMeta(session.metadata, "promo_id");
-  const creditId = pickMeta(session.metadata, "credit_id");
-  const promoDiscountCents = parseCents(
-    pickMeta(session.metadata, "promo_discount_cents"),
-  );
-  const creditCents = parseCents(pickMeta(session.metadata, "credit_cents"));
-  const totalCents = typeof session.amount_total === "number"
+  const orderId            = order.id;
+  const orderTotal         = order.amount_total;
+  const promoId            = pickMeta(session.metadata, "promo_id");
+  const creditId           = pickMeta(session.metadata, "credit_id");
+  const promoDiscountCents = parseCents(pickMeta(session.metadata, "promo_discount_cents"));
+  const creditCents        = parseCents(pickMeta(session.metadata, "credit_cents"));
+  const totalCents         = typeof session.amount_total === "number"
     ? session.amount_total
     : orderTotal;
 
@@ -113,21 +180,24 @@ export async function handleCheckoutSessionCompleted(
       "REVIEW_NUDGE_READY",
       toJson({
         amount_cents: orderTotal,
-        source: "stripe-webhook",
-        event_id: event.id,
+        source:       "stripe-webhook",
+        event_id:     event.id,
       }),
       requestId,
     ),
+    // Finalize loyalty reserve — flip checkout_reserve → redeemed in ledger.
+    // Best-effort: runs concurrently, never blocks order creation.
+    finalizeLoyaltyReserve({ db, session, requestId }),
   ];
 
   if (promoId !== null) {
     sideEffects.push(
       recordPromoRedemptionIfMissing({
         db,
-        promotionId: promoId,
+        promotionId:     promoId,
         userId,
-        sessionId: session.id,
-        discountCents: promoDiscountCents,
+        sessionId:       session.id,
+        discountCents:   promoDiscountCents,
         orderTotalCents: totalCents,
         requestId,
       }),
@@ -154,10 +224,10 @@ export async function handleCheckoutSessionCompleted(
         userId,
         "ORDER_CONFIRMED_WEBHOOK",
         toJson({
-          event_id: event.id,
-          session_id: session.id,
-          source: "stripe-webhook",
-          credit_cents: creditCents,
+          event_id:             event.id,
+          session_id:           session.id,
+          source:               "stripe-webhook",
+          credit_cents:         creditCents,
           promo_discount_cents: promoDiscountCents,
         }),
         requestId,
@@ -176,7 +246,7 @@ export async function handleCheckoutSessionCompleted(
         orderId,
         userId,
         fulfillmentType: pickMeta(session.metadata, "order_type") ?? "pickup",
-        amountTotal: orderTotal,
+        amountTotal:     orderTotal,
         requestId,
       }),
     );
@@ -186,10 +256,10 @@ export async function handleCheckoutSessionCompleted(
 
   log("info", "webhook_checkout_completed", {
     requestId,
-    orderId: prefix(orderId),
-    sessionId: prefix(session.id),
+    orderId:    prefix(orderId),
+    sessionId:  prefix(session.id),
     wasNewOrder,
     orderTotal,
-    userId: prefix(userId),
+    userId:     prefix(userId),
   });
 }

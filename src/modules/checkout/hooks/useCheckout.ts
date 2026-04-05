@@ -366,12 +366,16 @@ function buildCheckoutPayload(
     setPayloadField(payload, 'idempotencyKey', idempotencyKey);
   }
 
-  if (args.loyalty) {
-    setPayloadField(payload, 'loyalty', {
-      applyPoints: Boolean(args.loyalty.applyPoints),
-      pointsToRedeem: clampInt(args.loyalty.pointsToRedeem, 0, MAX_REDEEM_POINTS),
-      loyaltyAccountId: normalizeId(args.loyalty.loyaltyAccountId) ?? undefined,
-    });
+  // Send loyalty as flat top-level fields — validateBody reads
+  // loyalty_redeem_points and loyalty_account_id at the root of the request body.
+  // A nested loyalty:{} object is silently ignored by the server.
+  if (args.loyalty?.applyPoints && args.loyalty.pointsToRedeem && args.loyalty.loyaltyAccountId) {
+    const safePoints = clampInt(args.loyalty.pointsToRedeem, 1, MAX_REDEEM_POINTS);
+    const safeAccountId = normalizeId(args.loyalty.loyaltyAccountId);
+    if (safePoints > 0 && safeAccountId) {
+      setPayloadField(payload, 'loyalty_redeem_points', safePoints);
+      setPayloadField(payload, 'loyalty_account_id', safeAccountId);
+    }
   }
 
   return payload;

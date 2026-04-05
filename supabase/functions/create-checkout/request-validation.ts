@@ -461,6 +461,21 @@ export function validateBody(raw: unknown): ValidationResult<RequestBody> {
     };
   }
 
+  // loyalty_account_id: the loyalty_accounts.id UUID sent by the frontend.
+  // Ownership is validated server-side in loyalty.ts against the JWT userId.
+  // We accept any non-empty safe identifier string here.
+  const loyaltyAccountIdRaw = raw["loyalty_account_id"];
+  if (
+    loyaltyAccountIdRaw !== undefined &&
+    loyaltyAccountIdRaw !== null &&
+    !isNonEmptySafeId(loyaltyAccountIdRaw)
+  ) {
+    return {
+      ok: false,
+      error: "'loyalty_account_id' must be a non-empty safe identifier",
+    };
+  }
+
   return {
     ok: true,
     value: {
@@ -481,6 +496,9 @@ export function validateBody(raw: unknown): ValidationResult<RequestBody> {
         : null,
       loyalty_redemption_id: typeof loyaltyRedemptionIdRaw === "string"
         ? loyaltyRedemptionIdRaw.trim()
+        : null,
+      loyalty_account_id: typeof loyaltyAccountIdRaw === "string"
+        ? loyaltyAccountIdRaw.trim()
         : null,
     },
   };

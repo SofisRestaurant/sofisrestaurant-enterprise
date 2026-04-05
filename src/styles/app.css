@@ -1,10 +1,12 @@
-/* ── Tailwind base — includes preflight + all utilities ──────────────────── */
-/* NOTE: @import "tailwindcss" already includes everything.                   */
-/* Adding @import "tailwindcss/utilities" a second time breaks the cascade    */
-/* in Tailwind v4 and causes utility classes (gradients, colors) to not apply.*/
+/* ── Tailwind v4 — @import "tailwindcss" already includes ALL utilities ──── */
+/* CRITICAL: Remove the duplicate @import "tailwindcss/utilities" below.      */
+/* In Tailwind v4 the duplicate breaks the cascade — Tailwind-generated       */
+/* utility classes (text-white, bg-zinc-900, from-zinc-900 etc) stop applying.*/
+/* This causes buttons to be invisible: transparent background, white-on-white */
+/* text. The fix is to use ONLY the single @import "tailwindcss" line.        */
 @import "tailwindcss";
 
-/* ── Project-specific styles ────────────────────────────────────────────────── */
+/* ── Project-specific styles ─────────────────────────────────────────────── */
 @import "./fonts.css";
 @import "./tokens.css";
 @import "./globals.css";
@@ -13,7 +15,7 @@
 @import "./utilities.css";
 @import "./components.css";
 
-/* ── Custom utilities ───────────────────────────────────────────────────────── */
+/* ── Custom utilities ─────────────────────────────────────────────────────── */
 @layer utilities {
   .btn {
     border-radius: 0.5rem;

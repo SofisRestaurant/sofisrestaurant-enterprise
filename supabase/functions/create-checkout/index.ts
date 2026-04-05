@@ -11,11 +11,12 @@
 //   5. Validate promo code (active, applicable, per-user limit not exceeded)
 //   6. Validate user credit (exists, belongs to user, unused, not expired)
 //   7. Persist pending_cart BEFORE Stripe
-//   8. Build Stripe Checkout Session (server-authoritative line items only)
-//   9. Embed all critical identifiers in session.metadata for webhook recovery
-//  10. Update pending_cart.stripe_session_id after session created
-//  11. Reuse an existing open Stripe session for the same idempotency key
-//  12. Return { sessionId, url } to the client
+//   8. Reserve loyalty points atomically (server-side, before Stripe session)
+//   9. Build Stripe Checkout Session (server-authoritative line items only)
+//  10. Embed all critical identifiers in session.metadata for webhook recovery
+//  11. Update pending_cart.stripe_session_id after session created
+//  12. Reuse an existing open Stripe session for the same idempotency key
+//  13. Return { sessionId, url } to the client
 //
 // Security:
 //   - No client-supplied prices ever reach Stripe; all amounts come from server pricing
@@ -25,7 +26,8 @@
 //   - CORS is fail-closed to the allowlisted origins only
 //   - No tokens / emails / phones / addresses are logged
 //   - Credits are validated pre-payment only; redemption remains post-payment
-//   - Loyalty redemption intent is stored only as metadata pre-payment
+//   - Loyalty points are atomically reserved server-side before Stripe session;
+//     released automatically on session expiry or Stripe creation failure
 // =============================================================================
 
 import Stripe from "stripe";
@@ -47,6 +49,10 @@ import { loadCanonicalCartItems } from "./catalog.ts";
 import { corsHeadersFor } from "./cors.ts";
 import { validateCredit } from "./credits.ts";
 import {
+  applyLoyaltyToCheckout,
+  type LoyaltyIntent,
+} from "./loyalty.ts";
+import {
   MAX_BODY_BYTES,
   MAX_ORDER_TOTAL_CENTS,
   resolveTaxRate,
@@ -67,9 +73,92 @@ import { validateBody } from "./request-validation.ts";
 import { BASE_HEADERS, errorResponse, successResponse } from "./responses.ts";
 import { buildCheckoutIdempotencyKey, checkIntegrityHash } from "./security.ts";
 import { getStripe } from "./stripe-client.ts";
-import type { DbClient } from "./types.ts";
+import type { DbClient, PendingCartUpdate } from "./types.ts";
 import { validatePromo } from "./promos.ts";
 import { resolveCancelUrl, resolveSuccessUrl } from "./urls.ts";
+
+// ─── Loyalty helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Creates a one-time Stripe coupon for the loyalty discount.
+ * Negative line-item unit_amount is NOT supported in Checkout Sessions —
+ * coupons via session.discounts[] is the only Stripe-safe approach.
+ * The coupon is deleted immediately after the session claims it.
+ */
+async function createLoyaltyCoupon(
+  stripe: Stripe,
+  discountCents: number,
+  currency: string,
+  requestId: string,
+): Promise<string | null> {
+  try {
+    const coupon = await stripe.coupons.create({
+      amount_off: discountCents,
+      currency: currency.toLowerCase(),
+      name: "Loyalty Rewards",
+      duration: "once",
+      metadata: { request_id: requestId, source: "loyalty_checkout" },
+    });
+    return coupon.id;
+  } catch (err) {
+    log("error", "checkout_loyalty_coupon_create_failed", {
+      requestId,
+      error: asErr(err),
+    });
+    return null;
+  }
+}
+
+async function deleteCouponSilently(
+  stripe: Stripe,
+  couponId: string,
+  requestId: string,
+): Promise<void> {
+  try {
+    await stripe.coupons.del(couponId);
+  } catch (err) {
+    log("warn", "checkout_loyalty_coupon_delete_failed", {
+      requestId,
+      couponId,
+      error: asErr(err),
+    });
+  }
+}
+
+/**
+ * Best-effort loyalty reserve release.
+ * Called when Stripe session creation fails after a successful reserve,
+ * or when coupon creation fails. Never throws.
+ */
+async function tryReleaseLoyalty(
+  db: DbClient,
+  preSessionKey: string,
+  reason: string,
+  requestId: string,
+): Promise<void> {
+  try {
+    const { error } = await db.rpc(
+      "v2_release_loyalty_reserve" as never,
+      { p_stripe_session_id: preSessionKey, p_reason: reason } as never,
+    );
+    if (error) {
+      log("warn", "checkout_loyalty_release_failed", {
+        requestId,
+        reason,
+        error: error.message,
+      });
+    } else {
+      log("info", "checkout_loyalty_reserve_released", { requestId, reason });
+    }
+  } catch (err) {
+    log("error", "checkout_loyalty_release_exception", {
+      requestId,
+      error: asErr(err),
+    });
+  }
+}
+
+// ─── Main handler ─────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request): Promise<Response> => {
   const requestId = sanitizeRequestId(req.headers.get("x-request-id"));
@@ -539,6 +628,85 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
+  // ── Loyalty reservation ───────────────────────────────────────────────────
+  // Must run BEFORE Stripe session creation so the discount is applied to the
+  // correct server-computed total. On any failure the checkout proceeds at
+  // full price — loyalty is never a blocking dependency.
+  //
+  // preSessionKey = globally unique idempotency key for the ledger entry:
+  //   userId + cartId + requestId (all server-generated, not client-supplied)
+  const preSessionKey = `${userId}:${pendingCart.cartId}:${requestId}`;
+
+  let loyaltyDiscountCents = 0;
+  let loyaltyAccountId = "";
+  let loyaltyPoints = 0;
+  let stripeCouponId: string | null = null;
+
+  const loyaltyIntent: LoyaltyIntent | null =
+    body.loyalty_redeem_points && body.loyalty_redeem_points > 0 &&
+      body.loyalty_account_id
+      ? {
+        applyPoints: true,
+        pointsToRedeem: body.loyalty_redeem_points,
+        loyaltyAccountId: body.loyalty_account_id,
+      }
+      : null;
+
+  if (loyaltyIntent) {
+    // Cap against post-credit subtotal: loyalty discounts what remains after
+    // store credit is applied, matching the server's pricing pipeline order.
+    const subtotalAfterCredit = Math.max(
+      0,
+      snapshot.subtotalCents - (snapshot.creditCents ?? 0),
+    );
+
+    const loyaltyResult = await applyLoyaltyToCheckout({
+      intent: loyaltyIntent,
+      userId,
+      subtotalCents: subtotalAfterCredit,
+      stripeSessionId: preSessionKey,
+      db,
+      requestId,
+    });
+
+    if (loyaltyResult.applied) {
+      loyaltyDiscountCents = loyaltyResult.discountCents;
+      loyaltyAccountId = loyaltyResult.accountId;
+      loyaltyPoints = loyaltyResult.reservedPoints;
+
+      // Create a one-time Stripe coupon for the discount.
+      // Negative unit_amount on line items is not supported in payment mode.
+      stripeCouponId = await createLoyaltyCoupon(
+        stripe,
+        loyaltyDiscountCents,
+        snapshot.currency,
+        requestId,
+      );
+
+      if (!stripeCouponId) {
+        // Coupon creation failed — release the reserve and proceed at full price.
+        await tryReleaseLoyalty(
+          db,
+          preSessionKey,
+          "coupon_create_failed",
+          requestId,
+        );
+        loyaltyDiscountCents = 0;
+        loyaltyAccountId = "";
+        loyaltyPoints = 0;
+      } else {
+        log("info", "checkout_loyalty_reserved", {
+          requestId,
+          userId: prefix(userId),
+          accountId: prefix(loyaltyAccountId),
+          points: loyaltyPoints,
+          discountCents: loyaltyDiscountCents,
+        });
+      }
+    }
+    // Skips are already logged inside applyLoyaltyToCheckout via skip()
+  }
+
   let stripeLineItems: Stripe.Checkout.SessionCreateParams.LineItem[];
   try {
     stripeLineItems = buildStripeLineItemsFromPricing(snapshot);
@@ -549,6 +717,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
       cartId: prefix(pendingCart.cartId),
       error: asErr(error),
     });
+
+    // Release loyalty reserve before returning — line items failed after reserve
+    if (loyaltyAccountId && loyaltyPoints > 0) {
+      await tryReleaseLoyalty(
+        db,
+        preSessionKey,
+        "line_items_build_failed",
+        requestId,
+      );
+    }
+    if (stripeCouponId) await deleteCouponSilently(stripe, stripeCouponId, requestId);
 
     return errorResponse(
       requestId,
@@ -594,7 +773,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
     ...(snapshot.appliedCampaignIds.length
       ? { applied_campaign_ids: snapshot.appliedCampaignIds.join(",") }
       : {}),
-    ...(body.loyalty_redeem_points !== null && body.loyalty_redeem_points > 0
+    ...(body.loyalty_redeem_points !== null &&
+        body.loyalty_redeem_points !== undefined &&
+        body.loyalty_redeem_points > 0
       ? { loyalty_redeem_points: String(body.loyalty_redeem_points) }
       : {}),
     ...(body.loyalty_reward_id
@@ -602,6 +783,16 @@ Deno.serve(async (req: Request): Promise<Response> => {
       : {}),
     ...(body.loyalty_redemption_id
       ? { loyalty_redemption_id: body.loyalty_redemption_id }
+      : {}),
+    // Loyalty reservation fields — written only when a reserve was committed.
+    // The webhook uses these to finalize (completed) or release (expired).
+    ...(loyaltyAccountId
+      ? {
+        loyalty_account_id: loyaltyAccountId,
+        loyalty_reserved_points: String(loyaltyPoints),
+        loyalty_discount_cents: String(loyaltyDiscountCents),
+        loyalty_pre_session_key: preSessionKey,
+      }
       : {}),
   };
 
@@ -625,6 +816,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
         ...(body.order_type === "delivery"
           ? { phone_number_collection: { enabled: true } }
           : {}),
+        // Loyalty coupon — shows as "Loyalty Rewards -$X.XX" on Stripe's
+        // hosted payment page and on the customer receipt.
+        ...(stripeCouponId ? { discounts: [{ coupon: stripeCouponId }] } : {}),
       },
       {
         idempotencyKey,
@@ -638,6 +832,19 @@ Deno.serve(async (req: Request): Promise<Response> => {
       error: asErr(error),
     });
 
+    // Stripe failed after loyalty reserve — restore points immediately.
+    // Guard on loyaltyAccountId && loyaltyPoints > 0, NOT just discountCents,
+    // because a reserve can succeed even if the cents value rounded to zero.
+    if (loyaltyAccountId && loyaltyPoints > 0) {
+      await tryReleaseLoyalty(
+        db,
+        preSessionKey,
+        "stripe_session_create_failed",
+        requestId,
+      );
+    }
+    if (stripeCouponId) await deleteCouponSilently(stripe, stripeCouponId, requestId);
+
     return errorResponse(
       requestId,
       502,
@@ -646,6 +853,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
       corsHeaders,
     );
   }
+
+  // Coupon is now claimed by the session — delete to keep Stripe dashboard clean.
+  if (stripeCouponId) await deleteCouponSilently(stripe, stripeCouponId, requestId);
 
   if (!stripeSession.url) {
     log("error", "checkout_stripe_session_missing_url", {
@@ -706,6 +916,29 @@ Deno.serve(async (req: Request): Promise<Response> => {
     requestId,
   );
 
+  // Write loyalty columns to pending_carts so the webhook can find reservation
+  // context without re-parsing Stripe metadata. Best-effort — Stripe metadata
+  // is the authoritative fallback if this update fails.
+  if (loyaltyAccountId) {
+    const { error: loyaltyUpdateErr } = await db
+      .from("pending_carts")
+      .update({
+        loyalty_account_id: loyaltyAccountId,
+        loyalty_reserved_points: loyaltyPoints,
+        loyalty_discount_cents: loyaltyDiscountCents,
+      } as PendingCartUpdate)
+      .eq("id", pendingCart.cartId);
+
+    if (loyaltyUpdateErr) {
+      log("warn", "checkout_loyalty_pending_cart_update_failed", {
+        requestId,
+        cartId: prefix(pendingCart.cartId),
+        sessionId: prefix(authoritativeSession.id),
+        error: loyaltyUpdateErr.message,
+      });
+    }
+  }
+
   const ms = Date.now() - start;
 
   log("info", "checkout_session_created", {
@@ -714,6 +947,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     cartId: prefix(pendingCart.cartId),
     sessionId: prefix(authoritativeSession.id),
     amountTotal: snapshot.totalCents,
+    loyaltyOff: loyaltyDiscountCents,
     orderType: body.order_type,
     ms,
   });

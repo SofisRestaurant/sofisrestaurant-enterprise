@@ -26,6 +26,10 @@ export type PendingCartUpdate =
     pricing_hash?: string | null;
     currency?: string | null;
     consumed_at?: string | null;
+    // Loyalty reservation columns added by loyalty_checkout_reserve migration
+    loyalty_account_id?: string | null;
+    loyalty_reserved_points?: number | null;
+    loyalty_discount_cents?: number | null;
   };
 
 export type FraudLogInsert = Db["public"]["Tables"]["fraud_logs"]["Insert"];
@@ -119,6 +123,9 @@ export type RequestBody = {
   loyalty_redeem_points: number | null;
   loyalty_reward_id: string | null;
   loyalty_redemption_id: string | null;
+  // loyalty_account_id: the loyalty_accounts.id for the authenticated user.
+  // Validated server-side in loyalty.ts — ownership checked against JWT userId.
+  loyalty_account_id: string | null;
 };
 
 export type RateLimitResult =

@@ -22,6 +22,7 @@ import {
   ShoppingBag,
   X,
 } from 'lucide-react';
+import type { LoyaltyRedeemValue } from '@/modules/checkout/components/RewardsRedeem';
 
 import { env } from '@/lib/config/env';
 import { useCheckout } from '@/modules/checkout/hooks/useCheckout';
@@ -44,6 +45,7 @@ type CheckoutButtonProps = {
   creditId?: string;
   orderType?: OrderType;
   notes?: string | null;
+  loyalty?: LoyaltyRedeemValue;
   reviewFirst?: boolean;
   onPromoError?: (msg: string) => void;
   className?: string;
@@ -219,6 +221,7 @@ function CheckoutButton({
   creditId,
   orderType = 'pickup',
   notes = null,
+  loyalty,
   reviewFirst = true,
   onPromoError,
   className,
@@ -485,6 +488,7 @@ function CheckoutButton({
         credit_id: normalizedCreditId,
         orderType: normalizedOrderType,
         notes,
+        loyalty,
       });
     } catch (checkoutError: unknown) {
       const message =
@@ -634,16 +638,15 @@ function CheckoutButton({
         aria-busy={isLoading ? 'true' : 'false'}
         className={cx(
           'group relative w-full overflow-hidden rounded-xl px-6 py-4 transition',
+          'bg-linear-to-r from-zinc-900 to-zinc-800 shadow-sm',
+          'hover:from-zinc-800 hover:to-zinc-700',
           'focus:outline-none focus:ring-2 focus:ring-zinc-900/20',
           'disabled:cursor-not-allowed disabled:opacity-60',
           className,
         )}
         style={{
-          background: disabled
-            ? 'rgb(161 161 170)'
-            : 'linear-gradient(to right, rgb(24 24 27), rgb(39 39 42))',
           color: '#ffffff',
-          boxShadow: disabled ? 'none' : '0 1px 3px rgba(0,0,0,0.3)',
+          background: disabled ? '#71717a' : undefined,
         }}
       >
         {isLoading ? (
@@ -835,7 +838,7 @@ function CheckoutButton({
                   'disabled:cursor-not-allowed disabled:opacity-60',
                 )}
                 style={{
-                  background: disabled ? 'rgb(161 161 170)' : 'rgb(24 24 27)',
+                  backgroundColor: disabled ? '#71717a' : '#18181b',
                   color: '#ffffff',
                 }}
               >
