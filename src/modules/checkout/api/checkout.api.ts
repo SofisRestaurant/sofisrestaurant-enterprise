@@ -139,6 +139,7 @@ type CheckoutRequestItem = {
   pricing_hash?: string;
 };
 
+// AFTER:
 type CheckoutRequestBody = {
   request_id: string;
   items: CheckoutRequestItem[];
@@ -149,6 +150,8 @@ type CheckoutRequestBody = {
   promo_code?: string;
   promo_id?: string;
   credit_id?: string;
+  loyalty_redeem_points?: number;
+  loyalty_account_id?: string;
 };
 
 type CheckoutPayloadExtras = {
@@ -620,6 +623,19 @@ function buildCheckoutRequestBody(
     }
     requestBody.credit_id = creditId;
   }
+  
+const loyaltyPoints = asNumber(
+  (payload as unknown as Record<string, unknown>)['loyalty_redeem_points'],
+  0,
+);
+const loyaltyAccountId = asString(
+  (payload as unknown as Record<string, unknown>)['loyalty_account_id'],
+).trim();
+
+if (loyaltyPoints > 0 && loyaltyAccountId) {
+  requestBody.loyalty_redeem_points = Math.floor(loyaltyPoints);
+  requestBody.loyalty_account_id = loyaltyAccountId;
+}
 
   return requestBody;
 }
