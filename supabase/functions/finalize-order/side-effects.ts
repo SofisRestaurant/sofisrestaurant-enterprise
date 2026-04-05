@@ -66,6 +66,31 @@ export async function insertOrderItemsBestEffort(args: {
 }
 
 // ── Loyalty ───────────────────────────────────────────────────────────────────
+// Tier multipliers — must match LOYALTY_TIERS in src/domain/loyalty/tiers.ts
+// and calculatePointsPreview in src/modules/checkout/api/checkout.api.ts.
+// These are server-authoritative: we read tier + streak from the DB,
+// never from the client or Stripe metadata.
+
+const TIER_MULTIPLIERS: Record<string, number> = {
+  bronze:   1.0,
+  silver:   1.1,
+  gold:     1.25,
+  platinum: 1.5,
+  diamond:  2.0,
+};
+
+function resolveTierMultiplier(tier: string): number {
+  return TIER_MULTIPLIERS[tier.toLowerCase()] ?? 1.0;
+}
+
+function resolveStreakMultiplier(streak: number): number {
+  // nextStreak because the current order extends the streak by 1.
+  const nextStreak = streak + 1;
+  if (nextStreak >= 30) return 1.5;
+  if (nextStreak >= 7)  return 1.25;
+  if (nextStreak >= 3)  return 1.1;
+  return 1.0;
+}
 
 export async function backfillLoyaltyV2IfMissing(args: {
   db: DbClient;
@@ -79,9 +104,11 @@ export async function backfillLoyaltyV2IfMissing(args: {
   if (amountCents <= 0) return;
 
   try {
+    // Fetch tier + streak from loyalty_accounts — DB-authoritative.
+    // The old query only fetched 'id', which is why the multiplier was never applied.
     const { data: account, error: accountError } = await db
       .from('loyalty_accounts')
-      .select('id')
+      .select('id, tier, streak')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -104,13 +131,37 @@ export async function backfillLoyaltyV2IfMissing(args: {
 
     if (!ledgerError && existingLedger?.id) return;
 
+    // Compute multipliers from DB-authoritative tier + streak.
+    const tier           = typeof account.tier   === 'string' ? account.tier   : 'bronze';
+    const streak         = typeof account.streak === 'number' ? account.streak : 0;
+    const tierMultiplier = resolveTierMultiplier(tier);
+    const streakMult     = resolveStreakMultiplier(streak);
+    const basePoints     = Math.max(Math.floor(amountCents / 100), 0);
+    const finalPoints    = Math.max(Math.floor(basePoints * tierMultiplier * streakMult), 0);
+    const newStreak      = streak + 1;
+
+    if (finalPoints <= 0) {
+      log('info', 'loyalty_backfill_zero_points', {
+        requestId, orderId: prefix(orderId), amountCents, basePoints,
+      });
+      return;
+    }
+
+    // v2_award_points expects p_amount as the post-multiplier value.
+    // The edge function is responsible for computing this — the RPC stores it as-is.
     const { error } = await db.rpc('v2_award_points', {
-      p_account_id: account.id,
-      p_admin_id: userId,
-      p_amount_cents: amountCents,
+      p_account_id:      account.id,
+      p_admin_id:        userId,
+      p_amount:          finalPoints,       // post-multiplier — what goes in the ledger
+      p_base_points:     basePoints,        // pre-multiplier — audit only
+      p_tier_at_time:    tier,             // audit only
+      p_tier_mult:       tierMultiplier,   // audit only
+      p_streak:          newStreak,        // new streak after this order
+      p_streak_mult:     streakMult,       // audit only
+      p_amount_cents:    amountCents,      // purchase amount — audit only
       p_idempotency_key: idempotencyKey,
-      p_reference_id: orderId,
-    });
+      p_reference_id:    orderId,
+    } as never);
 
     if (error) {
       log('warn', 'loyalty_backfill_award_failed_v2', {
@@ -120,7 +171,15 @@ export async function backfillLoyaltyV2IfMissing(args: {
     }
 
     log('info', 'loyalty_backfill_awarded_v2', {
-      requestId, orderId: prefix(orderId), accountId: prefix(account.id),
+      requestId,
+      orderId:    prefix(orderId),
+      accountId:  prefix(account.id),
+      tier,
+      streak:     newStreak,
+      base:       basePoints,
+      tierMult:   tierMultiplier,
+      streakMult: streakMult,
+      final:      finalPoints,
     });
   } catch (error) {
     log('error', 'loyalty_backfill_crash', {

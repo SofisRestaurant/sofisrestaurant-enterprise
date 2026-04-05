@@ -854,9 +854,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
-  // Coupon is now claimed by the session — delete to keep Stripe dashboard clean.
-  if (stripeCouponId) await deleteCouponSilently(stripe, stripeCouponId, requestId);
-
   if (!stripeSession.url) {
     log("error", "checkout_stripe_session_missing_url", {
       requestId,
