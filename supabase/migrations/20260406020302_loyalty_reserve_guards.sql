@@ -30,20 +30,16 @@ BEGIN
     RAISE EXCEPTION 'reserve amount must be positive, got %', p_points
       USING ERRCODE = 'check_violation';
   END IF;
-
   IF p_stripe_session_id IS NULL OR trim(p_stripe_session_id) = '' THEN
     RAISE EXCEPTION 'stripe_session_id is required'
       USING ERRCODE = 'check_violation';
   END IF;
-
   IF p_points_per_dollar <= 0 THEN
     RAISE EXCEPTION 'points_per_dollar must be positive, got %', p_points_per_dollar
       USING ERRCODE = 'check_violation';
   END IF;
-
   IF p_points > c_max_points_per_order THEN
-    RAISE EXCEPTION
-      'Per-order redemption limit exceeded: requested %, max per order is %',
+    RAISE EXCEPTION 'Per-order redemption limit exceeded: requested %, max per order is %',
       p_points, c_max_points_per_order
       USING ERRCODE = 'check_violation';
   END IF;
@@ -68,34 +64,27 @@ BEGIN
     RAISE EXCEPTION 'Loyalty account not found: %', p_account_id
       USING ERRCODE = 'no_data_found';
   END IF;
-
   IF v_account.user_id IS DISTINCT FROM p_user_id THEN
     RAISE EXCEPTION 'Account % does not belong to user %', p_account_id, p_user_id
       USING ERRCODE = 'insufficient_privilege';
   END IF;
-
   IF v_account.balance < p_points THEN
-    RAISE EXCEPTION
-      'Insufficient loyalty balance: account has %, redemption requires %',
+    RAISE EXCEPTION 'Insufficient loyalty balance: account has %, redemption requires %',
       v_account.balance, p_points
       USING ERRCODE = 'check_violation';
   END IF;
 
-SELECT COALESCE(ABS(SUM(amount)), 0)::integer
+  -- Cross-session stack prevention — excludes released and redeemed reserves
+  SELECT COALESCE(ABS(SUM(amount)), 0)::integer
   INTO v_active_reserves
-  FROM loyalty_ledger
-  WHERE account_id    = p_account_id
-    AND entry_type    = 'checkout_reserve'
-    AND idempotency_key <> v_idem_key
+  FROM loyalty_ledger ll
+  WHERE ll.account_id     = p_account_id
+    AND ll.entry_type     = 'checkout_reserve'
+    AND ll.idempotency_key <> v_idem_key
     AND NOT EXISTS (
       SELECT 1 FROM loyalty_ledger ll2
-      WHERE ll2.idempotency_key = replace(loyalty_ledger.idempotency_key, 'reserve:', 'release:')
-    )
-    AND NOT EXISTS (
-      SELECT 1 FROM loyalty_ledger ll3
-      WHERE ll3.idempotency_key = replace(loyalty_ledger.idempotency_key, 'reserve:', 'redeemed:')
-        OR ll3.entry_type = 'redeemed'
-        AND ll3.idempotency_key = loyalty_ledger.idempotency_key
+      WHERE ll2.idempotency_key =
+        replace(ll.idempotency_key, 'reserve:', 'release:')
     );
 
   IF v_active_reserves > 0 THEN
@@ -110,7 +99,12 @@ SELECT COALESCE(ABS(SUM(amount)), 0)::integer
   FROM loyalty_ledger
   WHERE account_id = p_account_id
     AND entry_type IN ('redeemed', 'checkout_reserve')
-    AND created_at >= now() - interval '24 hours';
+    AND created_at >= now() - interval '24 hours'
+    AND NOT EXISTS (
+      SELECT 1 FROM loyalty_ledger ll2
+      WHERE ll2.idempotency_key =
+        replace(loyalty_ledger.idempotency_key, 'reserve:', 'release:')
+    );
 
   IF v_daily_redeemed + p_points > c_max_points_per_day THEN
     RAISE EXCEPTION
@@ -123,24 +117,11 @@ SELECT COALESCE(ABS(SUM(amount)), 0)::integer
   v_cents   := floor(p_points::numeric / p_points_per_dollar * 100)::integer;
 
   INSERT INTO loyalty_ledger (
-    account_id,
-    amount,
-    balance_after,
-    entry_type,
-    source,
-    idempotency_key,
-    tier_at_time,
-    streak_at_time,
-    metadata
+    account_id, amount, balance_after, entry_type, source,
+    idempotency_key, tier_at_time, streak_at_time, metadata
   ) VALUES (
-    p_account_id,
-    -p_points,
-    v_new_bal,
-    'checkout_reserve',
-    'online_checkout',
-    v_idem_key,
-    v_account.tier,
-    v_account.streak,
+    p_account_id, -p_points, v_new_bal, 'checkout_reserve', 'online_checkout',
+    v_idem_key, v_account.tier, v_account.streak,
     jsonb_build_object(
       'stripe_session_id', p_stripe_session_id,
       'reserved_cents',    v_cents,
@@ -160,21 +141,9 @@ SELECT COALESCE(ABS(SUM(amount)), 0)::integer
   END IF;
 
   UPDATE loyalty_accounts
-  SET
-    balance       = v_new_bal,
-    last_activity = now(),
-    updated_at    = now()
+  SET balance = v_new_bal, last_activity = now(), updated_at = now()
   WHERE id = p_account_id;
 
   RETURN QUERY SELECT p_points, v_cents, v_new_bal, false;
 END;
 $$;
-
-COMMENT ON FUNCTION public.v2_reserve_loyalty_points IS
-  'Atomically reserves loyalty points at checkout start. '
-  'Guards: per-order cap (5000 pts), daily cap (10000 pts/24h), '
-  'cross-session stack prevention (one active reserve per account). '
-  'FOR UPDATE prevents concurrent double-spend. '
-  'Idempotent per stripe_session_id. '
-  'Raises check_violation if any guard fails. '
-  'Pair with v2_release_loyalty_reserve on session expiry/cancellation.';
