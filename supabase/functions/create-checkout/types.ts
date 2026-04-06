@@ -174,6 +174,8 @@ export type ErrorCode =
   | "loyalty_reserve_conflict"
   | "loyalty_daily_limit"
   | "loyalty_order_limit"
+  | "loyalty_cooldown"
+  | "recent_order_exists"
   | "internal_error";
 
 export type SuccessCode =

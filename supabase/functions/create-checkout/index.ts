@@ -125,6 +125,7 @@ async function tryReleaseLoyalty(
     });
   }
 }
+const LOYALTY_REDEEM_COOLDOWN_MINUTES = 30;
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
 
@@ -340,6 +341,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       },
     );
   }
+
 
   let canonicalItems: CanonicalCartItem[];
   try {
@@ -629,6 +631,72 @@ Deno.serve(async (req: Request): Promise<Response> => {
       corsHeaders,
     );
   }
+
+if (loyaltyIntent) {
+
+  const { data: acct } = await db
+
+    .from("loyalty_accounts")
+
+    .select("last_redeem_at")
+
+    .eq("id", body.loyalty_account_id ?? "")
+
+    .maybeSingle();
+
+if (acct?.last_redeem_at) {
+
+const minutesSince =
+
+      (Date.now() - new Date(acct.last_redeem_at).getTime()) / 60000;
+
+if (minutesSince < LOYALTY_REDEEM_COOLDOWN_MINUTES) {
+
+const minutesLeft = Math.ceil(LOYALTY_REDEEM_COOLDOWN_MINUTES - minutesSince);
+
+return errorResponse(
+
+requestId,
+
+422,
+
+"loyalty_cooldown",
+
+`You recently redeemed points. Please wait ${minutesLeft} more minute${minutesLeft !== 1 ? "s" : ""} before redeeming again.`,
+
+corsHeaders,
+
+      );
+
+    }
+
+  }
+
+}
+
+const { data: recentOrder } = await db
+  .from("orders")
+  .select("id, created_at")
+  .eq("customer_uid", userId)
+  .eq("payment_status", "paid")
+  .gte("created_at", new Date(Date.now() - 2 * 60 * 1000).toISOString())
+  .limit(1)
+  .maybeSingle();
+
+if (recentOrder?.id) {
+  log("warn", "checkout_duplicate_order_blocked", {
+    requestId,
+    userId: prefix(userId),
+    recentOrderId: prefix(recentOrder.id),
+  });
+  return errorResponse(
+    requestId,
+    429,
+    "recent_order_exists",
+    "You placed an order very recently. Please wait a moment before ordering again.",
+    corsHeaders,
+  );
+}
 
   if (loyaltyIntent) {
     const subtotalAfterCredit = Math.max(
