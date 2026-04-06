@@ -651,10 +651,16 @@ Deno.serve(async (req: Request): Promise<Response> => {
         loyaltyAccountId: body.loyalty_account_id,
       }
       : null;
-
+if (loyaltyIntent && (resolvedPromoId || body.promo_code)) {
+  return errorResponse(
+    requestId,
+    422,
+    "discount_conflict",
+    "Cannot combine promo codes with loyalty points.",
+    corsHeaders,
+  );
+}
   if (loyaltyIntent) {
-    // Cap against post-credit subtotal: loyalty discounts what remains after
-    // store credit is applied, matching the server's pricing pipeline order.
     const subtotalAfterCredit = Math.max(
       0,
       snapshot.subtotalCents - (snapshot.creditCents ?? 0),

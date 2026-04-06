@@ -170,6 +170,7 @@ export type ErrorCode =
   | "pending_cart_persist_failed"
   | "line_items_failed"
   | "stripe_session_failed"
+  | "discount_conflict"
   | "internal_error";
 
 export type SuccessCode =

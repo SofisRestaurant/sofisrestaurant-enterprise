@@ -81,12 +81,22 @@ BEGIN
       USING ERRCODE = 'check_violation';
   END IF;
 
-  SELECT COALESCE(ABS(SUM(amount)), 0)::integer
+SELECT COALESCE(ABS(SUM(amount)), 0)::integer
   INTO v_active_reserves
   FROM loyalty_ledger
   WHERE account_id    = p_account_id
     AND entry_type    = 'checkout_reserve'
-    AND idempotency_key <> v_idem_key;  -- exclude this session (idempotency)
+    AND idempotency_key <> v_idem_key
+    AND NOT EXISTS (
+      SELECT 1 FROM loyalty_ledger ll2
+      WHERE ll2.idempotency_key = replace(loyalty_ledger.idempotency_key, 'reserve:', 'release:')
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM loyalty_ledger ll3
+      WHERE ll3.idempotency_key = replace(loyalty_ledger.idempotency_key, 'reserve:', 'redeemed:')
+        OR ll3.entry_type = 'redeemed'
+        AND ll3.idempotency_key = loyalty_ledger.idempotency_key
+    );
 
   IF v_active_reserves > 0 THEN
     RAISE EXCEPTION

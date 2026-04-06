@@ -50,12 +50,22 @@ async function finalizeLoyaltyReserve(args: {
 
   const reserveIdemKey = `reserve:${preSessionKey}`;
 
-  // Flip checkout_reserve → redeemed (idempotent: only matches checkout_reserve)
-  const { error: flipError } = await db
+const { error: flipError } = await db
     .from("loyalty_ledger")
-    .update({ entry_type: "redeemed" })
-    .eq("idempotency_key", reserveIdemKey)
-    .eq("entry_type", "checkout_reserve");
+    .insert({
+      account_id:      loyaltyAccountId,
+      amount:          0,
+      balance_after:   0,
+      entry_type:      "checkout_release",
+      source:          "online_checkout",
+      idempotency_key: reserveIdemKey.replace("reserve:", "release:"),
+      metadata: {
+        stripe_session_id: session.id,
+        reason:            "payment_completed",
+        loyalty_points:    loyaltyPoints,
+        loyalty_cents:     loyaltyCents,
+      },
+    });
 
   if (flipError) {
     // Non-critical — balance already correct from the reserve debit. Log and continue.
