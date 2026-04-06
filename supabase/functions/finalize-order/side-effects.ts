@@ -71,12 +71,12 @@ export async function insertOrderItemsBestEffort(args: {
 // These are server-authoritative: we read tier + streak from the DB,
 // never from the client or Stripe metadata.
 
+// Must match LOYALTY_TIERS multipliers in src/domain/loyalty/tiers.ts exactly.
 const TIER_MULTIPLIERS: Record<string, number> = {
   bronze:   1.0,
-  silver:   1.1,
-  gold:     1.25,
-  platinum: 1.5,
-  diamond:  2.0,
+  silver:   1.25,
+  gold:     1.5,
+  platinum: 2.0,
 };
 
 function resolveTierMultiplier(tier: string): number {

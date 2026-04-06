@@ -89,6 +89,10 @@ function normalizeOrderType(value: unknown): OrderType {
   return value === 'delivery' || value === 'dine_in' || value === 'pickup' ? value : 'pickup';
 }
 
+function isLoyaltyRelatedMessage(message: string): boolean {
+  return /(loyalty|points|redeem|reserve)/i.test(message);
+}
+
 function isPromoRelatedMessage(message: string): boolean {
   return /(promo|coupon|code|discount)/i.test(message);
 }
@@ -494,7 +498,12 @@ function CheckoutButton({
       const message =
         checkoutError instanceof Error ? checkoutError.message : t('checkout.error.checkoutFailed');
 
-      if (onPromoError && (isPromoRelatedMessage(message) || isCreditRelatedMessage(message))) {
+      if (
+        onPromoError &&
+        (isPromoRelatedMessage(message) ||
+          isCreditRelatedMessage(message) ||
+          isLoyaltyRelatedMessage(message))
+      ) {
         onPromoError(message);
       }
     } finally {
@@ -512,6 +521,7 @@ function CheckoutButton({
     notes,
     onPromoError,
     t,
+    loyalty,
   ]);
 
   const handlePrimaryClick = useCallback(() => {

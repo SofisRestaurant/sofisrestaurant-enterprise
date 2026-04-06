@@ -242,13 +242,22 @@ export async function applyLoyaltyToCheckout(args: {
       });
 
       // check_violation (23514) = insufficient balance race — not our bug
-      if (
-        error.code === "23514" ||
-        (error.message ?? "").includes("Insufficient")
-      ) {
-        return skip("insufficient_balance_at_reserve_time", requestId, {
-          points: pointsToReserve, balance: account.balance,
-        });
+if (error.code === "23514") {
+        const msg = error.message ?? "";
+        if (msg.includes("Active loyalty reserve exists")) {
+          return skip("active_reserve_exists", requestId, { msg });
+        }
+        if (msg.includes("Daily redemption limit")) {
+          return skip("daily_limit_exceeded", requestId, { msg });
+        }
+        if (msg.includes("Per-order redemption limit")) {
+          return skip("per_order_limit_exceeded", requestId, { msg });
+        }
+        if (msg.includes("Insufficient")) {
+          return skip("insufficient_balance_at_reserve_time", requestId, {
+            points: pointsToReserve, balance: account.balance,
+          });
+        }
       }
       return skip("reserve_rpc_error", requestId, { pgCode: error.code });
     }

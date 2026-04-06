@@ -161,19 +161,24 @@ function cx(...classes: Array<string | false | null | undefined>) {
 // Returns { accountId, balance } — the two values RewardsRedeem needs.
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function getLoyaltyAccount(): Promise<{ accountId: string; balance: number } | null> {
+async function getLoyaltyAccount(): Promise<{
+  accountId: string;
+  balance: number;
+  lastRedeemAt: string | null;
+} | null> {
   try {
     const { data, error } = await supabase.functions.invoke('loyalty-account');
     if (error || !data?.ok || !data?.account?.id) return null;
     return {
       accountId: String(data.account.id),
       balance: typeof data.account.balance === 'number' ? data.account.balance : 0,
+      lastRedeemAt:
+        typeof data.account.last_redeem_at === 'string' ? data.account.last_redeem_at : null,
     };
   } catch {
     return null;
   }
 }
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Component
 // ─────────────────────────────────────────────────────────────────────────────
@@ -272,7 +277,7 @@ export default function CheckoutPage() {
   // ── Loyalty profile (points-to-earn preview) ───────────────────────────────
   const [loyaltyProfile, setLoyaltyProfile] = useState<LoyaltyProfile | null>(null);
   const [loyaltyPreview, setLoyaltyPreview] = useState<LoyaltyPreview | null>(null);
-
+  const [recentlyRedeemed, setRecentlyRedeemed] = useState(false);
   useEffect(() => {
     if (!isAuthenticated) return;
     let alive = true;
@@ -296,18 +301,22 @@ export default function CheckoutPage() {
   const [loyaltyBalance, setLoyaltyBalance] = useState(0);
   const [loyaltyAccountId, setLoyaltyAccountId] = useState('');
 
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    let alive = true;
-    void getLoyaltyAccount().then((acct) => {
-      if (!alive || !acct) return;
-      setLoyaltyBalance(acct.balance);
-      setLoyaltyAccountId(acct.accountId);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [isAuthenticated]);
+useEffect(() => {
+  if (!isAuthenticated) return;
+  let alive = true;
+  void getLoyaltyAccount().then((acct) => {
+    if (!alive || !acct) return;
+    setLoyaltyBalance(acct.balance);
+    setLoyaltyAccountId(acct.accountId);
+    if (acct.lastRedeemAt) {
+      const hoursSince = (Date.now() - new Date(acct.lastRedeemAt).getTime()) / 36e5;
+      setRecentlyRedeemed(hoursSince < 24);
+    }
+  });
+  return () => {
+    alive = false;
+  };
+}, [isAuthenticated]);
 
   // ── Loyalty redemption intent (ephemeral — never persisted to localStorage) ─
   const [loyaltyIntent, setLoyaltyIntent] = useState<LoyaltyRedeemValue>({
@@ -728,6 +737,13 @@ export default function CheckoutPage() {
                   presentational component — it receives live balance + accountId
                   and emits the user's intent. Server validates everything.
               ──────────────────────────────────────────────────────────────── */}
+
+              {recentlyRedeemed && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 mb-2">
+                  ✨ You recently redeemed points. Your current balance reflects that redemption.
+                </p>
+              )}
+
               {isAuthenticated && loyaltyBalance > 0 && loyaltyAccountId && (
                 <RewardsRedeem
                   balance={loyaltyBalance}

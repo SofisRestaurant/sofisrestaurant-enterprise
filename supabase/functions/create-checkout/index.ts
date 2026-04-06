@@ -674,6 +674,26 @@ if (loyaltyIntent && (resolvedPromoId || body.promo_code)) {
       db,
       requestId,
     });
+    
+     if (!loyaltyResult.applied) {
+      const reason = loyaltyResult.reason;
+      if (reason === "active_reserve_exists") {
+        return errorResponse(requestId, 422, "loyalty_reserve_conflict",
+          "You have an active checkout in progress. Complete or cancel it before redeeming points again.",
+          corsHeaders);
+      }
+      if (reason === "daily_limit_exceeded") {
+        return errorResponse(requestId, 422, "loyalty_daily_limit",
+          "You've reached your daily loyalty redemption limit. Try again tomorrow.",
+          corsHeaders);
+      }
+      if (reason === "per_order_limit_exceeded") {
+        return errorResponse(requestId, 422, "loyalty_order_limit",
+          "You've selected more points than the per-order maximum.",
+          corsHeaders);
+      }
+      // All other skips (insufficient balance, zero balance, etc.) proceed silently at full price
+    }
 
     if (loyaltyResult.applied) {
       loyaltyDiscountCents = loyaltyResult.discountCents;

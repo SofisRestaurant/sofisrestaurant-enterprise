@@ -171,6 +171,9 @@ export type ErrorCode =
   | "line_items_failed"
   | "stripe_session_failed"
   | "discount_conflict"
+  | "loyalty_reserve_conflict"
+  | "loyalty_daily_limit"
+  | "loyalty_order_limit"
   | "internal_error";
 
 export type SuccessCode =
