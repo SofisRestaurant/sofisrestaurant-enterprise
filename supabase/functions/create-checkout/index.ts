@@ -674,14 +674,58 @@ if (loyaltyIntent && (resolvedPromoId || body.promo_code)) {
       db,
       requestId,
     });
-    
+
      if (!loyaltyResult.applied) {
       const reason = loyaltyResult.reason;
-      if (reason === "active_reserve_exists") {
+ if (reason === "active_reserve_exists") {
+        // Find the pending cart tied to the active loyalty reserve and
+        // return its Stripe URL so the customer can resume without losing points.
+        const { data: activeCart } = await db
+          .from("pending_carts")
+          .select("stripe_session_id")
+          .eq("user_id", userId)
+          .eq("loyalty_account_id", body.loyalty_account_id ?? "")
+          .is("consumed_at", null)
+          .not("stripe_session_id", "is", null)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (activeCart?.stripe_session_id) {
+          try {
+            const existingSession = await stripe.checkout.sessions.retrieve(
+              activeCart.stripe_session_id,
+            );
+            if (existingSession.status === "open" && existingSession.url) {
+              log("info", "checkout_loyalty_resume_existing", {
+                requestId,
+                userId: prefix(userId),
+                sessionId: prefix(existingSession.id),
+              });
+              return successResponse(
+                requestId,
+                "checkout_session_reused",
+                {
+                  sessionId: existingSession.id,
+                  url: existingSession.url,
+                  pricingHash,
+                  pricing: buildCheckoutPricingResponse(snapshot),
+                  loyalty_resumed: true,
+                },
+                corsHeaders,
+              );
+            }
+          } catch {
+            // Stripe session lookup failed — fall through to error
+          }
+        }
+
+        // No resumable session found — tell the customer clearly
         return errorResponse(requestId, 422, "loyalty_reserve_conflict",
           "You have an active checkout in progress. Complete or cancel it before redeeming points again.",
           corsHeaders);
       }
+
       if (reason === "daily_limit_exceeded") {
         return errorResponse(requestId, 422, "loyalty_daily_limit",
           "You've reached your daily loyalty redemption limit. Try again tomorrow.",
