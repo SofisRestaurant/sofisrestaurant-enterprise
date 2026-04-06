@@ -1,35 +1,3 @@
-// =============================================================================
-// PATH: supabase/functions/create-checkout/index.ts
-// =============================================================================
-// create-checkout — Production Hardened (2026)
-//
-// Responsibilities:
-//   1. Authenticate the caller (JWT → user_id)
-//   2. Validate + sanitize request body
-//   3. Enforce per-user rate limits via checkout_rate_limits table
-//   4. Resolve server-authoritative pricing via resolvePricingForCheckout()
-//   5. Validate promo code (active, applicable, per-user limit not exceeded)
-//   6. Validate user credit (exists, belongs to user, unused, not expired)
-//   7. Persist pending_cart BEFORE Stripe
-//   8. Reserve loyalty points atomically (server-side, before Stripe session)
-//   9. Build Stripe Checkout Session (server-authoritative line items only)
-//  10. Embed all critical identifiers in session.metadata for webhook recovery
-//  11. Update pending_cart.stripe_session_id after session created
-//  12. Reuse an existing open Stripe session for the same idempotency key
-//  13. Return { sessionId, url } to the client
-//
-// Security:
-//   - No client-supplied prices ever reach Stripe; all amounts come from server pricing
-//   - JWT required; user identity validated with anon client auth.getUser()
-//   - Per-user rate limiting via checkout_rate_limits + blocked_until
-//   - Strict JSON parsing with content-type + size cap + deterministic error codes
-//   - CORS is fail-closed to the allowlisted origins only
-//   - No tokens / emails / phones / addresses are logged
-//   - Credits are validated pre-payment only; redemption remains post-payment
-//   - Loyalty points are atomically reserved server-side before Stripe session;
-//     released automatically on session expiry or Stripe creation failure
-// =============================================================================
-
 import Stripe from "stripe";
 import {
   createAnonClient,
@@ -628,13 +596,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
-  // ── Loyalty reservation ───────────────────────────────────────────────────
-  // Must run BEFORE Stripe session creation so the discount is applied to the
-  // correct server-computed total. On any failure the checkout proceeds at
-  // full price — loyalty is never a blocking dependency.
-  //
-  // preSessionKey = globally unique idempotency key for the ledger entry:
-  //   userId + cartId + requestId (all server-generated, not client-supplied)
   const preSessionKey = `${userId}:${pendingCart.cartId}:${requestId}`;
 
   let loyaltyDiscountCents = 0;
@@ -677,53 +638,102 @@ if (loyaltyIntent && (resolvedPromoId || body.promo_code)) {
 
      if (!loyaltyResult.applied) {
       const reason = loyaltyResult.reason;
- if (reason === "active_reserve_exists") {
-        // Find the pending cart tied to the active loyalty reserve and
-        // return its Stripe URL so the customer can resume without losing points.
-        const { data: activeCart } = await db
-          .from("pending_carts")
-          .select("stripe_session_id")
-          .eq("user_id", userId)
-          .eq("loyalty_account_id", body.loyalty_account_id ?? "")
-          .is("consumed_at", null)
-          .not("stripe_session_id", "is", null)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
 
-        if (activeCart?.stripe_session_id) {
-          try {
-            const existingSession = await stripe.checkout.sessions.retrieve(
-              activeCart.stripe_session_id,
-            );
-            if (existingSession.status === "open" && existingSession.url) {
-              log("info", "checkout_loyalty_resume_existing", {
-                requestId,
-                userId: prefix(userId),
-                sessionId: prefix(existingSession.id),
-              });
-              return successResponse(
-                requestId,
-                "checkout_session_reused",
-                {
-                  sessionId: existingSession.id,
-                  url: existingSession.url,
-                  pricingHash,
-                  pricing: buildCheckoutPricingResponse(snapshot),
-                  loyalty_resumed: true,
-                },
-                corsHeaders,
-              );
+      
+if (reason === "active_reserve_exists") {
+        let resumeUrl: string | null = null;
+        const staleSessionKeys: string[] = [];
+
+        try {
+          const { data: activeReserves } = await db
+            .from("loyalty_ledger")
+            .select("idempotency_key, metadata")
+            .eq("account_id", body.loyalty_account_id ?? "")
+            .eq("entry_type", "checkout_reserve")
+            .order("created_at", { ascending: false })
+            .limit(10);
+
+          for (const row of activeReserves ?? []) {
+            const idemKey = row.idempotency_key as string ?? "";
+            const releaseKey = idemKey.replace("reserve:", "release:");
+
+            const { data: released } = await db
+              .from("loyalty_ledger")
+              .select("id")
+              .eq("idempotency_key", releaseKey)
+              .maybeSingle();
+            if (released?.id) continue;
+
+            const sessionKey = (row.metadata as Record<string, string>)
+              ?.stripe_session_id ?? "";
+            const parts = sessionKey.split(":");
+            const cartId = parts[1];
+
+            if (!cartId) {
+              staleSessionKeys.push(sessionKey);
+              continue;
             }
-          } catch {
-            // Stripe session lookup failed — fall through to error
+
+            const { data: cart } = await db
+              .from("pending_carts")
+              .select("stripe_session_id")
+              .eq("id", cartId)
+              .is("consumed_at", null)
+              .maybeSingle();
+
+            const stripeSessionId = cart?.stripe_session_id;
+            if (!stripeSessionId) {
+              staleSessionKeys.push(sessionKey);
+              continue;
+            }
+
+            try {
+              const existing = await stripe.checkout.sessions.retrieve(stripeSessionId);
+              if (existing.status === "open" && existing.url) {
+                resumeUrl = existing.url;
+                log("info", "checkout_loyalty_resume_existing", {
+                  requestId,
+                  userId: prefix(userId),
+                  sessionId: prefix(existing.id),
+                });
+                break;
+              } else {
+                staleSessionKeys.push(sessionKey);
+              }
+            } catch {
+              staleSessionKeys.push(sessionKey);
+            }
           }
+        } catch (err) {
+          log("warn", "checkout_loyalty_reserve_lookup_failed", {
+            requestId,
+            error: asErr(err),
+          });
         }
 
-        // No resumable session found — tell the customer clearly
-        return errorResponse(requestId, 422, "loyalty_reserve_conflict",
-          "You have an active checkout in progress. Complete or cancel it before redeeming points again.",
-          corsHeaders);
+        if (resumeUrl) {
+          return successResponse(
+            requestId,
+            "checkout_session_reused",
+            {
+              sessionId: "",
+              url: resumeUrl,
+              pricingHash,
+              pricing: buildCheckoutPricingResponse(snapshot),
+            },
+            corsHeaders,
+          );
+        }
+
+        for (const sessionKey of staleSessionKeys) {
+          await tryReleaseLoyalty(db, sessionKey, "stale_reserve_auto_release", requestId);
+        }
+
+        log("info", "checkout_loyalty_stale_reserve_cleared", {
+          requestId,
+          userId: prefix(userId),
+          count: staleSessionKeys.length,
+        });
       }
 
       if (reason === "daily_limit_exceeded") {
@@ -736,7 +746,6 @@ if (loyaltyIntent && (resolvedPromoId || body.promo_code)) {
           "You've selected more points than the per-order maximum.",
           corsHeaders);
       }
-      // All other skips (insufficient balance, zero balance, etc.) proceed silently at full price
     }
 
     if (loyaltyResult.applied) {
@@ -744,8 +753,6 @@ if (loyaltyIntent && (resolvedPromoId || body.promo_code)) {
       loyaltyAccountId = loyaltyResult.accountId;
       loyaltyPoints = loyaltyResult.reservedPoints;
 
-      // Create a one-time Stripe coupon for the discount.
-      // Negative unit_amount on line items is not supported in payment mode.
       stripeCouponId = await createLoyaltyCoupon(
         stripe,
         loyaltyDiscountCents,
@@ -754,7 +761,6 @@ if (loyaltyIntent && (resolvedPromoId || body.promo_code)) {
       );
 
       if (!stripeCouponId) {
-        // Coupon creation failed — release the reserve and proceed at full price.
         await tryReleaseLoyalty(
           db,
           preSessionKey,
@@ -774,7 +780,6 @@ if (loyaltyIntent && (resolvedPromoId || body.promo_code)) {
         });
       }
     }
-    // Skips are already logged inside applyLoyaltyToCheckout via skip()
   }
 
   let stripeLineItems: Stripe.Checkout.SessionCreateParams.LineItem[];
@@ -788,7 +793,6 @@ if (loyaltyIntent && (resolvedPromoId || body.promo_code)) {
       error: asErr(error),
     });
 
-    // Release loyalty reserve before returning — line items failed after reserve
     if (loyaltyAccountId && loyaltyPoints > 0) {
       await tryReleaseLoyalty(
         db,
@@ -854,8 +858,7 @@ if (loyaltyIntent && (resolvedPromoId || body.promo_code)) {
     ...(body.loyalty_redemption_id
       ? { loyalty_redemption_id: body.loyalty_redemption_id }
       : {}),
-    // Loyalty reservation fields — written only when a reserve was committed.
-    // The webhook uses these to finalize (completed) or release (expired).
+
     ...(loyaltyAccountId
       ? {
         loyalty_account_id: loyaltyAccountId,
@@ -886,8 +889,7 @@ if (loyaltyIntent && (resolvedPromoId || body.promo_code)) {
         ...(body.order_type === "delivery"
           ? { phone_number_collection: { enabled: true } }
           : {}),
-        // Loyalty coupon — shows as "Loyalty Rewards -$X.XX" on Stripe's
-        // hosted payment page and on the customer receipt.
+
         ...(stripeCouponId ? { discounts: [{ coupon: stripeCouponId }] } : {}),
       },
       {
@@ -902,9 +904,6 @@ if (loyaltyIntent && (resolvedPromoId || body.promo_code)) {
       error: asErr(error),
     });
 
-    // Stripe failed after loyalty reserve — restore points immediately.
-    // Guard on loyaltyAccountId && loyaltyPoints > 0, NOT just discountCents,
-    // because a reserve can succeed even if the cents value rounded to zero.
     if (loyaltyAccountId && loyaltyPoints > 0) {
       await tryReleaseLoyalty(
         db,
@@ -983,9 +982,7 @@ if (loyaltyIntent && (resolvedPromoId || body.promo_code)) {
     requestId,
   );
 
-  // Write loyalty columns to pending_carts so the webhook can find reservation
-  // context without re-parsing Stripe metadata. Best-effort — Stripe metadata
-  // is the authoritative fallback if this update fails.
+
   if (loyaltyAccountId) {
     const { error: loyaltyUpdateErr } = await db
       .from("pending_carts")
