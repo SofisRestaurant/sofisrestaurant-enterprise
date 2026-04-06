@@ -230,7 +230,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     await Promise.all([
       insertOrderItemsBestEffort({ db, requestId, orderId: finalOrder.id, snapshot, pricingHash }),
-      backfillLoyaltyV2IfMissing({ db, requestId, userId: user.id, orderId: finalOrder.id, amountCents: finalOrder.amount_total }),
+      backfillLoyaltyV2IfMissing({ db, requestId, userId: user.id, orderId: finalOrder.id, amountCents: snapshot.subtotalCents }),
       maybeEmitGrowthEvents({ db, requestId, orderId: finalOrder.id, userId: user.id, amountCents: finalOrder.amount_total }),
       markCreditUsedBestEffort({ db, requestId, creditId: snapshot.creditId, userId: user.id, stripeSessionId: sessionId }),
       recordPromoRedemptionBestEffort({

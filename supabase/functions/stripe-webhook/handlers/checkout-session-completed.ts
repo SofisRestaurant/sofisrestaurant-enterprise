@@ -159,6 +159,7 @@ export async function handleCheckoutSessionCompleted(
   const promoId            = pickMeta(session.metadata, "promo_id");
   const creditId           = pickMeta(session.metadata, "credit_id");
   const promoDiscountCents = parseCents(pickMeta(session.metadata, "promo_discount_cents"));
+  const subtotalCents = parseCents(pickMeta(session.metadata, "subtotal_cents")) ?? orderTotal;
   const creditCents        = parseCents(pickMeta(session.metadata, "credit_cents"));
   const totalCents         = typeof session.amount_total === "number"
     ? session.amount_total
@@ -170,7 +171,7 @@ export async function handleCheckoutSessionCompleted(
       db,
       userId,
       orderId,
-      amountCents: orderTotal,
+      amountCents: subtotalCents,
       requestId,
     }),
     emitOrderEvent(
