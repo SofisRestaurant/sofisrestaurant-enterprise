@@ -130,6 +130,26 @@ export async function upsertPaymentIntentTransaction(args: {
   }
 }
 
+// ── Tier multipliers — must match LOYALTY_TIERS in src/domain/loyalty/tiers.ts ──
+const WEBHOOK_TIER_MULTIPLIERS: Record<string, number> = {
+  bronze:   1.0,
+  silver:   1.25,
+  gold:     1.5,
+  platinum: 2.0,
+};
+
+function resolveWebhookTierMultiplier(tier: string): number {
+  return WEBHOOK_TIER_MULTIPLIERS[tier.toLowerCase()] ?? 1.0;
+}
+
+function resolveWebhookStreakMultiplier(streak: number): number {
+  const nextStreak = streak + 1;
+  if (nextStreak >= 30) return 1.5;
+  if (nextStreak >= 7)  return 1.25;
+  if (nextStreak >= 3)  return 1.1;
+  return 1.0;
+}
+
 export async function backfillLoyaltyIfMissing(args: {
   db: DbClient;
   userId: string;
@@ -139,17 +159,15 @@ export async function backfillLoyaltyIfMissing(args: {
 }): Promise<void> {
   const { db, userId, orderId, requestId } = args;
   const amountCents = clampCents(args.amountCents);
-
   if (amountCents <= 0) {
     return;
   }
-
   try {
     const { data: account, error: accountError } = await db
       .from("loyalty_accounts")
-      .select("id")
+      .select("id, tier, streak")
       .eq("user_id", userId)
-      .returns<Array<{ id: string }>>()
+      .returns<Array<{ id: string; tier: string; streak: number }>>()
       .maybeSingle();
 
     if (accountError !== null || account === null) {
@@ -175,13 +193,32 @@ export async function backfillLoyaltyIfMissing(args: {
       return;
     }
 
+    // Compute multipliers from DB-authoritative tier + streak.
+    const tier           = typeof account.tier   === "string" ? account.tier   : "bronze";
+    const streak         = typeof account.streak === "number" ? account.streak : 0;
+    const tierMultiplier = resolveWebhookTierMultiplier(tier);
+    const streakMult     = resolveWebhookStreakMultiplier(streak);
+    const basePoints     = Math.max(Math.floor(amountCents / 100), 0);
+    const finalPoints    = Math.max(Math.floor(basePoints * tierMultiplier * streakMult), 0);
+    const newStreak      = streak + 1;
+
+    if (finalPoints <= 0) {
+      return;
+    }
+
     const { error } = await db.rpc("v2_award_points", {
-      p_account_id: account.id,
-      p_admin_id: userId,
-      p_amount_cents: amountCents,
+      p_account_id:      account.id,
+      p_admin_id:        userId,
+      p_amount:          finalPoints,
+      p_base_points:     basePoints,
+      p_tier_at_time:    tier,
+      p_tier_mult:       tierMultiplier,
+      p_streak:          newStreak,
+      p_streak_mult:     streakMult,
+      p_amount_cents:    amountCents,
       p_idempotency_key: idempotencyKey,
-      p_reference_id: orderId,
-    });
+      p_reference_id:    orderId,
+    } as never);
 
     if (error !== null) {
       log("warn", "webhook_loyalty_award_failed", {
@@ -195,9 +232,14 @@ export async function backfillLoyaltyIfMissing(args: {
 
     log("info", "webhook_loyalty_awarded", {
       requestId,
-      orderId: prefix(orderId),
-      accountId: prefix(account.id),
-      amountCents,
+      orderId:    prefix(orderId),
+      accountId:  prefix(account.id),
+      tier,
+      streak:     newStreak,
+      base:       basePoints,
+      tierMult:   tierMultiplier,
+      streakMult: streakMult,
+      final:      finalPoints,
     });
   } catch (error) {
     log("error", "webhook_loyalty_crash", {
@@ -270,24 +312,24 @@ export async function recordPromoRedemptionIfMissing(args: {
       return;
     }
 
-const { data: incremented, error: updateError } = await db.rpc(
-  "increment_promo_usage_if_available",
-  { p_promo_id: promotionId },
-);
+    const { data: incremented, error: updateError } = await db.rpc(
+      "increment_promo_usage_if_available",
+      { p_promo_id: promotionId },
+    );
 
-if (updateError !== null) {
-  log("warn", "webhook_promo_usage_increment_failed", {
-    requestId,
-    promotionId: prefix(promotionId),
-    code: updateError.code ?? null,
-  });
-} else if (incremented !== true) {
-  log("warn", "webhook_promo_usage_increment_skipped", {
-    requestId,
-    promotionId: prefix(promotionId),
-    reason: "promo_at_capacity_or_missing",
-  });
-}
+    if (updateError !== null) {
+      log("warn", "webhook_promo_usage_increment_failed", {
+        requestId,
+        promotionId: prefix(promotionId),
+        code: updateError.code ?? null,
+      });
+    } else if (incremented !== true) {
+      log("warn", "webhook_promo_usage_increment_skipped", {
+        requestId,
+        promotionId: prefix(promotionId),
+        reason: "promo_at_capacity_or_missing",
+      });
+    }
   } catch (error) {
     log("warn", "webhook_promo_redemption_exception", {
       requestId,
@@ -296,6 +338,7 @@ if (updateError !== null) {
     });
   }
 }
+
 export async function markCreditUsedIfPending(args: {
   db: DbClient;
   creditId: string | null;
