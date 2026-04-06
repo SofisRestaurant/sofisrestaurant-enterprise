@@ -596,6 +596,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
+  // ── Loyalty reservation ───────────────────────────────────────────────────
+  // Must run BEFORE Stripe session creation so the discount is applied to the
+  // correct server-computed total. On any failure the checkout proceeds at
+  // full price — loyalty is never a blocking dependency.
+  //
+  // preSessionKey = globally unique idempotency key for the ledger entry:
+  //   userId + cartId + requestId (all server-generated, not client-supplied)
   const preSessionKey = `${userId}:${pendingCart.cartId}:${requestId}`;
 
   let loyaltyDiscountCents = 0;
@@ -612,15 +619,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
         loyaltyAccountId: body.loyalty_account_id,
       }
       : null;
-if (loyaltyIntent && (resolvedPromoId || body.promo_code)) {
-  return errorResponse(
-    requestId,
-    422,
-    "discount_conflict",
-    "Cannot combine promo codes with loyalty points.",
-    corsHeaders,
-  );
-}
+
+  if (loyaltyIntent && (resolvedPromoId || body.promo_code)) {
+    return errorResponse(
+      requestId,
+      422,
+      "discount_conflict",
+      "Cannot combine promo codes with loyalty points.",
+      corsHeaders,
+    );
+  }
+
   if (loyaltyIntent) {
     const subtotalAfterCredit = Math.max(
       0,
@@ -636,12 +645,15 @@ if (loyaltyIntent && (resolvedPromoId || body.promo_code)) {
       requestId,
     });
 
-     if (!loyaltyResult.applied) {
+    if (!loyaltyResult.applied) {
       const reason = loyaltyResult.reason;
 
-      
-if (reason === "active_reserve_exists") {
+      if (reason === "active_reserve_exists") {
+        // The reserve's stripe_session_id in ledger metadata is the preSessionKey
+        // format: userId:cartId:requestId — extract cartId to find the pending
+        // cart and its actual Stripe session URL so the customer can resume.
         let resumeUrl: string | null = null;
+        let resumeSessionId = "";
         const staleSessionKeys: string[] = [];
 
         try {
@@ -657,6 +669,7 @@ if (reason === "active_reserve_exists") {
             const idemKey = row.idempotency_key as string ?? "";
             const releaseKey = idemKey.replace("reserve:", "release:");
 
+            // Skip if already released
             const { data: released } = await db
               .from("loyalty_ledger")
               .select("id")
@@ -664,6 +677,7 @@ if (reason === "active_reserve_exists") {
               .maybeSingle();
             if (released?.id) continue;
 
+            // Extract cartId from preSessionKey: userId:cartId:requestId
             const sessionKey = (row.metadata as Record<string, string>)
               ?.stripe_session_id ?? "";
             const parts = sessionKey.split(":");
@@ -674,6 +688,7 @@ if (reason === "active_reserve_exists") {
               continue;
             }
 
+            // Look up the pending cart's actual Stripe session ID
             const { data: cart } = await db
               .from("pending_carts")
               .select("stripe_session_id")
@@ -691,6 +706,7 @@ if (reason === "active_reserve_exists") {
               const existing = await stripe.checkout.sessions.retrieve(stripeSessionId);
               if (existing.status === "open" && existing.url) {
                 resumeUrl = existing.url;
+                resumeSessionId = existing.id;
                 log("info", "checkout_loyalty_resume_existing", {
                   requestId,
                   userId: prefix(userId),
@@ -712,11 +728,12 @@ if (reason === "active_reserve_exists") {
         }
 
         if (resumeUrl) {
+          // Customer has an open checkout — redirect them to complete it.
           return successResponse(
             requestId,
             "checkout_session_reused",
             {
-              sessionId: "",
+              sessionId: resumeSessionId,
               url: resumeUrl,
               pricingHash,
               pricing: buildCheckoutPricingResponse(snapshot),
@@ -725,6 +742,8 @@ if (reason === "active_reserve_exists") {
           );
         }
 
+        // No open session found — auto-release stale reserves so the
+        // customer isn't permanently blocked from using their points.
         for (const sessionKey of staleSessionKeys) {
           await tryReleaseLoyalty(db, sessionKey, "stale_reserve_auto_release", requestId);
         }
@@ -734,18 +753,29 @@ if (reason === "active_reserve_exists") {
           userId: prefix(userId),
           count: staleSessionKeys.length,
         });
+        // Fall through — checkout proceeds without loyalty discount.
+        // Customer can retry points on the next attempt.
       }
 
       if (reason === "daily_limit_exceeded") {
-        return errorResponse(requestId, 422, "loyalty_daily_limit",
+        return errorResponse(
+          requestId,
+          422,
+          "loyalty_daily_limit",
           "You've reached your daily loyalty redemption limit. Try again tomorrow.",
-          corsHeaders);
+          corsHeaders,
+        );
       }
       if (reason === "per_order_limit_exceeded") {
-        return errorResponse(requestId, 422, "loyalty_order_limit",
+        return errorResponse(
+          requestId,
+          422,
+          "loyalty_order_limit",
           "You've selected more points than the per-order maximum.",
-          corsHeaders);
+          corsHeaders,
+        );
       }
+      // All other skips (insufficient balance, zero balance, etc.) proceed silently at full price
     }
 
     if (loyaltyResult.applied) {
@@ -753,6 +783,8 @@ if (reason === "active_reserve_exists") {
       loyaltyAccountId = loyaltyResult.accountId;
       loyaltyPoints = loyaltyResult.reservedPoints;
 
+      // Create a one-time Stripe coupon for the discount.
+      // Negative unit_amount on line items is not supported in payment mode.
       stripeCouponId = await createLoyaltyCoupon(
         stripe,
         loyaltyDiscountCents,
@@ -761,6 +793,7 @@ if (reason === "active_reserve_exists") {
       );
 
       if (!stripeCouponId) {
+        // Coupon creation failed — release the reserve and proceed at full price.
         await tryReleaseLoyalty(
           db,
           preSessionKey,
@@ -780,6 +813,7 @@ if (reason === "active_reserve_exists") {
         });
       }
     }
+    // Skips are already logged inside applyLoyaltyToCheckout via skip()
   }
 
   let stripeLineItems: Stripe.Checkout.SessionCreateParams.LineItem[];
@@ -793,6 +827,7 @@ if (reason === "active_reserve_exists") {
       error: asErr(error),
     });
 
+    // Release loyalty reserve before returning — line items failed after reserve
     if (loyaltyAccountId && loyaltyPoints > 0) {
       await tryReleaseLoyalty(
         db,
@@ -858,7 +893,8 @@ if (reason === "active_reserve_exists") {
     ...(body.loyalty_redemption_id
       ? { loyalty_redemption_id: body.loyalty_redemption_id }
       : {}),
-
+    // Loyalty reservation fields — written only when a reserve was committed.
+    // The webhook uses these to finalize (completed) or release (expired).
     ...(loyaltyAccountId
       ? {
         loyalty_account_id: loyaltyAccountId,
@@ -889,7 +925,8 @@ if (reason === "active_reserve_exists") {
         ...(body.order_type === "delivery"
           ? { phone_number_collection: { enabled: true } }
           : {}),
-
+        // Loyalty coupon — shows as "Loyalty Rewards -$X.XX" on Stripe's
+        // hosted payment page and on the customer receipt.
         ...(stripeCouponId ? { discounts: [{ coupon: stripeCouponId }] } : {}),
       },
       {
@@ -904,6 +941,9 @@ if (reason === "active_reserve_exists") {
       error: asErr(error),
     });
 
+    // Stripe failed after loyalty reserve — restore points immediately.
+    // Guard on loyaltyAccountId && loyaltyPoints > 0, NOT just discountCents,
+    // because a reserve can succeed even if the cents value rounded to zero.
     if (loyaltyAccountId && loyaltyPoints > 0) {
       await tryReleaseLoyalty(
         db,
@@ -982,7 +1022,9 @@ if (reason === "active_reserve_exists") {
     requestId,
   );
 
-
+  // Write loyalty columns to pending_carts so the webhook can find reservation
+  // context without re-parsing Stripe metadata. Best-effort — Stripe metadata
+  // is the authoritative fallback if this update fails.
   if (loyaltyAccountId) {
     const { error: loyaltyUpdateErr } = await db
       .from("pending_carts")
