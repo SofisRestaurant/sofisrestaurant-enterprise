@@ -2,14 +2,13 @@
 // src/domain/menu/_legacy/menu.mapper.ts
 // Menu domain mapper — DB row → domain model, domain model → DB insert
 //
-// NOTE: This file is in _legacy/ because it predates the menu_items_public
-// and menu_items_admin_full views. New code should prefer those views directly.
+// NOTE: This file is in _legacy/ because it predates the RPC-based menu system.
+// New code should use MenuPublicService / MenuOrderingService instead.
 // This mapper remains for backward-compat with components that consume the
 // MenuItemDomain shape (e.g. cart, order history, kitchen screen).
 //
 // Sources mapped:
 //   menu_items              → MenuItemDomain
-//   menu_items_public       → MenuItemDomain  (public subset)
 //   menu_items_admin_full   → MenuItemAdminDomain (includes modifier_groups JSON)
 //   modifiers               → ModifierDomain
 //   modifier_groups         → ModifierGroupDomain
@@ -21,13 +20,15 @@ import type { Database } from '@/types/supabase';
 // Raw row aliases
 // ─────────────────────────────────────────────────────────────────────────────
 
-type MenuItemRow = Database['public']['Tables']['menu_items']['Row'];
-type ModifierRow = Database['public']['Tables']['modifiers']['Row'];
-type ModifierGroupRow = Database['public']['Tables']['modifier_groups']['Row'];
-type MenuItemPublicRow = Database['public']['Views']['menu_items_public']['Row'];
-type MenuItemAdminRow = Database['public']['Views']['menu_items_admin_full']['Row'];
-type MenuCategory = Database['public']['Enums']['menu_category'];
-type MenuItemInsert = Database['public']['Tables']['menu_items']['Insert'];
+type MenuItemRow       = Database['public']['Tables']['menu_items']['Row'];
+type ModifierRow       = Database['public']['Tables']['modifiers']['Row'];
+type ModifierGroupRow  = Database['public']['Tables']['modifier_groups']['Row'];
+// menu_items_public view is gone — public reads now go through get_menu_public RPC.
+// Use the table row directly for public-facing mappers.
+type MenuItemPublicRow = Database['public']['Tables']['menu_items']['Row'];
+type MenuItemAdminRow  = Database['public']['Views']['menu_items_admin_full']['Row'];
+type MenuCategory      = Database['public']['Enums']['menu_category'];
+type MenuItemInsert    = Database['public']['Tables']['menu_items']['Insert'];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Domain Models
@@ -36,9 +37,8 @@ type MenuItemInsert = Database['public']['Tables']['menu_items']['Insert'];
 export interface ModifierDomain {
   id: string;
   groupId: string;
-  /** human readable label */
   name: string;
-  /** Price adjustment in cents — matches modifiers.price_adjustment */
+  /** Price adjustment in cents */
   priceAdjustment: number;
   available: boolean;
   sortOrder: number;
@@ -57,16 +57,11 @@ export interface ModifierGroupDomain {
   modifiers: ModifierDomain[];
 }
 
-/**
- * Core menu item domain model.
- * Matches the shape consumed by cart, kitchen, and order history.
- * All monetary values are in cents.
- */
 export interface MenuItemDomain {
   id: string;
   name: string;
   description: string | null;
-  /** Price in cents — raw DB value is dollars (numeric), multiply by 100 */
+  /** Price in cents */
   priceCents: number;
   category: MenuCategory;
   imageUrl: string | null;
@@ -84,10 +79,6 @@ export interface MenuItemDomain {
   updatedAt: string | null;
 }
 
-/**
- * Admin-extended model — includes modifier groups from the admin view JSON blob.
- * modifier_groups is a JSON column in menu_items_admin_full view.
- */
 export interface MenuItemAdminDomain extends MenuItemDomain {
   inventoryCount: number | null;
   lowStockThreshold: number | null;
@@ -95,7 +86,7 @@ export interface MenuItemAdminDomain extends MenuItemDomain {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Internal utility types / helpers
+// Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 type UnknownRecord = Record<string, unknown>;
@@ -108,11 +99,7 @@ function isRecord(value: unknown): value is UnknownRecord {
 
 function asString(value: unknown): string | null {
   if (typeof value === 'string') return value;
-  if (
-    typeof value === 'number' ||
-    typeof value === 'boolean' ||
-    typeof value === 'bigint'
-  ) {
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
     return String(value);
   }
   return null;
@@ -126,13 +113,8 @@ function asBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
 }
 
-/**
- * Safely normalizes unknown list-like data into string[].
- * Used for DB arrays and defensive JSON parsing from admin/public views.
- */
 function asStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-
   return value
     .map((entry) => asString(entry))
     .filter(notNull)
@@ -176,10 +158,7 @@ function readNullableNumber(obj: unknown, key: string): number | null {
 }
 
 function applyOptionalNumberInsert<
-  K extends keyof Pick<
-    MenuItemInsert,
-    'sort_order' | 'spicy_level'
-  >,
+  K extends keyof Pick<MenuItemInsert, 'sort_order' | 'spicy_level'>,
 >(target: MenuItemInsert, key: K, value: number | null | undefined): void {
   if (typeof value === 'number' && Number.isFinite(value)) {
     target[key] = value;
@@ -188,6 +167,8 @@ function applyOptionalNumberInsert<
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Modifier mapper
+// DB columns available/sort_order/price_adjustment/type/required/active are
+// all nullable in the generated types — we coerce safely here.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function mapModifier(row: ModifierRow): ModifierDomain {
@@ -195,9 +176,9 @@ export function mapModifier(row: ModifierRow): ModifierDomain {
     id: row.id,
     groupId: row.modifier_group_id,
     name: row.name,
-    priceAdjustment: row.price_adjustment,
-    available: row.available,
-    sortOrder: row.sort_order,
+    priceAdjustment: dollarsToCents(row.price_adjustment),   // nullable → 0
+    available: row.available ?? true,                         // nullable → true
+    sortOrder: row.sort_order ?? 0,                           // nullable → 0
   };
 }
 
@@ -209,15 +190,15 @@ export function mapModifierGroup(
     id: row.id,
     name: row.name,
     description: row.description,
-    type: row.type,
-    required: row.required,
+    type: row.type ?? 'checkbox',                             // nullable → 'checkbox'
+    required: row.required ?? false,                          // nullable → false
     minSelections: row.min_selections,
     maxSelections: row.max_selections,
-    sortOrder: row.sort_order,
-    active: row.active,
+    sortOrder: row.sort_order ?? 0,                           // nullable → 0
+    active: row.active ?? true,                               // nullable → true
     modifiers: modifiers
       .filter((modifier) => modifier.modifier_group_id === row.id)
-      .sort((a, b) => a.sort_order - b.sort_order)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
       .map(mapModifier),
   };
 }
@@ -249,20 +230,18 @@ export function mapMenuItem(row: MenuItemRow): MenuItemDomain {
   };
 }
 
-/**
- * Maps menu_items_public view row → MenuItemDomain.
- * View nulls all inventory / admin-only fields; safe for client-side use.
- */
+// MenuItemPublicRow is now an alias for MenuItemTableRow (view was dropped).
+// Shape is identical — available/featured are non-nullable on the table.
 export function mapMenuItemPublic(row: MenuItemPublicRow): MenuItemDomain {
   return {
-    id: row.id ?? '',
-    name: row.name ?? '',
+    id: row.id,
+    name: row.name,
     description: row.description ?? null,
     priceCents: dollarsToCents(row.price),
     category: asMenuCategory(row.category),
     imageUrl: row.image_url ?? null,
-    available: row.available ?? true,
-    featured: row.featured ?? false,
+    available: row.available,
+    featured: row.featured,
     allergens: asStringArray(row.allergens),
     isVegan: row.is_vegan ?? false,
     isVegetarian: row.is_vegetarian ?? false,
@@ -276,18 +255,21 @@ export function mapMenuItemPublic(row: MenuItemPublicRow): MenuItemDomain {
   };
 }
 
-/**
- * Maps menu_items_admin_full view row → MenuItemAdminDomain.
- * The view's modifier_groups column is an opaque JSON blob from Postgres.
- * We parse it defensively; malformed JSON falls back to [].
- */
-export function mapMenuItemAdmin(row: MenuItemAdminRow): MenuItemAdminDomain {
-  const base = mapMenuItemPublic(row);
+// The generated menu_items_admin_full view type may be stale and missing these
+// admin-only columns. Extend locally until `supabase gen types` is re-run.
+type MenuItemAdminRowExtended = MenuItemAdminRow & {
+  inventory_count?: number | null;
+  low_stock_threshold?: number | null;
+  popularity_score?: number | null;
+};
 
+export function mapMenuItemAdmin(row: MenuItemAdminRow): MenuItemAdminDomain {
+  const r = row as MenuItemAdminRowExtended;
+  const base = mapMenuItemPublic(row as unknown as MenuItemPublicRow);
   return {
     ...base,
-    inventoryCount: row.inventory_count ?? null,
-    lowStockThreshold: row.low_stock_threshold ?? null,
+    inventoryCount: r.inventory_count ?? null,
+    lowStockThreshold: r.low_stock_threshold ?? null,
     modifierGroups: parseModifierGroupsJson(row.modifier_groups),
   };
 }
@@ -309,13 +291,9 @@ export function mapMenuItemsAdmin(rows: MenuItemAdminRow[]): MenuItemAdminDomain
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Reverse mapper — domain → DB insert shape
+// Reverse mapper
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Converts a partial MenuItemDomain back to a menu_items Insert shape.
- * Price is converted back from cents → dollars for the DB.
- */
 export function menuItemToInsert(
   domain: Partial<MenuItemDomain> & Pick<MenuItemDomain, 'name' | 'priceCents' | 'category'>,
 ): MenuItemInsert {
@@ -341,16 +319,9 @@ export function menuItemToInsert(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Utility (safe JSON parsing + shape guards)
+// JSON modifier parsing (admin view blob)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Parses the admin view JSON blob into strictly typed ModifierGroupDomain[].
- * Filters out nulls at every level so callers never see (T | null)[].
- *
- * `isRecord` and `asStringArray` are intentionally used here to keep parsing
- * defensive and lint-clean while handling opaque Postgres JSON safely.
- */
 export function parseModifierGroups(raw: unknown): ModifierGroupDomain[] {
   try {
     const parsed: unknown = typeof raw === 'string' ? JSON.parse(raw) : raw;
@@ -398,7 +369,6 @@ export function parseModifierGroups(raw: unknown): ModifierGroupDomain[] {
           .filter(notNull)
           .sort((a, b) => a.sortOrder - b.sortOrder);
 
-        const normalizedType = asString(group.type) ?? '';
         const normalizedDescription = asString(group.description);
         const aliases = asStringArray(group.aliases);
         const description =
@@ -408,7 +378,7 @@ export function parseModifierGroups(raw: unknown): ModifierGroupDomain[] {
           id,
           name,
           description,
-          type: normalizedType,
+          type: asString(group.type) ?? 'checkbox',
           required: asBoolean(group.required, false),
           minSelections:
             asFiniteNumber(group.min_selections) ?? asFiniteNumber(group.minSelections),
@@ -427,18 +397,14 @@ export function parseModifierGroups(raw: unknown): ModifierGroupDomain[] {
   }
 }
 
-/**
- * Backward-compat export used across older code paths.
- * IMPORTANT: this is the ONLY `parseModifierGroupsJson` export in the file.
- */
 export function parseModifierGroupsJson(raw: unknown): ModifierGroupDomain[] {
   return parseModifierGroups(raw);
 }
 
-/**
- * Groups a flat MenuItemDomain[] by category.
- * Returns a Map in the canonical enum order.
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// Utilities
+// ─────────────────────────────────────────────────────────────────────────────
+
 const CATEGORY_ORDER: MenuCategory[] = [
   'breakfast',
   'lunch',
@@ -451,21 +417,13 @@ const CATEGORY_ORDER: MenuCategory[] = [
 
 export function groupByCategory(items: MenuItemDomain[]): Map<MenuCategory, MenuItemDomain[]> {
   const map = new Map<MenuCategory, MenuItemDomain[]>();
-
   for (const category of CATEGORY_ORDER) {
     const group = items.filter((item) => item.category === category);
-    if (group.length > 0) {
-      map.set(category, group);
-    }
+    if (group.length > 0) map.set(category, group);
   }
-
   return map;
 }
 
-/**
- * Formats a cent value → dollar display string.
- * Kept here so menu-layer consumers don't need to import from formatters.
- */
 export function formatMenuPrice(cents: number): string {
   return (cents / 100).toLocaleString('en-US', {
     style: 'currency',
