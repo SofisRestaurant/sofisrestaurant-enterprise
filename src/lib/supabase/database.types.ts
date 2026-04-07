@@ -1,6 +1,4 @@
-Need to install the following packages:
-supabase@2.87.2
-Ok to proceed? (y) export type Json =
+export type Json =
   | string
   | number
   | boolean
