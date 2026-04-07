@@ -10,9 +10,6 @@ export class MenuPublicService {
       .from('menu_items_public')
       .select('*')
       .eq('available', true)
-      .order('category', { ascending: true })
-      .order('sort_order', { ascending: true })
-      .order('name', { ascending: true });
 
     if (error) throw error;
     return MenuPublicMapper.mapMany(data ?? []);

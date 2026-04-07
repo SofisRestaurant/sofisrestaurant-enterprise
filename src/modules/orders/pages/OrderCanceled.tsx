@@ -80,7 +80,7 @@ type DerivedState = {
 // -----------------------------------------------------------------------------
 
 const STRIPE_SESSION_RE = /^cs_(test|live)_[a-zA-Z0-9]+$/;
-const SUPPORT_EMAIL = 'sofisrestaurante@gmail.com';
+const SUPPORT_EMAIL = 'sofisrestaurant2022@gmail.com';
 const COPY_RESET_MS = 1_400;
 
 // -----------------------------------------------------------------------------
@@ -483,7 +483,7 @@ export default function OrderCanceled(): React.ReactElement {
       {/* Brand mark */}
       <div className="animate-fade-down absolute top-8 left-1/2 -translate-x-1/2">
         {/* section-eyebrow from components.css — gets ::before gold line rule */}
-        <span className="section-eyebrow text-(--color-gold-500)">Sofi&apos;s Restaurante</span>
+        <span className="section-eyebrow text-(--color-gold-500)">Sofi&apos;s Restaurant</span>
       </div>
 
       {/* Card — .card from components.css: radius-card, shadow, hover-lift */}
