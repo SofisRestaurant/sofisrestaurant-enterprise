@@ -22,7 +22,7 @@
 //   /checkout            → CheckoutPage (auth required, lazy)
 //   /order-success       → OrderSuccess (lazy)
 //   /order-canceled      → OrderCanceled (lazy)
-//   /order-status/:id    → OrderStatus (lazy)
+//   /order-status/:id    → OrderStatus (lazy)  ← live tracker for users
 //   /update-password     → UpdatePassword (lazy)
 //   /privacy-policy      → PrivacyPolicy (lazy)
 //   /terms-of-service    → TermsOfService (lazy)
@@ -32,13 +32,13 @@
 //   /admin/*             → AdminLayout (admin required, lazy)
 //   /*                   → NotFound (lazy)
 //
-// WHY /account IS NO LONGER WRAPPED IN withAuth:
-//   Bottom navigation sends unauthenticated mobile users to /account.
-//   withAuth() delegates to AuthGuard which redirects before AccountLayout
-//   ever renders — so the branded login gate inside AccountLayout was
-//   dead code. Removing withAuth() here lets AccountLayout own the gate,
-//   which is the correct app-shell pattern (Account tab = auth entry point).
-//   /checkout keeps withAuth() — you must be signed in to pay.
+// CHANGE FROM ORIGINAL (1 line):
+//   /account no longer wrapped in withAuth().
+//   Reason: BottomNav sends unauthenticated mobile users to /account.
+//   withAuth() → AuthGuard intercepts before AccountLayout renders,
+//   making the LoginGate inside AccountLayout unreachable (dead code).
+//   AccountLayout now owns its own auth gate — guests see Login/Signup,
+//   authenticated users see their account. /checkout keeps withAuth().
 
 import React from 'react';
 import { createBrowserRouter } from 'react-router-dom';
@@ -54,8 +54,6 @@ import MenuPage from '@/modules/menu/pages/MenuPage';
 // Auth / Role wrappers
 // ─────────────────────────────────────────────────────────────────────────────
 
-// withAuth: used only for routes where being unauthenticated is a hard error
-// (checkout, kitchen, expo). NOT used for /account — see header comment.
 const withAuth = (Cmp: React.ComponentType) => () => (
   <AuthGuard requireAuth>
     <Cmp />
@@ -150,6 +148,7 @@ export const router = createBrowserRouter([
       </Providers>
     ),
 
+    // Shown while React is hydrating on first paint
     HydrateFallback: () => (
       <div
         className="flex min-h-screen items-center justify-center"
@@ -248,14 +247,16 @@ export const router = createBrowserRouter([
       // ────────────────────────────────────────────────────────
       // ACCOUNT — public route, AccountLayout owns the auth gate
       //
-      // No withAuth() — AccountLayout renders LoginGate for guests.
-      // This makes the bottom nav Account tab the auth entry point on mobile.
+      // ✏️  ONLY CHANGE FROM ORIGINAL: removed withAuth() wrapper.
+      // AccountLayout renders a branded LoginGate for unauthenticated
+      // users instead of letting AuthGuard redirect them away — which
+      // made the mobile Account tab a dead end with no way to log in.
       // ────────────────────────────────────────────────────────
       {
         path: 'account',
         lazy: async () => {
           const layout = await import('@/pages/Account/AccountLayout');
-          return { Component: layout.default };
+          return { Component: layout.default }; // no withAuth — layout owns gate
         },
         children: [
           {
@@ -283,7 +284,7 @@ export const router = createBrowserRouter([
       },
 
       // ────────────────────────────────────────────────────────
-      // CHECKOUT (auth required — you must be signed in to pay)
+      // CHECKOUT (auth required)
       // ────────────────────────────────────────────────────────
       {
         path: 'checkout',
@@ -310,6 +311,13 @@ export const router = createBrowserRouter([
           return { Component: m.default };
         },
       },
+
+      // ────────────────────────────────────────────────────────
+      // ORDER STATUS — live tracker (/order-status/:orderId)
+      // BottomNav Orders tab links here when user has an active order.
+      // useActiveOrder() provides the orderId; OrderStatus page renders
+      // the real-time tracker at sofisrestaurant-enterprise.vercel.app/order-status
+      // ────────────────────────────────────────────────────────
       {
         path: 'order-status/:orderId',
         lazy: async () => {
@@ -511,6 +519,11 @@ export const router = createBrowserRouter([
       // ────────────────────────────────────────────────────────
       // AUTH CALLBACK — MUST be before * or it hits NotFound
       // ────────────────────────────────────────────────────────
+      // Supabase redirects here after Google OAuth with ?code=xxxx
+      // AuthCallback shows a spinner while UserProvider exchanges
+      // the code, then navigates to /account (or ?redirect= param).
+      // Without this route, the * wildcard catches the URL and
+      // renders NotFound — causing the 404 flash before Google auth.
       {
         path: 'auth/callback',
         lazy: async () => {

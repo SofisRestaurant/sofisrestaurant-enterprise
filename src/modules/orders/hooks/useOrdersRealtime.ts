@@ -1,3 +1,23 @@
+// src/modules/orders/hooks/useOrdersRealtime.ts
+// =============================================================================
+// FIX: "cannot add `postgres_changes` callbacks after `subscribe()`"
+//
+// The original code did three separate statements:
+//   const channel = supabase.channel(name)   ← created
+//   channel.on('postgres_changes', ...)       ← listener added
+//   void channel.subscribe(...)               ← subscribed
+//
+// Supabase's RealtimeClient caches channels by name. Under React StrictMode
+// (double-invoke) or when the channelName dep changes quickly, removeChannel()
+// marks the old channel removed but the registry can return the same object
+// on the next supabase.channel() call. That recycled object is already in
+// 'joined' state — calling .on() on it after .subscribe() throws.
+//
+// FIX: chain .on() directly onto supabase.channel() BEFORE .subscribe(),
+// so there is never a window where the channel exists without its listener,
+// and the call order is always: create → listen → subscribe.
+// =============================================================================
+
 import { useEffect, useRef } from 'react';
 import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 
@@ -187,9 +207,14 @@ export function useOrdersRealtime({
       }
     };
 
-    const channel = supabase.channel(normalizedChannelName);
-
-    channel.on('postgres_changes', ORDERS_REALTIME_CONFIG, handleChange);
+    // FIX: chain .on() directly onto supabase.channel() before .subscribe().
+    // This guarantees the listener is registered before the channel is
+    // subscribed — preventing the "cannot add postgres_changes after subscribe"
+    // error that occurs when Supabase recycles a cached channel object that is
+    // already in 'joined' state.
+    const channel = supabase
+      .channel(normalizedChannelName)
+      .on('postgres_changes', ORDERS_REALTIME_CONFIG, handleChange);
 
     void channel.subscribe((status) => {
       if (!isActive) {
