@@ -88,12 +88,29 @@ Deno.serve(async (req: Request) => {
   try {
     const db = createServiceClient();
 
-    const { data, error } = await db
-      .from('menu_items_public')
-      .select('*')
-      .eq('featured', true)
-      .eq('available', true)
-      .order('sort_order', { ascending: true });
+const { data, error } = await db
+  .from('menu_items')
+  .select(`
+    id,
+    name,
+    price,
+    category,
+    featured,
+    available,
+    sort_order,
+    description,
+    image_url,
+    modifier_groups:menu_item_modifier_groups(
+      modifier_groups(
+        id,
+        name,
+        modifiers(*)
+      )
+    )
+  `)
+  .eq('featured', true)
+  .eq('available', true)
+  .order('sort_order', { ascending: true });
 
     if (error) {
       console.error({

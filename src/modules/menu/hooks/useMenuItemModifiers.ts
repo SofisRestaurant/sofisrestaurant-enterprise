@@ -2,7 +2,7 @@
 // PATH: src/modules/menu/hooks/useMenuItemModifiers.ts
 // =============================================================================
 // Manages modifier group state for a single menu item:
-//   - loads groups from menu_items_public view (best-effort, not server-truth)
+//   - loads groups via get_menu_item_public RPC (replaces menu_items_public view)
 //   - maintains selection state per group
 //   - prunes stale / unavailable selections automatically
 //   - exposes handlers consumed directly by MenuItemModal JSX
@@ -48,25 +48,22 @@ export function useMenuItemModifiers(
     setGroupsError(null);
 
     try {
-      const invokeResult = await supabase
-        .from('menu_items_public')
-        .select('modifier_groups')
-        .eq('id', itemId)
-        .maybeSingle();
+      // Replaced: supabase.from('menu_items_public').select('modifier_groups').eq('id', itemId)
+      // Now uses the get_menu_item_public RPC which does proper relational joins.
+      const { data: rpcData, error: rpcError } = await supabase.rpc('get_menu_item_public', {
+        p_item_id: itemId,
+      });
 
-      const invokeError: unknown = invokeResult.error;
-      const invokeData: unknown = invokeResult.data;
-
-      if (invokeError) {
+      if (rpcError) {
         const msg =
-          isRecord(invokeError) && typeof invokeError.message === 'string'
-            ? invokeError.message
+          isRecord(rpcError) && typeof rpcError.message === 'string'
+            ? rpcError.message
             : 'Failed to load options';
         throw new Error(msg);
       }
 
-      const raw = isRecord(invokeData) ? invokeData.modifier_groups : null;
-      console.log('raw modifier_groups from API:', raw);
+      // RPC returns the full item object — pull modifier_groups from it.
+      const raw = isRecord(rpcData) ? rpcData.modifier_groups : null;
 
       const groups = normalizeGroups(raw);
 

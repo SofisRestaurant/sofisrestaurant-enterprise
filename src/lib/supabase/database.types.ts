@@ -1,4 +1,6 @@
-export type Json =
+Need to install the following packages:
+supabase@2.87.2
+Ok to proceed? (y) export type Json =
   | string
   | number
   | boolean
@@ -451,13 +453,6 @@ export type Database = {
             columns: ["menu_item_id"]
             isOneToOne: true
             referencedRelation: "menu_items_admin_full"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "cost_of_goods_menu_item_id_fkey"
-            columns: ["menu_item_id"]
-            isOneToOne: true
-            referencedRelation: "menu_items_public"
             referencedColumns: ["id"]
           },
           {
@@ -1210,13 +1205,6 @@ export type Database = {
             columns: ["menu_item_id"]
             isOneToOne: false
             referencedRelation: "menu_items_admin_full"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "menu_item_modifier_groups_menu_item_id_fkey"
-            columns: ["menu_item_id"]
-            isOneToOne: false
-            referencedRelation: "menu_items_public"
             referencedColumns: ["id"]
           },
           {
@@ -3296,27 +3284,6 @@ export type Database = {
         }
         Relationships: []
       }
-      menu_items_public: {
-        Row: {
-          allergens: string[] | null
-          available: boolean | null
-          category: Database["public"]["Enums"]["menu_category"] | null
-          description: string | null
-          featured: boolean | null
-          id: string | null
-          image_url: string | null
-          is_gluten_free: boolean | null
-          is_vegan: boolean | null
-          is_vegetarian: boolean | null
-          modifier_groups: Json | null
-          name: string | null
-          pairs_with: string[] | null
-          price: number | null
-          sort_order: number | null
-          spicy_level: number | null
-        }
-        Relationships: []
-      }
       menu_items_view: {
         Row: {
           allergens: string[] | null
@@ -3905,6 +3872,29 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      get_menu_item_public: { Args: { p_item_id: string }; Returns: Json }
+      get_menu_items: {
+        Args: never
+        Returns: {
+          allergens: string[]
+          available: boolean
+          category: string
+          description: string
+          featured: boolean
+          id: string
+          image_url: string
+          is_gluten_free: boolean
+          is_vegan: boolean
+          is_vegetarian: boolean
+          modifier_groups: Json
+          name: string
+          pairs_with: string
+          price: number
+          sort_order: number
+          spicy_level: number
+        }[]
+      }
+      get_menu_public: { Args: never; Returns: Json }
       get_next_order_number: { Args: never; Returns: number }
       get_order_dispute_timeline: {
         Args: { p_order_id: string }
@@ -4214,6 +4204,30 @@ export type Database = {
         }
       }
       v2_award_points:
+        | {
+            Args: {
+              p_account_id: string
+              p_admin_id: string
+              p_amount: number
+              p_amount_cents: number
+              p_base_points: number
+              p_idempotency_key: string
+              p_reference_id: string
+              p_streak: number
+              p_streak_mult: number
+              p_tier_at_time: string
+              p_tier_mult: number
+            }
+            Returns: {
+              new_balance: number
+              new_lifetime: number
+              new_tier: string
+              points_earned: number
+              streak: number
+              tier_changed: boolean
+              was_duplicate: boolean
+            }[]
+          }
         | {
             Args: {
               p_account_id: string

@@ -3,7 +3,7 @@
 // MENU ORDERING SERVICE — Production Hardened (2026)
 // ============================================================================
 // Orchestrates the complete ordering flow for a single menu item:
-//   1. Fetch item with full modifier graph
+//   1. Fetch item with full modifier graph via get_menu_item_public RPC
 //   2. Validate customer configuration
 //   3. Inventory gate
 //   4. Run pricing engine (CENT-FIRST)
@@ -15,6 +15,7 @@ import { supabase } from '@/lib/supabase/supabaseClient';
 import { PricingEngine } from '@/domain/pricing/pricing.engine';
 import { validateItemConfiguration } from '@/domain/menu/modifier.validation';
 import { checkSelectionInventory } from '@/domain/menu/modifier-inventory.engine';
+import { parseModifierGroupsFromJson } from '@/domain/menu/parseModifierGroups';
 import type { MenuItemPublic, SelectedModifier, CartItemModifier } from '@/domain/menu/menu.types';
 
 // ─────────────────────────────────────────────────────────────
@@ -86,10 +87,7 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 function asTrimmedString(value: unknown): string | null {
-  if (typeof value !== 'string') {
-    return null;
-  }
-
+  if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
 }
@@ -99,17 +97,11 @@ function asOptionalString(value: unknown): string | null {
 }
 
 function asNumber(value: unknown, fallback = 0): number {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value;
-  }
-
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string') {
     const parsed = Number(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
+    if (Number.isFinite(parsed)) return parsed;
   }
-
   return fallback;
 }
 
@@ -118,15 +110,11 @@ function asBoolean(value: unknown, fallback = false): boolean {
 }
 
 function asNullableNumber(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value;
-  }
-
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string') {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
   }
-
   return null;
 }
 
@@ -140,18 +128,12 @@ function isMenuCategory(value: unknown): value is MenuItemPublic['category'] {
 }
 
 function isMenuModifierOption(value: unknown): value is MenuModifierOption {
-  if (!isRecord(value)) {
-    return false;
-  }
-
+  if (!isRecord(value)) return false;
   return typeof value.id === 'string' && value.id.trim().length > 0;
 }
 
 function isMenuModifierGroup(value: unknown): value is MenuModifierGroup {
-  if (!isRecord(value)) {
-    return false;
-  }
-
+  if (!isRecord(value)) return false;
   return (
     typeof value.id === 'string' &&
     value.id.trim().length > 0 &&
@@ -160,51 +142,25 @@ function isMenuModifierGroup(value: unknown): value is MenuModifierGroup {
   );
 }
 
-function parseModifierGroups(value: unknown): MenuItemPublic['modifier_groups'] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value.filter(isMenuModifierGroup);
-}
-
 function getGroupId(value: unknown): string {
-  if (!isRecord(value)) {
-    return '';
-  }
-
+  if (!isRecord(value)) return '';
   const groupId =
     asTrimmedString(value.groupId) ??
     asTrimmedString(value.modifier_group_id) ??
     asTrimmedString(value.group_id);
-
   return groupId ?? '';
 }
 
 function isCompatSelection(value: unknown): value is CompatSelection {
-  if (!isRecord(value)) {
-    return false;
-  }
-
+  if (!isRecord(value)) return false;
   return typeof value.id === 'string' && value.id.trim().length > 0;
 }
 
 function isCompatSelectionGroup(value: unknown): value is CompatSelectionGroup {
-  if (!isRecord(value) || !Array.isArray(value.selections)) {
-    return false;
-  }
-
+  if (!isRecord(value) || !Array.isArray(value.selections)) return false;
   return value.selections.every(isCompatSelection);
 }
 
-/**
- * Normalize ANY incoming "mods" shape into:
- *   [{ modifier_group_id, selections: [{id,name,price_adjustment}] }]
- *
- * Accepts:
- *  A) Flat:   compat selection array with group ids on each selection
- *  B) Group:  Array<{ groupId, selections: CompatSelection[] }>
- */
 function normalizeCartItemModifiers(mods: unknown): CartItemModifier[] {
   const grouped = new Map<string, CartItemModifier['selections']>();
   const input = Array.isArray(mods) ? mods : [];
@@ -212,10 +168,7 @@ function normalizeCartItemModifiers(mods: unknown): CartItemModifier[] {
   const addSelection = (groupId: string, selection: CompatSelection): void => {
     const normalizedGroupId = groupId.trim();
     const normalizedSelectionId = selection.id.trim();
-
-    if (normalizedGroupId.length === 0 || normalizedSelectionId.length === 0) {
-      return;
-    }
+    if (normalizedGroupId.length === 0 || normalizedSelectionId.length === 0) return;
 
     const rawPrice =
       typeof selection.price_adjustment === 'number'
@@ -226,49 +179,42 @@ function normalizeCartItemModifiers(mods: unknown): CartItemModifier[] {
 
     const priceAdjustment = Number.isFinite(rawPrice) ? rawPrice : 0;
     const currentSelections = grouped.get(normalizedGroupId) ?? [];
-
     currentSelections.push({
       id: normalizedSelectionId,
       name: typeof selection.name === 'string' ? selection.name : '',
       price_adjustment: priceAdjustment,
     });
-
     grouped.set(normalizedGroupId, currentSelections);
   };
 
   for (const item of input) {
     if (isCompatSelectionGroup(item)) {
       const groupId = getGroupId(item);
-
       for (const selection of item.selections) {
         addSelection(groupId, selection);
       }
-
       continue;
     }
-
     if (isCompatSelection(item)) {
       addSelection(getGroupId(item), item);
     }
   }
 
   const normalized: CartItemModifier[] = [];
-
   for (const [modifier_group_id, selections] of grouped.entries()) {
-    if (selections.length === 0) {
-      continue;
-    }
-
-    normalized.push({
-      modifier_group_id,
-      selections,
-    });
+    if (selections.length === 0) continue;
+    normalized.push({ modifier_group_id, selections });
   }
-
   return normalized;
 }
 
-function parseMenuItem(data: unknown): MenuItemPublic {
+// ─────────────────────────────────────────────────────────────
+// RPC item parser
+// ─────────────────────────────────────────────────────────────
+// The RPC returns a jsonb object. We parse it into MenuItemPublic,
+// reusing parseModifierGroupsFromJson for the modifier graph.
+
+function parseRpcItem(data: unknown): MenuItemPublic {
   if (!isRecord(data)) {
     throw new MenuOrderingError('Item not found', 'ITEM_NOT_FOUND');
   }
@@ -299,7 +245,8 @@ function parseMenuItem(data: unknown): MenuItemPublic {
     is_gluten_free: asBoolean(data.is_gluten_free, false),
     allergens: isStringArray(data.allergens) ? data.allergens : [],
     pairs_with: isStringArray(data.pairs_with) ? data.pairs_with : [],
-    modifier_groups: parseModifierGroups(data.modifier_groups),
+    // Use the authoritative parser — same one used everywhere else in the app.
+    modifier_groups: parseModifierGroupsFromJson(data.modifier_groups),
     created_at: asTrimmedString(data.created_at) ?? '',
     updated_at: asOptionalString(data.updated_at),
   };
@@ -322,17 +269,15 @@ export interface OrderingReadyState {
 
 export class MenuOrderingService {
   static async fetchItemForOrdering(itemId: string): Promise<MenuItemPublic> {
-    const { data, error } = await supabase
-      .from('menu_items_public')
-      .select('*')
-      .eq('id', itemId)
-      .single();
+    const { data, error } = await supabase.rpc('get_menu_item_public', {
+      p_item_id: itemId,
+    });
 
     if (error !== null || data === null) {
       throw new MenuOrderingError(`Item not found: ${itemId}`, 'ITEM_NOT_FOUND');
     }
 
-    const item = parseMenuItem(data);
+    const item = parseRpcItem(data);
 
     if (!item.available) {
       throw new MenuOrderingError(`"${item.name}" is not currently available`, 'UNAVAILABLE');
@@ -412,12 +357,6 @@ export class MenuOrderingService {
     specialInstructions?: string,
   ): Promise<OrderingReadyState> {
     const item = await MenuOrderingService.fetchItemForOrdering(itemId);
-
-    return MenuOrderingService.buildCartPayload(
-      item,
-      selectedModifiers,
-      quantity,
-      specialInstructions,
-    );
+    return MenuOrderingService.buildCartPayload(item, selectedModifiers, quantity, specialInstructions);
   }
 }
