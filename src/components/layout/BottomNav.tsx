@@ -1,9 +1,8 @@
 import { useCallback, useMemo } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Home, UtensilsCrossed, ClipboardList, User } from 'lucide-react';
-import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useCart } from '@/modules/cart/hooks/useCart';
-import { useActiveOrder } from '@/modules/orders/hooks/useActiveOrder';
+import { useActiveOrderId } from '@/app/ActiveOrderContext';
 
 // -----------------------------------------------------------------------------
 // Types
@@ -203,38 +202,29 @@ function TabButton({ tab, isActive, badge, hasLivePulse, onClick }: TabButtonPro
 
 export default function BottomNav() {
   const { pathname } = useLocation();
-  const { user } = useAuth();
   const { itemCount } = useCart();
-  const activeOrderId = useActiveOrder(user?.id ?? null);
+  // Read from context — ActiveOrderProvider in RootLayout calls useActiveOrder
+  // once. This prevents duplicate Supabase channels when TopBar also reads it.
+  const activeOrderId = useActiveOrderId();
 
   const isHidden = useIsNavHidden(pathname);
   const activeTab = useActiveTab(pathname);
 
-  // Only show live-order pulse when user has an active order in progress
   const hasLiveOrder = Boolean(activeOrderId);
 
   const getTabProps = useCallback(
     (tab: Tab) => {
       const isActive = activeTab === tab.id;
-
-      // Menu tab gets the cart badge
       const badge = tab.id === 'menu' ? (itemCount ?? 0) : null;
-
-      // Orders tab gets the live pulse when tracking
       const hasLivePulse = tab.id === 'orders' && hasLiveOrder;
-
-      // Orders tab: navigate to active order if tracking, else order history
       const path =
-        tab.id === 'orders' && activeOrderId
-          ? `/order-status/${activeOrderId}`
-          : tab.path;
+        tab.id === 'orders' && activeOrderId ? `/order-status/${activeOrderId}` : tab.path;
 
       return { isActive, badge, hasLivePulse, path };
     },
     [activeTab, itemCount, hasLiveOrder, activeOrderId],
   );
 
-  // Resolved tabs with dynamic paths
   const resolvedTabs = useMemo(
     () =>
       TABS.map((tab) => {
@@ -248,11 +238,6 @@ export default function BottomNav() {
 
   return (
     <>
-      {/*
-        Spacer — prevents page content from being hidden behind the nav bar.
-        Height = nav bar height (56px) + iOS safe area.
-        Must live in the document flow (not fixed) so flex-1 pages push it down.
-      */}
       <div
         className="h-[calc(56px+env(safe-area-inset-bottom,0px))] shrink-0 md:hidden"
         aria-hidden="true"
@@ -262,16 +247,11 @@ export default function BottomNav() {
         role="navigation"
         aria-label="App navigation"
         className={cx(
-          // Position
           'fixed bottom-0 left-0 right-0 z-30',
-          // Only show on mobile — desktop uses TopBar links
           'md:hidden',
-          // Background + border
           'border-t border-(--color-cream-300)',
           'bg-white/95 backdrop-blur-md',
-          // Safe area padding for iPhone home indicator
           'pb-[env(safe-area-inset-bottom,0px)]',
-          // Shadow
           'shadow-[0_-1px_0_0_var(--color-cream-300),0_-4px_16px_-2px_rgb(26_18_9/0.08)]',
         )}
       >

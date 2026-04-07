@@ -7,7 +7,7 @@ import { useCart } from '@/modules/cart/hooks/useCart';
 import { useModal } from '@/components/ui/useModal';
 import { CartDrawer } from '@/modules/cart/components/CartDrawer';
 import { Button } from '@/components/ui/Button';
-import { useActiveOrder } from '@/modules/orders/hooks/useActiveOrder';
+import { useActiveOrderId } from '@/app/ActiveOrderContext';
 import { canAccessAdmin } from '@/security/permissions';
 
 import MenuHeaderSearch from '@/modules/menu/components/MenuHeaderSearch';
@@ -53,7 +53,8 @@ export default function TopBar() {
   const { user, profile, signOut } = useAuth();
   const { itemCount } = useCart();
   const modal = useModal();
-  const activeOrderId = useActiveOrder(user?.id ?? null);
+  // Read from context — single channel, shared with BottomNav
+  const activeOrderId = useActiveOrderId();
 
   const menuSearchText = useMenuUi((s) => s.searchText);
   const setMenuSearchText = useMenuUi((s) => s.setSearchText);
@@ -225,7 +226,6 @@ export default function TopBar() {
         )}
       >
         <div className="mx-auto flex h-14 max-w-7xl items-center justify-between gap-3 px-4">
-
           {/* Logo */}
           <Link
             to="/"
@@ -276,7 +276,6 @@ export default function TopBar() {
 
           {/* Right cluster: search · cart · auth */}
           <div className="flex items-center gap-1.5">
-
             {/* Desktop search — /menu only, lg+ */}
             {isMenu && (
               <div className="hidden w-64 max-w-[30vw] lg:block">
@@ -413,7 +412,7 @@ export default function TopBar() {
         </div>
       </header>
 
-      {/* Mobile Search Overlay — same implementation as Header.tsx */}
+      {/* Mobile Search Overlay */}
       {isMenu && mobileSearchOpen && (
         <div
           className="fixed inset-0 z-40"
