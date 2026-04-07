@@ -2,18 +2,15 @@
 // =============================================================================
 // 404 NOT FOUND — 2026 App Shell
 // =============================================================================
-// Branded, on-theme 404 that works inside the app shell.
-// Feels like part of the restaurant experience — not a generic error page.
+// Branded, on-theme 404 that lives inside the app shell (TopBar + BottomNav).
+// Feels like a restaurant page — not a generic system error.
 //
-// Mobile: centered, full viewport minus nav bars
-// Desktop: centered in main content area
-//
-// No hard-coded routes — uses useNavigate(-1) to go back,
-// or falls back to / and /menu as safe destinations.
+// Height accounts for TopBar (56px) so the content centers correctly.
+// BottomNav renders its own spacer so no extra padding needed here.
 // =============================================================================
 
 import { useNavigate, Link } from 'react-router-dom';
-import { UtensilsCrossed, ArrowLeft, Home, ShoppingBag } from 'lucide-react';
+import { UtensilsCrossed, ArrowLeft, ShoppingBag, Home } from 'lucide-react';
 
 function cx(...classes: (string | false | null | undefined)[]): string {
   return classes.filter(Boolean).join(' ');
@@ -23,7 +20,7 @@ export default function NotFound() {
   const navigate = useNavigate();
 
   const handleBack = () => {
-    // If there's history to go back to, use it. Otherwise go home.
+    // Go back if there's history, otherwise home
     if (window.history.length > 1) {
       navigate(-1);
     } else {
@@ -34,39 +31,34 @@ export default function NotFound() {
   return (
     <div
       className={cx(
-        // Full height minus top bar — BottomNav handles its own spacer
+        // Center within available height (viewport minus top bar)
         'flex min-h-[calc(100dvh-56px)] flex-col items-center justify-center',
         'px-6 py-12 text-center',
-        // Page background — matches app shell
+        // Matches app shell background
         'bg-(--color-cream-100)',
-        // Subtle grain via surface-noise (from effects.css)
+        // Grain texture from effects.css
         'surface-noise relative',
       )}
       role="main"
       aria-labelledby="not-found-title"
     >
-      {/* Decorative radial — same as OrderCanceled, feels native */}
+      {/* Decorative radial glow — same as rest of app shell */}
       <div className="overlay-luxury pointer-events-none" aria-hidden="true" />
 
       <div className="relative z-10 flex flex-col items-center">
-        {/* Icon */}
-        <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-(--color-ember-50) ring-8 ring-(--color-ember-50)/60">
+
+        {/* Icon ring */}
+        <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-(--color-ember-50) ring-8 ring-(--color-ember-50)/60">
           <UtensilsCrossed
-            className="h-9 w-9 text-(--color-ember-500)"
+            className="h-9 w-9 text-(--color-ember-400)"
             strokeWidth={1.5}
             aria-hidden="true"
           />
         </div>
 
-        {/* 404 number — large, editorial */}
+        {/* Large decorative 404 */}
         <p
-          className={cx(
-            'font-display',
-            'mb-1 text-[5rem] font-normal leading-none tracking-[-0.04em]',
-            'text-(--color-cream-400)',
-            // Slight color shift so it's decorative, not dominant
-            'select-none',
-          )}
+          className="font-display mb-1 select-none text-[6rem] font-normal leading-none tracking-[-0.04em] text-(--color-cream-400)"
           aria-hidden="true"
         >
           404
@@ -80,24 +72,24 @@ export default function NotFound() {
           Page not found
         </h1>
 
-        {/* Subtext — brand-voice, not robotic */}
-        <p className="mb-8 max-w-280px text-sm leading-relaxed text-(--color-ink-400)">
-          That page doesn&apos;t exist — but our menu does. Let&apos;s get you somewhere good.
+        {/* Brand-voice copy — not robotic */}
+        <p className="mb-8 max-w-260px text-sm leading-relaxed text-(--color-ink-400)">
+          That page doesn&apos;t exist — but our kitchen is open.
+          Let&apos;s get you somewhere useful.
         </p>
 
-        {/* Primary CTAs */}
+        {/* CTAs — priority order: back → menu → home */}
         <div className="flex w-full max-w-280px flex-col gap-3">
-          {/* Back button — most natural first action */}
+
           <button
             type="button"
             onClick={handleBack}
-            className={cx('btn btn-ghost-light w-full', 'flex items-center justify-center gap-2')}
+            className="btn btn-ghost-light w-full flex items-center justify-center gap-2"
           >
             <ArrowLeft className="h-4 w-4 shrink-0" strokeWidth={1.75} aria-hidden="true" />
             Go back
           </button>
 
-          {/* Menu — highest-value destination */}
           <Link
             to="/menu"
             className="btn btn-primary w-full flex items-center justify-center gap-2"
@@ -113,8 +105,7 @@ export default function NotFound() {
           className={cx(
             'mt-6 inline-flex items-center gap-1.5',
             'text-xs text-(--color-ink-300)',
-            'transition-colors duration-(--duration-base)',
-            'hover:text-(--color-ink-600)',
+            'transition-colors duration-(--duration-base) hover:text-(--color-ink-600)',
             'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) rounded',
           )}
         >

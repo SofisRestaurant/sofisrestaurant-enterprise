@@ -18,7 +18,7 @@
 //   /catering            → Catering (lazy)
 //   /reservations        → Reservations (lazy)
 //   /reviews             → Reviews (lazy)
-//   /account/*           → AccountLayout (auth required, lazy)
+//   /account/*           → AccountLayout (PUBLIC — layout owns auth gate)
 //   /checkout            → CheckoutPage (auth required, lazy)
 //   /order-success       → OrderSuccess (lazy)
 //   /order-canceled      → OrderCanceled (lazy)
@@ -31,6 +31,14 @@
 //   /expo                → ExpoCommandCenter (admin|staff role, lazy)
 //   /admin/*             → AdminLayout (admin required, lazy)
 //   /*                   → NotFound (lazy)
+//
+// WHY /account IS NO LONGER WRAPPED IN withAuth:
+//   Bottom navigation sends unauthenticated mobile users to /account.
+//   withAuth() delegates to AuthGuard which redirects before AccountLayout
+//   ever renders — so the branded login gate inside AccountLayout was
+//   dead code. Removing withAuth() here lets AccountLayout own the gate,
+//   which is the correct app-shell pattern (Account tab = auth entry point).
+//   /checkout keeps withAuth() — you must be signed in to pay.
 
 import React from 'react';
 import { createBrowserRouter } from 'react-router-dom';
@@ -46,6 +54,8 @@ import MenuPage from '@/modules/menu/pages/MenuPage';
 // Auth / Role wrappers
 // ─────────────────────────────────────────────────────────────────────────────
 
+// withAuth: used only for routes where being unauthenticated is a hard error
+// (checkout, kitchen, expo). NOT used for /account — see header comment.
 const withAuth = (Cmp: React.ComponentType) => () => (
   <AuthGuard requireAuth>
     <Cmp />
@@ -140,7 +150,6 @@ export const router = createBrowserRouter([
       </Providers>
     ),
 
-    // Shown while React is hydrating on first paint
     HydrateFallback: () => (
       <div
         className="flex min-h-screen items-center justify-center"
@@ -237,13 +246,16 @@ export const router = createBrowserRouter([
       },
 
       // ────────────────────────────────────────────────────────
-      // ACCOUNT (auth required)
+      // ACCOUNT — public route, AccountLayout owns the auth gate
+      //
+      // No withAuth() — AccountLayout renders LoginGate for guests.
+      // This makes the bottom nav Account tab the auth entry point on mobile.
       // ────────────────────────────────────────────────────────
       {
         path: 'account',
         lazy: async () => {
           const layout = await import('@/pages/Account/AccountLayout');
-          return { Component: withAuth(layout.default) };
+          return { Component: layout.default };
         },
         children: [
           {
@@ -271,7 +283,7 @@ export const router = createBrowserRouter([
       },
 
       // ────────────────────────────────────────────────────────
-      // CHECKOUT (auth required)
+      // CHECKOUT (auth required — you must be signed in to pay)
       // ────────────────────────────────────────────────────────
       {
         path: 'checkout',
@@ -499,11 +511,6 @@ export const router = createBrowserRouter([
       // ────────────────────────────────────────────────────────
       // AUTH CALLBACK — MUST be before * or it hits NotFound
       // ────────────────────────────────────────────────────────
-      // Supabase redirects here after Google OAuth with ?code=xxxx
-      // AuthCallback shows a spinner while UserProvider exchanges
-      // the code, then navigates to /account (or ?redirect= param).
-      // Without this route, the * wildcard catches the URL and
-      // renders NotFound — causing the 404 flash before Google auth.
       {
         path: 'auth/callback',
         lazy: async () => {

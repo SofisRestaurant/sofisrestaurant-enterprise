@@ -2,20 +2,31 @@
 // =============================================================================
 // ACCOUNT LAYOUT — 2026 App Shell
 // =============================================================================
-// Mobile: horizontal pill tabs + sign-out at bottom
-// Desktop: left sidebar (refined from original)
+// This layout owns its own auth gate. It does NOT rely on withAuth() in the
+// router — that wrapper was removed so mobile users can reach this component.
 //
-// KEY BEHAVIOUR: unauthenticated users see a branded login gate
-// instead of being routed to a 404. The Account tab is the only
-// entry point for auth on mobile — so it must own the login/signup UX.
+// Three render states:
+//   1. loading     → spinner (prevents flash of gate on session restore)
+//   2. !isAuthed   → LoginGate (branded login/signup — mobile auth entry point)
+//   3. isAuthed    → full account layout (mobile pill tabs / desktop sidebar)
 //
-// Auth: useAuth() from UserProvider — never calls Supabase directly
-// Modal: useModal() to trigger the existing LoginModal / SignupModal
-// Permissions: canAccessAdmin() from security/permissions.ts
+// Mobile: horizontal pill tabs, user greeting, sign-out at bottom
+// Desktop: left sidebar with user card, nav links, sign-out button
+//
+// The Account tab in BottomNav is the PRIMARY auth entry point on mobile.
+// Sign-out lives here — not in the top bar — consistent with app-shell pattern.
 // =============================================================================
 
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { User, ClipboardList, Edit3, ShieldCheck, LogOut, UtensilsCrossed } from 'lucide-react';
+import {
+  User,
+  ClipboardList,
+  Edit3,
+  ShieldCheck,
+  LogOut,
+  UtensilsCrossed,
+  Star,
+} from 'lucide-react';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useModal } from '@/components/ui/useModal';
 import { canAccessAdmin } from '@/security/permissions';
@@ -47,8 +58,9 @@ const BASE_NAV: AccountNavItem[] = [
 ];
 
 // -----------------------------------------------------------------------------
-// Login gate — shown to unauthenticated users on mobile
-// Replaces the silent 404 redirect.
+// LoginGate
+// Shown to unauthenticated users instead of redirecting away.
+// Opens existing LoginModal / SignupModal via useModal().
 // -----------------------------------------------------------------------------
 
 function LoginGate() {
@@ -65,48 +77,43 @@ function LoginGate() {
   };
 
   return (
-    <div className="flex min-h-[60vh] flex-col items-center justify-center px-6 py-12 text-center">
-      {/* Brand icon */}
-      <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-(--color-ember-50)">
+    <div className="flex min-h-[70vh] flex-col items-center justify-center px-6 py-12 text-center">
+      {/* Brand mark */}
+      <div className="mb-6 flex h-18 w-18 items-center justify-center rounded-full bg-(--color-ember-50) ring-8 ring-(--color-ember-50)/60">
         <UtensilsCrossed
-          className="h-8 w-8 text-(--color-ember-600)"
+          className="h-8 w-8 text-(--color-ember-500)"
           strokeWidth={1.5}
           aria-hidden="true"
         />
       </div>
 
-      {/* Copy */}
-      <h1 className="font-display mb-2 text-2xl font-normal tracking-tight text-(--color-ink-900)">
-        Sign in to your account
+      {/* Headline */}
+      <h1 className="font-display mb-2 text-[1.6rem] font-normal tracking-tight text-(--color-ink-900)">
+        Welcome back
       </h1>
-      <p className="mb-8 max-w-280px text-sm leading-relaxed text-(--color-ink-400)">
-        View your order history, loyalty points, and manage your profile.
+      <p className="mb-8 max-w-260px text-sm leading-relaxed text-(--color-ink-400)">
+        Sign in to track your orders, earn loyalty points, and save your preferences.
       </p>
 
-      {/* Auth CTAs */}
+      {/* Primary CTAs */}
       <div className="flex w-full max-w-280px flex-col gap-3">
-        <Button
-          onClick={openLogin}
-          variant="primary"
-          type="button"
-          className="w-full"
-        >
+        <Button onClick={openLogin} variant="primary" type="button" className="w-full">
           Log in
         </Button>
-        <Button
-          onClick={openSignup}
-          variant="secondary"
-          type="button"
-          className="w-full"
-        >
-          Create account
+        <Button onClick={openSignup} variant="secondary" type="button" className="w-full">
+          Create account — it&apos;s free
         </Button>
       </div>
 
-      {/* Subtext */}
-      <p className="mt-6 text-xs text-(--color-ink-300)">
-        Your cart is always saved — no account needed to browse.
-      </p>
+      {/* Social proof nudge */}
+      <div className="mt-8 flex items-center gap-2 rounded-xl border border-(--color-cream-300) bg-(--color-cream-100) px-4 py-3">
+        <Star
+          className="h-4 w-4 shrink-0 text-(--color-gold-500)"
+          strokeWidth={1.75}
+          aria-hidden="true"
+        />
+        <p className="text-xs text-(--color-ink-500)">Members earn points on every order</p>
+      </div>
     </div>
   );
 }
@@ -183,17 +190,16 @@ export default function AccountLayout() {
       await signOut();
       void navigate('/');
     } catch {
-      // fail silently — UserProvider will update auth state
+      // fail silently — UserProvider updates auth state
     }
   };
 
-  // Nav items (admin shortcut appended for admins)
   const navItems: AccountNavItem[] = [
     ...BASE_NAV,
     ...(isAdmin ? [{ to: '/admin', label: 'Admin Panel', icon: ShieldCheck }] : []),
   ];
 
-  // ── Loading state — prevents flash of login gate on refresh ───────────────
+  // ── Loading: prevents LoginGate flash on session restore ───────────────────
   if (loading) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
@@ -206,10 +212,8 @@ export default function AccountLayout() {
     );
   }
 
-  // ── Unauthenticated gate ───────────────────────────────────────────────────
-  // On mobile: show branded login prompt (Account tab is the auth entry point)
-  // On desktop: router's AuthGuard + withAuth() already handles redirect,
-  // but this gate catches any edge-case where a user lands here unauthenticated.
+  // ── Guest: branded login gate ──────────────────────────────────────────────
+  // Reached now that router.tsx no longer wraps /account in withAuth().
   if (!isAuthed) {
     return (
       <div className="mx-auto w-full max-w-5xl px-4 py-6 md:px-8 md:py-8">
@@ -218,6 +222,7 @@ export default function AccountLayout() {
     );
   }
 
+  // ── Authenticated: full account layout ─────────────────────────────────────
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-6 md:px-8 md:py-8">
       {/* ── Mobile layout ──────────────────────────────────────────────── */}
@@ -275,7 +280,7 @@ export default function AccountLayout() {
         {/* Sidebar */}
         <aside className="flex flex-col gap-2">
           <div className="rounded-2xl border border-(--color-cream-300) bg-white p-4 shadow-(--shadow-sm)">
-            {/* User info */}
+            {/* User card */}
             <div className="mb-4 flex items-center gap-3 border-b border-(--color-cream-200) pb-4">
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-(--color-ember-100)">
                 <User
@@ -302,7 +307,7 @@ export default function AccountLayout() {
             </nav>
           </div>
 
-          {/* Sign out */}
+          {/* Sign out — separate from nav, visually distinct */}
           <button
             type="button"
             onClick={() => void handleSignOut()}
