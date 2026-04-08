@@ -19,7 +19,7 @@
 //   /reservations        → Reservations (lazy)
 //   /reviews             → Reviews (lazy)
 //   /account/*           → AccountLayout (auth required, lazy)
-//   /checkout            → CheckoutPage (auth required, lazy)
+//   /checkout            → CheckoutPage (public — page owns guest/auth mode switch)
 //   /order-success       → OrderSuccess (lazy)
 //   /order-canceled      → OrderCanceled (lazy)
 //   /order-status/:id    → OrderStatus (lazy)
@@ -271,18 +271,18 @@ export const router = createBrowserRouter([
       },
 
       // ────────────────────────────────────────────────────────
-      // CHECKOUT — public route, CheckoutPage owns guest/auth mode switch
+      // CHECKOUT — public route, CheckoutPage owns guest/auth mode
       //
-      // withAuth() removed: CheckoutPage now renders a full guest experience
-      // (email + optional SMS + pay) OR the enriched auth experience (loyalty,
-      // credits, rewards) based on isAuthenticated internally.
-      // Blocking guests here = 0% conversion from new customers.
+      // withAuth() removed: guests need checkout access.
+      // CheckoutPage renders guest experience (email + pay) OR the
+      // enriched auth experience (loyalty, credits, rewards) based on
+      // isAuthenticated internally. Blocking guests = 0% conversion.
       // ────────────────────────────────────────────────────────
       {
         path: 'checkout',
         lazy: async () => {
           const m = await import('@/modules/checkout/pages/CheckoutPage');
-          return { Component: m.default }; // no withAuth — page owns mode switch
+          return { Component: m.default };
         },
       },
 

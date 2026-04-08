@@ -10,6 +10,13 @@
 // - Accessible modal: ESC, outside click, focus restore, focus trap-lite
 // - Scroll lock handled centrally through useScrollLock
 // ✅ i18n: all user-visible strings via useTranslation()
+//
+// GUEST MODE (2026 addition):
+// - Accepts optional guestEmail prop from CheckoutPage
+// - When !isAuthenticated: uses guestEmail as the checkout identity
+// - Button enabled when guestEmail is a valid email (not auth state)
+// - doCheckout passes guestEmail as customer email when user is null
+// - No "Log in to pay" shown to guests — replaced with email validation
 // ============================================================================
 
 import React, { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
@@ -50,6 +57,8 @@ type CheckoutButtonProps = {
   onPromoError?: (msg: string) => void;
   className?: string;
   disabled?: boolean;
+  /** Guest mode: email entered by unauthenticated user. Enables checkout when valid. */
+  guestEmail?: string;
 };
 
 type CountdownState = {
@@ -87,6 +96,13 @@ function normalizeCreditId(id?: string | null): string | undefined {
 
 function normalizeOrderType(value: unknown): OrderType {
   return value === 'delivery' || value === 'dine_in' || value === 'pickup' ? value : 'pickup';
+}
+
+/** RFC-lite email check — UX only, server validates authoritatively */
+function isValidEmail(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const s = value.trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) && s.length <= 320;
 }
 
 function isLoyaltyRelatedMessage(message: string): boolean {
@@ -230,6 +246,7 @@ function CheckoutButton({
   onPromoError,
   className,
   disabled: disabledProp = false,
+  guestEmail,
 }: CheckoutButtonProps) {
   const { t } = useTranslation();
   const normalizedOrderType = normalizeOrderType(orderType);
@@ -286,7 +303,16 @@ function CheckoutButton({
   const safeNotesPreview = useMemo(() => safeTrim(notes, 400), [notes]);
 
   const stripeEnabled = Boolean(env?.stripe?.enabled);
+
+  // ── Identity resolution ───────────────────────────────────────────────────
+  // isAuthed: true for logged-in users.
+  // For guests, we check guestEmail validity instead.
   const isAuthed = Boolean(isAuthenticated && user?.id);
+  const guestEmailValid = !isAuthed && isValidEmail(guestEmail);
+
+  // canProceed: either logged in OR guest with valid email
+  const canProceed = isAuthed || guestEmailValid;
+
   const hasItems = safeItems.length > 0;
 
   useEffect(() => {
@@ -409,30 +435,36 @@ function CheckoutButton({
   const cooldownSeconds = countdown?.secondsLeft ?? 0;
   const disabledBecauseCooldown = cooldownSeconds > 0;
 
+  // ── Disabled state ────────────────────────────────────────────────────────
+  // CHANGED: !isAuthed replaced with !canProceed
+  // Guests with a valid email are now allowed to proceed.
   const disabled =
     disabledProp ||
     authLoading ||
     !stripeEnabled ||
-    !isAuthed ||
+    !canProceed || // was: !isAuthed
     !canCheckout ||
     !hasItems ||
     isLoading ||
     disabledBecauseCooldown ||
     inflightRef.current;
 
+  // ── Button label ──────────────────────────────────────────────────────────
+  // CHANGED: removed loginRequired branch, added guestEmailRequired
   const buttonLabel = useMemo(() => {
     if (!stripeEnabled) return t('checkout.button.unavailable');
     if (authLoading) return t('checkout.button.loading');
-    if (!isAuthed) return t('checkout.button.loginRequired');
     if (!hasItems) return t('checkout.button.cartEmpty');
+    if (!canProceed && !isAuthed) return t('checkout.button.emailRequired'); // guest: enter email
     if (isLoading) return t('checkout.button.processing');
     if (disabledBecauseCooldown) return t('checkout.button.retryIn', { seconds: cooldownSeconds });
     return reviewFirst ? t('checkout.button.reviewOrder') : t('checkout.button.proceedToPayment');
   }, [
     stripeEnabled,
     authLoading,
-    isAuthed,
     hasItems,
+    canProceed,
+    isAuthed,
     isLoading,
     disabledBecauseCooldown,
     cooldownSeconds,
@@ -440,7 +472,6 @@ function CheckoutButton({
     t,
   ]);
 
-  // Order type label is pulled from translations
   const orderTypeLabel = t(`checkout.orderType.${normalizedOrderType}`);
 
   const reviewSubtotalCents = useMemo(() => sumCartSubtotalCents(safeItems), [safeItems]);
@@ -461,6 +492,10 @@ function CheckoutButton({
     reset();
   }, [disabledBecauseCooldown, reset]);
 
+  // ── doCheckout ────────────────────────────────────────────────────────────
+  // CHANGED: allows guest path when !isAuthed but guestEmail is valid.
+  // Uses a synthetic customer_uid for guests (crypto UUID — server ignores
+  // it for anonymous orders, Stripe session is the source of truth).
   const doCheckout = useCallback(async () => {
     if (disabled) return;
 
@@ -469,8 +504,19 @@ function CheckoutButton({
       return;
     }
 
-    if (!isAuthed || !user) {
-      window.alert(t('checkout.error.loginAlert'));
+    // Resolve identity: logged-in user takes priority, then guest email
+    const resolvedEmail =
+      isAuthed && user
+        ? typeof user.email === 'string'
+          ? user.email
+          : undefined
+        : typeof guestEmail === 'string' && isValidEmail(guestEmail)
+          ? guestEmail.trim().toLowerCase()
+          : undefined;
+
+    if (!resolvedEmail) {
+      // Should not happen if disabled logic is correct, but guard anyway
+      onPromoError?.(t('checkout.error.emailRequired') ?? 'Please enter a valid email.');
       return;
     }
 
@@ -479,20 +525,24 @@ function CheckoutButton({
 
     try {
       await redirectToCheckout({
-        customer_uid: user.id,
-        email: typeof user.email === 'string' ? user.email : undefined,
+        // Auth users: real user.id. Guests: ephemeral UUID (server uses Stripe session).
+        customer_uid: isAuthed && user?.id ? user.id : crypto.randomUUID(),
+        email: resolvedEmail,
         name:
-          isRecord(user) && typeof user.name === 'string'
-            ? user.name
-            : isRecord(user) && typeof user.full_name === 'string'
-              ? user.full_name
-              : undefined,
-        phone: isRecord(user) && typeof user.phone === 'string' ? user.phone : undefined,
+          isAuthed && isRecord(user)
+            ? typeof user.name === 'string'
+              ? user.name
+              : typeof user.full_name === 'string'
+                ? user.full_name
+                : undefined
+            : undefined,
+        phone:
+          isAuthed && isRecord(user) && typeof user.phone === 'string' ? user.phone : undefined,
         promo_code: normalizedPromo,
         credit_id: normalizedCreditId,
         orderType: normalizedOrderType,
         notes,
-        loyalty,
+        loyalty: isAuthed ? loyalty : undefined, // loyalty only for auth users
       });
     } catch (checkoutError: unknown) {
       const message =
@@ -514,6 +564,7 @@ function CheckoutButton({
     stripeEnabled,
     isAuthed,
     user,
+    guestEmail,
     redirectToCheckout,
     normalizedPromo,
     normalizedCreditId,
