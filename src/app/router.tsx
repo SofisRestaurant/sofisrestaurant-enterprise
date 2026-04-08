@@ -18,11 +18,11 @@
 //   /catering            → Catering (lazy)
 //   /reservations        → Reservations (lazy)
 //   /reviews             → Reviews (lazy)
-//   /account/*           → AccountLayout (PUBLIC — layout owns auth gate)
+//   /account/*           → AccountLayout (auth required, lazy)
 //   /checkout            → CheckoutPage (auth required, lazy)
 //   /order-success       → OrderSuccess (lazy)
 //   /order-canceled      → OrderCanceled (lazy)
-//   /order-status/:id    → OrderStatus (lazy)  ← live tracker for users
+//   /order-status/:id    → OrderStatus (lazy)
 //   /update-password     → UpdatePassword (lazy)
 //   /privacy-policy      → PrivacyPolicy (lazy)
 //   /terms-of-service    → TermsOfService (lazy)
@@ -31,14 +31,6 @@
 //   /expo                → ExpoCommandCenter (admin|staff role, lazy)
 //   /admin/*             → AdminLayout (admin required, lazy)
 //   /*                   → NotFound (lazy)
-//
-// CHANGE FROM ORIGINAL (1 line):
-//   /account no longer wrapped in withAuth().
-//   Reason: BottomNav sends unauthenticated mobile users to /account.
-//   withAuth() → AuthGuard intercepts before AccountLayout renders,
-//   making the LoginGate inside AccountLayout unreachable (dead code).
-//   AccountLayout now owns its own auth gate — guests see Login/Signup,
-//   authenticated users see their account. /checkout keeps withAuth().
 
 import React from 'react';
 import { createBrowserRouter } from 'react-router-dom';
@@ -245,18 +237,13 @@ export const router = createBrowserRouter([
       },
 
       // ────────────────────────────────────────────────────────
-      // ACCOUNT — public route, AccountLayout owns the auth gate
-      //
-      // ✏️  ONLY CHANGE FROM ORIGINAL: removed withAuth() wrapper.
-      // AccountLayout renders a branded LoginGate for unauthenticated
-      // users instead of letting AuthGuard redirect them away — which
-      // made the mobile Account tab a dead end with no way to log in.
+      // ACCOUNT (auth required)
       // ────────────────────────────────────────────────────────
       {
         path: 'account',
         lazy: async () => {
           const layout = await import('@/pages/Account/AccountLayout');
-          return { Component: layout.default }; // no withAuth — layout owns gate
+          return { Component: withAuth(layout.default) };
         },
         children: [
           {
@@ -284,13 +271,18 @@ export const router = createBrowserRouter([
       },
 
       // ────────────────────────────────────────────────────────
-      // CHECKOUT (auth required)
+      // CHECKOUT — public route, CheckoutPage owns guest/auth mode switch
+      //
+      // withAuth() removed: CheckoutPage now renders a full guest experience
+      // (email + optional SMS + pay) OR the enriched auth experience (loyalty,
+      // credits, rewards) based on isAuthenticated internally.
+      // Blocking guests here = 0% conversion from new customers.
       // ────────────────────────────────────────────────────────
       {
         path: 'checkout',
         lazy: async () => {
           const m = await import('@/modules/checkout/pages/CheckoutPage');
-          return { Component: withAuth(m.default) };
+          return { Component: m.default }; // no withAuth — page owns mode switch
         },
       },
 
@@ -311,13 +303,6 @@ export const router = createBrowserRouter([
           return { Component: m.default };
         },
       },
-
-      // ────────────────────────────────────────────────────────
-      // ORDER STATUS — live tracker (/order-status/:orderId)
-      // BottomNav Orders tab links here when user has an active order.
-      // useActiveOrder() provides the orderId; OrderStatus page renders
-      // the real-time tracker at sofisrestaurant-enterprise.vercel.app/order-status
-      // ────────────────────────────────────────────────────────
       {
         path: 'order-status/:orderId',
         lazy: async () => {

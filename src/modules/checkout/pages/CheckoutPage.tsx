@@ -1,18 +1,22 @@
 // src/modules/checkout/pages/CheckoutPage.tsx
 // =============================================================================
-// CHECKOUT PAGE — ENTERPRISE GRADE (PRODUCTION READY, 2026) — MAX UX + SAFE
+// CHECKOUT — 2026 DUAL-MODE
 //
-// Security guarantees preserved:
-// - Frontend NEVER calculates promo discount amounts.
-// - Frontend NEVER finalizes tax/total (server/Stripe is source of truth).
-// - Defensive rendering against cart-shape drift (never crashes on nullish).
-// - Canonical cents display everywhere (no dollars/cents mismatch).
+// Guest mode:  Fast, frictionless, invisible identity.
+//              45-second goal. No loyalty talk. No account pressure.
+//              Email + optional SMS → Pay.
 //
-// Loyalty additions (2026):
-// - getLoyaltyAccount() fetches live balance + accountId from loyalty-account fn
-// - RewardsRedeem toggle lets user select points to redeem
-// - loyaltyIntent passed to CheckoutButton → useCheckout → edge function
-// - Server caps, validates, and atomically reserves before Stripe session
+// Auth mode:   Personalized, reward-driven, "the place knows me."
+//              Points preview, credits, loyalty redeem — all visible.
+//              Zero friction: email pre-filled, SMS pre-enabled.
+//
+// Rule: if (user) → enhanced mode. if (null) → fast mode.
+//
+// Security guarantees preserved (unchanged from original):
+//   - Frontend NEVER calculates promo amounts.
+//   - Frontend NEVER finalizes tax/total (Stripe is source of truth).
+//   - Defensive rendering — never crashes on nullish cart.
+//   - Canonical cents everywhere.
 // =============================================================================
 
 import {
@@ -20,10 +24,12 @@ import {
   useMemo,
   useState,
   useCallback,
+  useRef,
   type ChangeEvent,
   type KeyboardEvent,
 } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
 
 import CheckoutButton from '@/modules/checkout/components/CheckoutButton';
 import { PhoneVerification } from '@/modules/checkout/components/PhoneVerification';
@@ -32,6 +38,7 @@ import {
   type LoyaltyRedeemValue,
 } from '@/modules/checkout/components/RewardsRedeem';
 import { useCart } from '@/modules/cart/hooks/useCart';
+import { useAuth } from '@/features/auth/hooks/useAuth';
 import {
   getAvailableCredits,
   getLoyaltyProfile,
@@ -40,9 +47,7 @@ import {
   type LoyaltyProfile,
   type LoyaltyPreview,
 } from '@/modules/checkout/api/checkout.api';
-import { useUserContext } from '@/contexts/useUserContext';
 import { supabase } from '@/lib/supabase/supabaseClient';
-
 import { computeLineTotalCents, cartItemKey } from '@/modules/cart/types/cart.types';
 import type { CartItem } from '@/modules/cart/types/cart.types';
 import { formatCents } from '@/modules/cart/utils/cart.utils';
@@ -51,37 +56,25 @@ import { formatCents } from '@/modules/cart/utils/cart.utils';
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-type PromoState = {
-  code: string;
-  applied: boolean;
-  error: string | null;
-};
-
+type PromoState = { code: string; applied: boolean; error: string | null };
 type OrderType = 'pickup' | 'delivery' | 'dine_in';
-
-type OrderDetailsState = {
-  orderType: OrderType;
-  notes: string;
-};
+type OrderDetailsState = { orderType: OrderType; notes: string };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STORAGE = {
-  CHECKOUT_ORDER_TYPE: 'sofis.checkout.orderType.v1',
-  CHECKOUT_NOTES: 'sofis.checkout.notes.v1',
-  CHECKOUT_PROMO: 'sofis.checkout.promo.v1',
-  CHECKOUT_CREDIT: 'sofis.checkout.credit.v1',
+  ORDER_TYPE: 'sofis.checkout.orderType.v1',
+  NOTES: 'sofis.checkout.notes.v1',
+  PROMO: 'sofis.checkout.promo.v1',
+  CREDIT: 'sofis.checkout.credit.v1',
 } as const;
 
-const LIMITS = {
-  NOTES_MAX: 600,
-  PROMO_MAX: 50,
-} as const;
+const LIMITS = { NOTES_MAX: 600, PROMO_MAX: 50 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers (safe + cents-canonical) — identical to original
+// Pure helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 function clampInt(n: number, min: number, max: number): number {
@@ -135,32 +128,24 @@ function safeLocalGet(key: string): string | null {
     return null;
   }
 }
-
-function safeLocalSet(key: string, value: string): void {
+function safeLocalSet(key: string, val: string): void {
   try {
-    localStorage.setItem(key, value);
+    localStorage.setItem(key, val);
   } catch {
-    /* ignore */
+    /* */
   }
 }
-
 function safeLocalRemove(key: string): void {
   try {
     localStorage.removeItem(key);
   } catch {
-    /* ignore */
+    /* */
   }
 }
 
 function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(' ');
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Loyalty account fetch
-// Calls the loyalty-account edge function which handles auth internally.
-// Returns { accountId, balance } — the two values RewardsRedeem needs.
-// ─────────────────────────────────────────────────────────────────────────────
 
 async function getLoyaltyAccount(): Promise<{
   accountId: string;
@@ -180,28 +165,519 @@ async function getLoyaltyAccount(): Promise<{
     return null;
   }
 }
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Component
+// Animation variants
+// ─────────────────────────────────────────────────────────────────────────────
+
+const fadeUp = {
+  hidden:  { opacity: 0, y: 12 },
+  visible: (i: number) => ({
+    opacity: 1, y: 0,
+    transition: {
+      delay:    i * 0.06,
+      duration: 0.4,
+      // Cast to [number,number,number,number] — Framer Motion accepts cubic-bezier
+      // arrays but TypeScript infers number[] without the explicit tuple type.
+      ease: [0.22, 1, 0.36, 1] as [number, number, number, number],
+    },
+  }),
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-components
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SectionCard({
+  children,
+  className = '',
+  index = 0,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  index?: number;
+}) {
+  return (
+    <motion.section
+      custom={index}
+      variants={fadeUp}
+      initial="hidden"
+      animate="visible"
+      className={cx(
+        'overflow-hidden rounded-2xl border border-(--color-cream-300) bg-white shadow-[0_1px_3px_0_rgb(0_0_0/0.04)]',
+        className,
+      )}
+    >
+      {children}
+    </motion.section>
+  );
+}
+
+function SectionHeader({
+  title,
+  subtitle,
+  right,
+}: {
+  title: string;
+  subtitle?: string;
+  right?: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3 border-b border-(--color-cream-200) px-5 py-4">
+      <div>
+        <h2 className="text-sm font-semibold text-(--color-ink-900)">{title}</h2>
+        {subtitle && <p className="mt-0.5 text-xs text-(--color-ink-400)">{subtitle}</p>}
+      </div>
+      {right}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Guest-only: email capture strip (minimal, non-pressuring)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function GuestContactStrip({
+  email, onEmailChange, phone, onPhoneChange, smsOptIn, onSmsToggle,
+}: {
+  email: string;
+  onEmailChange: (v: string) => void;
+  phone: string;
+  onPhoneChange: (v: string) => void;
+  smsOptIn: boolean;
+  onSmsToggle: () => void;
+}) {
+  return (
+    <div className="space-y-4 px-5 py-5">
+      {/* Email — required for receipt */}
+      <div>
+        <label htmlFor="guest-email" className="block text-xs font-semibold uppercase tracking-wide text-(--color-ink-400) mb-1.5">
+          Email <span className="text-(--color-ember-500)">*</span>
+        </label>
+        <input
+          id="guest-email"
+          type="email"
+          inputMode="email"
+          autoComplete="email"
+          value={email}
+          onChange={(e) => onEmailChange(e.target.value)}
+          placeholder="your@email.com"
+          className="input w-full"
+        />
+        <p className="mt-1 text-[11px] text-(--color-ink-300)">Receipt sent here after payment.</p>
+      </div>
+
+      {/* SMS — optional toggle, no pressure */}
+      <div className="flex items-center justify-between rounded-xl border border-(--color-cream-300) bg-(--color-cream-50) px-4 py-3">
+        <div>
+          <p className="text-sm font-medium text-(--color-ink-800)">Text me when ready</p>
+          <p className="text-xs text-(--color-ink-400)">Optional — no spam, just your order status</p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={smsOptIn}
+          onClick={onSmsToggle}
+          className={cx(
+            'relative h-6 w-11 rounded-full transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)',
+            smsOptIn ? 'bg-(--color-ember-500)' : 'bg-(--color-ink-200)',
+          )}
+        >
+          <span className={cx(
+            'absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200',
+            smsOptIn ? 'translate-x-5' : 'translate-x-0.5',
+          )} />
+        </button>
+      </div>
+
+      {/* Phone input — only shown if SMS opted in */}
+      <AnimatePresence>
+        {smsOptIn && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            <input
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
+              value={phone}
+              onChange={(e) => onPhoneChange(e.target.value)}
+              placeholder="+1 (555) 555-5555"
+              className="input w-full"
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Auth mode: smart contact strip (pre-filled, no typing)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function AuthContactStrip({ email, name }: { email: string; name: string | null }) {
+  return (
+    <div className="flex items-center gap-3 px-5 py-4">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-(--color-ember-50)">
+        <span className="text-base font-bold text-(--color-ember-600)">
+          {(name ?? email).charAt(0).toUpperCase()}
+        </span>
+      </div>
+      <div className="min-w-0">
+        {name && <p className="text-sm font-semibold text-(--color-ink-900) truncate">{name}</p>}
+        <p className="text-xs text-(--color-ink-400) truncate">{email}</p>
+      </div>
+      <span className="ml-auto shrink-0 flex items-center gap-1 rounded-full bg-(--color-success-bg) px-2.5 py-1 text-[11px] font-semibold text-(--color-success)">
+        ✓ Saved
+      </span>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Auth mode: loyalty reward banner — informational, not distracting
+// ─────────────────────────────────────────────────────────────────────────────
+
+function LoyaltyEarnBanner({ preview }: { preview: LoyaltyPreview }) {
+  if (preview.pointsToEarn <= 0) return null;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -6 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="flex items-center justify-between border-b border-(--color-gold-200) bg-linear-to-r from-(--color-gold-50) to-(--color-cream-50) px-5 py-3"
+    >
+      <div className="flex items-center gap-2.5">
+        <span className="text-lg">✨</span>
+        <div>
+          <p className="text-sm font-semibold text-(--color-gold-800)">
+            Earn <span className="tabular-nums">+{preview.pointsToEarn} pts</span> on this order
+          </p>
+          <p className="text-[11px] text-(--color-gold-600)">
+            {preview.willLevelUp
+              ? '🎉 You\'ll level up after this order!'
+              : preview.pointsToNextTier !== null
+                ? `${preview.pointsToNextTier} pts to next tier`
+                : 'Maximum tier — best rewards active'}
+          </p>
+        </div>
+      </div>
+      <div className="flex items-center gap-1.5 shrink-0">
+        <span className="rounded-full bg-(--color-gold-400) px-2.5 py-0.5 text-xs font-bold text-white tabular-nums">
+          +{preview.pointsToEarn}
+        </span>
+        {preview.tierMultiplier > 1 && (
+          <span className="rounded-full bg-(--color-gold-100) px-1.5 py-px text-[10px] font-semibold text-(--color-gold-700)">
+            ×{preview.tierMultiplier}
+          </span>
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Order items list — shared between both modes
+// ─────────────────────────────────────────────────────────────────────────────
+
+function OrderItemsList({ items }: { items: CartItem[] }) {
+  return (
+    <div className="divide-y divide-(--color-cream-200)">
+      {items.map((item) => {
+        const notes = safeText(item.notes, 500);
+        const lineTotalCents = computeDisplayLineTotalCents(item);
+        return (
+          <div key={stableCartKey(item)} className="flex items-start justify-between gap-3 px-5 py-4">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-(--color-ink-900) truncate">
+                {item.name}{' '}
+                <span className="text-(--color-ink-400)">× {clampInt(item.quantity, 1, 100)}</span>
+              </p>
+              {item.modifiers?.length ? (
+                <ul className="mt-1 space-y-0.5">
+                  {item.modifiers.map((m) => (
+                    <li key={`${m.groupId}:${m.id}`} className="text-xs text-(--color-ink-400) truncate">
+                      • {m.name}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {notes && <p className="mt-1 text-xs text-(--color-ink-400)">{notes}</p>}
+            </div>
+            <div className="shrink-0 text-right">
+              <span className="text-sm font-semibold text-(--color-ink-900) tabular-nums">
+                {formatCents(lineTotalCents)}
+              </span>
+              <div className="mt-0.5 text-[11px] text-(--color-ink-400) tabular-nums">
+                {formatCents(safeMoneyCents(item.unitPriceCents))} ea
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Order totals — shared
+// ─────────────────────────────────────────────────────────────────────────────
+
+function OrderTotals({
+  subtotalCents,
+  estimatedTaxCents,
+  estimatedTotalCents,
+}: {
+  subtotalCents: number;
+  estimatedTaxCents: number;
+  estimatedTotalCents: number;
+}) {
+  return (
+    <div className="space-y-2 border-t border-(--color-cream-200) bg-(--color-cream-50) px-5 py-4 text-sm">
+      <div className="flex justify-between text-(--color-ink-600)">
+        <span>Subtotal</span>
+        <span className="tabular-nums">{formatCents(subtotalCents)}</span>
+      </div>
+      <div className="flex justify-between text-(--color-ink-400)">
+        <span>Est. tax</span>
+        <span className="tabular-nums">{formatCents(estimatedTaxCents)}</span>
+      </div>
+      <div className="flex justify-between border-t border-(--color-cream-300) pt-3 font-bold text-(--color-ink-900)">
+        <span>Total</span>
+        <span className="tabular-nums text-(--color-ember-600)">{formatCents(estimatedTotalCents)}</span>
+      </div>
+      <p className="text-center text-[11px] text-(--color-ink-300)">
+        Final total confirmed by Stripe — includes tax, promos, and credits.
+      </p>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Promo code — shown in both modes but minimal in guest
+// ─────────────────────────────────────────────────────────────────────────────
+
+function PromoSection({
+  promo,
+  onPromoChange,
+  onPromoApply,
+  onPromoClear,
+  onPromoKeyDown,
+}: {
+  promo: PromoState;
+  onPromoChange: (e: ChangeEvent<HTMLInputElement>) => void;
+  onPromoApply: () => void;
+  onPromoClear: () => void;
+  onPromoKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void;
+}) {
+  return (
+    <div className="px-5 py-4">
+      {promo.applied ? (
+        <div className="flex items-center justify-between rounded-xl border border-(--color-success) bg-(--color-success-bg) px-4 py-3">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-(--color-success)">✓ {promo.code}</span>
+            <span className="text-xs text-(--color-success)">queued</span>
+          </div>
+          <button type="button" onClick={onPromoClear} className="text-xs text-(--color-ink-400) underline hover:text-(--color-ink-700)">
+            Remove
+          </button>
+        </div>
+      ) : (
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={promo.code}
+            onChange={onPromoChange}
+            onKeyDown={onPromoKeyDown}
+            placeholder="PROMO CODE"
+            inputMode="text"
+            autoCapitalize="characters"
+            autoComplete="off"
+            maxLength={LIMITS.PROMO_MAX}
+            className="input flex-1 font-mono uppercase tracking-wider"
+            aria-label="Promo code"
+          />
+          <button
+            type="button"
+            onClick={onPromoApply}
+            disabled={!promo.code.trim()}
+            className="btn btn-ghost px-4 text-sm disabled:opacity-40"
+          >
+            Apply
+          </button>
+        </div>
+      )}
+      {promo.error && <p className="mt-2 text-xs font-medium text-(--color-error)">{promo.error}</p>}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Credits section (auth only)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CreditsSection({
+  credits,
+  creditsLoading,
+  creditsError,
+  creditsAvailableCents,
+  selectedCredit,
+  onSelectCredit,
+  onRemoveCredit,
+  onRetry,
+}: {
+  credits: UserCredit[];
+  creditsLoading: boolean;
+  creditsError: string | null;
+  creditsAvailableCents: number;
+  selectedCredit: string | null;
+  onSelectCredit: (id: string) => void;
+  onRemoveCredit: () => void;
+  onRetry: () => void;
+}) {
+  if (creditsLoading) {
+    return (
+      <div className="rounded-xl border border-(--color-cream-200) bg-(--color-cream-50) px-4 py-3 text-sm text-(--color-ink-400)">
+        Loading credits…
+      </div>
+    );
+  }
+
+  if (creditsError) {
+    return (
+      <div className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+        <p className="text-sm font-semibold text-red-800">{creditsError}</p>
+        <button type="button" onClick={onRetry} className="rounded-lg bg-white px-3 py-2 text-xs font-semibold text-red-800 ring-1 ring-red-200 hover:bg-red-50">
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  if (credits.length === 0) return null;
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-semibold text-(--color-ink-600)">Store Credits</p>
+        <span className="text-xs font-semibold text-(--color-gold-600) tabular-nums">
+          {formatCents(creditsAvailableCents)} available
+        </span>
+      </div>
+      <div className="divide-y divide-(--color-cream-200) rounded-xl border border-(--color-cream-300) overflow-hidden">
+        {credits.map((credit) => {
+          const amt = safeMoneyCents(credit.amount_cents);
+          const exp = safeText(credit.expires_at, 64);
+          return (
+            <label key={credit.id} className="flex cursor-pointer items-center gap-3 px-4 py-3 hover:bg-(--color-cream-50) transition-colors">
+              <input
+                type="radio"
+                name="credit"
+                value={credit.id}
+                checked={selectedCredit === credit.id}
+                onChange={() => onSelectCredit(credit.id)}
+                className="h-4 w-4 text-(--color-gold-500) focus:ring-(--color-gold-400)"
+              />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-(--color-ink-800) tabular-nums">{formatCents(amt)} credit</p>
+                <p className="text-xs text-(--color-ink-400)">
+                  {String(credit.source ?? '').replace(/_/g, ' ') || 'credit'}
+                  {exp ? ` · Expires ${new Date(exp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}
+                </p>
+              </div>
+              {selectedCredit === credit.id && (
+                <span className="text-xs font-bold text-(--color-gold-600)">Selected</span>
+              )}
+            </label>
+          );
+        })}
+      </div>
+      {selectedCredit && (
+        <button type="button" onClick={onRemoveCredit} className="mt-2 text-xs text-(--color-ink-300) underline hover:text-(--color-ink-600)">
+          Remove credit
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Post-purchase nudge (guest only) — shown after payment CTA
+// "Save for faster checkout next time" — no pressure during
+// ─────────────────────────────────────────────────────────────────────────────
+
+function GuestPostCheckoutNudge({ email }: { email: string }) {
+  const [dismissed, setDismissed] = useState(false);
+
+  if (dismissed || !email) return null;
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 8 }}
+        className="relative overflow-hidden rounded-2xl border border-(--color-gold-200) bg-linear-to-br from-(--color-gold-50) to-(--color-cream-50) p-5"
+      >
+        <button
+          type="button"
+          onClick={() => setDismissed(true)}
+          className="absolute right-3 top-3 text-(--color-ink-300) hover:text-(--color-ink-600)"
+          aria-label="Dismiss"
+        >
+          ×
+        </button>
+        <p className="text-sm font-semibold text-(--color-gold-800)">
+          Want faster checkout next time?
+        </p>
+        <p className="mt-1 text-xs text-(--color-ink-500)">
+          Save your info and earn loyalty rewards on every order.
+        </p>
+        <div className="mt-3 flex gap-2">
+          <Link
+            to={`/auth/signup?email=${encodeURIComponent(email)}&source=checkout`}
+            className="rounded-lg bg-(--color-gold-500) px-4 py-2 text-xs font-semibold text-white hover:bg-(--color-gold-600) transition-colors"
+          >
+            Create account
+          </Link>
+          <button
+            type="button"
+            onClick={() => setDismissed(true)}
+            className="rounded-lg border border-(--color-cream-300) bg-white px-4 py-2 text-xs font-medium text-(--color-ink-500) hover:bg-(--color-cream-50)"
+          >
+            Maybe later
+          </button>
+        </div>
+      </motion.div>
+    </AnimatePresence>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main Component
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function CheckoutPage() {
   const navigate = useNavigate();
   const { items } = useCart();
-  const { isAuthenticated } = useUserContext();
+  const { user, isAuthenticated } = useAuth();
+
+  const isGuest = !isAuthenticated;
 
   const hasItems = Array.isArray(items) && items.length > 0;
-
   const subtotalCents = useMemo(() => {
     if (!hasItems) return 0;
     return items.reduce((sum, i) => sum + computeDisplayLineTotalCents(i), 0);
   }, [items, hasItems]);
-
   const estimatedTaxCents = useMemo(() => Math.round(subtotalCents * 0.095), [subtotalCents]);
   const estimatedTotalCents = useMemo(
     () => subtotalCents + estimatedTaxCents,
     [subtotalCents, estimatedTaxCents],
   );
-
   const itemCount = useMemo(() => {
     if (!hasItems) return 0;
     return items.reduce((acc, i) => acc + clampInt(i.quantity, 0, 10_000), 0);
@@ -209,49 +685,45 @@ export default function CheckoutPage() {
 
   // ── Order details ──────────────────────────────────────────────────────────
   const [orderDetails, setOrderDetails] = useState<OrderDetailsState>(() => {
-    const storedType = safeLocalGet(STORAGE.CHECKOUT_ORDER_TYPE);
-    const storedNotes = safeLocalGet(STORAGE.CHECKOUT_NOTES);
+    const storedType = safeLocalGet(STORAGE.ORDER_TYPE);
+    const storedNotes = safeLocalGet(STORAGE.NOTES);
     const t: OrderType =
       storedType === 'pickup' || storedType === 'delivery' || storedType === 'dine_in'
         ? storedType
         : 'pickup';
-    const notes = typeof storedNotes === 'string' ? storedNotes.slice(0, LIMITS.NOTES_MAX) : '';
-    return { orderType: t, notes };
+    return {
+      orderType: t,
+      notes: typeof storedNotes === 'string' ? storedNotes.slice(0, LIMITS.NOTES_MAX) : '',
+    };
   });
 
   useEffect(() => {
-    safeLocalSet(STORAGE.CHECKOUT_ORDER_TYPE, orderDetails.orderType);
+    safeLocalSet(STORAGE.ORDER_TYPE, orderDetails.orderType);
   }, [orderDetails.orderType]);
-
   useEffect(() => {
-    if (!orderDetails.notes) safeLocalRemove(STORAGE.CHECKOUT_NOTES);
-    else safeLocalSet(STORAGE.CHECKOUT_NOTES, orderDetails.notes);
+    if (!orderDetails.notes) safeLocalRemove(STORAGE.NOTES);
+    else safeLocalSet(STORAGE.NOTES, orderDetails.notes);
   }, [orderDetails.notes]);
 
   // ── Promo ──────────────────────────────────────────────────────────────────
   const [promo, setPromo] = useState<PromoState>(() => {
-    const stored = safeLocalGet(STORAGE.CHECKOUT_PROMO);
-    const code = stored ? normalizePromo(stored) : '';
-    return { code, applied: false, error: null };
+    const stored = safeLocalGet(STORAGE.PROMO);
+    return { code: stored ? normalizePromo(stored) : '', applied: false, error: null };
   });
 
   const onPromoChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     const code = normalizePromo(e.target.value);
     setPromo({ code, applied: false, error: null });
-    if (code) safeLocalSet(STORAGE.CHECKOUT_PROMO, code);
-    else safeLocalRemove(STORAGE.CHECKOUT_PROMO);
+    if (code) safeLocalSet(STORAGE.PROMO, code);
+    else safeLocalRemove(STORAGE.PROMO);
   }, []);
-
   const onPromoApply = useCallback(() => {
-    if (!promo.code.trim()) return;
-    setPromo((p) => ({ ...p, applied: true, error: null }));
+    if (promo.code.trim()) setPromo((p) => ({ ...p, applied: true, error: null }));
   }, [promo.code]);
-
   const onPromoClear = useCallback(() => {
     setPromo({ code: '', applied: false, error: null });
-    safeLocalRemove(STORAGE.CHECKOUT_PROMO);
+    safeLocalRemove(STORAGE.PROMO);
   }, []);
-
   const onPromoKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
       if (e.key === 'Enter') {
@@ -266,19 +738,73 @@ export default function CheckoutPage() {
     [onPromoApply, onPromoClear],
   );
 
-  // ── Credits ────────────────────────────────────────────────────────────────
+  // ── Guest state ────────────────────────────────────────────────────────────
+  const [guestEmail, setGuestEmail] = useState('');
+  const [guestPhone, setGuestPhone] = useState('');
+  const [smsOptIn, setSmsOptIn] = useState(false);
+
+  // ── Auth: credits ──────────────────────────────────────────────────────────
   const [credits, setCredits] = useState<UserCredit[]>([]);
-  const [selectedCredit, setSelectedCredit] = useState<string | null>(() => {
-    const stored = safeLocalGet(STORAGE.CHECKOUT_CREDIT);
-    return stored && typeof stored === 'string' ? stored : null;
-  });
+  const [selectedCredit, setSelectedCredit] = useState<string | null>(() =>
+    safeLocalGet(STORAGE.CREDIT),
+  );
   const [creditsLoading, setCreditsLoading] = useState(true);
   const [creditsError, setCreditsError] = useState<string | null>(null);
+  const [creditsAvailableCents] = useMemo(
+    () => [credits.reduce((s, c) => s + safeMoneyCents(c.amount_cents), 0)],
+    [credits],
+  );
 
-  // ── Loyalty profile (points-to-earn preview) ───────────────────────────────
+  // ── Auth: loyalty ──────────────────────────────────────────────────────────
   const [loyaltyProfile, setLoyaltyProfile] = useState<LoyaltyProfile | null>(null);
   const [loyaltyPreview, setLoyaltyPreview] = useState<LoyaltyPreview | null>(null);
+  const [loyaltyBalance, setLoyaltyBalance] = useState(0);
+  const [loyaltyAccountId, setLoyaltyAccountId] = useState('');
   const [recentlyRedeemed, setRecentlyRedeemed] = useState(false);
+  const [loyaltyIntent, setLoyaltyIntent] = useState<LoyaltyRedeemValue>({
+    applyPoints: false,
+    pointsToRedeem: 0,
+    loyaltyAccountId: '',
+  });
+
+  // ── Auth: phone verification ───────────────────────────────────────────────
+  const [verifiedPhone, setVerifiedPhone] = useState<string | null>(null);
+  const [phoneSkipped, setPhoneSkipped] = useState(false);
+
+  // ── Data loading (auth only) ───────────────────────────────────────────────
+  const loadCredits = useCallback(async () => {
+    setCreditsLoading(true);
+    setCreditsError(null);
+    try {
+      const rows = await getAvailableCredits();
+      const clean = (rows ?? []).filter((c) => typeof c?.id === 'string' && c.id.length > 0);
+      setCredits(clean);
+      if (selectedCredit && !clean.some((c) => c.id === selectedCredit)) {
+        setSelectedCredit(null);
+        safeLocalRemove(STORAGE.CREDIT);
+      }
+    } catch {
+      setCredits([]);
+      setCreditsError('Unable to load credits right now.');
+    } finally {
+      setCreditsLoading(false);
+    }
+  }, [selectedCredit]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setCreditsLoading(false);
+      return;
+    }
+    let alive = true;
+    void loadCredits().finally(() => {
+      if (!alive) return;
+    });
+    return () => {
+      alive = false;
+    };
+  }, [isAuthenticated, loadCredits]);
+
   useEffect(() => {
     if (!isAuthenticated) return;
     let alive = true;
@@ -295,12 +821,6 @@ export default function CheckoutPage() {
       subtotalCents > 0 ? calculatePointsPreview(subtotalCents, loyaltyProfile) : null,
     );
   }, [subtotalCents, loyaltyProfile]);
-
-  // ── Loyalty account (live balance + accountId for redemption) ──────────────
-  // Fetched separately from the profile — needs loyalty_accounts.id and
-  // the live balance from the ledger, not the denormalized profiles.points.
-  const [loyaltyBalance, setLoyaltyBalance] = useState(0);
-  const [loyaltyAccountId, setLoyaltyAccountId] = useState('');
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -319,145 +839,121 @@ export default function CheckoutPage() {
     };
   }, [isAuthenticated]);
 
-  // ── Loyalty redemption intent (ephemeral — never persisted to localStorage) ─
-  const [loyaltyIntent, setLoyaltyIntent] = useState<LoyaltyRedeemValue>({
-    applyPoints: false,
-    pointsToRedeem: 0,
-    loyaltyAccountId: '',
-  });
-
-  // ── Phone verification (optional — for SMS order updates) ─────────────────
-  // verifiedPhone stores the canonical E.164 returned by the backend after OTP.
-  // phoneSkipped tracks whether the user dismissed the widget.
-  // Neither blocks checkout — both are purely additive.
-  const [verifiedPhone, setVerifiedPhone] = useState<string | null>(null);
-  const [phoneSkipped, setPhoneSkipped] = useState(false);
-
-  // ── Credits loader ─────────────────────────────────────────────────────────
-  const loadCredits = useCallback(async () => {
-    setCreditsLoading(true);
-    setCreditsError(null);
-    try {
-      const rows = await getAvailableCredits();
-      const clean = (rows ?? []).filter((c) => typeof c?.id === 'string' && c.id.length > 0);
-      setCredits(clean);
-      if (selectedCredit && !clean.some((c) => c.id === selectedCredit)) {
-        setSelectedCredit(null);
-        safeLocalRemove(STORAGE.CHECKOUT_CREDIT);
-      }
-    } catch {
-      setCredits([]);
-      setCreditsError('Unable to load credits right now.');
-    } finally {
-      setCreditsLoading(false);
-    }
-  }, [selectedCredit]);
-
   useEffect(() => {
-    let alive = true;
-    void (async () => {
-      if (!alive) return;
-      await loadCredits();
-    })().catch((error: unknown) => {
-      console.error('Failed to load credits on checkout init:', error);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [loadCredits]);
-
-  useEffect(() => {
-    if (!selectedCredit) safeLocalRemove(STORAGE.CHECKOUT_CREDIT);
-    else safeLocalSet(STORAGE.CHECKOUT_CREDIT, selectedCredit);
+    if (!selectedCredit) safeLocalRemove(STORAGE.CREDIT);
+    else safeLocalSet(STORAGE.CREDIT, selectedCredit);
   }, [selectedCredit]);
-
-  const creditsAvailableCents = useMemo(
-    () => credits.reduce((sum, c) => sum + safeMoneyCents(c.amount_cents), 0),
-    [credits],
-  );
 
   // ── Copy summary ───────────────────────────────────────────────────────────
   const copySummary = useCallback(async () => {
     if (!hasItems) return;
-    const lines: string[] = [];
-    lines.push(`Sofi's Restaurant — Checkout Summary`);
-    lines.push(`Order type: ${formatOrderTypeLabel(orderDetails.orderType)}`);
-    lines.push(`Items:`);
+    const lines = [
+      `Sofi's — Checkout Summary`,
+      `Type: ${formatOrderTypeLabel(orderDetails.orderType)}`,
+    ];
     for (const item of items) {
-      const qty = clampInt(item.quantity, 1, 100);
-      const lineTotal = computeDisplayLineTotalCents(item);
-      lines.push(`- ${item.name} x${qty} — ${formatCents(lineTotal)}`);
-      if (Array.isArray(item.modifiers) && item.modifiers.length) {
-        const mods = item.modifiers
-          .map((m) => (typeof m?.name === 'string' ? m.name.trim() : ''))
-          .filter(Boolean);
-        if (mods.length) lines.push(`  • ${mods.join(', ')}`);
-      }
-      const notes = safeText(item.notes, 200);
-      if (notes) lines.push(`  note: ${notes}`);
+      lines.push(
+        `- ${item.name} x${clampInt(item.quantity, 1, 100)} — ${formatCents(computeDisplayLineTotalCents(item))}`,
+      );
     }
-    lines.push(`Subtotal (estimated): ${formatCents(subtotalCents)}`);
-    if (promo.applied && promo.code) lines.push(`Promo queued: ${promo.code}`);
-    if (selectedCredit) lines.push(`Credit selected: ${selectedCredit.slice(0, 8).toUpperCase()}`);
-    if (loyaltyIntent.applyPoints && loyaltyIntent.pointsToRedeem > 0) {
-      lines.push(`Loyalty: ${loyaltyIntent.pointsToRedeem.toLocaleString()} pts queued`);
-    }
-    if (orderDetails.notes.trim()) lines.push(`Checkout notes: ${orderDetails.notes.trim()}`);
-    lines.push(`Final total is confirmed by Stripe at payment.`);
+    lines.push(`Subtotal: ${formatCents(subtotalCents)}`);
+    lines.push(`Final total confirmed by Stripe.`);
     try {
       await navigator.clipboard.writeText(lines.join('\n'));
     } catch {
-      /* ignore */
+      /* */
     }
-  }, [hasItems, items, subtotalCents, promo, selectedCredit, loyaltyIntent, orderDetails]);
+  }, [hasItems, items, subtotalCents, orderDetails]);
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Render — identical structure to original, loyalty section added inside
-  // the existing "Loyalty Rewards + Credits" section
-  // ─────────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // Render
+  // ─────────────────────────────────────────────────────────────────────────
 
   return (
-    <main className="relative mx-auto w-full max-w-3xl px-3 py-6 sm:px-4 sm:py-10">
-      {/* Header */}
-      <header className="mb-6 sm:mb-8">
-        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Checkout</h1>
-        <p className="mt-1 text-sm text-gray-500">Review your order before secure payment.</p>
-      </header>
-
-      {/* Empty cart */}
-      {!hasItems ? (
-        <section className="rounded-2xl border border-dashed bg-white p-10 text-center">
-          <p className="text-gray-600">Your cart is empty.</p>
-          <div className="mt-6 flex justify-center gap-3">
-            <button
-              type="button"
-              onClick={() => navigate('/menu')}
-              className="rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-gray-700"
-            >
-              Browse Menu
-            </button>
-            <Link
-              to="/"
-              className="rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-900 hover:bg-gray-50"
-            >
-              Home
-            </Link>
+    <main className="relative mx-auto w-full max-w-2xl px-4 py-8 sm:py-12">
+      {/* ── Header ── */}
+      <motion.header
+        initial={{ opacity: 0, y: -8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.35 }}
+        className="mb-7"
+      >
+        {isGuest ? (
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-(--color-ink-900)">Checkout</h1>
+            <p className="mt-1 text-sm text-(--color-ink-400)">Fast, secure, no account needed.</p>
           </div>
-        </section>
-      ) : (
-        <div className="space-y-3 sm:space-y-4">
-          {/* Order Details */}
-          <section className="overflow-hidden rounded-2xl border bg-white shadow-sm">
-            <div className="border-b px-4 py-3 sm:px-6 sm:py-4">
-              <h2 className="font-semibold">Order details</h2>
-              <p className="mt-0.5 text-xs text-gray-500">
-                These details help us prepare your order. Pricing is confirmed by Stripe at payment.
-              </p>
+        ) : (
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-widest text-(--color-ember-500) mb-1">
+              Welcome back{user?.name ? `, ${user.name.split(' ')[0]}` : ''}
+            </p>
+            <h1 className="text-2xl font-bold tracking-tight text-(--color-ink-900)">Your Order</h1>
+            <p className="mt-1 text-sm text-(--color-ink-400)">
+              Your details are saved. Rewards applied automatically.
+            </p>
+          </div>
+        )}
+      </motion.header>
+
+      {/* ── Empty cart ── */}
+      {!hasItems ? (
+        <SectionCard index={0}>
+          <div className="p-10 text-center">
+            <p className="text-(--color-ink-500)">Your cart is empty.</p>
+            <div className="mt-6 flex justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => navigate('/menu')}
+                className="btn btn-primary px-5 py-2.5 text-sm"
+              >
+                Browse Menu
+              </button>
+              <Link to="/" className="btn btn-ghost px-5 py-2.5 text-sm">
+                Home
+              </Link>
             </div>
-            <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-5">
+          </div>
+        </SectionCard>
+      ) : (
+        <div className="space-y-3">
+          {/* ═══════════════════════════════════════════════════════════
+              SECTION 1: ORDER REVIEW (same for both, guest gets quick actions)
+          ════════════════════════════════════════════════════════════ */}
+          <SectionCard index={0}>
+            <SectionHeader
+              title="Order Summary"
+              subtitle={`${itemCount} item${itemCount !== 1 ? 's' : ''}`}
+              right={
+                <div className="flex gap-2">
+                  <Link
+                    to="/menu"
+                    className="text-xs text-(--color-ink-400) hover:text-(--color-ink-700) underline"
+                  >
+                    Edit
+                  </Link>
+                </div>
+              }
+            />
+            <OrderItemsList items={items} />
+            <OrderTotals
+              subtotalCents={subtotalCents}
+              estimatedTaxCents={estimatedTaxCents}
+              estimatedTotalCents={estimatedTotalCents}
+            />
+          </SectionCard>
+
+          {/* ═══════════════════════════════════════════════════════════
+              SECTION 2: ORDER TYPE + NOTES (shared)
+          ════════════════════════════════════════════════════════════ */}
+          <SectionCard index={1}>
+            <SectionHeader title="Order details" />
+            <div className="space-y-4 px-5 py-5">
               <div>
-                <label className="block text-sm font-semibold text-gray-900">Order type</label>
-                <div className="mt-2 grid grid-cols-3 gap-2">
+                <label className="block text-xs font-semibold uppercase tracking-wide text-(--color-ink-400) mb-1.5">
+                  Order type
+                </label>
+                <div className="grid grid-cols-3 gap-2">
                   {(['pickup', 'delivery', 'dine_in'] as const).map((t) => {
                     const active = orderDetails.orderType === t;
                     const comingSoon = t === 'delivery' || t === 'dine_in';
@@ -470,33 +966,22 @@ export default function CheckoutPage() {
                             !comingSoon && setOrderDetails((s) => ({ ...s, orderType: t }))
                           }
                           className={cx(
-                            'w-full rounded-xl border px-3 py-2.5 text-sm font-semibold transition',
+                            'w-full rounded-xl border px-3 py-2.5 text-sm font-semibold transition-all',
                             comingSoon
-                              ? 'cursor-not-allowed border-gray-100 bg-gray-50 text-gray-300 select-none'
+                              ? 'cursor-not-allowed border-(--color-cream-200) bg-(--color-cream-50) text-(--color-ink-300) select-none'
                               : active
-                                ? 'border-gray-900 text-white'
-                                : 'border-gray-200 bg-white text-gray-900 hover:border-gray-300 hover:bg-gray-50',
+                                ? 'border-(--color-ember-500) bg-(--color-ember-600) text-white shadow-sm'
+                                : 'border-(--color-cream-300) bg-white text-(--color-ink-800) hover:border-(--color-ink-300) hover:bg-(--color-cream-50)',
                           )}
-                          style={
-                            comingSoon
-                              ? {}
-                              : active
-                                ? { backgroundColor: '#1c1915', color: '#ffffff' }
-                                : {}
-                          }
                           aria-pressed={active}
-                          aria-disabled={comingSoon}
                         >
                           {formatOrderTypeLabel(t)}
                         </button>
-                        {comingSoon ? (
-                          <span
-                            className="pointer-events-none absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full px-2 py-px text-[9px] font-bold uppercase text-white shadow-sm"
-                            style={{ backgroundColor: '#d4af37', letterSpacing: '0.12em' }}
-                          >
+                        {comingSoon && (
+                          <span className="pointer-events-none absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-(--color-gold-400) px-2 py-px text-[9px] font-bold uppercase text-white shadow-sm tracking-wide">
                             Soon
                           </span>
-                        ) : null}
+                        )}
                       </div>
                     );
                   })}
@@ -506,417 +991,229 @@ export default function CheckoutPage() {
               <div>
                 <label
                   htmlFor="checkout-notes"
-                  className="block text-sm font-semibold text-gray-900"
+                  className="block text-xs font-semibold uppercase tracking-wide text-(--color-ink-400) mb-1.5"
                 >
-                  Notes for the kitchen{' '}
-                  <span className="text-xs font-normal text-gray-400">(optional)</span>
+                  Kitchen notes{' '}
+                  <span className="text-[11px] font-normal normal-case text-(--color-ink-300)">
+                    (optional)
+                  </span>
                 </label>
                 <textarea
                   id="checkout-notes"
                   value={orderDetails.notes}
-                  onChange={(e) => {
-                    const next = String(e.target.value ?? '').slice(0, LIMITS.NOTES_MAX);
-                    setOrderDetails((s) => ({ ...s, notes: next }));
-                  }}
-                  rows={3}
-                  placeholder="Example: no onions, sauce on the side, mild salsa…"
-                  className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
+                  onChange={(e) =>
+                    setOrderDetails((s) => ({
+                      ...s,
+                      notes: String(e.target.value).slice(0, LIMITS.NOTES_MAX),
+                    }))
+                  }
+                  rows={2}
+                  placeholder="No onions, mild salsa, sauce on the side…"
+                  className="input w-full resize-none"
                 />
-                <div className="mt-1 flex items-center justify-between text-[11px] text-gray-400">
-                  <span>Keep it short for fastest prep.</span>
-                  <span className="tabular-nums">
+                <div className="mt-1 flex justify-end">
+                  <span className="text-[11px] text-(--color-ink-300) tabular-nums">
                     {orderDetails.notes.length}/{LIMITS.NOTES_MAX}
                   </span>
                 </div>
               </div>
 
+              {/* Quick actions — less prominent in auth mode */}
               <div className="flex flex-wrap gap-2 pt-1">
                 <button
                   type="button"
                   onClick={() => window.print()}
-                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-900 hover:bg-gray-50"
+                  className="rounded-lg border border-(--color-cream-300) bg-white px-3 py-2 text-xs font-medium text-(--color-ink-600) hover:bg-(--color-cream-50)"
                 >
                   Print / Save PDF
                 </button>
                 <button
                   type="button"
                   onClick={() => void copySummary()}
-                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-900 hover:bg-gray-50"
+                  className="rounded-lg border border-(--color-cream-300) bg-white px-3 py-2 text-xs font-medium text-(--color-ink-600) hover:bg-(--color-cream-50)"
                 >
                   Copy summary
                 </button>
-                <Link
-                  to="/menu"
-                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-900 hover:bg-gray-50"
-                >
-                  Continue shopping
-                </Link>
               </div>
             </div>
-          </section>
+          </SectionCard>
 
-          {/* Order Summary */}
-          <section className="overflow-hidden rounded-2xl border bg-white shadow-sm">
-            <div className="flex items-center justify-between border-b px-4 py-3 sm:px-6 sm:py-4">
-              <h2 className="font-semibold">Order Summary</h2>
-              <span className="text-sm text-gray-500">
-                {itemCount} item{itemCount !== 1 ? 's' : ''}
-              </span>
-            </div>
-            <div className="divide-y">
-              {items.map((item) => {
-                const notes = safeText(item.notes, 500);
-                const lineTotalCents = computeDisplayLineTotalCents(item);
-                return (
-                  <div
-                    key={stableCartKey(item)}
-                    className="flex items-start justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate font-medium">
-                        {item.name}{' '}
-                        <span className="text-gray-500">× {clampInt(item.quantity, 1, 100)}</span>
-                      </p>
-                      {item.modifiers?.length ? (
-                        <ul className="mt-1 space-y-0.5 text-xs text-gray-500">
-                          {item.modifiers.map((m) => (
-                            <li key={`${m.groupId}:${m.id}`} className="truncate">
-                              • {m.name}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : null}
-                      {notes ? <p className="mt-1 text-xs text-gray-500">{notes}</p> : null}
-                    </div>
-                    <div className="shrink-0 text-right font-semibold tabular-nums">
-                      {formatCents(lineTotalCents)}
-                      <div className="mt-0.5 text-[11px] font-normal text-gray-400">
-                        {formatCents(safeMoneyCents(item.unitPriceCents))} ea
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="space-y-2 border-t bg-gray-50 px-4 py-4 sm:px-6 sm:py-5 text-sm">
-              <div className="flex justify-between">
-                <span>Subtotal (estimated)</span>
-                <span className="tabular-nums">{formatCents(subtotalCents)}</span>
-              </div>
-              <div className="flex justify-between text-gray-400">
-                <span>Estimated tax</span>
-                <span className="tabular-nums">{formatCents(estimatedTaxCents)}</span>
-              </div>
-              <div className="flex justify-between border-t pt-3 text-lg font-bold">
-                <span>Total (estimated)</span>
-                <span className="tabular-nums text-primary">
-                  {formatCents(estimatedTotalCents)}
-                </span>
-              </div>
-              <p className="pt-1 text-center text-[11px] text-gray-400">
-                Final total confirmed by Stripe — includes tax, promotions, and credits.
-              </p>
-            </div>
-          </section>
-
-          {/* Promo Code */}
-          <section className="overflow-hidden rounded-2xl border bg-white shadow-sm">
-            <div className="border-b px-4 py-3 sm:px-6 sm:py-4">
-              <h2 className="font-semibold">Promo Code</h2>
-              <p className="mt-0.5 text-xs text-gray-500">
-                Discounts are verified and applied by the server at checkout.
-              </p>
-            </div>
-            <div className="px-6 py-4">
-              {promo.applied ? (
-                <div className="flex items-center justify-between rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-emerald-700">✓ {promo.code}</span>
-                    <span className="text-xs text-emerald-600">queued</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={onPromoClear}
-                    className="text-xs text-gray-400 underline hover:text-gray-600"
-                  >
-                    Remove
-                  </button>
-                </div>
-              ) : (
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={promo.code}
-                    onChange={onPromoChange}
-                    onKeyDown={onPromoKeyDown}
-                    placeholder="ENTER CODE"
-                    inputMode="text"
-                    autoCapitalize="characters"
-                    autoComplete="off"
-                    maxLength={LIMITS.PROMO_MAX}
-                    className="flex-1 rounded-lg border border-gray-300 px-3 py-2.5 font-mono text-sm uppercase tracking-wider outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
-                    aria-label="Promo code"
-                  />
-                  <button
-                    type="button"
-                    onClick={onPromoApply}
-                    disabled={!promo.code.trim()}
-                    className="rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Apply
-                  </button>
-                </div>
-              )}
-              {promo.error ? (
-                <p className="mt-2 text-xs font-medium text-red-600">{promo.error}</p>
-              ) : null}
-              <p className="mt-2 text-[11px] text-gray-400">
-                Tip: Press <span className="font-mono">Enter</span> to apply,{' '}
-                <span className="font-mono">Esc</span> to clear.
-              </p>
-            </div>
-          </section>
-
-          {/* Loyalty Rewards + Credits */}
-          <section className="overflow-hidden rounded-2xl border bg-white shadow-sm">
-            <div className="border-b px-4 py-3 sm:px-6 sm:py-4">
-              <div className="flex items-center justify-between">
-                <h2 className="font-semibold">Loyalty & Credits</h2>
-                {!creditsLoading && credits.length > 0 ? (
-                  <span className="text-sm font-semibold text-amber-600 tabular-nums">
-                    {formatCents(creditsAvailableCents)} available
-                  </span>
-                ) : null}
-              </div>
-              <p className="mt-0.5 text-xs text-gray-500">
-                Credits are applied by the server — final balance confirmed at payment.
-              </p>
-            </div>
-
-            {/* Points-to-earn preview */}
-            {loyaltyPreview !== null && loyaltyPreview.pointsToEarn > 0 ? (
-              <div className="border-b bg-amber-50 px-4 py-3 sm:px-6">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-base" aria-hidden="true">
-                      ✨
-                    </span>
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-amber-900">
-                        You'll earn{' '}
-                        <span className="tabular-nums">+{loyaltyPreview.pointsToEarn} pts</span> on
-                        this order
-                      </p>
-                      <p className="text-[11px] text-amber-700 mt-0.5">
-                        {loyaltyPreview.willLevelUp
-                          ? "🎉 You'll level up to the next tier!"
-                          : loyaltyPreview.pointsToNextTier !== null
-                            ? `${loyaltyPreview.pointsToNextTier} pts to next tier`
-                            : "You're at the top tier — maximum rewards!"}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex flex-col items-end gap-1 shrink-0 ml-3">
-                    <span className="rounded-full bg-amber-400 px-2.5 py-0.5 text-sm font-bold text-white tabular-nums">
-                      +{loyaltyPreview.pointsToEarn}
-                    </span>
-                    {(loyaltyPreview.tierMultiplier > 1 || loyaltyPreview.streakMultiplier > 1) && (
-                      <div className="flex gap-1">
-                        {loyaltyPreview.tierMultiplier > 1 && (
-                          <span className="rounded-full bg-amber-100 px-1.5 py-px text-[10px] font-semibold text-amber-800">
-                            ×{loyaltyPreview.tierMultiplier}
-                          </span>
-                        )}
-                        {loyaltyPreview.streakMultiplier > 1 && (
-                          <span className="rounded-full bg-amber-100 px-1.5 py-px text-[10px] font-semibold text-amber-800">
-                            🔥×{loyaltyPreview.streakMultiplier}
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
-            <div className="space-y-4 px-6 py-4">
-              {/* ── LOYALTY REDEEM TOGGLE ──────────────────────────────────────
-                  Only rendered when user has points. RewardsRedeem is a pure
-                  presentational component — it receives live balance + accountId
-                  and emits the user's intent. Server validates everything.
-              ──────────────────────────────────────────────────────────────── */}
-
-              {recentlyRedeemed && (
-                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 mb-2">
-                  ✨ You recently redeemed points. Your current balance reflects that redemption.
-                </p>
-              )}
-
-              {isAuthenticated && loyaltyBalance > 0 && loyaltyAccountId && (
-                <RewardsRedeem
-                  balance={loyaltyBalance}
-                  accountId={loyaltyAccountId}
-                  subtotalCents={subtotalCents}
-                  onChange={setLoyaltyIntent}
+          {/* ═══════════════════════════════════════════════════════════
+              SECTION 3A: GUEST — Contact (email required + optional SMS)
+              SECTION 3B: AUTH — Smart contact (pre-filled, no typing)
+          ════════════════════════════════════════════════════════════ */}
+          <SectionCard index={2}>
+            {isGuest ? (
+              <>
+                <SectionHeader title="Contact" subtitle="For your receipt and order updates" />
+                <GuestContactStrip
+                  email={guestEmail}
+                  onEmailChange={setGuestEmail}
+                  phone={guestPhone}
+                  onPhoneChange={setGuestPhone}
+                  smsOptIn={smsOptIn}
+                  onSmsToggle={() => setSmsOptIn((v) => !v)}
                 />
-              )}
+              </>
+            ) : (
+              <>
+                <SectionHeader title="Your info" />
+                <AuthContactStrip email={user?.email ?? ''} name={user?.name ?? null} />
 
-              {/* ── CREDITS ──────────────────────────────────────────────────── */}
-              {creditsLoading ? (
-                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
-                  Loading credits…
-                </div>
-              ) : creditsError ? (
-                <div className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
-                  <p className="text-sm font-semibold text-red-800">{creditsError}</p>
-                  <button
-                    type="button"
-                    onClick={() => void loadCredits()}
-                    className="rounded-lg bg-white px-3 py-2 text-xs font-semibold text-red-800 ring-1 ring-red-200 hover:bg-red-50"
-                  >
-                    Retry
-                  </button>
-                </div>
-              ) : credits.length === 0 ? (
-                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
-                  No credits available right now.
-                </div>
-              ) : (
-                <div className="divide-y">
-                  {credits.map((credit) => {
-                    const amt = safeMoneyCents(credit.amount_cents);
-                    const exp = safeText(credit.expires_at, 64);
-                    return (
-                      <label
-                        key={credit.id}
-                        className="flex cursor-pointer items-center gap-3 py-3"
-                      >
-                        <input
-                          type="radio"
-                          name="credit"
-                          value={credit.id}
-                          checked={selectedCredit === credit.id}
-                          onChange={() => setSelectedCredit(credit.id)}
-                          className="h-4 w-4 text-amber-500 focus:ring-amber-500"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-semibold text-gray-800 tabular-nums">
-                            {formatCents(amt)} credit
-                          </p>
-                          <p className="text-xs capitalize text-gray-500">
-                            {String(credit.source ?? '').replace(/_/g, ' ') || 'credit'}
-                            {exp ? (
-                              <>
-                                {' '}
-                                · Expires{' '}
-                                {new Date(exp).toLocaleDateString('en-US', {
-                                  month: 'short',
-                                  day: 'numeric',
-                                })}
-                              </>
-                            ) : null}
-                          </p>
-                        </div>
-                        {selectedCredit === credit.id ? (
-                          <span className="text-xs font-bold text-amber-600">Selected</span>
-                        ) : null}
-                      </label>
-                    );
-                  })}
-                  {selectedCredit ? (
-                    <div className="pt-3">
+                {/* Auth: phone verification widget for SMS */}
+                {!verifiedPhone && !phoneSkipped && (
+                  <div className="border-t border-(--color-cream-200) px-5 py-4">
+                    <PhoneVerification
+                      onVerified={(phone) => setVerifiedPhone(phone)}
+                      onSkip={() => setPhoneSkipped(true)}
+                    />
+                  </div>
+                )}
+                {verifiedPhone && (
+                  <div className="border-t border-(--color-cream-200) px-5 py-3">
+                    <div className="flex items-center justify-between rounded-xl border border-(--color-success) bg-(--color-success-bg) px-4 py-2.5">
+                      <p className="text-sm font-medium text-(--color-success)">
+                        📱 SMS updates active
+                      </p>
                       <button
                         type="button"
-                        onClick={() => setSelectedCredit(null)}
-                        className="text-xs text-gray-400 underline hover:text-gray-600"
+                        onClick={() => {
+                          setVerifiedPhone(null);
+                          setPhoneSkipped(false);
+                        }}
+                        className="text-xs text-(--color-success) underline"
                       >
-                        Remove credit
+                        Change
                       </button>
                     </div>
-                  ) : null}
-                </div>
-              )}
-            </div>
-          </section>
+                  </div>
+                )}
+              </>
+            )}
+          </SectionCard>
 
-          {/* SMS Updates — optional phone verification */}
-          {/* Shows if user hasn't verified or skipped. Never blocks checkout. */}
-          {!verifiedPhone && !phoneSkipped && (
-            <section>
-              <PhoneVerification
-                onVerified={(phone) => setVerifiedPhone(phone)}
-                onSkip={() => setPhoneSkipped(true)}
-              />
-            </section>
-          )}
-
-          {/* Verified confirmation chip */}
-          {verifiedPhone && (
-            <section>
-              <div className="flex items-center justify-between rounded-xl border border-green-200 bg-green-50 px-4 py-2.5">
-                <p className="text-sm font-medium text-green-800">
-                  📱 SMS updates: {verifiedPhone.slice(-4).padStart(verifiedPhone.length, '•')}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setVerifiedPhone(null);
-                    setPhoneSkipped(false);
-                  }}
-                  className="text-xs text-green-600 underline hover:text-green-800"
-                >
-                  Change
-                </button>
-              </div>
-            </section>
-          )}
-
-          {/* Payment */}
-          <section className="space-y-3 sm:space-y-4">
-            <CheckoutButton
-              promoCode={promo.applied ? promo.code : undefined}
-              creditId={selectedCredit ?? undefined}
-              orderType={orderDetails.orderType}
-              notes={orderDetails.notes ? orderDetails.notes : null}
-              loyalty={loyaltyIntent}
-              onPromoError={(msg: string) =>
-                setPromo((prev) => ({ ...prev, error: msg, applied: false }))
-              }
+          {/* ═══════════════════════════════════════════════════════════
+              SECTION 4: PROMO (both modes — minimal, non-distracting)
+          ════════════════════════════════════════════════════════════ */}
+          <SectionCard index={3}>
+            <SectionHeader title="Promo Code" subtitle="Verified by the server at checkout" />
+            <PromoSection
+              promo={promo}
+              onPromoChange={onPromoChange}
+              onPromoApply={onPromoApply}
+              onPromoClear={onPromoClear}
+              onPromoKeyDown={onPromoKeyDown}
             />
+          </SectionCard>
 
-            <p className="text-center text-xs text-gray-500">
-              🔒 Secure payment powered by Stripe. Your card details are never stored on our
-              servers.
-            </p>
+          {/* ═══════════════════════════════════════════════════════════
+              SECTION 5: REWARDS (AUTH ONLY — hidden from guests entirely)
+              Loyalty points earn preview + redeem + credits
+              Goal: informational, not overwhelming
+          ════════════════════════════════════════════════════════════ */}
+          {!isGuest && (
+            <SectionCard index={4}>
+              {/* Earn preview banner */}
+              {loyaltyPreview && <LoyaltyEarnBanner preview={loyaltyPreview} />}
 
-            <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700">
-              <p className="font-semibold">Need help?</p>
-              <p className="mt-1 text-xs text-gray-500">
-                If anything looks off after payment, we'll fix it fast. Save your receipt and
-                include your order ID.
+              <SectionHeader
+                title="Rewards & Credits"
+                subtitle="Applied by the server — final balance confirmed at payment"
+              />
+
+              <div className="space-y-4 px-5 py-4">
+                {recentlyRedeemed && (
+                  <p className="rounded-xl border border-(--color-gold-200) bg-(--color-gold-50) px-3 py-2.5 text-xs text-(--color-gold-700)">
+                    ✨ You recently redeemed points. Your balance reflects that.
+                  </p>
+                )}
+
+                {/* Loyalty redeem toggle */}
+                {loyaltyBalance > 0 && loyaltyAccountId && (
+                  <RewardsRedeem
+                    balance={loyaltyBalance}
+                    accountId={loyaltyAccountId}
+                    subtotalCents={subtotalCents}
+                    onChange={setLoyaltyIntent}
+                  />
+                )}
+
+                {/* Credits */}
+                <CreditsSection
+                  credits={credits}
+                  creditsLoading={creditsLoading}
+                  creditsError={creditsError}
+                  creditsAvailableCents={creditsAvailableCents}
+                  selectedCredit={selectedCredit}
+                  onSelectCredit={(id) => setSelectedCredit(id)}
+                  onRemoveCredit={() => setSelectedCredit(null)}
+                  onRetry={() => void loadCredits()}
+                />
+              </div>
+            </SectionCard>
+          )}
+
+          {/* ═══════════════════════════════════════════════════════════
+              SECTION 6: PAYMENT CTA — dominant, nothing below it competes
+          ════════════════════════════════════════════════════════════ */}
+          <SectionCard
+            index={isGuest ? 4 : 5}
+            className="border-(--color-ember-200) bg-linear-to-b from-white to-(--color-cream-50)"
+          >
+            <div className="px-5 py-5 space-y-3">
+              <CheckoutButton
+                promoCode={promo.applied ? promo.code : undefined}
+                creditId={selectedCredit ?? undefined}
+                orderType={orderDetails.orderType}
+                notes={orderDetails.notes || null}
+                loyalty={loyaltyIntent}
+                onPromoError={(msg: string) =>
+                  setPromo((prev) => ({ ...prev, error: msg, applied: false }))
+                }
+              />
+
+              <p className="text-center text-[11px] text-(--color-ink-300)">
+                🔒 Secure payment via Stripe — card details never stored on our servers
               </p>
-              <div className="mt-3 flex flex-wrap gap-2">
+            </div>
+          </SectionCard>
+
+          {/* ═══════════════════════════════════════════════════════════
+              GUEST POST-CHECKOUT: "Create account" nudge AFTER CTA
+              Not during — never during.
+          ════════════════════════════════════════════════════════════ */}
+          {isGuest && (
+            <motion.div custom={5} variants={fadeUp} initial="hidden" animate="visible">
+              <GuestPostCheckoutNudge email={guestEmail} />
+            </motion.div>
+          )}
+
+          {/* Help — minimal, below the fold */}
+          <motion.div custom={isGuest ? 6 : 6} variants={fadeUp} initial="hidden" animate="visible">
+            <div className="px-1 py-2 text-center">
+              <p className="text-xs text-(--color-ink-400)">
+                Need help?{' '}
                 <a
-                  className="rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white hover:bg-gray-700"
                   href="mailto:sofisrestaurante@gmail.com"
+                  className="underline hover:text-(--color-ink-700)"
                 >
-                  Email support
+                  Email us
                 </a>
-                <Link
-                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-900 hover:bg-gray-50"
-                  to="/contact"
-                >
+                {' · '}
+                <Link to="/contact" className="underline hover:text-(--color-ink-700)">
                   Contact form
                 </Link>
-                <Link
-                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-900 hover:bg-gray-50"
-                  to="/account/orders"
-                >
-                  View order history
-                </Link>
-              </div>
+                {isAuthenticated && (
+                  <>
+                    {' · '}
+                    <Link to="/account/orders" className="underline hover:text-(--color-ink-700)">
+                      Order history
+                    </Link>
+                  </>
+                )}
+              </p>
             </div>
-          </section>
+          </motion.div>
         </div>
       )}
     </main>
