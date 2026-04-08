@@ -9,6 +9,7 @@ import {
   markCreditUsedIfPending,
   notify,
   recordPromoRedemptionIfMissing,
+  sendOrderConfirmationSms,
   upsertPaymentTransaction,
 } from "../side-effects.ts";
 import { notifyKitchen } from "../kitchen-notify.ts";
@@ -260,6 +261,10 @@ export async function handleCheckoutSessionCompleted(
         amountTotal:     orderTotal,
         requestId,
       }),
+      // ✅ SMS confirmation — calls send-sms Edge Function via internal key.
+      // Best-effort: never blocks order creation. send-sms handles idempotency,
+      // rate limiting, and phone normalization internally.
+      sendOrderConfirmationSms({ db, orderId, requestId }),
     );
   }
 

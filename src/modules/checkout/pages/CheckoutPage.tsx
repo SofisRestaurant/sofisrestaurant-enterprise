@@ -26,6 +26,7 @@ import {
 import { useNavigate, Link } from 'react-router-dom';
 
 import CheckoutButton from '@/modules/checkout/components/CheckoutButton';
+import { PhoneVerification } from '@/modules/checkout/components/PhoneVerification';
 import {
   RewardsRedeem,
   type LoyaltyRedeemValue,
@@ -301,22 +302,22 @@ export default function CheckoutPage() {
   const [loyaltyBalance, setLoyaltyBalance] = useState(0);
   const [loyaltyAccountId, setLoyaltyAccountId] = useState('');
 
-useEffect(() => {
-  if (!isAuthenticated) return;
-  let alive = true;
-  void getLoyaltyAccount().then((acct) => {
-    if (!alive || !acct) return;
-    setLoyaltyBalance(acct.balance);
-    setLoyaltyAccountId(acct.accountId);
-    if (acct.lastRedeemAt) {
-      const hoursSince = (Date.now() - new Date(acct.lastRedeemAt).getTime()) / 36e5;
-      setRecentlyRedeemed(hoursSince < 24);
-    }
-  });
-  return () => {
-    alive = false;
-  };
-}, [isAuthenticated]);
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let alive = true;
+    void getLoyaltyAccount().then((acct) => {
+      if (!alive || !acct) return;
+      setLoyaltyBalance(acct.balance);
+      setLoyaltyAccountId(acct.accountId);
+      if (acct.lastRedeemAt) {
+        const hoursSince = (Date.now() - new Date(acct.lastRedeemAt).getTime()) / 36e5;
+        setRecentlyRedeemed(hoursSince < 24);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [isAuthenticated]);
 
   // ── Loyalty redemption intent (ephemeral — never persisted to localStorage) ─
   const [loyaltyIntent, setLoyaltyIntent] = useState<LoyaltyRedeemValue>({
@@ -324,6 +325,13 @@ useEffect(() => {
     pointsToRedeem: 0,
     loyaltyAccountId: '',
   });
+
+  // ── Phone verification (optional — for SMS order updates) ─────────────────
+  // verifiedPhone stores the canonical E.164 returned by the backend after OTP.
+  // phoneSkipped tracks whether the user dismissed the widget.
+  // Neither blocks checkout — both are purely additive.
+  const [verifiedPhone, setVerifiedPhone] = useState<string | null>(null);
+  const [phoneSkipped, setPhoneSkipped] = useState(false);
 
   // ── Credits loader ─────────────────────────────────────────────────────────
   const loadCredits = useCallback(async () => {
@@ -830,6 +838,38 @@ useEffect(() => {
               )}
             </div>
           </section>
+
+          {/* SMS Updates — optional phone verification */}
+          {/* Shows if user hasn't verified or skipped. Never blocks checkout. */}
+          {!verifiedPhone && !phoneSkipped && (
+            <section>
+              <PhoneVerification
+                onVerified={(phone) => setVerifiedPhone(phone)}
+                onSkip={() => setPhoneSkipped(true)}
+              />
+            </section>
+          )}
+
+          {/* Verified confirmation chip */}
+          {verifiedPhone && (
+            <section>
+              <div className="flex items-center justify-between rounded-xl border border-green-200 bg-green-50 px-4 py-2.5">
+                <p className="text-sm font-medium text-green-800">
+                  📱 SMS updates: {verifiedPhone.slice(-4).padStart(verifiedPhone.length, '•')}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setVerifiedPhone(null);
+                    setPhoneSkipped(false);
+                  }}
+                  className="text-xs text-green-600 underline hover:text-green-800"
+                >
+                  Change
+                </button>
+              </div>
+            </section>
+          )}
 
           {/* Payment */}
           <section className="space-y-3 sm:space-y-4">

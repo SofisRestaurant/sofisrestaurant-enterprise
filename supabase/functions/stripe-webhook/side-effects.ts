@@ -488,3 +488,57 @@ export async function logSecurityEvent(
     // best effort
   }
 }
+export async function sendOrderConfirmationSms(args: {
+  db:        DbClient;
+  orderId:   string;
+  requestId: string;
+}): Promise<void> {
+  const { orderId, requestId } = args;
+ 
+  try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const internalKey = Deno.env.get("INTERNAL_FUNCTION_KEY");
+ 
+    if (!supabaseUrl || !internalKey) {
+      log("warn", "webhook_sms_missing_env", {
+        requestId,
+        orderId: prefix(orderId),
+      });
+      return;
+    }
+ 
+    const res = await fetch(`${supabaseUrl}/functions/v1/send-sms`, {
+      method: "POST",
+      headers: {
+        "Content-Type":   "application/json",
+        "x-internal-key": internalKey,
+      },
+      body: JSON.stringify({
+        order_id: orderId,
+        event:    "confirmed",
+      }),
+    });
+ 
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      log("warn", "webhook_sms_confirmed_failed", {
+        requestId,
+        orderId: prefix(orderId),
+        status:  res.status,
+        body:    text.slice(0, 200),
+      });
+      return;
+    }
+ 
+    log("info", "webhook_sms_confirmed_sent", {
+      requestId,
+      orderId: prefix(orderId),
+    });
+  } catch (error) {
+    log("warn", "webhook_sms_confirmed_exception", {
+      requestId,
+      orderId: prefix(orderId),
+      error:   asErr(error),
+    });
+  }
+}
