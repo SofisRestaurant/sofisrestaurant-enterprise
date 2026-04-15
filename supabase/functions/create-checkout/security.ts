@@ -137,6 +137,31 @@ async function logSecurityEvent(
   }
 }
 
+// ─── Guest Idempotency Key ───────────────────────────────────────────────────
+
+export type GuestIdempotencyKeyInput = {
+  guestEmail: string;
+  cartHash: string;
+  pricingHash: string;
+};
+
+export async function buildGuestIdempotencyKey(
+  input: GuestIdempotencyKeyInput,
+): Promise<string> {
+  if (!input.guestEmail || !input.cartHash || !input.pricingHash) {
+    throw new Error("buildGuestIdempotencyKey: all inputs are required");
+  }
+
+  const payload = [
+    input.guestEmail.toLowerCase().trim(),
+    input.cartHash,
+    input.pricingHash,
+  ].join("|");
+
+  const hex = await sha256Hex(payload); // ✅ USE YOUR EXISTING FUNCTION
+  return hex.slice(0, 32);
+}
+
 export async function checkIntegrityHash(args: {
   db: DbClient;
   clientHash: string | null;

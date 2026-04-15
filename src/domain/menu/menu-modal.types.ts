@@ -1,218 +1,205 @@
 // =============================================================================
 // PATH: src/domain/menu/menu-modal.types.ts
 // =============================================================================
-import type { MenuItemPublic } from '@/domain/menu/menu.types';
+import type { MenuItemPublic, ModifierGroup, Modifier, SelectedModifier } from '@/domain/menu/menu.types';
 import type { Database } from '@/types/supabase';
-// ── Cart phase ───────
-//─────────────────────────────────────────────────────────
+
+// ── Cart phase ────────────────────────────────────────────────────────────────
 
 export type CartPhase = 'idle' | 'adding' | 'success';
 
 // ── Modifier selection ────────────────────────────────────────────────────────
 
-/** A single modifier the user has toggled on within a group. */
-export interface SelectedModifier {
-  id: string;
-  groupId: string;
-  name: string;
-  /** Cents — may be negative (discount modifier). */
-  priceAdjustment: number;
-}
+/**
+ * Re-export canonical SelectedModifier from menu.types so modal consumers
+ * use one definition only. modifier_group_id is required — never optional.
+ */
+export type { SelectedModifier };
 
-/** Map of groupId → selected modifiers for that group. */
+/**
+ * Map of modifier_group_id → selected modifiers for that group.
+ * Key is the group's UUID. Value is always an array (never null/undefined).
+ */
 export type SelectionMap = Record<string, SelectedModifier[]>;
 
 // ── Preflight ─────────────────────────────────────────────────────────────────
 
-/** Shape returned by the preflight API when the item is orderable. */
 export interface PreflightOk {
   ok: true;
   available: boolean;
   unit_price_cents: number;
-  stock_count?: number | null;
-  low_stock_threshold?: number | null;
+  stock_count: number | null;
+  low_stock_threshold: number | null;
 }
 
-/** Shape returned by the preflight API when the item cannot be ordered. */
 export interface PreflightFail {
   ok: false;
-  reason?: string;
+  reason: string;
   error?: string;
 }
 
 export type PreflightResult = PreflightOk | PreflightFail;
 
-// ── Modal state (surface for hooks) ──────────────────────────────────────────
+// ── Modal state ───────────────────────────────────────────────────────────────
 
 export interface MenuItemModalState {
-  phase: CartPhase;
-  notes: string;
-  liveStatus: string;
+  readonly phase: CartPhase;
+  readonly notes: string;
+  readonly liveStatus: string;
 }
 
-// ── Pricing derived values ────────────────────────────────────────────────────
+// ── Pricing ───────────────────────────────────────────────────────────────────
 
 export interface ModalPricingValues {
-  unitPriceCents: number;
-  modifiersCents: number;
-  lineTotalCents: number;
+  readonly unitPriceCents: number;
+  readonly modifiersCents: number;
+  readonly lineTotalCents: number;
 }
 
 export interface ModalPriceLabels {
-  /** e.g. "$12.50" */
-  basePriceLabel: string;
-  /** e.g. "+ $2.00 options" or null */
-  extrasLabel: string | null;
-  /** e.g. "$14.50" */
-  stickyTotalLabel: string;
-  /** e.g. "server-confirmed" | "checking…" | "—" */
-  headerPriceLabel: string;
+  readonly basePriceLabel: string;
+  readonly extrasLabel: string | null;
+  readonly stickyTotalLabel: string;
+  readonly headerPriceLabel: string;
 }
 
-// ── Availability derived values ───────────────────────────────────────────────
+// ── Availability ──────────────────────────────────────────────────────────────
 
 export interface ModalAvailability {
-  isLowStock: boolean;
-  unavailable: boolean;
-  hasBlockedSelections: boolean;
-  /** Set of modifier IDs that are no longer available but are still selected. */
-  selectionBlockedIds: Set<string>;
+  readonly isLowStock: boolean;
+  readonly unavailable: boolean;
+  readonly hasBlockedSelections: boolean;
+  /** Set of modifier IDs that are no longer available but still selected. */
+  readonly selectionBlockedIds: ReadonlySet<string>;
 }
 
-// ── Validation derived values ─────────────────────────────────────────────────
+// ── Validation ────────────────────────────────────────────────────────────────
 
 export interface ModalValidation {
-  modifierRulesOk: boolean;
-  canAdd: boolean;
-  /** Human-readable hint listing missing required groups, or null. */
-  requiredHint: string | null;
+  readonly modifierRulesOk: boolean;
+  readonly canAdd: boolean;
+  readonly requiredHint: string | null;
 }
 
 // ── Add-to-cart payload ───────────────────────────────────────────────────────
 
 export interface AddToCartPayload {
-  menuItemId: string;
-  name: string;
-  unitPriceCents: number;
-  imageUrl: string | null;
-  category: Database['public']['Enums']['menu_category'];
-  modifiers: Array<{
-    id: string;
-    groupId: string;
-    name: string;
-    priceAdjustment: number;
+  readonly menuItemId: string;
+  readonly name: string;
+  readonly unitPriceCents: number;
+  readonly imageUrl: string | null;
+  readonly category: Database['public']['Enums']['menu_category'];
+  readonly modifiers: ReadonlyArray<{
+    readonly id: string;
+    /** Required — must match the group this modifier belongs to. */
+    readonly groupId: string;
+    readonly name: string;
+    readonly priceAdjustment: number;
   }>;
-  quantity: number;
-  notes: string | null;
-  /** Composite hash used for server-side price integrity check. */
-  pricingHash: string;
+  readonly quantity: number;
+  readonly notes: string | null;
+  /** Composite hash for server-side price integrity check. */
+  readonly pricingHash: string;
 }
 
-// ── Component prop shapes ─────────────────────────────────────────────────────
+// ── Component props ───────────────────────────────────────────────────────────
 
 export interface MenuItemModalProps {
-  item: MenuItemPublic;
-  onClose: () => void;
+  readonly item: MenuItemPublic;
+  readonly onClose: () => void;
 }
 
 export interface ModalHeaderProps {
-  name: string;
-  categoryLabel: string;
-  isPopular: boolean;
-  basePriceLabel: string;
-  headerPriceLabel: string;
-  extrasLabel: string | null;
-  onClose: () => void;
-  closeBtnRef: React.RefObject<HTMLButtonElement | null>;
+  readonly name: string;
+  readonly categoryLabel: string;
+  readonly isPopular: boolean;
+  readonly basePriceLabel: string;
+  readonly headerPriceLabel: string;
+  readonly extrasLabel: string | null;
+  readonly onClose: () => void;
+  readonly closeBtnRef: React.RefObject<HTMLButtonElement | null>;
 }
 
 export interface ModalImageProps {
-  imageUrl: string | null;
-  name: string;
-  description: string;
-  tags: string[];
+  readonly imageUrl: string | null;
+  readonly name: string;
+  readonly description: string;
+  readonly tags: readonly string[];
 }
 
 export interface ModalAlertsProps {
-  preflightError: string | null;
-  isLowStock: boolean;
-  stockCount?: number | null;
-  unavailable: boolean;
-  selectionPrunedWarning: string | null;
-  hasBlockedSelections: boolean;
+  readonly preflightError: string | null;
+  readonly isLowStock: boolean;
+  readonly stockCount: number | null;
+  readonly unavailable: boolean;
+  readonly selectionPrunedWarning: string | null;
+  readonly hasBlockedSelections: boolean;
 }
 
 export interface ModalModifiersProps {
-  modifierGroups: import('@/domain/menu/menu.types').ModifierGroup[];
-  groupsLoading: boolean;
-  groupsError: string | null;
-  selected: SelectionMap;
-  expandedGroups: Record<string, boolean>;
-  maxSelectionHint: string | null;
-  selectionBlockedIds: Set<string>;
-  onClearSelections: () => void;
-  onToggleGroup: (groupId: string) => void;
-  onSetSelection: (
-    group: import('@/domain/menu/menu.types').ModifierGroup,
-    modifier: import('@/domain/menu/menu.types').Modifier,
-  ) => void;
-  onRetryLoad: () => void;
+  readonly modifierGroups: readonly ModifierGroup[];
+  readonly groupsLoading: boolean;
+  readonly groupsError: string | null;
+  readonly selected: SelectionMap;
+  readonly expandedGroups: Record<string, boolean>;
+  readonly maxSelectionHint: string | null;
+  readonly selectionBlockedIds: ReadonlySet<string>;
+  readonly onClearSelections: () => void;
+  readonly onToggleGroup: (groupId: string) => void;
+  readonly onSetSelection: (group: ModifierGroup, modifier: Modifier) => void;
+  readonly onRetryLoad: () => void;
 }
 
 export interface ModalModifierGroupProps {
-  group: import('@/domain/menu/menu.types').ModifierGroup;
-  sels: SelectedModifier[];
-  expanded: boolean;
-  valid: boolean;
-  maxSelectionHint: string | null;
-  onToggle: () => void;
-  onSetSelection: (
-    group: import('@/domain/menu/menu.types').ModifierGroup,
-    modifier: import('@/domain/menu/menu.types').Modifier,
-  ) => void;
+  readonly group: ModifierGroup;
+  readonly sels: readonly SelectedModifier[];
+  readonly expanded: boolean;
+  readonly valid: boolean;
+  readonly maxSelectionHint: string | null;
+  readonly onToggle: () => void;
+  readonly onSetSelection: (group: ModifierGroup, modifier: Modifier) => void;
 }
 
 export interface ModalNotesProps {
-  notes: string;
-  maxLength: number;
-  onChange: (value: string) => void;
+  readonly notes: string;
+  readonly maxLength: number;
+  readonly onChange: (value: string) => void;
 }
 
 export interface ModalQuantityProps {
-  safeQty: number;
-  maxQty: number;
-  preflightLoading: boolean;
-  invalidItem: boolean;
-  onDecrement: () => void;
-  onIncrement: () => void;
+  readonly safeQty: number;
+  readonly maxQty: number;
+  readonly preflightLoading: boolean;
+  readonly invalidItem: boolean;
+  readonly onDecrement: () => void;
+  readonly onIncrement: () => void;
 }
 
 export interface ModalFooterProps {
-  safeQty: number;
-  maxQty: number;
-  stickyTotalLabel: string;
-  preflightLoading: boolean;
-  phase: CartPhase;
-  canAdd: boolean;
-  invalidItem: boolean;
-  modifierRulesOk: boolean;
-  unavailable: boolean;
-  onDecrement: () => void;
-  onIncrement: () => void;
-  onAddToCart: () => void;
+  readonly safeQty: number;
+  readonly maxQty: number;
+  readonly stickyTotalLabel: string;
+  readonly preflightLoading: boolean;
+  readonly phase: CartPhase;
+  readonly canAdd: boolean;
+  readonly invalidItem: boolean;
+  readonly modifierRulesOk: boolean;
+  readonly unavailable: boolean;
+  readonly onDecrement: () => void;
+  readonly onIncrement: () => void;
+  readonly onAddToCart: () => void;
 }
 
 // ── Section wrapper props ─────────────────────────────────────────────────────
 
 export interface ModalSectionProps {
-  children: React.ReactNode;
-  className?: string;
-  /** Renders a top-border separator before the section. */
-  bordered?: boolean;
+  readonly children: React.ReactNode;
+  readonly className?: string;
+  readonly bordered?: boolean;
 }
 
 export interface ModalGroupWrapperProps {
-  children: React.ReactNode;
-  valid: boolean;
-  className?: string;
+  readonly children: React.ReactNode;
+  readonly valid: boolean;
+  readonly className?: string;
 }

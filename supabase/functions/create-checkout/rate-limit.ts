@@ -3,13 +3,105 @@ import {
   RATE_LIMIT_MAX_ATTEMPTS,
   RATE_LIMIT_WINDOW_MS,
 } from "./env.ts";
+
 import { asErr, log, nowIso, prefix } from "./logging.ts";
+
 import type {
   CheckoutRateLimitInsert,
   CheckoutRateLimitUpdate,
   DbClient,
   RateLimitResult,
 } from "./types.ts";
+
+// ─────────────────────────────────────────────────────────────
+// RPC RESPONSE TYPE
+// ─────────────────────────────────────────────────────────────
+
+type GuestRateLimitRPCResult = {
+  allowed: boolean;
+  reason?: string;
+  retry_after_ms?: number;
+};
+
+// ─────────────────────────────────────────────────────────────
+// GUEST RATE LIMIT
+// ─────────────────────────────────────────────────────────────
+
+export async function checkGuestRateLimit(
+  db: DbClient,
+  ipHash: string,
+  requestId: string,
+): Promise<RateLimitResult> {
+  if (!ipHash || ipHash.length !== 64) {
+    log("error", "guest_rate_limit_invalid_ip_hash", {
+      requestId,
+      hashLen: ipHash?.length ?? 0,
+    });
+
+    return {
+      allowed: false,
+      reason: "invalid_ip_identifier",
+      retryAfterMs: 60_000,
+    };
+  }
+
+  try {
+    const { data, error } = await db.rpc(
+      "check_guest_rate_limit",
+      { p_ip_hash: ipHash },
+    ) as {
+      data: GuestRateLimitRPCResult[] | GuestRateLimitRPCResult | null;
+      error: unknown;
+    };
+
+    if (error) {
+      log("error", "guest_rate_limit_rpc_failed", {
+        requestId,
+        error: String(error),
+      });
+
+      return {
+        allowed: false,
+        reason: "rate_limit_service_unavailable",
+        retryAfterMs: 10_000,
+      };
+    }
+
+    // ─── NORMALIZE SUPABASE RESPONSE ─────────────────────────────
+    const result: GuestRateLimitRPCResult | null = Array.isArray(data)
+      ? data[0]
+      : data;
+
+    if (!result) {
+      return {
+        allowed: true,
+        reason: "",
+        retryAfterMs: 0,
+      };
+    }
+
+    return {
+      allowed: result.allowed === true,
+      reason: result.reason ?? "",
+      retryAfterMs: result.retry_after_ms ?? 0,
+    };
+  } catch (err) {
+    log("error", "guest_rate_limit_rpc_exception", {
+      requestId,
+      error: String(err),
+    });
+
+    return {
+      allowed: false,
+      reason: "rate_limit_service_error",
+      retryAfterMs: 10_000,
+    };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// AUTH RATE LIMIT
+// ─────────────────────────────────────────────────────────────
 
 export async function checkRateLimit(
   db: DbClient,
@@ -34,29 +126,33 @@ export async function checkRateLimit(
         userId: prefix(userId),
         error: error.message,
       });
-      return { allowed: true };
+
+      return { allowed: true, reason: "", retryAfterMs: 0 };
     }
 
     const now = Date.now();
 
+    // ─── BLOCK CHECK ────────────────────────────────────────────────
     if (row?.blocked_until) {
       const blockedUntilMs = new Date(row.blocked_until).getTime();
+
       if (Number.isFinite(blockedUntilMs) && blockedUntilMs > now) {
         return {
           allowed: false,
           retryAfterMs: blockedUntilMs - now,
-          reason:
-            "Too many checkout attempts. Please wait before trying again.",
+          reason: "Too many checkout attempts. Please wait before trying again.",
         };
       }
     }
 
+    // ─── WINDOW LOGIC ───────────────────────────────────────────────
     const inWindow = row?.last_attempt_at
       ? now - new Date(row.last_attempt_at).getTime() <= RATE_LIMIT_WINDOW_MS
       : false;
 
     const nextAttempts = row ? (inWindow ? row.attempts + 1 : 1) : 1;
 
+    // ─── CREATE ROW ────────────────────────────────────────────────
     if (!row) {
       const insert: CheckoutRateLimitInsert = {
         user_id: userId,
@@ -78,13 +174,16 @@ export async function checkRateLimit(
         });
       }
 
-      return { allowed: true };
+      return { allowed: true, reason: "", retryAfterMs: 0 };
     }
 
+    // ─── BLOCK USER ────────────────────────────────────────────────
     if (nextAttempts > RATE_LIMIT_MAX_ATTEMPTS) {
-      const blockedUntil = new Date(now + RATE_LIMIT_BLOCK_MS).toISOString();
+      const blockedUntil = new Date(
+        now + RATE_LIMIT_BLOCK_MS,
+      ).toISOString();
 
-      const update: CheckoutRateLimitUpdate = {
+      const blockUpdate: CheckoutRateLimitUpdate = {
         attempts: nextAttempts,
         blocked_until: blockedUntil,
         last_attempt_at: nowIso(),
@@ -93,7 +192,7 @@ export async function checkRateLimit(
 
       const { error: updateError } = await db
         .from("checkout_rate_limits")
-        .update(update)
+        .update(blockUpdate)
         .eq("id", row.id);
 
       if (updateError) {
@@ -112,7 +211,8 @@ export async function checkRateLimit(
       };
     }
 
-    const update: CheckoutRateLimitUpdate = {
+    // ─── NORMAL UPDATE ──────────────────────────────────────────────
+    const normalUpdate: CheckoutRateLimitUpdate = {
       attempts: nextAttempts,
       blocked_until: null,
       last_attempt_at: nowIso(),
@@ -121,7 +221,7 @@ export async function checkRateLimit(
 
     const { error: updateError } = await db
       .from("checkout_rate_limits")
-      .update(update)
+      .update(normalUpdate)
       .eq("id", row.id);
 
     if (updateError) {
@@ -133,13 +233,14 @@ export async function checkRateLimit(
       });
     }
 
-    return { allowed: true };
+    return { allowed: true, reason: "", retryAfterMs: 0 };
   } catch (error) {
     log("warn", "checkout_rate_limit_exception", {
       requestId,
       userId: prefix(userId),
       error: asErr(error),
     });
-    return { allowed: true };
+
+    return { allowed: true, reason: "", retryAfterMs: 0 };
   }
 }

@@ -1,3 +1,7 @@
+//==========================================
+///Users/sofisdev/Developer/SofisRestaurantV2/supabase/functions/create-checkout/catalog.ts
+//==========================================
+
 import {
   buildClientIntegrityHash,
   type CanonicalCartItem,
@@ -193,7 +197,8 @@ export async function loadCanonicalCartItems(
         name: modifier.name,
         // DB stores price_adjustment as dollar float (e.g. 0.5 = $0.50, 1 = $1.00).
         // Convert to integer cents: multiply by 100 then truncate.
-        priceAdjustmentCents: Math.trunc(Math.round(modifier.price_adjustment * 100)),
+        // Null-safe: price_adjustment is nullable in the DB schema.
+        priceAdjustmentCents: Math.trunc(Math.round((modifier.price_adjustment ?? 0) * 100)),
       });
     }
 

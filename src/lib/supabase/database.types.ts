@@ -838,6 +838,33 @@ export type Database = {
         }
         Relationships: []
       }
+      guest_rate_limits: {
+        Row: {
+          blocked_until: string | null
+          ip_hash: string
+          overrun_count: number
+          request_count: number
+          updated_at: string
+          window_start: string
+        }
+        Insert: {
+          blocked_until?: string | null
+          ip_hash: string
+          overrun_count?: number
+          request_count?: number
+          updated_at?: string
+          window_start?: string
+        }
+        Update: {
+          blocked_until?: string | null
+          ip_hash?: string
+          overrun_count?: number
+          request_count?: number
+          updated_at?: string
+          window_start?: string
+        }
+        Relationships: []
+      }
       health_check: {
         Row: {
           id: number
@@ -2250,6 +2277,7 @@ export type Database = {
           payment_failed_at: string | null
           payment_method_type: Database["public"]["Enums"]["payment_method_type_enum"]
           payment_status: string
+          phone_verified: boolean
           refunded_amount_cents: number
           refunded_at: string | null
           service_fee_cents: number
@@ -2302,6 +2330,7 @@ export type Database = {
           payment_failed_at?: string | null
           payment_method_type?: Database["public"]["Enums"]["payment_method_type_enum"]
           payment_status?: string
+          phone_verified?: boolean
           refunded_amount_cents?: number
           refunded_at?: string | null
           service_fee_cents?: number
@@ -2354,6 +2383,7 @@ export type Database = {
           payment_failed_at?: string | null
           payment_method_type?: Database["public"]["Enums"]["payment_method_type_enum"]
           payment_status?: string
+          phone_verified?: boolean
           refunded_amount_cents?: number
           refunded_at?: string | null
           service_fee_cents?: number
@@ -2416,6 +2446,8 @@ export type Database = {
           currency: string
           discount_cents: number
           expires_at: string | null
+          guest_email: string | null
+          guest_token: string | null
           id: string
           idempotency_key: string | null
           items: Json
@@ -2429,7 +2461,7 @@ export type Database = {
           subtotal_cents: number
           tax_cents: number
           total_cents: number
-          user_id: string
+          user_id: string | null
         }
         Insert: {
           consumed_at?: string | null
@@ -2438,20 +2470,22 @@ export type Database = {
           currency?: string
           discount_cents?: number
           expires_at?: string | null
-          id: string
+          guest_email?: string | null
+          guest_token?: string | null
+          id?: string
           idempotency_key?: string | null
           items: Json
           loyalty_account_id?: string | null
           loyalty_discount_cents?: number | null
           loyalty_reserved_points?: number | null
           pricing_hash?: string | null
-          pricing_snapshot: Json
+          pricing_snapshot?: Json
           promo_id?: string | null
           stripe_session_id?: string | null
           subtotal_cents?: number
           tax_cents?: number
           total_cents?: number
-          user_id: string
+          user_id?: string | null
         }
         Update: {
           consumed_at?: string | null
@@ -2460,6 +2494,8 @@ export type Database = {
           currency?: string
           discount_cents?: number
           expires_at?: string | null
+          guest_email?: string | null
+          guest_token?: string | null
           id?: string
           idempotency_key?: string | null
           items?: Json
@@ -2473,7 +2509,7 @@ export type Database = {
           subtotal_cents?: number
           tax_cents?: number
           total_cents?: number
-          user_id?: string
+          user_id?: string | null
         }
         Relationships: [
           {
@@ -2744,6 +2780,93 @@ export type Database = {
           start_hour?: number | null
           type?: string | null
           value?: number | null
+        }
+        Relationships: []
+      }
+      sms_log: {
+        Row: {
+          created_at: string
+          error: string | null
+          event: string
+          id: string
+          order_id: string
+          phone_suffix: string
+          status: string
+          twilio_sid: string | null
+        }
+        Insert: {
+          created_at?: string
+          error?: string | null
+          event: string
+          id?: string
+          order_id: string
+          phone_suffix: string
+          status: string
+          twilio_sid?: string | null
+        }
+        Update: {
+          created_at?: string
+          error?: string | null
+          event?: string
+          id?: string
+          order_id?: string
+          phone_suffix?: string
+          status?: string
+          twilio_sid?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sms_log_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "admin_tax_order_breakdown"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "sms_log_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "financial_revenue_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sms_log_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "order_performance"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "sms_log_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "order_timeline"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "sms_log_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sms_verify_attempts: {
+        Row: {
+          created_at: string
+          id: string
+          phone_hash: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          phone_hash: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          phone_hash?: string
         }
         Relationships: []
       }
@@ -3816,6 +3939,20 @@ export type Database = {
         Args: { p_amount_cents: number; p_order_id: string; p_user_id: string }
         Returns: Json
       }
+      check_guest_rate_limit: {
+        Args: {
+          p_block_duration_ms?: number
+          p_ip_hash: string
+          p_max_requests?: number
+          p_overrun_limit?: number
+          p_window_ms?: number
+        }
+        Returns: {
+          allowed: boolean
+          reason: string
+          retry_after_ms: number
+        }[]
+      }
       cleanup_pending_carts: { Args: never; Returns: undefined }
       custom_access_token_hook: { Args: { event: Json }; Returns: Json }
       get_admin_layout_snapshot: { Args: never; Returns: Json }
@@ -4075,6 +4212,7 @@ export type Database = {
           payment_failed_at: string | null
           payment_method_type: Database["public"]["Enums"]["payment_method_type_enum"]
           payment_status: string
+          phone_verified: boolean
           refunded_amount_cents: number
           refunded_at: string | null
           service_fee_cents: number

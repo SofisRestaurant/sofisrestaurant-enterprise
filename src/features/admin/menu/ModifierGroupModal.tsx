@@ -1,4 +1,4 @@
-// src/pages/Admin/components/ModifierGroupModal.tsx
+// /src/features/admin/menu/ModifierGroupModal.tsx
 // ============================================================================
 // MODIFIER GROUP MODAL
 // ============================================================================

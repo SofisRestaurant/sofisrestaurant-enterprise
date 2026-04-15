@@ -12,9 +12,26 @@
 // - Make money-unit intent explicit (cents vs dollars) to prevent drift.
 // =============================================================================
 
-import Stripe from 'stripe';
 import type { Database, Json } from './database.types.ts';
 import type { DbClient } from './supabase.ts';
+
+// ─── Local Stripe line item type ──────────────────────────────────────────────
+// Stripe.Checkout.SessionCreateParams.LineItem is not reliably available in
+// Deno with stripe@22. This local type covers exactly the fields we construct
+// and read (quantity, price_data.unit_amount). It is structurally compatible
+// with what stripe.checkout.sessions.create() accepts at runtime.
+
+type StripeLineItem = {
+  quantity: number;
+  price_data?: {
+    currency: string;
+    unit_amount: number;
+    product_data: {
+      name: string;
+      metadata?: Record<string, string>;
+    };
+  };
+};
 
 type MenuCategory = Database['public']['Enums']['menu_category'];
 
@@ -568,10 +585,10 @@ function compactStripeLineItems(
   rawItems: Array<{
     key: string;
     quantity: number;
-    item: Stripe.Checkout.SessionCreateParams.LineItem;
+    item: StripeLineItem;
   }>,
-): Stripe.Checkout.SessionCreateParams.LineItem[] {
-  const grouped = new Map<string, Stripe.Checkout.SessionCreateParams.LineItem>();
+): StripeLineItem[] {
+  const grouped = new Map<string, StripeLineItem>();
 
   for (const raw of rawItems) {
     const existing = grouped.get(raw.key);
@@ -1387,11 +1404,11 @@ export function buildLegacyPricingSnapshotFromPendingCart(
 
 export function buildStripeLineItemsFromPricing(
   snapshot: PricingSnapshot,
-): Stripe.Checkout.SessionCreateParams.LineItem[] {
+): StripeLineItem[] {
   const rawItems: Array<{
     key: string;
     quantity: number;
-    item: Stripe.Checkout.SessionCreateParams.LineItem;
+    item: StripeLineItem;
   }> = [];
 
   for (const line of snapshot.lines) {
@@ -1405,17 +1422,17 @@ export function buildStripeLineItemsFromPricing(
         line_id: line.lineId,
         campaign_id: line.campaignId ?? '',
         pricing_hash_base: line.basePricingHash,
+        ...(description ? { description } : {}),
+        ...(line.imageUrl ? { image_url: line.imageUrl } : {}),
       };
 
-      const lineItem: Stripe.Checkout.SessionCreateParams.LineItem = {
+      const lineItem: StripeLineItem = {
         quantity: 1,
         price_data: {
           currency: snapshot.currency,
           unit_amount: unitAmount,
           product_data: {
             name: line.name,
-            ...(description ? { description } : {}),
-            ...(line.imageUrl ? { images: [line.imageUrl] } : {}),
             metadata,
           },
         },

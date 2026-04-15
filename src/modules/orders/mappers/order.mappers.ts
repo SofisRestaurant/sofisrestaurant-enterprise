@@ -61,10 +61,9 @@ const CART_ITEM_MODIFIER_GROUP_ID_KEYS = [
   'groupId',
 ] as const;
 const CART_ITEM_MODIFIER_PRICE_KEYS = [
-  'priceAdjustment',
+  'priceAdjustmentCents',
+  'price_adjustment_cents',
   'price_adjustment',
-  'price',
-  'price_cents',
 ] as const;
 const CART_ITEM_MODIFIER_QUANTITY_KEYS = ['quantity', 'qty'] as const;
 const CART_ITEM_MODIFIER_SELECTIONS_KEYS = [
@@ -368,7 +367,7 @@ function parsePricingSnapshotModifier(value: unknown): PricingSnapshotModifier |
     groupId: nullToUndefined(readText(value, ['groupId', 'group_id'])),
     groupName: nullToUndefined(readText(value, ['groupName', 'group_name', 'group'])),
     priceAdjustmentCents: normalizeMoneyValue(
-      readNumber(value, ['priceAdjustmentCents', 'price_adjustment_cents', 'priceAdjustment']) ?? 0,
+      readNumber(value, ['priceAdjustmentCents', 'price_adjustment_cents']) ?? 0,
     ),
   };
 }
@@ -546,7 +545,7 @@ function mapSnapshotModifierToOrderCartItemModifier(
   const selection: OrderCartItemModifierSelection = {
     id: modifier.id ?? modifierName,
     name: modifierName,
-    price_adjustment: normalizeMoneyValue(modifier.priceAdjustmentCents ?? 0),
+    price_adjustment: normalizeMoneyValue(modifier.priceAdjustmentCents),
   };
 
   return {

@@ -1,41 +1,6 @@
 // =============================================================================
 // PATH: src/domain/menu/parseModifierGroups.ts
 // =============================================================================
-// SAFE MODIFIER GROUP PARSER
-// =============================================================================
-// The `menu_items_public` Supabase view returns `modifier_groups` as
-// `Json | null` (a JSONB aggregate column). This module is the SINGLE
-// authoritative parser that converts that raw payload into the strictly-typed
-// `ModifierGroup[]` shape the rest of the app expects.
-//
-// Why this file exists
-// --------------------
-// Before this fix, `normalizeMenuItemPublic()` in MenuPage.tsx did a shallow
-// spread `{ ...v }` — which forwarded the raw Json object untouched.
-// The modal hooks then received a field that looked like an array but whose
-// elements were plain JSON objects, not validated `ModifierGroup` instances.
-// The result: modifier groups appeared to exist in memory but every consumer
-// that checked `.available`, `.required`, `.modifiers[*].price_adjustment` etc.
-// got `undefined` instead of the expected values → no modifiers rendered.
-//
-// Contract (matches DB view SQL exactly)
-// --------------------------------------
-// The view's JSONB aggregate builds objects of this shape per group:
-//   {
-//     id, name, type, active, required,
-//     min_selections, max_selections,
-//     modifiers: [{ id, name, available, is_default, sort_order, price_adjustment }]
-//   }
-//
-// Security notes
-// --------------
-// - All string fields are trimmed + length-capped — no raw DB text reaches the UI.
-// - All numeric fields go through Number() + isFinite guard — no NaN/Infinity.
-// - All boolean fields are strict typeof === 'boolean' checked with safe fallback.
-// - Arrays are filtered; non-conformant elements are silently dropped.
-// - The modifier_group_id on each Modifier is back-filled from the group's id
-//   because the view's inner aggregate does not include that redundant column.
-// =============================================================================
 
 import type { Modifier, ModifierGroup, ModifierGroupType } from '@/domain/menu/menu.types';
 
@@ -62,7 +27,10 @@ function safeInt(v: unknown, fallback: number): number {
   return Number.isFinite(n) ? Math.trunc(n) : fallback;
 }
 
-/** Float-safe reader — does NOT truncate. Used for price_adjustment (stored as dollars). */
+/**
+ * Float-safe reader — preserves decimals before the × 100 conversion.
+ * Used ONLY for price_adjustment (DB dollar float). Do NOT use for cent values.
+ */
 function safeFloat(v: unknown, fallback: number): number {
   const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
   return Number.isFinite(n) ? n : fallback;
@@ -82,11 +50,57 @@ function safeGroupType(v: unknown): ModifierGroupType {
     : 'checkbox';
 }
 
+// ── Dollar → cents conversion (THE ONLY SITE IN THE CODEBASE) ─────────────────
+
+/**
+ * Convert a DB dollar float to integer cents.
+ *
+ * This is the ONLY function in the codebase that performs the
+ *   price_adjustment (DB dollar float) → integer cents
+ * conversion for modifiers. All other files receive integer cents and must
+ * assert — not convert — on the value they receive.
+ *
+ * safeFloat is used before rounding to avoid IEEE 754 drift on values
+ * like 0.1 + 0.2 that would be misrepresented by a direct Math.round call.
+ *
+ * Throws if the DB value is absent or non-numeric — a corrupt price must
+ * never silently become 0 cents.
+ */
+function dollarsToCents(raw: unknown, context: string): number {
+  if (raw === null || raw === undefined) {
+    throw new Error(
+      `parseModifierGroups: ${context} price_adjustment is missing. ` +
+      `Expected a DB dollar float.`,
+    );
+  }
+  const dollars = safeFloat(raw, NaN);
+  if (!Number.isFinite(dollars)) {
+    throw new Error(
+      `parseModifierGroups: ${context} price_adjustment is not a finite number: ` +
+      `${String(raw)}`,
+    );
+  }
+  const cents = Math.round(dollars * 100);
+  // Post-conversion assertion: the result must be an integer.
+  // Math.round guarantees this, but we assert explicitly so the contract is
+  // machine-checked and visible to future readers.
+  if (!Number.isInteger(cents)) {
+    throw new Error(
+      `parseModifierGroups: ${context} price_adjustment conversion produced a non-integer: ` +
+      `${dollars} × 100 = ${cents}`,
+    );
+  }
+  return cents;
+}
+
 // ── Modifier parser ───────────────────────────────────────────────────────────
 
 /**
  * Parses a single raw modifier object from the JSONB aggregate.
  * Returns null if the element lacks a valid id — it will be filtered out.
+ *
+ * price_adjustment: DB dollar float → integer cents (via dollarsToCents).
+ * This is the only site in the codebase where that conversion occurs.
  */
 function parseModifier(raw: unknown, groupId: string): Modifier | null {
   if (!isRec(raw)) return null;
@@ -94,17 +108,19 @@ function parseModifier(raw: unknown, groupId: string): Modifier | null {
   const id = safeStr(raw.id, '', 128);
   if (!id) return null;
 
+  const price_adjustment = dollarsToCents(
+    raw.price_adjustment,
+    `modifier(id=${id}, group=${groupId})`,
+  );
+
   return {
     id,
     // Back-fill modifier_group_id — the view aggregate omits it.
     modifier_group_id: groupId,
-    name: safeStr(raw.name, 'Option', 240),
-    // price_adjustment in the DB is stored as numeric (dollars), but
-    // our domain type uses CENTS. The view returns it as a float dollar value.
-    // We convert here: 0.50 → 50 cents. safeFloat preserves decimals before rounding.
-    price_adjustment: Math.round(safeFloat(raw.price_adjustment, 0) * 100),
-    available: safeBool(raw.available, true),
-    sort_order: safeInt(raw.sort_order, 0),
+    name:             safeStr(raw.name, 'Option', 240),
+    price_adjustment,
+    available:        safeBool(raw.available, true),
+    sort_order:       safeInt(raw.sort_order, 0),
   };
 }
 
@@ -131,35 +147,22 @@ function parseModifierGroup(raw: unknown): ModifierGroup | null {
 
   return {
     id,
-    name: safeStr(raw.name, 'Options', 240),
-    description: typeof raw.description === 'string' ? raw.description.trim().slice(0, 800) || null : null,
-    type: safeGroupType(raw.type),
-    required: safeBool(raw.required, false),
+    name:          safeStr(raw.name, 'Options', 240),
+    description:   typeof raw.description === 'string'
+                     ? raw.description.trim().slice(0, 800) || null
+                     : null,
+    type:          safeGroupType(raw.type),
+    required:      safeBool(raw.required, false),
     min_selections: Math.max(0, min),
     max_selections: max !== null ? Math.max(1, max) : null,
-    sort_order: safeInt(raw.sort_order, 0),
-    active: safeBool(raw.active, true),
+    sort_order:    safeInt(raw.sort_order, 0),
+    active:        safeBool(raw.active, true),
     modifiers,
   };
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/**
- * Parses the `modifier_groups` field from the `menu_items_public` Supabase view.
- *
- * Accepts:
- *   - A JSON string (Supabase occasionally returns JSONB as a string)
- *   - A pre-parsed array (normal Supabase JS client behaviour)
- *   - null / undefined / any other garbage → returns []
- *
- * Always returns a valid, sorted `ModifierGroup[]`.
- * Never throws — all errors produce an empty array.
- *
- * IMPORTANT: price_adjustment values coming from the DB are in DOLLARS (numeric float).
- * This function converts them to CENTS via safeFloat() + Math.round() once, here,
- * before they touch any other layer. Example: 0.50 → 50 cents.
- */
 export function parseModifierGroupsFromJson(raw: unknown): ModifierGroup[] {
   // Handle JSON string (edge case where Supabase returns raw JSONB as text)
   let parsed: unknown = raw;
@@ -177,6 +180,6 @@ export function parseModifierGroupsFromJson(raw: unknown): ModifierGroup[] {
   return parsed
     .map(parseModifierGroup)
     .filter((g): g is ModifierGroup => g !== null)
-    .filter((g) => g.active) // only surface active groups to the customer
+    .filter((g) => g.active)
     .sort((a, b) => a.sort_order - b.sort_order);
 }

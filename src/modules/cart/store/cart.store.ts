@@ -882,3 +882,18 @@ export const selectItemByKey = (key: string) => (state: CartStore) =>
 
 export const selectItemsByCategory = (category: string) => (state: CartStore) =>
   state.items.filter((entry) => entry.category === category);
+
+
+// DEV ONLY DEBUG ACCESS
+export function attachCartDebugTools() {
+  if (typeof window === 'undefined') return;
+
+  if (import.meta.env.DEV) {
+    (window as any).cartStore = useCartStore;
+    (window as any).cartItemKey = cartItemKey;
+    (window as any).computeLineTotalCents = computeLineTotalCents; // 👈 ADD THIS
+  }
+}
+if (import.meta.env.DEV) {
+  attachCartDebugTools();
+}

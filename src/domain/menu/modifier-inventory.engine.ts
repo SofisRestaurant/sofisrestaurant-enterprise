@@ -215,7 +215,7 @@ export function getModifierInventoryStatus(
  * - If/when modifier stock exists, it will also block known out-of-stock modifiers.
  */
 export function checkSelectionInventory(
-  groups: ModifierGroup[],
+  groups: readonly ModifierGroup[],
   selectedModifiers: Record<string, SelectedModifier[]>,
 ): SelectionInventoryCheck {
   const blocked:  string[] = [];

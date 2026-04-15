@@ -59,13 +59,9 @@ export function MenuItemModalModifierGroup({
   const rangeLabel = groupSelectionRangeLabel(group);
   const selectedCount = Array.isArray(sels) ? sels.length : 0;
 
-  const max =
-    group.max_selections ??
-    (group.type === 'radio' ? 1 : null);
+  const max = group.max_selections ?? (group.type === 'radio' ? 1 : null);
 
-  const min =
-    group.min_selections ??
-    (group.required ? 1 : 0);
+  const min = group.min_selections ?? (group.required ? 1 : 0);
 
   const subline = buildGroupSubline(group, sels ?? [], rangeLabel);
 
@@ -89,11 +85,9 @@ export function MenuItemModalModifierGroup({
       >
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <p className="truncate text-sm font-semibold text-white">
-              {safeName}
-            </p>
+            <p className="truncate text-sm font-semibold text-white">{safeName}</p>
 
-            {(group.required || min > 0) ? (
+            {group.required || min > 0 ? (
               <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-200 ring-1 ring-amber-500/25">
                 Required
               </span>
@@ -105,20 +99,13 @@ export function MenuItemModalModifierGroup({
           </div>
 
           {safeDescription ? (
-            <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500">
-              {safeDescription}
-            </p>
+            <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500">{safeDescription}</p>
           ) : (
-            <p className="mt-0.5 text-xs text-zinc-500">
-              {subline}
-            </p>
+            <p className="mt-0.5 text-xs text-zinc-500">{subline}</p>
           )}
 
           {validationMsg && (
-            <p
-              className="mt-1 text-[11px] font-semibold text-amber-200"
-              role="alert"
-            >
+            <p className="mt-1 text-[11px] font-semibold text-amber-200" role="alert">
               {validationMsg}
             </p>
           )}
@@ -132,10 +119,7 @@ export function MenuItemModalModifierGroup({
           )}
 
           <ChevronDown
-            className={cx(
-              'h-5 w-5 text-zinc-400 transition',
-              expanded && 'rotate-180'
-            )}
+            className={cx('h-5 w-5 text-zinc-400 transition', expanded && 'rotate-180')}
             aria-hidden="true"
           />
         </div>
@@ -143,23 +127,16 @@ export function MenuItemModalModifierGroup({
 
       {/* Expanded */}
       {expanded && (
-        <div
-          id={`group-${group.id}`}
-          className="border-t border-white/10 px-4 py-3"
-        >
+        <div id={`group-${group.id}`} className="border-t border-white/10 px-4 py-3">
           <div className="grid gap-2">
             {modifiers.length === 0 && (
-              <p className="text-xs text-zinc-500">
-                No options available
-              </p>
+              <p className="text-xs text-zinc-500">No options available</p>
             )}
 
             {modifiers.map((m) => {
               if (!m || !m.id) return null;
 
-              const isSelected = sels?.some(
-                (s) => s?.id === m.id
-              );
+              const isSelected = sels?.some((s) => s?.id === m.id);
 
               const disabled = m.available === false;
 
@@ -176,14 +153,11 @@ export function MenuItemModalModifierGroup({
                     isSelected
                       ? 'border-amber-500/30 bg-amber-500/10'
                       : 'border-white/10 bg-white/5 hover:bg-white/8',
-                    disabled &&
-                      'cursor-not-allowed opacity-50 hover:bg-white/5'
+                    disabled && 'cursor-not-allowed opacity-50 hover:bg-white/5',
                   )}
                   aria-pressed={isSelected}
                   aria-disabled={disabled}
-                  aria-label={`${m.name ?? 'Option'}${
-                    disabled ? ', unavailable' : ''
-                  }`}
+                  aria-label={`${m.name ?? 'Option'}${disabled ? ', unavailable' : ''}`}
                 >
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold text-white">
@@ -191,9 +165,7 @@ export function MenuItemModalModifierGroup({
                     </p>
 
                     <p className="mt-0.5 text-[11px] text-zinc-500">
-                      {deriveModifierPriceLabel(
-                        m.price_adjustment ?? 0
-                      )}
+                      {deriveModifierPriceLabel(m.price_adjustment ?? 0)}
                       {disabled ? ' • Unavailable' : ''}
                     </p>
                   </div>
@@ -201,10 +173,7 @@ export function MenuItemModalModifierGroup({
                   <div className="shrink-0">
                     {isSelected ? (
                       <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/15 ring-1 ring-amber-500/25">
-                        <Check
-                          className="h-4 w-4 text-amber-200"
-                          aria-hidden="true"
-                        />
+                        <Check className="h-4 w-4 text-amber-200" aria-hidden="true" />
                       </span>
                     ) : (
                       <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-white/5 ring-1 ring-white/10">
@@ -218,9 +187,7 @@ export function MenuItemModalModifierGroup({
           </div>
 
           {maxSelectionHint && (
-            <p className="mt-3 text-xs font-semibold text-amber-200">
-              {maxSelectionHint}
-            </p>
+            <p className="mt-3 text-xs font-semibold text-amber-200">{maxSelectionHint}</p>
           )}
         </div>
       )}

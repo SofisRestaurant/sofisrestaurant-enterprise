@@ -15,7 +15,7 @@ import { supabase } from '@/lib/supabase/supabaseClient';
 import { PricingEngine } from '@/domain/pricing/pricing.engine';
 import { validateItemConfiguration } from '@/domain/menu/modifier.validation';
 import { checkSelectionInventory } from '@/domain/menu/modifier-inventory.engine';
-import { parseModifierGroupsFromJson } from '@/domain/menu/parseModifierGroups';
+import { toMenuItemBase } from '@/domain/menu/menu.gateway';
 import type { MenuItemPublic, SelectedModifier, CartItemModifier } from '@/domain/menu/menu.types';
 
 // ─────────────────────────────────────────────────────────────
@@ -44,14 +44,15 @@ export class MenuOrderingError extends Error {
 
 type UnknownRecord = Record<string, unknown>;
 
-type MenuModifierGroup = MenuItemPublic['modifier_groups'][number];
+type MenuModifierGroup  = MenuItemPublic['modifier_groups'][number];
 type MenuModifierOption = MenuModifierGroup['modifiers'][number];
 
 type CompatSelection = {
   id: string;
   name?: string;
+  // price_adjustment is the single canonical field. priceAdjustment (camelCase)
+  // intentionally removed — post-gateway data must never carry the old shape.
   price_adjustment?: number | null;
-  priceAdjustment?: number | null;
   groupId?: string;
   modifier_group_id?: string;
   group_id?: string;
@@ -63,20 +64,6 @@ type CompatSelectionGroup = {
   group_id?: string;
   selections: CompatSelection[];
 };
-
-const MENU_CATEGORIES = new Set([
-  'appetizers',
-  'entrees',
-  'sides',
-  'desserts',
-  'drinks',
-  'specials',
-  'kids',
-  'combos',
-  'breakfast',
-  'lunch',
-  'dinner',
-]);
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -90,41 +77,6 @@ function asTrimmedString(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
-}
-
-function asOptionalString(value: unknown): string | null {
-  return typeof value === 'string' ? value : null;
-}
-
-function asNumber(value: unknown, fallback = 0): number {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string') {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return fallback;
-}
-
-function asBoolean(value: unknown, fallback = false): boolean {
-  return typeof value === 'boolean' ? value : fallback;
-}
-
-function asNullableNumber(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string') {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
-}
-
-function toCents(dollars: unknown): number {
-  const amount = asNumber(dollars, 0);
-  return Math.max(0, Math.round(amount * 100));
-}
-
-function isMenuCategory(value: unknown): value is MenuItemPublic['category'] {
-  return typeof value === 'string' && MENU_CATEGORIES.has(value);
 }
 
 function isMenuModifierOption(value: unknown): value is MenuModifierOption {
@@ -162,27 +114,37 @@ function isCompatSelectionGroup(value: unknown): value is CompatSelectionGroup {
 }
 
 function normalizeCartItemModifiers(mods: unknown): CartItemModifier[] {
-  const grouped = new Map<string, CartItemModifier['selections']>();
-  const input = Array.isArray(mods) ? mods : [];
+  // Use a mutable working array in the Map; CartItemModifier.selections is readonly
+  // so we cannot push onto a CartItemModifier['selections'] typed value directly.
+  const grouped = new Map<string, SelectedModifier[]>();
+  const input   = Array.isArray(mods) ? mods : [];
 
   const addSelection = (groupId: string, selection: CompatSelection): void => {
-    const normalizedGroupId = groupId.trim();
+    const normalizedGroupId     = groupId.trim();
     const normalizedSelectionId = selection.id.trim();
     if (normalizedGroupId.length === 0 || normalizedSelectionId.length === 0) return;
 
-    const rawPrice =
-      typeof selection.price_adjustment === 'number'
-        ? selection.price_adjustment
-        : typeof selection.priceAdjustment === 'number'
-          ? selection.priceAdjustment
-          : 0;
-
-    const priceAdjustment = Number.isFinite(rawPrice) ? rawPrice : 0;
+    // price_adjustment is the single canonical field on post-gateway data.
+    // priceAdjustment (camelCase) has been removed — it should not exist here.
+    // If price_adjustment is absent or non-finite, reject the selection rather
+    // than silently pricing it at $0.
+    if (
+      typeof selection.price_adjustment !== 'number' ||
+      !Number.isFinite(selection.price_adjustment)
+    ) {
+      throw new Error(
+        `normalizeCartItemModifiers: selection(id=${normalizedSelectionId}) in ` +
+        `group(id=${normalizedGroupId}) has invalid price_adjustment: ` +
+        String(selection.price_adjustment),
+      );
+    }
+    const priceAdjustment = selection.price_adjustment;
     const currentSelections = grouped.get(normalizedGroupId) ?? [];
     currentSelections.push({
-      id: normalizedSelectionId,
-      name: typeof selection.name === 'string' ? selection.name : '',
-      price_adjustment: priceAdjustment,
+      id:                normalizedSelectionId,
+      modifier_group_id: normalizedGroupId,
+      name:              typeof selection.name === 'string' ? selection.name : '',
+      price_adjustment:  priceAdjustment,
     });
     grouped.set(normalizedGroupId, currentSelections);
   };
@@ -208,48 +170,27 @@ function normalizeCartItemModifiers(mods: unknown): CartItemModifier[] {
   return normalized;
 }
 
+function toCents(dollars: number): number {
+  return Math.max(0, Math.round(dollars * 100));
+}
+
 // ─────────────────────────────────────────────────────────────
 // RPC item parser
 // ─────────────────────────────────────────────────────────────
-// The RPC returns a jsonb object. We parse it into MenuItemPublic,
-// reusing parseModifierGroupsFromJson for the modifier graph.
+// Delegates all field validation and normalization to menu.gateway.ts.
+// menu.gateway.toMenuItemBase throws a generic Error on invalid data.
+// This wrapper re-throws those errors as MenuOrderingError so that callers
+// in this service receive the domain-specific error type they expect.
 
 function parseRpcItem(data: unknown): MenuItemPublic {
-  if (!isRecord(data)) {
-    throw new MenuOrderingError('Item not found', 'ITEM_NOT_FOUND');
+  try {
+    return toMenuItemBase(data);
+  } catch (err) {
+    throw new MenuOrderingError(
+      err instanceof Error ? err.message : 'Item not found',
+      'ITEM_NOT_FOUND',
+    );
   }
-
-  const id = asTrimmedString(data.id);
-  const name = asTrimmedString(data.name);
-
-  if (id === null || name === null) {
-    throw new MenuOrderingError('Item not found', 'ITEM_NOT_FOUND');
-  }
-
-  const rawCategory = data.category;
-  const category: MenuItemPublic['category'] = isMenuCategory(rawCategory) ? rawCategory : 'entrees';
-
-  return {
-    id,
-    name,
-    price: asNumber(data.price, 0),
-    category,
-    featured: asBoolean(data.featured, false),
-    available: asBoolean(data.available, true),
-    sort_order: Math.trunc(asNumber(data.sort_order, 0)),
-    description: asOptionalString(data.description),
-    image_url: asOptionalString(data.image_url),
-    spicy_level: asNullableNumber(data.spicy_level),
-    is_vegetarian: asBoolean(data.is_vegetarian, false),
-    is_vegan: asBoolean(data.is_vegan, false),
-    is_gluten_free: asBoolean(data.is_gluten_free, false),
-    allergens: isStringArray(data.allergens) ? data.allergens : [],
-    pairs_with: isStringArray(data.pairs_with) ? data.pairs_with : [],
-    // Use the authoritative parser — same one used everywhere else in the app.
-    modifier_groups: parseModifierGroupsFromJson(data.modifier_groups),
-    created_at: asTrimmedString(data.created_at) ?? '',
-    updated_at: asOptionalString(data.updated_at),
-  };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -257,9 +198,9 @@ function parseRpcItem(data: unknown): MenuItemPublic {
 // ─────────────────────────────────────────────────────────────
 
 export interface OrderingReadyState {
-  item: MenuItemPublic;
-  payload: AddToCartPayload;
-  pricing: ReturnType<typeof PricingEngine.calculate>;
+  item:     MenuItemPublic;
+  payload:  AddToCartPayload;
+  pricing:  ReturnType<typeof PricingEngine.calculate>;
   warnings: string[];
 }
 
@@ -280,16 +221,19 @@ export class MenuOrderingService {
     const item = parseRpcItem(data);
 
     if (!item.available) {
-      throw new MenuOrderingError(`"${item.name}" is not currently available`, 'UNAVAILABLE');
+      throw new MenuOrderingError(
+        `"${item.name}" is not currently available`,
+        'UNAVAILABLE',
+      );
     }
 
     return item;
   }
 
   static buildCartPayload(
-    item: MenuItemPublic,
-    selectedModifiers: Record<string, SelectedModifier[]>,
-    quantity: number,
+    item:                 MenuItemPublic,
+    selectedModifiers:    Record<string, SelectedModifier[]>,
+    quantity:             number,
     specialInstructions?: string,
   ): OrderingReadyState {
     const groups = item.modifier_groups;
@@ -312,33 +256,34 @@ export class MenuOrderingService {
       );
     }
 
-    const compatModifiers = PricingEngine.buildCartModifiers(item, selectedModifiers);
+    const compatModifiers   = PricingEngine.buildCartModifiers(item, selectedModifiers);
     const cartItemModifiers = normalizeCartItemModifiers(compatModifiers);
-    const unitPriceCents = toCents(item.price);
+    const unitPriceCents    = toCents(item.price);
 
     const pricing = PricingEngine.calculate(item.id, unitPriceCents, compatModifiers, quantity);
 
     const modifiers: CartModifier[] = cartItemModifiers.flatMap((group) =>
       group.selections.map((selection) => ({
-        id: selection.id,
+        id:    selection.id,
         groupId: group.modifier_group_id,
-        name: selection.name ?? '',
+        name:  selection.name ?? '',
         priceAdjustmentCents:
-          typeof selection.price_adjustment === 'number' && Number.isFinite(selection.price_adjustment)
+          typeof selection.price_adjustment === 'number' &&
+          Number.isFinite(selection.price_adjustment)
             ? selection.price_adjustment
             : 0,
       })),
     );
 
     const payload: AddToCartPayload = {
-      menuItemId: item.id,
-      name: item.name,
+      menuItemId:  item.id,
+      name:        item.name,
       unitPriceCents,
-      imageUrl: item.image_url ?? null,
-      category: item.category,
+      imageUrl:    item.image_url ?? null,
+      category:    item.category,
       modifiers,
       quantity,
-      notes: specialInstructions?.trim() ? specialInstructions.trim() : null,
+      notes:       specialInstructions?.trim() ? specialInstructions.trim() : null,
       pricingHash: pricing.pricing_hash,
     };
 
@@ -351,12 +296,17 @@ export class MenuOrderingService {
   }
 
   static async prepareOrder(
-    itemId: string,
-    selectedModifiers: Record<string, SelectedModifier[]>,
-    quantity: number,
+    itemId:               string,
+    selectedModifiers:    Record<string, SelectedModifier[]>,
+    quantity:             number,
     specialInstructions?: string,
   ): Promise<OrderingReadyState> {
     const item = await MenuOrderingService.fetchItemForOrdering(itemId);
-    return MenuOrderingService.buildCartPayload(item, selectedModifiers, quantity, specialInstructions);
+    return MenuOrderingService.buildCartPayload(
+      item,
+      selectedModifiers,
+      quantity,
+      specialInstructions,
+    );
   }
 }

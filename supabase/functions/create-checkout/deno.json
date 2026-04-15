@@ -1,7 +1,0 @@
-{
-  "imports": {
-    "std/http": "https://deno.land/std@0.224.0/http/server.ts",
-    "@supabase/supabase-js": "jsr:@supabase/supabase-js@^2.98.0",
-    "stripe": "npm:stripe@^20.4.0"
-  }
-}

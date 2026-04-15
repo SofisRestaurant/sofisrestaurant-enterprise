@@ -1,24 +1,5 @@
 // src/modules/checkout/pages/CheckoutPage.tsx
-// =============================================================================
-// CHECKOUT — 2026 DUAL-MODE
-//
-// Guest mode:  Fast, frictionless, invisible identity.
-//              45-second goal. No loyalty talk. No account pressure.
-//              Email + optional SMS → Pay.
-//
-// Auth mode:   Personalized, reward-driven, "the place knows me."
-//              Points preview, credits, loyalty redeem — all visible.
-//              Zero friction: email pre-filled, SMS pre-enabled.
-//
-// Rule: if (user) → enhanced mode. if (null) → fast mode.
-//
-// Security guarantees preserved (unchanged from original):
-//   - Frontend NEVER calculates promo amounts.
-//   - Frontend NEVER finalizes tax/total (Stripe is source of truth).
-//   - Defensive rendering — never crashes on nullish cart.
-//   - Canonical cents everywhere.
-// =============================================================================
-
+// ============================================================================
 import {
   useEffect,
   useMemo,

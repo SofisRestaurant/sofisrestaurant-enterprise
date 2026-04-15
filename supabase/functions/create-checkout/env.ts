@@ -1,4 +1,3 @@
-import type Stripe from "stripe";
 import type { OrderType } from "../_shared/pricing.ts";
 
 export const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -46,7 +45,7 @@ export const STRIPE_API_VERSION = (
   isValidStripeApiVersion(Deno.env.get("STRIPE_API_VERSION")?.trim() ?? "")
     ? (Deno.env.get("STRIPE_API_VERSION")?.trim() ?? DEFAULT_STRIPE_API_VERSION)
     : DEFAULT_STRIPE_API_VERSION
-) as Stripe.LatestApiVersion;
+) as string;
 
 export function mustEnv(name: string): string {
   const value = Deno.env.get(name)?.trim();

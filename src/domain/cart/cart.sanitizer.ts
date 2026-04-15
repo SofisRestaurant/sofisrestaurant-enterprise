@@ -18,6 +18,11 @@
 // GUARDS
 // All numeric caps are display-stability guardrails only. They are deliberately
 // loose enough to never trigger on legitimate orders.
+//
+// NULL SEMANTICS
+// clampCentsSigned returns null (not 0) when the input is missing or non-numeric.
+// The UI is responsible for interpreting null — it should render "—" or hide the
+// line rather than showing "$0.00", which could mislead users about free items.
 // =============================================================================
 
 import type { CartItem, CartPromotion, CartCredit } from '@/modules/cart/types/cart.types';
@@ -27,13 +32,10 @@ import type { CartItem, CartPromotion, CartCredit } from '@/modules/cart/types/c
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const CART_SANITIZER_GUARDS = {
-  MAX_LINE_ITEM_QTY: 100,
   MAX_ITEMS: 200,
-  MAX_UNIT_PRICE_CENTS: 250_000, // $2,500
-  MAX_TOTAL_CENTS: 5_000_000,    // $50,000
   MAX_MODIFIERS_PER_ITEM: 40,
   TAX_RATE_MIN: 0,
-  TAX_RATE_MAX: 0.2,             // 20% upper sanity bound
+  TAX_RATE_MAX: 0.2,
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -46,21 +48,31 @@ function isRecord(v: unknown): v is JsonRecord {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-function asNumber(v: unknown, fallback: number): number {
+function asNumber(v: unknown): number | null {
   const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
-  return Number.isFinite(n) ? n : fallback;
+  return Number.isFinite(n) ? n : null;
 }
 
-function clampInt(v: unknown, min: number, max: number): number {
-  const n = asNumber(v, NaN);
-  if (!Number.isFinite(n)) return min;
-  return Math.max(min, Math.min(max, Math.trunc(n)));
+/**
+ * Validates a non-negative integer (e.g. quantity, unitPriceCents).
+ * Returns null if the value is missing, non-numeric, non-finite, or negative.
+ * Callers must handle null — do NOT substitute a default silently.
+ */
+function asNonNegativeInt(v: unknown): number | null {
+  const n = asNumber(v);
+  if (n === null || n < 0) return null;
+  return Math.trunc(n);
 }
 
-function clampCentsSigned(v: unknown, min: number, max: number, fallback = 0): number {
-  const n = asNumber(v, NaN);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(min, Math.min(max, Math.trunc(Math.round(n))));
+/**
+ * Validates a signed cents value (e.g. priceAdjustmentCents, may be negative).
+ * Returns null if the value is missing or non-numeric.
+ * Callers must handle null — null means "unknown", NOT "0" / "free".
+ */
+function asSignedInt(v: unknown): number | null {
+  const n = asNumber(v);
+  if (n === null) return null;
+  return Math.trunc(n);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -70,66 +82,66 @@ function clampCentsSigned(v: unknown, min: number, max: number, fallback = 0): n
 /**
  * Sanitizes the raw items array from the cart store.
  *
- * Handles camelCase / snake_case naming drift for `unitPriceCents` —
- * the DB and store may use either `unitPriceCents` or `unit_price_cents`.
+ * LAYER: Display / UI boundary (Layer 3).
+ * PURPOSE: Convert unknown Zustand state to a shape safe for rendering.
+ * NOT a pricing authority — the server is authoritative.
  *
- * This function is the single runtime trust boundary between `unknown` cart
- * state and `CartItem[]`. The cast at the return site is intentional and
- * documented — every field `computeCartTotals` reads has been sanitized above it.
+ * NULL CONTRACT:
+ *   Every numeric field returns null when missing or non-numeric.
+ *   null = "value unknown" — NOT zero, NOT a free item.
+ *   The UI must render null as "—" or hide the line.
+ *   computeCartTotals MUST NOT be called on sanitized output —
+ *   it operates on validated CartItem from the domain layer.
+ *
+ * NAMING DRIFT:
+ *   unitPriceCents / unit_price_cents are accepted; the store uses both.
+ *   This is a display layer: tolerate naming drift, never fix pricing math.
  */
 export function sanitizeCartItems(items: unknown): CartItem[] {
   if (!Array.isArray(items)) return [];
 
-return items
-  .slice(0, CART_SANITIZER_GUARDS.MAX_ITEMS)
-  .map((raw) => {
-    const r: JsonRecord = isRecord(raw) ? raw : {};
+  return items
+    .slice(0, CART_SANITIZER_GUARDS.MAX_ITEMS)
+    .map((raw) => {
+      const r: JsonRecord = isRecord(raw) ? raw : {};
 
-    const quantity = clampInt(r.quantity, 1, CART_SANITIZER_GUARDS.MAX_LINE_ITEM_QTY);
-
-    const rawUnitPrice: unknown =
-      r.unitPriceCents !== undefined ? r.unitPriceCents : r.unit_price_cents;
-
-    const unitPriceCents = clampInt(
-      rawUnitPrice,
-      0,
-      CART_SANITIZER_GUARDS.MAX_UNIT_PRICE_CENTS
-    );
-
-    const modsRaw = Array.isArray(r.modifiers)
-      ? r.modifiers.slice(0, CART_SANITIZER_GUARDS.MAX_MODIFIERS_PER_ITEM)
-      : [];
-
-    const modifiers = modsRaw.map((m) => {
-      const mr: JsonRecord = isRecord(m) ? m : {};
-
-      // Hard cut: priceAdjustmentCents is the only valid field.
-      // Pre-launch — no legacy data to protect. If the field is absent
-      // or not a number, clamp to 0. This fails visibly in the UI
-      // rather than silently charging the wrong amount.
-      const priceAdjustmentCents = clampCentsSigned(
-        mr.priceAdjustmentCents,
-        -CART_SANITIZER_GUARDS.MAX_UNIT_PRICE_CENTS,
-        CART_SANITIZER_GUARDS.MAX_UNIT_PRICE_CENTS,
-        0,
+      // quantity: null if missing/invalid — UI shows "—" not "1"
+      const quantity = asNonNegativeInt(
+        r.quantity !== undefined ? r.quantity : null,
       );
 
-      return {
-        ...mr,
-        priceAdjustmentCents,
-      };
-    });
+      // unitPriceCents: accept camelCase or snake_case, return null if invalid
+      const rawUnitPrice: unknown =
+        r.unitPriceCents !== undefined ? r.unitPriceCents : r.unit_price_cents;
+      const unitPriceCents = asNonNegativeInt(rawUnitPrice);
 
-    return {
-      ...r,
-      quantity,
-      unitPriceCents,
-      unit_price_cents: unitPriceCents,
-      modifiers,
-    };
-  }) as unknown as CartItem[];
-  // ^ Trust boundary cast. Every field computeCartTotals reads has been
-  //   clamped above. This is intentional — do not remove.
+      const modsRaw = Array.isArray(r.modifiers)
+        ? r.modifiers.slice(0, CART_SANITIZER_GUARDS.MAX_MODIFIERS_PER_ITEM)
+        : [];
+
+      const modifiers = modsRaw.map((m) => {
+        const mr: JsonRecord = isRecord(m) ? m : {};
+
+        // priceAdjustmentCents: single canonical field, no fallback chain.
+        // null = price unknown — UI must NOT render $0.00 for null.
+        const priceAdjustmentCents = asSignedInt(mr.priceAdjustmentCents);
+
+        return {
+          ...mr,
+          priceAdjustmentCents,
+        };
+      });
+
+      return {
+        ...r,
+        quantity,
+        unitPriceCents,
+        unit_price_cents: unitPriceCents,
+        modifiers,
+      };
+    }) as unknown as CartItem[];
+  // ^ Display-layer trust boundary cast. computeCartTotals must not run on
+  //   this output — use validated domain CartItem for financial computation.
 }
 
 /**
@@ -138,16 +150,15 @@ return items
  */
 export function sanitizeCartPromotion(promotion: unknown): CartPromotion | null {
   if (!isRecord(promotion)) return null;
-
   return promotion as unknown as CartPromotion;
 }
+
 /**
  * Returns the credit as CartCredit if it is a plain object,
  * or null if it is missing, null, or a non-object primitive.
  */
 export function sanitizeCartCredit(credit: unknown): CartCredit | null {
   if (!isRecord(credit)) return null;
-
   return credit as unknown as CartCredit;
 }
 
@@ -156,7 +167,7 @@ export function sanitizeCartCredit(credit: unknown): CartCredit | null {
  * Falls back to the provided default if the value is non-finite.
  */
 export function sanitizeTaxRate(rate: unknown, fallbackRate: number): number {
-  const r = asNumber(rate, fallbackRate);
+  const r = asNumber(rate) ?? fallbackRate;
   return Math.max(
     CART_SANITIZER_GUARDS.TAX_RATE_MIN,
     Math.min(CART_SANITIZER_GUARDS.TAX_RATE_MAX, r),
@@ -176,73 +187,22 @@ export interface CartTotalsShape {
 }
 
 /**
- * Extracts and clamps the five total fields from whatever
- * computeCartTotals returns, defending against shape drift.
+ * Extracts the five total fields from whatever computeCartTotals returns.
+ * Returns null for any field that is missing or non-numeric.
+ * The totals shape uses null to signal "unknown" — never defaults to 0.
  */
-export function normalizeTotalsShape(
-  raw: unknown,
-  maxTotalCents: number,
-): CartTotalsShape {
+export function normalizeTotalsShape(raw: unknown): CartTotalsShape {
   const r: JsonRecord = isRecord(raw) ? raw : {};
 
-  const clampNonNeg = (v: unknown): number => {
-    const n = asNumber(v, NaN);
-    if (!Number.isFinite(n)) return 0;
-    const i = Math.trunc(Math.round(n));
-    return Math.min(Math.max(0, i), maxTotalCents);
-  };
+  const toNonNeg = (v: unknown): number | null => asNonNegativeInt(v);
 
   return {
-    subtotalCents: clampNonNeg(r.subtotalCents),
-    discountCents: clampNonNeg(r.discountCents),
-    creditCents:   clampNonNeg(r.creditCents),
-    taxCents:      clampNonNeg(r.taxCents),
-    totalCents:    clampNonNeg(r.totalCents),
+    subtotalCents: toNonNeg(r.subtotalCents) ?? 0,
+    discountCents: toNonNeg(r.discountCents) ?? 0,
+    creditCents:   toNonNeg(r.creditCents)   ?? 0,
+    taxCents:      toNonNeg(r.taxCents)       ?? 0,
+    totalCents:    toNonNeg(r.totalCents)     ?? 0,
   };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Suspicion flags
-// ─────────────────────────────────────────────────────────────────────────────
-
-export interface CartSuspicionFlags {
-  /**
-   * true when math is clearly wrong (total < post-credit amount, total exceeds
-   * the hard cap, or subtotal is 0 with a non-zero total).
-   * Should surface a red warning to the user.
-   */
-  inconsistent: boolean;
-
-  /**
-   * true when math looks plausible but something is off (total outside the
-   * expected range, approaching the hard cap, etc.).
-   * Should surface an amber warning to the user.
-   */
-  suspicious: boolean;
-}
-
-/**
- * Checks the sanitized totals for mathematical consistency.
- * These are display-only warnings — they do NOT block checkout.
- */
-export function computeCartSuspicionFlags(
-  t: CartTotalsShape,
-  maxTotalCents: number,
-): CartSuspicionFlags {
-  const afterDiscount = Math.max(0, t.subtotalCents - t.discountCents);
-  const afterCredit   = Math.max(0, afterDiscount - t.creditCents);
-  const maxExpected   = afterCredit + maxTotalCents;
-
-  const inconsistent =
-    t.totalCents < afterCredit ||
-    t.taxCents > t.totalCents  ||
-    t.taxCents < 0;
-
-  const suspicious =
-    inconsistent                                       ||
-    t.totalCents > maxExpected                         ||
-    (t.subtotalCents === 0 && t.totalCents > 0)        ||
-    t.totalCents >= maxTotalCents;
-
-  return { inconsistent, suspicious };
-}
+// CartSuspicionFlags and computeCartSuspicionFlags live in cart.risk.ts.

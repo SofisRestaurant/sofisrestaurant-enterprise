@@ -2,13 +2,6 @@
 // src/domain/menu/menu.types.ts
 // MENU DOMAIN TYPES — canonical, strict, app-safe
 // ============================================================================
-// Goals:
-// - Ensure MenuItemPublic.modifier_groups is ALWAYS ModifierGroup[] (never {} / null)
-// - Add modifierGroups for UI-friendly structure
-// - Ensure image_url is string | null (so cart payload can map safely)
-// - Provide CartItemModifier / SelectedModifier types used by PricingEngine + services
-// - Provide MenuItem alias used by legacy imports
-// ============================================================================
 
 /* ─────────────────────────────────────────────────────────────
    Primitives
@@ -26,83 +19,90 @@ export type MenuCategory =
 export type ModifierGroupType = 'radio' | 'checkbox' | 'quantity';
 
 /* ─────────────────────────────────────────────────────────────
-   Modifier Layer (LEGACY / DB STRUCTURE)
+   Modifier Layer
 ──────────────────────────────────────────────────────────── */
 
 export interface Modifier {
-  id: string;
-  modifier_group_id: string;
-  name: string;
-  /** cents */
-  price_adjustment: number;
-  available: boolean;
-  sort_order: number;
+  /** Non-empty UUID. */
+  readonly id: string;
+  /** Non-empty UUID — must match the parent ModifierGroup.id. */
+  readonly modifier_group_id: string;
+  readonly name: string;
+  /** Cents. Integer. May be negative. */
+  readonly price_adjustment: number;
+  readonly available: boolean;
+  readonly sort_order: number;
 }
 
 export interface ModifierGroup {
-  id: string;
-  name: string;
-  description: string | null;
-  type: ModifierGroupType;
-  required: boolean;
-  min_selections: number;
-  max_selections: number | null;
-  sort_order: number;
-  active: boolean;
-  modifiers: Modifier[];
+  /** Non-empty UUID. */
+  readonly id: string;
+  readonly name: string;
+  readonly description: string | null;
+  readonly type: ModifierGroupType;
+  /** Authoritative. Never inferred from min_selections. */
+  readonly required: boolean;
+  /** Non-negative integer. 0 = no minimum. */
+  readonly min_selections: number;
+  /** Positive integer or null (unlimited). */
+  readonly max_selections: number | null;
+  readonly sort_order: number;
+  readonly active: boolean;
+  /** Always an array. Never null/undefined. */
+  readonly modifiers: readonly Modifier[];
 }
 
 /* ─────────────────────────────────────────────────────────────
-   UI Modifier Layer (NEW STRUCTURE)
+   UI Modifier Layer
 ──────────────────────────────────────────────────────────── */
 
 export interface ModifierOptionUI {
-  id: string;
-  name: string;
-  priceDelta: number;
-  isDefault: boolean;
+  readonly id: string;
+  readonly name: string;
+  readonly priceDelta: number;
+  readonly isDefault: boolean;
 }
 
 export interface ModifierGroupUI {
-  id: string;
-  name: string;
-  sortOrder: number;
-  options: ModifierOptionUI[];
+  readonly id: string;
+  readonly name: string;
+  readonly sortOrder: number;
+  readonly options: readonly ModifierOptionUI[];
 }
 
 /* ─────────────────────────────────────────────────────────────
-   Base Menu Model (DB-compatible + UI-safe)
+   Base Menu Model
 ──────────────────────────────────────────────────────────── */
 
 export interface MenuItemBase {
-  id: string;
-  name: string;
-  inventory_count?: number | null;
-  price: number;
-  category: MenuCategory;
-  featured: boolean;
-  available: boolean;
-  sort_order: number;
+  readonly id: string;
+  readonly name: string;
+  readonly inventory_count: number | null;
+  readonly price: number;
+  readonly category: MenuCategory;
+  readonly featured: boolean;
+  readonly available: boolean;
+  readonly sort_order: number;
 
-  description: string | null;
-  /** IMPORTANT: always string | null (not undefined, not {}) */
-  image_url: string | null;
+  readonly description: string | null;
+  /** Always string | null — never undefined or {}. */
+  readonly image_url: string | null;
 
-  spicy_level: number | null;
-  is_vegetarian: boolean;
-  is_vegan: boolean;
-  is_gluten_free: boolean;
-  allergens: string[];
-  pairs_with: string[];
+  readonly spicy_level: number | null;
+  readonly is_vegetarian: boolean;
+  readonly is_vegan: boolean;
+  readonly is_gluten_free: boolean;
+  readonly allergens: readonly string[];
+  readonly pairs_with: readonly string[];
 
-  /** 🔒 LEGACY DB STRUCTURE (used by pricing engine, etc.) */
-  modifier_groups: ModifierGroup[];
+  /** DB structure. Always an array — never null/undefined. */
+  readonly modifier_groups: readonly ModifierGroup[];
 
-  /** 🎨 NEW UI STRUCTURE (used by frontend rendering) */
-  modifierGroups?: ModifierGroupUI[];
+  /** UI structure. Optional — present only when explicitly hydrated. */
+  readonly modifierGroups?: readonly ModifierGroupUI[];
 
-  created_at: string;
-  updated_at: string | null;
+  readonly created_at: string;
+  readonly updated_at: string | null;
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -112,56 +112,63 @@ export interface MenuItemBase {
 export type MenuItemPublic = MenuItemBase;
 
 export interface InventoryFields {
-  low_stock_threshold: number;
-  inventory_count?: number | null;
+  readonly low_stock_threshold: number;
+  readonly inventory_count: number | null;
 }
 
 export interface MenuItemAdmin extends MenuItemBase, InventoryFields {
-  popularity_score: number | null;
+  readonly popularity_score: number | null;
 }
 
-/** Back-compat alias used across repo */
+/** Back-compat alias. */
 export type MenuItem = MenuItemPublic;
 
 /* ─────────────────────────────────────────────────────────────
-   Selection + Cart Modifier Shapes (PricingEngine / Checkout)
+   Selection types — used by PricingEngine and checkout
 ──────────────────────────────────────────────────────────── */
 
-/** What a single selected modifier looks like in the cart. */
+/**
+ * A single modifier the customer has selected.
+ * modifier_group_id is required — it must match the parent group.id.
+ * Carried explicitly so downstream consumers never need to re-look it up.
+ */
 export interface SelectedModifier {
-  id: string;
-  name: string;
-  price_adjustment: number;
+  readonly id: string;
+  /** Must match the ModifierGroup.id this modifier belongs to. */
+  readonly modifier_group_id: string;
+  readonly name: string;
+  /** Cents. Integer. */
+  readonly price_adjustment: number;
 }
 
 /** What a modifier group looks like inside a cart item. */
 export interface CartItemModifier {
-  modifier_group_id: string;
-  selections: SelectedModifier[];
+  readonly modifier_group_id: string;
+  readonly selections: readonly SelectedModifier[];
 }
 
 /* ─────────────────────────────────────────────────────────────
-   Pricing & Validation Types (used by UI / engines)
+   Pricing & Validation Types
 ──────────────────────────────────────────────────────────── */
 
 export interface PricingBreakdown {
-  base_price: number;
-  modifier_total: number;
-  unit_price: number;
-  quantity: number;
-  subtotal: number;
-  tax: number;
-  total: number;
-  pricing_hash: string;
+  readonly base_price: number;
+  readonly modifier_total: number;
+  readonly unit_price: number;
+  readonly quantity: number;
+  readonly subtotal: number;
+  readonly tax: number;
+  readonly total: number;
+  readonly pricing_hash: string;
 }
 
 export interface ConfigurationValidation {
-  valid: boolean;
-  errors: Record<string, string>;
+  readonly valid: boolean;
+  readonly errors: Record<string, string>;
 }
 
 export interface ModifierValidationResult {
-  ok: boolean;
-  code?: string;
-  message?: string;
+  readonly ok: boolean;
+  readonly code?: string;
+  readonly message?: string;
 }

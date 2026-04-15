@@ -18,9 +18,46 @@ import type {
   RequestCartModifierInput,
 } from "./types.ts";
 
+// ─── Shared result type ───────────────────────────────────────────────────────
+
 export type ValidationResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: string };
+
+// ─── Guest body type ──────────────────────────────────────────────────────────
+
+export type GuestRequestBody = {
+  items: RequestCartItemInput[];
+  order_type: "pickup" | "delivery" | "dine_in";
+  notes: string | null;
+  guest_email: string;
+  guest_token: string | null;
+  success_url: string | null;
+  cancel_url: string | null;
+};
+
+// ─── Fields that are forbidden in guest checkout ──────────────────────────────
+// Any of these present in the request body → hard 422. Never silently ignore.
+
+const GUEST_FORBIDDEN_FIELDS = [
+  "promo_code",
+  "promo_id",
+  "credit_id",
+  "loyalty_redeem_points",
+  "loyalty_reward_id",
+  "loyalty_redemption_id",
+  "loyalty_account_id",
+  "client_integrity_hash",
+] as const;
+
+// ─── Fields that are forbidden in auth checkout ───────────────────────────────
+
+const AUTH_FORBIDDEN_FIELDS = [
+  "guest_email",
+  "guest_token",
+] as const;
+
+// ─── Shared utility functions ─────────────────────────────────────────────────
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -121,7 +158,11 @@ export function pickMeta(
   return null;
 }
 
-function normalizeRequestModifier(
+// ─── Item normalization (used by BOTH validators — copied, not shared) ────────
+// Intentionally duplicated between auth and guest validators.
+// A shared helper would allow a future change to silently affect both pipelines.
+
+function normalizeRequestModifier_auth(
   value: unknown,
   fallbackGroupId: string | null,
 ): ValidationResult<RequestCartModifierInput | null> {
@@ -170,7 +211,7 @@ function normalizeRequestModifier(
   };
 }
 
-function normalizeRequestModifiers(
+function normalizeRequestModifiers_auth(
   value: unknown,
 ): ValidationResult<RequestCartModifierInput[]> {
   if (value === null || value === undefined) {
@@ -181,7 +222,7 @@ function normalizeRequestModifiers(
 
   if (Array.isArray(value)) {
     for (const entry of value) {
-      const normalized = normalizeRequestModifier(entry, null);
+      const normalized = normalizeRequestModifier_auth(entry, null);
       if (!normalized.ok) return { ok: false, error: normalized.error };
       if (normalized.value) out.push(normalized.value);
     }
@@ -198,14 +239,14 @@ function normalizeRequestModifiers(
 
     if (Array.isArray(entry)) {
       for (const nested of entry) {
-        const normalized = normalizeRequestModifier(nested, fallbackGroupId);
+        const normalized = normalizeRequestModifier_auth(nested, fallbackGroupId);
         if (!normalized.ok) return { ok: false, error: normalized.error };
         if (normalized.value) out.push(normalized.value);
       }
       continue;
     }
 
-    const normalized = normalizeRequestModifier(entry, fallbackGroupId);
+    const normalized = normalizeRequestModifier_auth(entry, fallbackGroupId);
     if (!normalized.ok) return { ok: false, error: normalized.error };
     if (normalized.value) out.push(normalized.value);
   }
@@ -213,7 +254,7 @@ function normalizeRequestModifiers(
   return { ok: true, value: out };
 }
 
-function normalizeRequestItem(
+function normalizeRequestItem_auth(
   value: unknown,
   index: number,
 ): ValidationResult<RequestCartItemInput> {
@@ -262,7 +303,7 @@ function normalizeRequestItem(
     };
   }
 
-  const modifiers = normalizeRequestModifiers(value["modifiers"]);
+  const modifiers = normalizeRequestModifiers_auth(value["modifiers"]);
   if (!modifiers.ok) {
     return { ok: false, error: `items[${index}].${modifiers.error}` };
   }
@@ -277,6 +318,167 @@ function normalizeRequestItem(
     },
   };
 }
+
+// ─── Guest item normalization (intentionally separate copy) ───────────────────
+
+function normalizeRequestModifier_guest(
+  value: unknown,
+  fallbackGroupId: string | null,
+): ValidationResult<RequestCartModifierInput | null> {
+  if (value === null || value === undefined) {
+    return { ok: true, value: null };
+  }
+
+  if (typeof value === "string") {
+    if (!isNonEmptySafeId(value)) {
+      return { ok: false, error: "Modifier id is invalid" };
+    }
+
+    return {
+      ok: true,
+      value: {
+        id: value.trim(),
+        groupId: fallbackGroupId,
+      },
+    };
+  }
+
+  if (!isRecord(value)) {
+    return { ok: false, error: "Modifier entry is invalid" };
+  }
+
+  const modifierId = normalizeString(value["id"]) ??
+    normalizeString(value["modifier_id"]);
+  if (!modifierId || !isNonEmptySafeId(modifierId)) {
+    return { ok: false, error: "Modifier id is invalid" };
+  }
+
+  const groupIdCandidate = normalizeString(value["group_id"]) ??
+    normalizeString(value["modifier_group_id"]) ??
+    fallbackGroupId;
+
+  if (groupIdCandidate && !isNonEmptySafeId(groupIdCandidate)) {
+    return { ok: false, error: "Modifier group id is invalid" };
+  }
+
+  return {
+    ok: true,
+    value: {
+      id: modifierId,
+      groupId: groupIdCandidate,
+    },
+  };
+}
+
+function normalizeRequestModifiers_guest(
+  value: unknown,
+): ValidationResult<RequestCartModifierInput[]> {
+  if (value === null || value === undefined) {
+    return { ok: true, value: [] };
+  }
+
+  const out: RequestCartModifierInput[] = [];
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const normalized = normalizeRequestModifier_guest(entry, null);
+      if (!normalized.ok) return { ok: false, error: normalized.error };
+      if (normalized.value) out.push(normalized.value);
+    }
+
+    return { ok: true, value: out };
+  }
+
+  if (!isRecord(value)) {
+    return { ok: false, error: "'modifiers' must be an array or object map" };
+  }
+
+  for (const [groupKey, entry] of Object.entries(value)) {
+    const fallbackGroupId = isNonEmptySafeId(groupKey) ? groupKey : null;
+
+    if (Array.isArray(entry)) {
+      for (const nested of entry) {
+        const normalized = normalizeRequestModifier_guest(nested, fallbackGroupId);
+        if (!normalized.ok) return { ok: false, error: normalized.error };
+        if (normalized.value) out.push(normalized.value);
+      }
+      continue;
+    }
+
+    const normalized = normalizeRequestModifier_guest(entry, fallbackGroupId);
+    if (!normalized.ok) return { ok: false, error: normalized.error };
+    if (normalized.value) out.push(normalized.value);
+  }
+
+  return { ok: true, value: out };
+}
+
+function normalizeRequestItem_guest(
+  value: unknown,
+  index: number,
+): ValidationResult<RequestCartItemInput> {
+  if (!isRecord(value)) {
+    return { ok: false, error: `items[${index}] must be an object` };
+  }
+
+  if ("price" in value || "amount" in value || "unit_amount" in value) {
+    return {
+      ok: false,
+      error: `items[${index}] must not include price fields`,
+    };
+  }
+
+  const id = normalizeString(value["id"]) ??
+    normalizeString(value["menu_item_id"]) ??
+    normalizeString(value["menuItemId"]);
+
+  if (!id || !isNonEmptySafeId(id)) {
+    return { ok: false, error: `items[${index}].id is invalid` };
+  }
+
+  const quantity = parseOptionalInteger(value["quantity"]);
+  if (!quantity || quantity < 1 || quantity > 99) {
+    return {
+      ok: false,
+      error: `items[${index}].quantity must be an integer between 1 and 99`,
+    };
+  }
+
+  const notesValue = value["notes"];
+  if (
+    notesValue !== undefined && notesValue !== null &&
+    typeof notesValue !== "string"
+  ) {
+    return { ok: false, error: `items[${index}].notes must be a string` };
+  }
+
+  const notes = normalizeNotes(notesValue);
+  if (
+    typeof notesValue === "string" && notesValue.trim().length > MAX_NOTES_LEN
+  ) {
+    return {
+      ok: false,
+      error: `items[${index}].notes too long (max ${MAX_NOTES_LEN})`,
+    };
+  }
+
+  const modifiers = normalizeRequestModifiers_guest(value["modifiers"]);
+  if (!modifiers.ok) {
+    return { ok: false, error: `items[${index}].${modifiers.error}` };
+  }
+
+  return {
+    ok: true,
+    value: {
+      id: id.trim(),
+      quantity,
+      notes,
+      modifiers: modifiers.value,
+    },
+  };
+}
+
+// ─── Shared URL validator ─────────────────────────────────────────────────────
 
 function validateRedirectUrl(url: string): ValidationResult<string> {
   if (url.length > MAX_URL_LEN) {
@@ -301,9 +503,165 @@ function validateRedirectUrl(url: string): ValidationResult<string> {
   return { ok: true, value: parsed.toString() };
 }
 
-export function validateBody(raw: unknown): ValidationResult<RequestBody> {
+// ─── validateGuestBody ────────────────────────────────────────────────────────
+// Runs forbidden-field rejection FIRST — before any other validation.
+// A probing client that sends loyalty/promo fields gets an explicit 422,
+// not a silent ignore.
+
+export function validateGuestBody(raw: unknown): ValidationResult<GuestRequestBody> {
   if (!isRecord(raw)) {
     return { ok: false, error: "Request body must be a JSON object" };
+  }
+
+  // Hard reject any auth-only field before touching anything else.
+  for (const field of GUEST_FORBIDDEN_FIELDS) {
+    if (raw[field] !== undefined && raw[field] !== null) {
+      return {
+        ok: false,
+        error: `Field '${field}' is not permitted in guest checkout`,
+      };
+    }
+  }
+
+  // Items
+  const rawItems = raw["items"];
+  if (!Array.isArray(rawItems)) {
+    return { ok: false, error: "'items' must be an array" };
+  }
+
+  if (rawItems.length === 0) {
+    return { ok: false, error: "'items' must not be empty" };
+  }
+
+  if (rawItems.length > MAX_ITEMS) {
+    return { ok: false, error: `Too many items (max ${MAX_ITEMS})` };
+  }
+
+  const items: RequestCartItemInput[] = [];
+  for (let index = 0; index < rawItems.length; index += 1) {
+    const normalized = normalizeRequestItem_guest(rawItems[index], index);
+    if (!normalized.ok) {
+      return normalized;
+    }
+    items.push(normalized.value);
+  }
+
+  // order_type
+  const rawOrderType = typeof raw["order_type"] === "string"
+    ? raw["order_type"].trim()
+    : "pickup";
+
+  if (!isOrderType(rawOrderType)) {
+    return {
+      ok: false,
+      error: `'order_type' must be one of: ${ALLOWED_ORDER_TYPES.join(", ")}`,
+    };
+  }
+
+  // notes
+  const notesValue = raw["notes"];
+  if (
+    notesValue !== undefined && notesValue !== null &&
+    typeof notesValue !== "string"
+  ) {
+    return { ok: false, error: "'notes' must be a string" };
+  }
+
+  const notes = normalizeNotes(notesValue);
+  if (
+    typeof notesValue === "string" && notesValue.trim().length > MAX_NOTES_LEN
+  ) {
+    return { ok: false, error: `'notes' too long (max ${MAX_NOTES_LEN})` };
+  }
+
+  // guest_email — required
+  const guestEmailRaw = raw["guest_email"];
+  if (
+    guestEmailRaw === undefined ||
+    guestEmailRaw === null ||
+    typeof guestEmailRaw !== "string" ||
+    guestEmailRaw.trim().length === 0
+  ) {
+    return { ok: false, error: "'guest_email' is required" };
+  }
+
+  const guestEmail = guestEmailRaw.trim().toLowerCase();
+
+  if (guestEmail.length > 254) {
+    return { ok: false, error: "'guest_email' must be 254 characters or fewer" };
+  }
+
+  // RFC-5322 simplified — no local part can start/end with dot,
+  // domain must have at least one dot
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guestEmail)) {
+    return { ok: false, error: "'guest_email' is not a valid email address" };
+  }
+
+  // guest_token — optional, used for session resumption
+  const guestTokenRaw = raw["guest_token"];
+  let guestToken: string | null = null;
+
+  if (guestTokenRaw !== undefined && guestTokenRaw !== null) {
+    if (typeof guestTokenRaw !== "string") {
+      return { ok: false, error: "'guest_token' must be a string" };
+    }
+    const trimmed = guestTokenRaw.trim();
+    if (trimmed.length < 8 || trimmed.length > 64) {
+      return { ok: false, error: "'guest_token' must be between 8 and 64 characters" };
+    }
+    if (!/^[A-Za-z0-9_-]+$/.test(trimmed)) {
+      return { ok: false, error: "'guest_token' contains invalid characters" };
+    }
+    guestToken = trimmed;
+  }
+
+  // success_url
+  const successUrlRaw = normalizeString(raw["success_url"]);
+  if (successUrlRaw) {
+    const validated = validateRedirectUrl(successUrlRaw);
+    if (!validated.ok) {
+      return { ok: false, error: `Invalid success_url: ${validated.error}` };
+    }
+  }
+
+  // cancel_url
+  const cancelUrlRaw = normalizeString(raw["cancel_url"]);
+  if (cancelUrlRaw) {
+    const validated = validateRedirectUrl(cancelUrlRaw);
+    if (!validated.ok) {
+      return { ok: false, error: `Invalid cancel_url: ${validated.error}` };
+    }
+  }
+
+  return {
+    ok: true,
+    value: {
+      items,
+      order_type: rawOrderType as "pickup" | "delivery" | "dine_in",
+      notes,
+      guest_email: guestEmail,
+      guest_token: guestToken,
+      success_url: successUrlRaw ?? null,
+      cancel_url: cancelUrlRaw ?? null,
+    },
+  };
+}
+
+// ─── validateAuthBody (renamed from validateBody) ─────────────────────────────
+
+export function validateAuthBody(raw: unknown): ValidationResult<RequestBody> {
+  if (!isRecord(raw)) {
+    return { ok: false, error: "Request body must be a JSON object" };
+  }
+
+  // Reject guest-only fields on the auth endpoint
+  for (const field of AUTH_FORBIDDEN_FIELDS) {
+    if (raw[field] !== undefined && raw[field] !== null) {
+      return {
+        ok: false,
+        error: `Field '${field}' is not permitted in auth checkout`,
+      };
+    }
   }
 
   const rawItems = raw["items"];
@@ -321,7 +679,7 @@ export function validateBody(raw: unknown): ValidationResult<RequestBody> {
 
   const items: RequestCartItemInput[] = [];
   for (let index = 0; index < rawItems.length; index += 1) {
-    const normalized = normalizeRequestItem(rawItems[index], index);
+    const normalized = normalizeRequestItem_auth(rawItems[index], index);
     if (!normalized.ok) {
       return normalized;
     }
@@ -461,9 +819,6 @@ export function validateBody(raw: unknown): ValidationResult<RequestBody> {
     };
   }
 
-  // loyalty_account_id: the loyalty_accounts.id UUID sent by the frontend.
-  // Ownership is validated server-side in loyalty.ts against the JWT userId.
-  // We accept any non-empty safe identifier string here.
   const loyaltyAccountIdRaw = raw["loyalty_account_id"];
   if (
     loyaltyAccountIdRaw !== undefined &&

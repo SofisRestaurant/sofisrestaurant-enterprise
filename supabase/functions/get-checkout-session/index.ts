@@ -47,7 +47,7 @@ const CONFIG = {
   ALLOWED_COUNTRIES: ['US'] as const, // ISO-3166-1 alpha-2
 
   // Stripe pinned version (upgrade intentionally)
-  DEFAULT_STRIPE_API_VERSION: '2026-02-25',
+  DEFAULT_STRIPE_API_VERSION: '2026-03-25.dahlia',
 } as const;
 
 const STRIPE_SESSION_RE = /^cs_(test|live)_[a-zA-Z0-9]+$/;
@@ -229,9 +229,11 @@ function getStripeOrThrow(): { stripe: Stripe; apiVersion: string } {
   }
 
   const stripe = new Stripe(secret, {
-    apiVersion: v as unknown as Stripe.LatestApiVersion,
+    apiVersion: v,
     httpClient: Stripe.createFetchHttpClient(),
   });
+
+
 
   STRIPE_SINGLETON = stripe;
   STRIPE_SINGLETON_VERSION = v;

@@ -1,3 +1,14 @@
+// =============================================================================
+// PATH: src/modules/orders/components/kitchen/kitchen-item-parser.ts
+// =============================================================================
+// LAYER 3 — Display only. Never affects pricing truth.
+//
+// Reads from OrderCartItem (already-normalized domain objects from order.mappers).
+// price_adjustment is the single canonical field for modifier pricing.
+// ?? 0 is intentional: kitchen screen must never crash — $0 display is
+// operationally safe. Financial truth lives in the pricing_snapshot.
+// =============================================================================
+
 import type { OrderCartItem } from '@/domain/orders/order.types';
 import type { DisplayModifier, DisplayModifierSelection } from './kitchen.types';
 
@@ -14,9 +25,9 @@ interface KitchenLooseModifier {
   name?: unknown;
   label?: unknown;
   title?: unknown;
+  // Single canonical pricing field. price / price_cents intentionally removed —
+  // those are item-level fields and must not be read as modifier price adjustments.
   price_adjustment?: unknown;
-  price?: unknown;
-  price_cents?: unknown;
   quantity?: unknown;
   qty?: unknown;
   selections?: unknown;
@@ -32,9 +43,8 @@ interface KitchenLooseSelection {
   name?: unknown;
   label?: unknown;
   title?: unknown;
+  // Single canonical pricing field. price / price_cents intentionally removed.
   price_adjustment?: unknown;
-  price?: unknown;
-  price_cents?: unknown;
   quantity?: unknown;
   qty?: unknown;
 }
@@ -204,10 +214,13 @@ function getSelectionName(selection: KitchenLooseSelection): string | null {
   return getFirstText(selection.name, selection.label, selection.title);
 }
 
+/**
+ * Reads price_adjustment — the single canonical modifier pricing field.
+ * ?? 0 is correct here: kitchen display only, never affects financial truth.
+ * null price = display $0, not crash.
+ */
 function getSelectionPriceAdjustment(selection: KitchenLooseSelection): number {
-  return Math.round(
-    toFiniteNumber(selection.price_adjustment ?? selection.price ?? selection.price_cents) ?? 0,
-  );
+  return Math.round(toFiniteNumber(selection.price_adjustment) ?? 0);
 }
 
 function getSelectionQuantity(selection: KitchenLooseSelection): number {
@@ -219,10 +232,9 @@ function getFallbackModifierSelection(
   label: string,
 ): DisplayModifierSelection | null {
   const fallbackName = getFirstText(modifier.name, modifier.label, modifier.title) ?? label;
-  const fallbackId = getModifierId(modifier) ?? getModifierGroupId(modifier) ?? fallbackName;
-  const priceAdjustment = Math.round(
-    toFiniteNumber(modifier.price_adjustment ?? modifier.price ?? modifier.price_cents) ?? 0,
-  );
+  const fallbackId   = getModifierId(modifier) ?? getModifierGroupId(modifier) ?? fallbackName;
+  // Single canonical field. ?? 0 is display-safe (see layer contract above).
+  const priceAdjustment = Math.round(toFiniteNumber(modifier.price_adjustment) ?? 0);
   const quantity = Math.max(1, Math.floor(toFiniteNumber(modifier.quantity ?? modifier.qty) ?? 1));
 
   return {
@@ -257,9 +269,9 @@ function buildSelectionMap(
     }
 
     const priceAdjustment = getSelectionPriceAdjustment(selection);
-    const quantity = getSelectionQuantity(selection);
-    const selectionId = getSelectionId(selection, selectionName);
-    const selectionKey = `${selectionId}:${selectionName}:${priceAdjustment}`;
+    const quantity        = getSelectionQuantity(selection);
+    const selectionId     = getSelectionId(selection, selectionName);
+    const selectionKey    = `${selectionId}:${selectionName}:${priceAdjustment}`;
 
     const existing = selectionMap.get(selectionKey);
     if (existing !== undefined) {
@@ -307,8 +319,8 @@ function buildItemSignature(item: OrderCartItem): string {
     record !== null ? getFirstTextFromRecord(record, ['menu_item_id', 'menuItemId']) : null;
 
   const specialInstructions = getSpecialInstructions(item) ?? 'na';
-  const kitchenNotes = getKitchenNotes(item) ?? 'na';
-  const modifierSignature = buildModifierSignature(item);
+  const kitchenNotes        = getKitchenNotes(item) ?? 'na';
+  const modifierSignature   = buildModifierSignature(item);
 
   return [
     menuItemId ?? item.id ?? item.name,
@@ -336,7 +348,7 @@ export function getCartItemKey(orderId: string, item: OrderCartItem, itemIndex =
     return `${orderId}:${stableLineId}`;
   }
 
-  const itemId = toTrimmedText(item.id);
+  const itemId        = toTrimmedText(item.id);
   const baseSignature = buildItemSignature(item);
 
   if (itemId !== null) {
@@ -378,7 +390,7 @@ export function getAllergens(item: OrderCartItem): string[] {
     return [];
   }
 
-  const source = getArrayValue(record, ['allergens', 'allergen_flags', 'allergenFlags']);
+  const source   = getArrayValue(record, ['allergens', 'allergen_flags', 'allergenFlags']);
   const allergens: string[] = [];
 
   for (const entry of source) {
@@ -401,17 +413,17 @@ export function parseDisplayModifiers(item: OrderCartItem): DisplayModifier[] {
   const modifiers: DisplayModifier[] = [];
 
   for (const rawModifier of rawModifiers) {
-    const modifierId = getModifierId(rawModifier);
-    const groupId = getModifierGroupId(rawModifier);
-    const label = getModifierLabel(rawModifier);
+    const modifierId   = getModifierId(rawModifier);
+    const groupId      = getModifierGroupId(rawModifier);
+    const label        = getModifierLabel(rawModifier);
     const selectionMap = buildSelectionMap(rawModifier, label);
-    const selections = Array.from(selectionMap.values());
+    const selections   = Array.from(selectionMap.values());
 
     if (selections.length === 0) {
       continue;
     }
 
-    const keyBase = modifierId ?? groupId ?? label;
+    const keyBase            = modifierId ?? groupId ?? label;
     const selectionSignature = selections
       .map((selection) => `${selection.id}:${selection.count}`)
       .join('|');

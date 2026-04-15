@@ -33,9 +33,9 @@ export function flattenSelectionsForCart(
     for (const s of selected[g.id] ?? []) {
       result.push({
         id: s.id,
-        groupId: s.groupId,
+        groupId: s.modifier_group_id,
         name: s.name,
-        priceAdjustmentCents: safeCents(s.priceAdjustment, 0),
+        priceAdjustmentCents: safeCents(s.price_adjustment, 0),
       });
     }
   }

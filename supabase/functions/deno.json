@@ -1,7 +1,7 @@
 {
   "imports": {
-    "@supabase/supabase-js": "npm:@supabase/supabase-js@2.97.0",
-    "stripe": "npm:stripe@20.4.0",
-    "std/http/server": "jsr:@std/http@^1.0.0/server"
+    "@supabase/supabase-js": "npm:@supabase/supabase-js@^2.101.1",
+    "stripe": "npm:stripe@^22.0.1",
+    "@std/http": "jsr:@std/http@^1.0.25"
   }
 }

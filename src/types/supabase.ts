@@ -12,6 +12,31 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.1"
   }
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
       abandoned_cart_sessions: {
@@ -2250,6 +2275,7 @@ export type Database = {
           payment_failed_at: string | null
           payment_method_type: Database["public"]["Enums"]["payment_method_type_enum"]
           payment_status: string
+          phone_verified: boolean
           refunded_amount_cents: number
           refunded_at: string | null
           service_fee_cents: number
@@ -2302,6 +2328,7 @@ export type Database = {
           payment_failed_at?: string | null
           payment_method_type?: Database["public"]["Enums"]["payment_method_type_enum"]
           payment_status?: string
+          phone_verified?: boolean
           refunded_amount_cents?: number
           refunded_at?: string | null
           service_fee_cents?: number
@@ -2354,6 +2381,7 @@ export type Database = {
           payment_failed_at?: string | null
           payment_method_type?: Database["public"]["Enums"]["payment_method_type_enum"]
           payment_status?: string
+          phone_verified?: boolean
           refunded_amount_cents?: number
           refunded_at?: string | null
           service_fee_cents?: number
@@ -2416,6 +2444,8 @@ export type Database = {
           currency: string
           discount_cents: number
           expires_at: string | null
+          guest_email: string | null
+          guest_token: string | null
           id: string
           idempotency_key: string | null
           items: Json
@@ -2429,7 +2459,7 @@ export type Database = {
           subtotal_cents: number
           tax_cents: number
           total_cents: number
-          user_id: string
+          user_id: string | null
         }
         Insert: {
           consumed_at?: string | null
@@ -2438,6 +2468,8 @@ export type Database = {
           currency?: string
           discount_cents?: number
           expires_at?: string | null
+          guest_email?: string | null
+          guest_token?: string | null
           id: string
           idempotency_key?: string | null
           items: Json
@@ -2451,7 +2483,7 @@ export type Database = {
           subtotal_cents?: number
           tax_cents?: number
           total_cents?: number
-          user_id: string
+          user_id?: string | null
         }
         Update: {
           consumed_at?: string | null
@@ -2460,6 +2492,8 @@ export type Database = {
           currency?: string
           discount_cents?: number
           expires_at?: string | null
+          guest_email?: string | null
+          guest_token?: string | null
           id?: string
           idempotency_key?: string | null
           items?: Json
@@ -2473,7 +2507,7 @@ export type Database = {
           subtotal_cents?: number
           tax_cents?: number
           total_cents?: number
-          user_id?: string
+          user_id?: string | null
         }
         Relationships: [
           {
@@ -2744,6 +2778,93 @@ export type Database = {
           start_hour?: number | null
           type?: string | null
           value?: number | null
+        }
+        Relationships: []
+      }
+      sms_log: {
+        Row: {
+          created_at: string
+          error: string | null
+          event: string
+          id: string
+          order_id: string
+          phone_suffix: string
+          status: string
+          twilio_sid: string | null
+        }
+        Insert: {
+          created_at?: string
+          error?: string | null
+          event: string
+          id?: string
+          order_id: string
+          phone_suffix: string
+          status: string
+          twilio_sid?: string | null
+        }
+        Update: {
+          created_at?: string
+          error?: string | null
+          event?: string
+          id?: string
+          order_id?: string
+          phone_suffix?: string
+          status?: string
+          twilio_sid?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sms_log_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "admin_tax_order_breakdown"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "sms_log_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "financial_revenue_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sms_log_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "order_performance"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "sms_log_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "order_timeline"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "sms_log_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sms_verify_attempts: {
+        Row: {
+          created_at: string
+          id: string
+          phone_hash: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          phone_hash: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          phone_hash?: string
         }
         Relationships: []
       }
@@ -4075,6 +4196,7 @@ export type Database = {
           payment_failed_at: string | null
           payment_method_type: Database["public"]["Enums"]["payment_method_type_enum"]
           payment_status: string
+          phone_verified: boolean
           refunded_amount_cents: number
           refunded_at: string | null
           service_fee_cents: number
@@ -4554,6 +4676,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
       avs_check_enum: ["pass", "fail", "unavailable", "unchecked", "unknown"],

@@ -4,7 +4,7 @@ export const MAX_BODY_BYTES = 524_288;
 export const LOYALTY_IDEMPOTENCY_PREFIX = "finalize-backfill:";
 export const MAX_AWARD_AMOUNT_CENTS = 500_000;
 
-export const DEFAULT_STRIPE_API_VERSION = "2026-02-25.clover";
+export const DEFAULT_STRIPE_API_VERSION = "2026-03-25.dahlia";
 
 export const DB_PMT_PAID = "paid";
 export const DB_PMT_FAILED = "failed";

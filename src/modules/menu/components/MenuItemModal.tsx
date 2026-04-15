@@ -285,22 +285,23 @@ export default function MenuItemModal({ item, onClose }: Props) {
 
     if (addTimer.current) clearTimeout(addTimer.current);
     addTimer.current = setTimeout(() => {
-      const chosen: Array<{
-        id: string;
-        groupId: string;
-        name: string;
-        priceAdjustmentCents: number;
-      }> = [];
-      for (const g of modifierGroups) {
-        for (const s of selected[g.id] ?? []) {
-          chosen.push({
-            id: s.id,
-            groupId: s.groupId,
-            name: s.name,
-            priceAdjustmentCents: safeCents(s.priceAdjustment, 0),
-          });
-        }
-      }
+const chosen: Array<{
+  id: string;
+  groupId: string;
+  name: string;
+  priceAdjustmentCents: number;
+}> = [];
+
+for (const g of modifierGroups) {
+  for (const s of selected[g.id] ?? []) {
+    chosen.push({
+      id: s.id,
+      groupId: s.modifier_group_id, // ✅ map domain → cart
+      name: s.name,
+      priceAdjustmentCents: safeCents(s.price_adjustment, 0), // ✅ map domain → cart
+    });
+  }
+}
 
       const note = safeStr(notes, '', MAX_NOTES_LENGTH);
       const notesOrNull = note.length ? note : null;

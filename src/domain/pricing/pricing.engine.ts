@@ -1,4 +1,3 @@
-
 export type {
   MoneyUnit,
   CartItemModifierCompat,
@@ -15,8 +14,11 @@ import type { SelectedModLike, SelectedByGroup } from './pricing.input.types';
 type ModifierLike = {
   id: string;
   name: string;
+  // price_adjustment is the single canonical field.
+  // priceAdjustment (camelCase) intentionally absent — dual-field reads
+  // in a pricing function create ambiguity. Callers must normalise to
+  // price_adjustment before reaching this layer.
   price_adjustment?: number | null;
-  priceAdjustment?: number | null;
 };
 
 type ModifierGroupLike = {
@@ -91,14 +93,17 @@ function sanitizeLabel(value: unknown, fallback = '', maxLength = 240): string {
   return trimmed.slice(0, maxLength);
 }
 
-function getModifierAdjustment(value: ModifierLike | SelectedModLike): number {
-  if ('price_adjustment' in value && typeof value.price_adjustment === 'number') {
+/**
+ * Read the modifier's price adjustment from the single canonical field.
+ * Returns null when the field is absent or not a finite number.
+ * Callers in the domain layer must treat null as an error.
+ * Callers in the display layer may substitute 0 with explicit intent.
+ */
+function getModifierAdjustment(value: ModifierLike | SelectedModLike): number | null {
+  if ('price_adjustment' in value && typeof value.price_adjustment === 'number' && Number.isFinite(value.price_adjustment)) {
     return value.price_adjustment;
   }
-  if ('priceAdjustment' in value && typeof value.priceAdjustment === 'number') {
-    return value.priceAdjustment;
-  }
-  return 0;
+  return null;
 }
 
 function getModifierGroups(item: unknown): ModifierGroupLike[] {
@@ -141,18 +146,20 @@ function getSelectedByGroup(selected: unknown): Array<[string, SelectedModLike[]
 }
 
 
-function guessMoneyUnit(value: number): MoneyUnit {
-  if (Math.abs(value % 1) > 0) return 'dollars';
-  if (Math.abs(value) > 0 && Math.abs(value) < 50) return 'dollars';
-  return 'cents';
-}
-
-
-export function normalizeMoney(value: unknown, unit?: MoneyUnit): number {
+/**
+ * Convert a known-unit value to integer cents.
+ *
+ * Unit MUST be supplied explicitly by the caller. There is no default and
+ * no inference — the caller is responsible for knowing what unit their
+ * data is in. Ambiguous inputs must be rejected before reaching this function.
+ *
+ * 'cents'  — value is already integer cents, returned as-is after truncation.
+ * 'dollars' — value is a dollar float (e.g. 0.50 = 50¢), multiplied by 100.
+ */
+export function normalizeMoney(value: unknown, unit: MoneyUnit): number {
   const raw = asNumber(value, 0);
-  const resolvedUnit = unit ?? guessMoneyUnit(raw);
 
-  if (resolvedUnit === 'dollars') {
+  if (unit === 'dollars') {
     return toCentsInt(raw * 100, 0);
   }
 
@@ -198,20 +205,65 @@ function buildModifierLookup(groups: ModifierGroupLike[]): Map<string, ModifierL
       if (!modifierId) continue;
 
       const adjustment = getModifierAdjustment(modifier);
+      if (adjustment === null) continue;
+
+      // price_adjustment on Modifier is integer cents by the time it reaches
+      // this layer — normalizeGroups() converts DB dollar float → cents via
+      // Math.trunc(Math.round(dollars * 100)) before storing on the domain type.
+      // We assert it is an integer here. If it is not, the normalization layer
+      // has a bug that must surface immediately rather than be silently corrected.
+      if (!Number.isInteger(adjustment)) {
+        throw new Error(
+          `buildModifierLookup: modifier(id=${modifierId}, group=${groupId}) ` +
+          `price_adjustment is not an integer: ${adjustment}. ` +
+          `Expected integer cents. Check the normalization boundary (normalizeGroups).`,
+        );
+      }
 
       lookup.set(`${groupId}:${modifierId}`, {
-        name: sanitizeLabel(modifier.name, modifierId),
+        name:     sanitizeLabel(modifier.name, modifierId),
         groupId,
-        adjCents: clampInt(
-          normalizeMoney(adjustment, guessMoneyUnit(adjustment)),
-          -50_000_000,
-          50_000_000,
-        ),
+        adjCents: clampInt(adjustment, -50_000_000, 50_000_000),
       });
     }
   }
 
   return lookup;
+}
+
+/**
+ * Validates the modifier array before it enters pricing math.
+ * Throws on:
+ *   - duplicate modifier ids within the same group
+ *   - non-finite priceAdjustmentCents
+ *   - missing id or groupId
+ * This is the single gate before calculate(). If it passes, pricing is safe.
+ */
+function validateModifiersForPricing(mods: CartItemModifierCompat[]): void {
+  const seen = new Set<string>();
+
+  for (const mod of mods) {
+    if (!mod.id || typeof mod.id !== 'string') {
+      throw new Error(`PricingEngine.validate: modifier has missing or invalid id`);
+    }
+    if (!mod.groupId || typeof mod.groupId !== 'string') {
+      throw new Error(`PricingEngine.validate: modifier(id=${mod.id}) has missing groupId`);
+    }
+    if (typeof mod.priceAdjustmentCents !== 'number' || !Number.isFinite(mod.priceAdjustmentCents)) {
+      throw new Error(
+        `PricingEngine.validate: modifier(id=${mod.id}) has invalid priceAdjustmentCents: ` +
+        String(mod.priceAdjustmentCents),
+      );
+    }
+
+    const dedupeKey = `${mod.groupId}:${mod.id}`;
+    if (seen.has(dedupeKey)) {
+      throw new Error(
+        `PricingEngine.validate: duplicate modifier(id=${mod.id}) in group(id=${mod.groupId})`,
+      );
+    }
+    seen.add(dedupeKey);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -324,14 +376,32 @@ export class PricingEngine {
         const name = sanitizeLabel(raw.name, id);
         const hit = lookup.get(`${groupId}:${id}`);
         const adjustmentRaw = getModifierAdjustment(raw);
-
+        // adjustmentRaw is null when price_adjustment is absent or non-finite.
+        // Hit path:  use the lookup value, already validated as integer cents.
+        // Miss path: the selected modifier must carry price_adjustment in integer
+        //            cents itself. We assert it is an integer — no unit inference,
+        //            no conversion. If the value is a dollar float (e.g. 0.5), the
+        //            normalization boundary (normalizeGroups / gateway) has failed
+        //            to convert it and must be fixed there, not here.
         const priceAdjustmentCents = hit
           ? hit.adjCents
-          : clampInt(
-              normalizeMoney(adjustmentRaw, guessMoneyUnit(adjustmentRaw)),
-              -50_000_000,
-              50_000_000,
-            );
+          : (() => {
+              if (adjustmentRaw === null) {
+                throw new Error(
+                  `PricingEngine.buildCartModifiers: modifier(id=${id}, group=${groupId}) ` +
+                  `has no lookup entry and no valid price_adjustment on the selection. ` +
+                  `Cannot price this modifier without an explicit integer cents value.`,
+                );
+              }
+              if (!Number.isInteger(adjustmentRaw)) {
+                throw new Error(
+                  `PricingEngine.buildCartModifiers: modifier(id=${id}, group=${groupId}) ` +
+                  `price_adjustment is not an integer cents value: ${adjustmentRaw}. ` +
+                  `Normalize to integer cents at the data boundary before calling buildCartModifiers.`,
+                );
+              }
+              return clampInt(adjustmentRaw, -50_000_000, 50_000_000);
+            })();
 
         out.push({
           id,
@@ -350,6 +420,10 @@ export class PricingEngine {
   /**
    * Core pricing math — CLIENT DISPLAY ONLY.
    * The server always re-prices from the DB; this is for UI feedback only.
+   *
+   * Throws before computing if any modifier is invalid (missing id/groupId,
+   * non-finite priceAdjustmentCents, or duplicate within the same group).
+   * This ensures subtotal is always deterministic or fails loudly.
    */
   static calculate(
     itemId: string,
@@ -357,27 +431,42 @@ export class PricingEngine {
     modifiers: CartItemModifierCompat[],
     quantity: number,
   ): { subtotal: number; pricing_hash: string } {
+    // Validate first — throws on any invalid modifier state
+    validateModifiersForPricing(modifiers);
+
     const safeItemId = sanitizeIdentifier(itemId);
-    const safeQty = clampInt(asNumber(quantity, 1), 1, 99);
+    if (!safeItemId) {
+      throw new Error('PricingEngine.calculate: itemId is missing or empty');
+    }
+
+    if (typeof basePriceCents !== 'number' || !Number.isFinite(basePriceCents) || basePriceCents < 0) {
+      throw new Error(
+        `PricingEngine.calculate: basePriceCents is invalid: ${String(basePriceCents)}`,
+      );
+    }
+
+    if (typeof quantity !== 'number' || !Number.isFinite(quantity) || quantity < 1) {
+      throw new Error(
+        `PricingEngine.calculate: quantity is invalid: ${String(quantity)}`,
+      );
+    }
+
+    const safeQty  = clampInt(quantity, 1, 99);
     const safeBase = clampInt(toCentsInt(basePriceCents, 0), 0, 50_000_000);
 
+    // modifiers are already validated above — priceAdjustmentCents is finite
     const modSum = clampInt(
       modifiers.reduce((sum, modifier) => {
-        const safeAdj = clampInt(
-          toCentsInt(modifier.priceAdjustmentCents, 0),
-          -50_000_000,
-          50_000_000,
-        );
-        return sum + safeAdj;
+        return sum + clampInt(modifier.priceAdjustmentCents, -50_000_000, 50_000_000);
       }, 0),
       -50_000_000,
       50_000_000,
     );
 
-    const unit = clampInt(safeBase + modSum, 0, 50_000_000);
+    const unit     = clampInt(safeBase + modSum, 0, 50_000_000);
     const subtotal = clampInt(unit * safeQty, 0, 2_000_000_000);
 
-    const payload = `${safeItemId}|${safeBase}|${safeQty}|${canonicalizeModifiers(modifiers)}`;
+    const payload      = `${safeItemId}|${safeBase}|${safeQty}|${canonicalizeModifiers(modifiers)}`;
     const pricing_hash = fnv1a32(payload);
 
     return { subtotal, pricing_hash };

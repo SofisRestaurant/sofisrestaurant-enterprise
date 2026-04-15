@@ -17,6 +17,9 @@ export type PendingCartInsert =
     pricing_hash?: string | null;
     currency?: string | null;
     consumed_at?: string | null;
+    // Guest checkout columns (added by migration 001_guest_checkout.sql)
+    guest_email?: string | null;
+    guest_token?: string | null;
   };
 
 export type PendingCartUpdate =
@@ -30,6 +33,12 @@ export type PendingCartUpdate =
     loyalty_account_id?: string | null;
     loyalty_reserved_points?: number | null;
     loyalty_discount_cents?: number | null;
+    // Guest checkout columns (added by migration 001_guest_checkout.sql)
+    guest_email?: string | null;
+    guest_token?: string | null;
+    // NOTE: `status` is intentionally omitted — the DB generated type does not
+    // include a status column on pending_carts and rejects it as `never`.
+    // Do not add status here.
   };
 
 export type FraudLogInsert = Db["public"]["Tables"]["fraud_logs"]["Insert"];
@@ -123,14 +132,14 @@ export type RequestBody = {
   loyalty_redeem_points: number | null;
   loyalty_reward_id: string | null;
   loyalty_redemption_id: string | null;
-  // loyalty_account_id: the loyalty_accounts.id for the authenticated user.
-  // Validated server-side in loyalty.ts — ownership checked against JWT userId.
   loyalty_account_id: string | null;
 };
 
-export type RateLimitResult =
-  | { allowed: true }
-  | { allowed: false; retryAfterMs: number; reason: string };
+export type RateLimitResult = {
+  allowed: boolean;
+  retryAfterMs: number;
+  reason: string;
+};
 
 export type PromoValidationResult =
   | { valid: true; promoId: string; discountCents: number }
@@ -165,6 +174,7 @@ export type ErrorCode =
   | "rate_limited"
   | "pricing_failed"
   | "pricing_hash_failed"
+  | "pricing_integrity_failed"
   | "promo_invalid"
   | "credit_invalid"
   | "pending_cart_persist_failed"
@@ -176,7 +186,8 @@ export type ErrorCode =
   | "loyalty_order_limit"
   | "loyalty_cooldown"
   | "recent_order_exists"
-  | "internal_error";
+  | "internal_error"
+  | "auth_not_permitted";
 
 export type SuccessCode =
   | "checkout_session_created"

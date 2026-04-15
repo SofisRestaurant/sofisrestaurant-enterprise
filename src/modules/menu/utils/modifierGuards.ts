@@ -1,47 +1,32 @@
 // =============================================================================
 // PATH: src/modules/menu/utils/modifierGuards.ts
 // =============================================================================
-// Runtime normalization + pure business-logic helpers for modifier groups and
-// selections. No React or Supabase imports — pure functions only.
-// =============================================================================
-
 import { isRecord, safeBool, safeStr, clampInt } from './menuItemGuards';
 import type { PreflightOk } from '@/domain/menu/menu-modal.types';
-import type { ModifierGroupType } from "@/domain/menu/menu.types";
+import type {
+  ModifierGroupType,
+  ModifierGroup,
+  Modifier,
+  SelectedModifier,
+} from '@/domain/menu/menu.types';
 
-export type ModifierLike = {
-  id: string;
-  name: string;
-  /** integer cents — converted from DB dollar float at normalization time */
-  price_adjustment: number;
-  available: boolean;
-  sort_order?: number | null;
-};
-
-export type ModifierGroupLike = {
-  id: string;
-  name: string;
-  description: string | null;
-  type: ModifierGroupType;
-  required: boolean;
-  min_selections: number | null;
-  max_selections: number | null;
-  sort_order?: number | null;
-  active: boolean;
-  modifiers: ModifierLike[];
-  selections?: ModifierLike[];
-};
-
-export type SelectedModifier = {
-  id: string;
-  name: string;
-  priceAdjustment: number; // cents
-  groupId: string;
-};
+// Re-export so existing imports of SelectedModifier from this file continue
+// to resolve to the single canonical domain type.
+export type { SelectedModifier };
 
 export type PreflightErr = { ok: false; error: string };
-
 export type PreflightResponse = PreflightOk | PreflightErr;
+
+// ─── Private normalization intermediates ─────────────────────────────────────
+// NOT exported. Used only inside this module during raw DB → domain conversion.
+
+type ModifierRaw = {
+  id: string;
+  name: string;
+  price_adjustment: number; // integer cents after dollar→cents conversion
+  available: boolean;
+  sort_order: number;
+};
 
 // ─── Tag parsing ─────────────────────────────────────────────────────────────
 
@@ -71,114 +56,136 @@ export function normalizeGroupType(v: unknown): ModifierGroupType {
 }
 
 /**
- * Normalize a raw modifier row from the DB / public view.
+ * Parse a raw modifier row into a private intermediate.
  *
- * The DB `price_adjustment` column is a dollar float (0.5 = $0.50, 1 = $1.00).
- * ModifierLike.price_adjustment is typed as integer cents throughout the app
- * (see menu.types.ts /** cents *\/).
- * We convert here: dollars × 100 → cents, then truncate to integer.
+ * price_adjustment MUST already be integer cents by the time it reaches
+ * this function. The dollar→cents conversion is performed exclusively in
+ * parseModifierGroups.ts (parseModifierGroupsFromJson). This function
+ * enforces that contract by asserting, never converting.
  *
- * Previously this called safeCents() which did NOT multiply by 100,
- * so 0.5 → 0 cents and 1 → 1 cent, producing wrong display prices.
+ * Throws if price_adjustment is missing, non-numeric, non-finite, or not
+ * an integer. A modifier with corrupt pricing must never enter the domain.
  */
-export function normalizeModifierLike(v: unknown): ModifierLike | null {
+function parseModifierRaw(v: unknown): ModifierRaw | null {
   if (!isRecord(v)) return null;
-  const id = safeStr(v.id, '', 128);
+  const id   = safeStr(v.id, '', 128);
   const name = safeStr(v.name, '', 120);
   if (!id || !name) return null;
 
   const rawAdj = v.price_adjustment;
-  const dollarFloat =
-    typeof rawAdj === 'number' && Number.isFinite(rawAdj) ? rawAdj : 0;
 
-  // Convert dollars → integer cents
-  const priceAdjustmentCents = Math.trunc(Math.round(dollarFloat * 100));
+  if (rawAdj === null || rawAdj === undefined) {
+    throw new Error(
+      `modifierGuards.parseModifierRaw: modifier(id=${id}) price_adjustment is missing. ` +
+      `All data through this path must have been normalised by parseModifierGroupsFromJson first.`,
+    );
+  }
+  if (typeof rawAdj !== 'number' || !Number.isFinite(rawAdj)) {
+    throw new Error(
+      `modifierGuards.parseModifierRaw: modifier(id=${id}) price_adjustment is not a ` +
+      `finite number: ${String(rawAdj)}. Expected integer cents.`,
+    );
+  }
+  if (!Number.isInteger(rawAdj)) {
+    throw new Error(
+      `modifierGuards.parseModifierRaw: modifier(id=${id}) price_adjustment is not an ` +
+      `integer: ${rawAdj}. Dollar float detected — convert in parseModifierGroups.ts, not here.`,
+    );
+  }
+
+  const sort_order =
+    typeof v.sort_order === 'number' && Number.isFinite(v.sort_order) ? v.sort_order : 0;
 
   return {
     id,
     name,
-    price_adjustment: priceAdjustmentCents,
+    price_adjustment: rawAdj,
     available: safeBool(v.available, true),
-    sort_order: typeof v.sort_order === 'number' ? v.sort_order : null,
+    sort_order,
   };
 }
 
 /**
- * Normalizes a raw DB record into a ModifierGroupLike.
- *
- * DB view may return `selections` instead of `modifiers` — we unify both into
- * `modifiers` so the UI only ever needs to read `g.modifiers`.
+ * Lift a private ModifierRaw + its groupId into the canonical domain Modifier.
+ * modifier_group_id is stamped here — the single place it is assigned.
  */
-export function normalizeGroupLike(v: unknown): ModifierGroupLike | null {
+function toDomainModifier(m: ModifierRaw, groupId: string): Modifier {
+  return {
+    id:                m.id,
+    modifier_group_id: groupId,
+    name:              m.name,
+    price_adjustment:  m.price_adjustment,
+    available:         m.available,
+    sort_order:        m.sort_order,
+  };
+}
+
+/**
+ * Normalize a raw DB record into a domain ModifierGroup.
+ *
+ * Handles DB views that may return `selections` or `options` instead of
+ * `modifiers` — all are unified into `modifiers` on the returned object.
+ *
+ * min_selections null → 0 (domain type is non-nullable number).
+ */
+export function normalizeGroupLike(v: unknown): ModifierGroup | null {
   if (!isRecord(v)) return null;
 
-  const id = safeStr(v.id, '', 128);
+  const id   = safeStr(v.id, '', 128);
   const name = safeStr(v.name, '', 120);
   const type = normalizeGroupType(v.type);
   if (!id || !name) return null;
 
-  // ── Pick the raw modifiers from whichever property exists
   const modsSrc: unknown[] = Array.isArray(v.modifiers)
     ? v.modifiers
     : Array.isArray(v.options)
-      ? v.options
-      : Array.isArray(v.selections)
-        ? v.selections
-        : [];
+    ? v.options
+    : Array.isArray(v.selections)
+    ? v.selections
+    : [];
 
-  const mods: ModifierLike[] = [];
+  const rawMods: ModifierRaw[] = [];
   for (const m of modsSrc) {
-    const mm = normalizeModifierLike(m);
-    if (mm) mods.push(mm);
+    const mm = parseModifierRaw(m);
+    if (mm) rawMods.push(mm);
   }
 
-  // Sort modifiers consistently
-  mods.sort((a, b) => {
-    const ao = typeof a.sort_order === 'number' ? a.sort_order : 0;
-    const bo = typeof b.sort_order === 'number' ? b.sort_order : 0;
-    return ao - bo || a.name.localeCompare(b.name);
-  });
+  rawMods.sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name));
 
-  const selections: ModifierLike[] | undefined = Array.isArray(v.selections)
-    ? v.selections
-        .map((x: unknown) => normalizeModifierLike(x))
-        .filter((x): x is ModifierLike => x !== null)
-    : undefined;
+  const modifiers: Modifier[] = rawMods.map((m) => toDomainModifier(m, id));
+
+  const sort_order =
+    typeof v.sort_order === 'number' && Number.isFinite(v.sort_order) ? v.sort_order : 0;
 
   return {
     id,
     name,
-    description: v.description == null ? null : safeStr(v.description, '', 240) || null,
+    description:    v.description == null ? null : safeStr(v.description, '', 240) || null,
     type,
-    required: safeBool(v.required, false),
-    min_selections: v.min_selections == null ? null : clampInt(v.min_selections, 0, 999),
+    required:       safeBool(v.required, false),
+    min_selections: v.min_selections == null ? 0 : clampInt(v.min_selections, 0, 999),
     max_selections: v.max_selections == null ? null : clampInt(v.max_selections, 0, 999),
-    sort_order: typeof v.sort_order === 'number' ? v.sort_order : null,
-    active: safeBool(v.active, true),
-    modifiers: mods,
-    selections: selections && selections.length ? selections : undefined,
+    sort_order,
+    active:         safeBool(v.active, true),
+    modifiers,
   };
 }
 
-export function normalizeGroups(v: unknown): ModifierGroupLike[] {
-  const out: ModifierGroupLike[] = [];
+export function normalizeGroups(v: unknown): ModifierGroup[] {
+  const out: ModifierGroup[] = [];
   const raw = Array.isArray(v) ? v : [];
   for (const item of raw) {
     const g = normalizeGroupLike(item);
     if (g !== null) out.push(g);
   }
-  out.sort((a, b) => {
-    const ao = typeof a.sort_order === 'number' ? a.sort_order : 0;
-    const bo = typeof b.sort_order === 'number' ? b.sort_order : 0;
-    return ao - bo || a.name.localeCompare(b.name);
-  });
+  out.sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name));
   return out;
 }
 
 // ─── Selection business logic ─────────────────────────────────────────────────
 
-export function groupSelectionRangeLabel(group: ModifierGroupLike): string {
-  const min = group.min_selections ?? (group.required ? 1 : 0);
+export function groupSelectionRangeLabel(group: ModifierGroup): string {
+  const min = group.min_selections;
   const max = group.max_selections ?? (group.type === 'radio' ? 1 : null);
 
   if (group.type === 'radio') {
@@ -196,14 +203,13 @@ export function groupSelectionRangeLabel(group: ModifierGroupLike): string {
 }
 
 export function isSelectionValidForGroup(
-  group: ModifierGroupLike,
-  selected: SelectedModifier[],
+  group: ModifierGroup,
+  selected: readonly SelectedModifier[],
 ): boolean {
-  const sels = Array.isArray(selected) ? selected : [];
+  const sels  = Array.isArray(selected) ? selected : [];
   const count = sels.length;
-
-  const min = group.min_selections ?? (group.required ? 1 : 0);
-  const max = group.max_selections ?? (group.type === 'radio' ? 1 : null);
+  const min   = group.min_selections;
+  const max   = group.max_selections ?? (group.type === 'radio' ? 1 : null);
 
   if (count < min) return false;
   if (max != null && count > max) return false;
@@ -218,14 +224,32 @@ export function computeSelectedModifierCents(
   for (const sels of Object.values(selected)) {
     if (!Array.isArray(sels)) continue;
     for (const s of sels) {
-      const val =
-        typeof s.priceAdjustment === 'number' && Number.isFinite(s.priceAdjustment)
-          ? s.priceAdjustment
-          : 0;
-      sum += val;
+      const adj = s.price_adjustment;
+
+      if (adj === null || adj === undefined) {
+        throw new Error(
+          `computeSelectedModifierCents: modifier(id=${s.id}) price_adjustment is missing. ` +
+          `Normalization in parseModifierGroups.ts must have been bypassed.`,
+        );
+      }
+      if (typeof adj !== 'number' || !Number.isFinite(adj)) {
+        throw new Error(
+          `computeSelectedModifierCents: modifier(id=${s.id}) price_adjustment is not a ` +
+          `finite number: ${String(adj)}. Expected integer cents from the normalization boundary.`,
+        );
+      }
+      if (!Number.isInteger(adj)) {
+        throw new Error(
+          `computeSelectedModifierCents: modifier(id=${s.id}) price_adjustment is not an ` +
+          `integer: ${adj}. Dollar float reached this function — ` +
+          `conversion must happen in parseModifierGroups.ts, not here.`,
+        );
+      }
+
+      sum += adj;
     }
   }
-  return Math.max(0, sum);
+  return sum;
 }
 
 export function canonicalizeSelectionsForHash(
@@ -235,7 +259,7 @@ export function canonicalizeSelectionsForHash(
   const groupIds = Object.keys(selected).sort((a, b) => a.localeCompare(b));
   for (const gid of groupIds) {
     const sels = selected[gid] ?? [];
-    const ids = sels
+    const ids  = sels
       .map((s) => safeStr(s.id, '').trim())
       .filter(Boolean)
       .sort((a, b) => a.localeCompare(b));
