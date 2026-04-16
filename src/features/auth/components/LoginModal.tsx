@@ -1,18 +1,17 @@
 // src/features/auth/components/LoginModal.tsx
 // ============================================================================
-// LOGIN MODAL — Production hardened (2026)
+// AUTH MODAL — Passwordless (2026)
 // ============================================================================
-// ✅ Uses useUserContext().signIn — UserProvider is notified, state updates correctly
-// ✅ Uses useUserContext().signInWithGoogle — Google OAuth through the same path
-// ✅ No direct supabase.auth calls — all auth goes through authAPI via UserProvider
-// ✅ No-misused-promises safe (void wrapper on submit)
-// ✅ Accessibility: labels, aria, autofill, focus, keyboard-friendly
-// ✅ Error cleared on input change
-// ✅ Rate-limit lockout with countdown timer
+// Two auth methods only:
+//   1. Google OAuth  — one click, primary CTA
+//   2. Magic link    — email → OTP link, no password ever
+//
+// Sign in and sign up are the same flow — passwordless means no distinction.
 // ============================================================================
 
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { useUserContext } from '@/contexts/useUserContext';
+import { supabase } from '@/lib/supabase/supabaseClient';
 import { GoogleSignInButton } from '@/features/auth/components/GoogleSignInButton';
 
 interface LoginModalProps {
@@ -24,145 +23,76 @@ interface LoginModalProps {
   onForgotPassword?: () => void;
 }
 
-// ─── Error normalizer ─────────────────────────────────────────────────────────
+type Stage = 'idle' | 'sending' | 'sent' | 'error';
 
-function normalizeAuthError(err: unknown): string {
-  const msg = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
-  const lower = msg.toLowerCase();
-
-  if (lower.includes('invalid login credentials') || lower.includes('invalid_credentials')) {
-    return 'Incorrect email or password.';
-  }
-  if (lower.includes('email not confirmed')) {
-    return 'Please confirm your email before signing in.';
-  }
-  if (lower.includes('too many') || lower.includes('rate limit')) {
-    return 'Too many attempts. Please wait a moment and try again.';
-  }
-  if (lower.includes('network') || lower.includes('fetch')) {
-    return 'Network error. Please check your connection.';
-  }
-
-  return msg || 'Something went wrong. Please try again.';
-}
-
-// ─── Component ────────────────────────────────────────────────────────────────
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function LoginModal({
   isOpen,
   onClose,
   onSuccess,
   onLoginSuccess,
-  onSwitchToSignup,
-  onForgotPassword,
 }: LoginModalProps) {
-  // ✅ Pull signIn and signInWithGoogle from UserProvider — NOT from supabase directly
-  const { signIn, signInWithGoogle } = useUserContext();
+  const { signInWithGoogle } = useUserContext();
 
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPass, setShowPass] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [stage, setStage] = useState<Stage>('idle');
   const [error, setError] = useState<string | null>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
 
-  // Rate-limit lockout
-  const [blockedUntil, setBlockedUntil] = useState<number | null>(null);
-  const [timeLeft, setTimeLeft] = useState(0);
+  const emailValid = EMAIL_RE.test(email.trim());
 
-  const emailInputRef = useRef<HTMLInputElement | null>(null);
-  const emailTrimmed = useMemo(() => email.trim(), [email]);
-  const isBlocked = blockedUntil !== null && Date.now() < blockedUntil;
-
-  const canSubmit = !loading && !isBlocked && emailTrimmed.length > 0 && password.length > 0;
-
-  // ── Countdown timer ────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!blockedUntil) return;
-    const id = setInterval(() => {
-      const remaining = Math.max(0, blockedUntil - Date.now());
-      setTimeLeft(remaining);
-      if (remaining === 0) {
-        setBlockedUntil(null);
-        setError(null);
-      }
-    }, 1000);
-    return () => clearInterval(id);
-  }, [blockedUntil]);
-
-  // ── Reset state on open ────────────────────────────────────────────────────
+  // Focus email input on open
   useEffect(() => {
     if (!isOpen) return;
+    setEmail('');
+    setStage('idle');
     setError(null);
-    setLoading(false);
-    setShowPass(false);
-    const t = window.setTimeout(() => emailInputRef.current?.focus(), 0);
-    return () => window.clearTimeout(t);
+    const t = setTimeout(() => emailRef.current?.focus(), 60);
+    return () => clearTimeout(t);
   }, [isOpen]);
 
-  // ── Success helper ─────────────────────────────────────────────────────────
   const handleSuccess = useCallback(() => {
     onLoginSuccess?.();
     onSuccess?.();
     onClose();
   }, [onLoginSuccess, onSuccess, onClose]);
 
-  // ── Email/password submit ──────────────────────────────────────────────────
-  const handleSubmit = useCallback(
-    async (e: FormEvent<HTMLFormElement>) => {
+  // Magic link
+  const handleMagicLink = useCallback(
+    async (e: FormEvent) => {
       e.preventDefault();
-      if (!canSubmit) return;
+      if (!emailValid || stage === 'sending') return;
 
+      setStage('sending');
       setError(null);
-      setLoading(true);
 
       try {
-        // ✅ Goes through UserProvider → authAPI → Supabase
-        // UserProvider's onAuthStateChange listener picks up SIGNED_IN automatically
-        await signIn(emailTrimmed, password);
-        handleSuccess();
+        const { error: err } = await supabase.auth.signInWithOtp({
+          email: email.trim(),
+          options: {
+            emailRedirectTo: `${window.location.origin}/auth/callback`,
+            shouldCreateUser: true,
+          },
+        });
+        if (err) throw err;
+        setStage('sent');
       } catch (err: unknown) {
-        const msg = normalizeAuthError(err);
-        if (/too many|rate limit/i.test(msg)) {
-          setBlockedUntil(Date.now() + 5 * 60 * 1000);
-        }
-        setError(msg);
-      } finally {
-        setLoading(false);
+        setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
+        setStage('error');
       }
     },
-    [canSubmit, signIn, emailTrimmed, password, handleSuccess],
+    [email, emailValid, stage],
   );
-
-  const onSubmit = useCallback(
-    (e: FormEvent<HTMLFormElement>) => {
-      void handleSubmit(e);
-    },
-    [handleSubmit],
-  );
-
-  const handleForgotPassword = useCallback(() => {
-    setError(null);
-    onForgotPassword?.();
-  }, [onForgotPassword]);
-
-  const handleSwitchToSignup = useCallback(() => {
-    setError(null);
-    onSwitchToSignup?.();
-  }, [onSwitchToSignup]);
-
-  const formatTime = (ms: number) => {
-    const s = Math.ceil(ms / 1000);
-    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-  };
 
   if (!isOpen) return null;
 
   return (
     <div
-      className="w-full overflow-hidden"
       role="dialog"
       aria-modal="true"
-      aria-label="Sign in"
+      aria-label="Sign in to Sofi's"
+      className="w-full overflow-hidden"
       style={{
         background: 'var(--color-surface)',
         borderRadius: 'var(--radius-card)',
@@ -170,200 +100,207 @@ export default function LoginModal({
         border: '1px solid var(--color-border)',
       }}
     >
-      {/* ── Header ── */}
+      {/* Header */}
       <div className="px-8 pt-8 pb-6" style={{ borderBottom: '1px solid var(--color-border)' }}>
+        <p
+          className="mb-1 text-xs font-bold uppercase tracking-[0.18em]"
+          style={{ color: 'var(--color-ink-400)' }}
+        >
+          Sofi's Kitchen
+        </p>
         <h2
-          className="text-2xl"
+          className="text-[1.65rem] leading-tight"
           style={{
             fontFamily: 'var(--font-display)',
             letterSpacing: 'var(--tracking-display)',
             color: 'var(--color-ink-900)',
           }}
         >
-          Welcome Back
+          {stage === 'sent' ? 'Check your email' : 'Welcome back'}
         </h2>
-        <p className="mt-2 text-sm" style={{ color: 'var(--color-ink-500)' }}>
-          Sign in to your Sofi&apos;s account
+        <p className="mt-1.5 text-sm" style={{ color: 'var(--color-ink-500)' }}>
+          {stage === 'sent'
+            ? `We sent a sign-in link to ${email.trim()}`
+            : 'Sign in or create an account — no password needed.'}
         </p>
       </div>
 
       <div className="px-8 py-7 space-y-5">
-        {/* ── Google OAuth button ── */}
-        <GoogleSignInButton
-          label="Continue with Google"
-          // Close the modal before navigating to Google so it doesn't flash on return
-          onBeforeRedirect={handleSuccess}
-          onError={(err) => setError(err.message)}
-          // ✅ signInWithGoogle is called inside GoogleSignInButton via useUserContext()
-          // — it goes through UserProvider → authAPI → Supabase, same as signIn
-        />
-
-        {/* ── Divider ── */}
-        <div className="relative flex items-center gap-3">
-          <div className="h-px flex-1" style={{ background: 'var(--color-border)' }} />
-          <span
-            className="text-xs font-medium uppercase tracking-wider"
-            style={{ color: 'var(--color-ink-400)' }}
-          >
-            or
-          </span>
-          <div className="h-px flex-1" style={{ background: 'var(--color-border)' }} />
-        </div>
-
-        {/* ── Email / password form ── */}
-        <form onSubmit={onSubmit} className="space-y-5" noValidate>
-          {error && (
+        {stage === 'sent' ? (
+          // ── Sent state ──────────────────────────────────────────────────────
+          <div className="space-y-4 text-center">
             <div
-              className="rounded-md p-3 text-sm"
-              role="alert"
-              aria-live="polite"
-              style={{
-                background: 'var(--color-error-50)',
-                color: 'var(--color-error)',
-                border: '1px solid var(--color-error)',
-              }}
+              className="mx-auto flex h-16 w-16 items-center justify-center rounded-full"
+              style={{ background: 'var(--color-ember-50)' }}
             >
-              {isBlocked && timeLeft > 0
-                ? `Too many attempts. Try again in ${formatTime(timeLeft)}`
-                : error}
-            </div>
-          )}
-
-          {/* Email */}
-          <div>
-            <label
-              htmlFor="login-email"
-              className="block text-xs uppercase mb-1"
-              style={{ letterSpacing: 'var(--tracking-label)', color: 'var(--color-ink-500)' }}
-            >
-              Email
-            </label>
-            <input
-              ref={emailInputRef}
-              id="login-email"
-              type="email"
-              inputMode="email"
-              autoComplete="email"
-              required
-              value={email}
-              onChange={(e) => {
-                if (error) setError(null);
-                setEmail(e.target.value);
-              }}
-              placeholder="you@email.com"
-              disabled={isBlocked}
-              className="w-full px-4 py-2 outline-none transition-all disabled:opacity-60"
-              style={{
-                borderRadius: 'var(--radius-input)',
-                border: '1px solid var(--color-border-mid)',
-                background: 'var(--color-surface-alt)',
-                color: 'var(--color-ink-900)',
-              }}
-            />
-          </div>
-
-          {/* Password */}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label
-                htmlFor="login-password"
-                className="text-xs uppercase"
-                style={{ letterSpacing: 'var(--tracking-label)', color: 'var(--color-ink-500)' }}
+              <svg
+                width="28"
+                height="28"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="var(--color-ember-500)"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
               >
-                Password
-              </label>
-              {onForgotPassword && (
-                <button
-                  type="button"
-                  onClick={handleForgotPassword}
-                  className="text-xs"
-                  style={{ color: 'var(--color-brand)' }}
-                >
-                  Forgot password?
-                </button>
-              )}
+                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+                <polyline points="22,6 12,13 2,6" />
+              </svg>
             </div>
-            <div className="relative">
-              <input
-                id="login-password"
-                type={showPass ? 'text' : 'password'}
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(e) => {
-                  if (error) setError(null);
-                  setPassword(e.target.value);
-                }}
-                placeholder="••••••••"
-                disabled={isBlocked}
-                className="w-full px-4 py-2 pr-16 outline-none transition-all disabled:opacity-60"
-                style={{
-                  borderRadius: 'var(--radius-input)',
-                  border: '1px solid var(--color-border-mid)',
-                  background: 'var(--color-surface-alt)',
-                  color: 'var(--color-ink-900)',
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => setShowPass((v) => !v)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-sm"
-                style={{ color: 'var(--color-ink-300)' }}
-                aria-label={showPass ? 'Hide password' : 'Show password'}
-              >
-                {showPass ? 'Hide' : 'Show'}
-              </button>
+            <div>
+              <p className="text-sm font-semibold" style={{ color: 'var(--color-ink-800)' }}>
+                Magic link sent
+              </p>
+              <p className="mt-1 text-sm" style={{ color: 'var(--color-ink-500)' }}>
+                Click the link in your email to sign in instantly. It expires in 10 minutes.
+              </p>
             </div>
-          </div>
-
-          {/* Submit */}
-          <div className="space-y-3">
-            <button
-              type="submit"
-              disabled={!canSubmit}
-              className="w-full py-3 font-semibold transition-all"
-              style={{
-                borderRadius: 'var(--radius-btn)',
-                background: canSubmit ? 'var(--color-accent)' : 'var(--color-border-mid)',
-                color: 'var(--color-ink-900)',
-                boxShadow: canSubmit ? 'var(--shadow-gold)' : 'none',
-                opacity: canSubmit ? 1 : 0.7,
-                cursor: canSubmit ? 'pointer' : 'not-allowed',
-              }}
-            >
-              {loading ? 'Signing in…' : isBlocked ? `Locked (${formatTime(timeLeft)})` : 'Sign In'}
-            </button>
-
             <button
               type="button"
-              onClick={onClose}
-              className="w-full py-2 text-sm font-semibold transition-all"
-              style={{
-                borderRadius: 'var(--radius-btn)',
-                border: '1px solid var(--color-border-mid)',
-                background: 'transparent',
-                color: 'var(--color-ink-700)',
+              onClick={() => {
+                setStage('idle');
+                setEmail('');
               }}
+              className="text-sm font-medium"
+              style={{ color: 'var(--color-brand)' }}
             >
-              Cancel
+              Use a different email
             </button>
           </div>
-        </form>
-      </div>
+        ) : (
+          <>
+            {/* ── Google — primary CTA ──────────────────────────────────── */}
+            <GoogleSignInButton
+              label="Continue with Google"
+              onBeforeRedirect={handleSuccess}
+              onError={(err) => {
+                setError(err.message);
+                setStage('error');
+              }}
+            />
 
-      {/* ── Footer ── */}
-      <div className="px-8 pb-7 text-center text-sm">
-        <span style={{ color: 'var(--color-ink-500)' }}>Don&apos;t have an account?</span>{' '}
-        {onSwitchToSignup && (
-          <button
-            type="button"
-            onClick={handleSwitchToSignup}
-            style={{ color: 'var(--color-brand)', fontWeight: 600 }}
-          >
-            Create one
-          </button>
+            {/* ── Divider ───────────────────────────────────────────────── */}
+            <div className="relative flex items-center gap-3">
+              <div className="h-px flex-1" style={{ background: 'var(--color-border)' }} />
+              <span
+                className="text-xs font-medium uppercase tracking-wider"
+                style={{ color: 'var(--color-ink-400)' }}
+              >
+                or continue with email
+              </span>
+              <div className="h-px flex-1" style={{ background: 'var(--color-border)' }} />
+            </div>
+
+            {/* ── Magic link form ───────────────────────────────────────── */}
+            <form
+              onSubmit={(e) => {
+                void handleMagicLink(e);
+              }}
+              className="space-y-3"
+              noValidate
+            >
+              {error && (
+                <div
+                  role="alert"
+                  className="rounded-lg px-4 py-3 text-sm"
+                  style={{
+                    background: 'var(--color-error-50)',
+                    color: 'var(--color-error)',
+                    border: '1px solid var(--color-error)',
+                  }}
+                >
+                  {error}
+                </div>
+              )}
+
+              <div>
+                <label
+                  htmlFor="auth-email"
+                  className="block text-xs font-semibold uppercase tracking-wider mb-1.5"
+                  style={{ color: 'var(--color-ink-500)' }}
+                >
+                  Email address
+                </label>
+                <input
+                  ref={emailRef}
+                  id="auth-email"
+                  type="email"
+                  inputMode="email"
+                  autoComplete="email"
+                  required
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    setError(null);
+                    if (stage === 'error') setStage('idle');
+                  }}
+                  placeholder="you@example.com"
+                  className="w-full px-4 py-2.5 text-sm outline-none transition-all"
+                  style={{
+                    borderRadius: 'var(--radius-input)',
+                    border: '1px solid var(--color-border-mid)',
+                    background: 'var(--color-surface-alt)',
+                    color: 'var(--color-ink-900)',
+                  }}
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={!emailValid || stage === 'sending'}
+                className="w-full py-2.5 text-sm font-semibold transition-all"
+                style={{
+                  borderRadius: 'var(--radius-btn)',
+                  background: emailValid ? 'var(--color-accent)' : 'var(--color-border-mid)',
+                  color: emailValid ? 'var(--color-ink-900)' : 'var(--color-ink-500)',
+                  boxShadow: emailValid ? 'var(--shadow-gold)' : 'none',
+                  cursor: emailValid ? 'pointer' : 'not-allowed',
+                  opacity: stage === 'sending' ? 0.7 : 1,
+                }}
+              >
+                {stage === 'sending' ? 'Sending link…' : 'Send magic link'}
+              </button>
+            </form>
+
+            {/* ── Privacy note ─────────────────────────────────────────── */}
+            <p className="text-center text-xs" style={{ color: 'var(--color-ink-400)' }}>
+              No password, no spam. Just a secure link to your inbox.
+            </p>
+          </>
         )}
       </div>
+
+      {/* Close */}
+      {stage !== 'sent' && (
+        <div className="px-8 pb-7 text-center">
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-sm"
+            style={{ color: 'var(--color-ink-400)' }}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {stage === 'sent' && (
+        <div className="px-8 pb-7 text-center">
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-sm font-semibold py-2.5 px-6 transition-all"
+            style={{
+              borderRadius: 'var(--radius-btn)',
+              border: '1px solid var(--color-border-mid)',
+              color: 'var(--color-ink-700)',
+            }}
+          >
+            Done
+          </button>
+        </div>
+      )}
     </div>
   );
 }

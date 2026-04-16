@@ -2,10 +2,11 @@
 // PATH: src/modules/orders/components/kitchen/KitchenColumn.tsx
 // =============================================================================
 
+import { memo } from 'react';
 import { KitchenOrderCard } from './KitchenOrderCard';
 import type { KitchenColumnProps } from './kitchen.types';
 
-export function KitchenColumn({
+export const KitchenColumn = memo(function KitchenColumn({
   title,
   color,
   orders,
@@ -14,30 +15,49 @@ export function KitchenColumn({
   actionColor,
   getTimeSince,
 }: KitchenColumnProps) {
+  const hasOrders = orders.length > 0;
+
   return (
-    <div>
-      <div className={`${color} mb-4 rounded-lg p-3 font-bold`}>
-        {title} ({orders.length})
-      </div>
+    <section className="flex h-full flex-col" aria-label={`${title} kitchen column`}>
+      {/* Header */}
+      <header
+        className={[
+          'mb-4 flex items-center justify-between rounded-lg px-3 py-2 font-bold shadow-sm',
+          color,
+        ].join(' ')}
+      >
+        <span className="truncate">{title}</span>
 
-      <div className="space-y-4">
-        {orders.length === 0 ? (
-          <div className="rounded-lg border-2 border-dashed border-neutral-800 p-8 text-center text-neutral-600">
-            No orders
+        <span
+          className="ml-3 rounded-full bg-black/20 px-2 py-0.5 text-xs font-semibold"
+          aria-label="order count"
+        >
+          {orders.length}
+        </span>
+      </header>
+
+      {/* Body */}
+      <div className="flex-1 space-y-4 overflow-y-auto pr-1">
+        {/* Empty state */}
+        {!hasOrders && (
+          <div className="flex h-40 items-center justify-center rounded-lg border border-dashed border-neutral-700 text-center text-sm text-neutral-500">
+            No active orders
           </div>
-        ) : null}
+        )}
 
-        {orders.map((order) => (
-          <KitchenOrderCard
-            key={order.id}
-            order={order}
-            onAction={onAction}
-            actionLabel={actionLabel}
-            actionColor={actionColor}
-            getTimeSince={getTimeSince}
-          />
-        ))}
+        {/* Orders */}
+        {hasOrders &&
+          orders.map((order) => (
+            <KitchenOrderCard
+              key={order.id}
+              order={order}
+              onAction={onAction}
+              actionLabel={actionLabel}
+              actionColor={actionColor}
+              getTimeSince={getTimeSince}
+            />
+          ))}
       </div>
-    </div>
+    </section>
   );
-}
+});

@@ -1,22 +1,6 @@
 // =============================================================================
 // supabase/functions/stripe-webhook/index.ts
 // =============================================================================
-// Stripe webhook handler — production hardened, no guest/auth branching.
-//
-// Architecture:
-//   - Single source of truth: pending_carts DB row
-//   - Stripe metadata is cross-checked but never trusted for amounts
-//   - State machine: pending_carts.status transitions are the audit trail
-//   - Auth rows: loyalty + credit finalization runs when columns are non-null
-//   - Guest rows: loyalty/credit columns are null — those steps simply do not run
-//   - No if (user_id IS NULL) branches anywhere in core fulfillment
-//
-// Handled events:
-//   checkout.session.completed   → create order, finalize discounts, mark consumed
-//   checkout.session.expired     → mark failed, release loyalty reserve if any
-//   payment_intent.payment_failed → mark failed, release loyalty reserve if any
-// =============================================================================
-
 import Stripe from "stripe";
 import { createServiceClient } from "../_shared/supabase.ts";
 import {

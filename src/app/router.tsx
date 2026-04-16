@@ -1,39 +1,8 @@
 // src/app/router.tsx — 2026 Enterprise Router (production-hardened)
 // =============================================================================
-//
-// Architecture:
-//   • All public routes are lazy-loaded for optimal bundle splitting
-//   • /menu is kept synchronous (no lazy) — it's the highest-traffic route
-//   • Auth-protected routes use AuthGuard / RoleGuard wrappers
-//   • lazyPick() handles modules with non-default exports gracefully
-//   • Every load failure renders a visible RouteLoadError instead of blank page
-//   • HydrateFallback covers the initial load state before React hydrates
-//
-// Route tree:
-//   /                    → HomePage (lazy)
-//   /menu                → MenuPage (sync — no lazy)
-//   /about               → About (lazy)
-//   /contact             → Contact (lazy)
-//   /gallery             → Gallery (lazy)
-//   /catering            → Catering (lazy)
-//   /reservations        → Reservations (lazy)
-//   /reviews             → Reviews (lazy)
-//   /account/*           → AccountLayout (auth required, lazy)
-//   /checkout            → CheckoutPage (public — page owns guest/auth mode switch)
-//   /order-success       → OrderSuccess (lazy)
-//   /order-canceled      → OrderCanceled (lazy)
-//   /order-status/:id    → OrderStatus (lazy)
-//   /update-password     → UpdatePassword (lazy)
-//   /privacy-policy      → PrivacyPolicy (lazy)
-//   /terms-of-service    → TermsOfService (lazy)
-//   /refund-policy       → RefundPolicy (lazy)
-//   /kitchen             → KitchenScreen (admin|staff role, lazy)
-//   /expo                → ExpoCommandCenter (admin|staff role, lazy)
-//   /admin/*             → AdminLayout (admin required, lazy)
-//   /*                   → NotFound (lazy)
 
 import React from 'react';
-import { createBrowserRouter } from 'react-router-dom';
+import { createBrowserRouter, Navigate } from 'react-router-dom';
 
 import RootLayout from '@/app/RootLayout';
 import { Providers } from '@/app/Providers';
@@ -65,8 +34,7 @@ const withRole = (roles: Array<'admin' | 'staff' | 'customer'>, Cmp: React.Compo
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Graceful lazy loader — surfaces missing exports as visible UI errors
-// instead of blank pages or cryptic console noise.
+// Graceful lazy loader
 // ─────────────────────────────────────────────────────────────────────────────
 
 function RouteLoadError({ title, details }: { title: string; details: string }) {
@@ -140,7 +108,6 @@ export const router = createBrowserRouter([
       </Providers>
     ),
 
-    // Shown while React is hydrating on first paint
     HydrateFallback: () => (
       <div
         className="flex min-h-screen items-center justify-center"
@@ -189,10 +156,7 @@ export const router = createBrowserRouter([
           return { Component: m.default };
         },
       },
-      {
-        path: 'menu',
-        element: <MenuPage />,
-      },
+      { path: 'menu', element: <MenuPage /> },
       {
         path: 'about',
         lazy: async () => {
@@ -237,13 +201,17 @@ export const router = createBrowserRouter([
       },
 
       // ────────────────────────────────────────────────────────
-      // ACCOUNT (auth required)
+      // ACCOUNT
+      // AccountLayout owns its own auth gate — it renders LoginGate
+      // for unauthenticated users instead of redirecting away.
+      // Do NOT wrap with withAuth() here; that would fire AuthGuard
+      // first and redirect to /unauthorized before LoginGate renders.
       // ────────────────────────────────────────────────────────
       {
         path: 'account',
         lazy: async () => {
           const layout = await import('@/pages/Account/AccountLayout');
-          return { Component: withAuth(layout.default) };
+          return { Component: layout.default };
         },
         children: [
           {
@@ -271,12 +239,7 @@ export const router = createBrowserRouter([
       },
 
       // ────────────────────────────────────────────────────────
-      // CHECKOUT — public route, CheckoutPage owns guest/auth mode
-      //
-      // withAuth() removed: guests need checkout access.
-      // CheckoutPage renders guest experience (email + pay) OR the
-      // enriched auth experience (loyalty, credits, rewards) based on
-      // isAuthenticated internally. Blocking guests = 0% conversion.
+      // CHECKOUT — public, CheckoutPage owns guest/auth mode
       // ────────────────────────────────────────────────────────
       {
         path: 'checkout',
@@ -502,19 +465,30 @@ export const router = createBrowserRouter([
       },
 
       // ────────────────────────────────────────────────────────
-      // AUTH CALLBACK — MUST be before * or it hits NotFound
+      // AUTH CALLBACK
+      // MUST be before /login and * or it hits NotFound
       // ────────────────────────────────────────────────────────
-      // Supabase redirects here after Google OAuth with ?code=xxxx
-      // AuthCallback shows a spinner while UserProvider exchanges
-      // the code, then navigates to /account (or ?redirect= param).
-      // Without this route, the * wildcard catches the URL and
-      // renders NotFound — causing the 404 flash before Google auth.
       {
         path: 'auth/callback',
         lazy: async () => {
           const m = await import('@/features/auth/components/AuthCallback');
           return { Component: m.default };
         },
+      },
+
+      // ────────────────────────────────────────────────────────
+      // AUTH REDIRECT STUBS
+      // No /login or /unauthorized pages exist — auth is modal-based.
+      // Redirect stale links and guard bounces to home where the
+      // auth modal is accessible from the header.
+      // ────────────────────────────────────────────────────────
+      {
+        path: 'login',
+        element: <Navigate to="/" replace />,
+      },
+      {
+        path: 'unauthorized',
+        element: <Navigate to="/" replace />,
       },
 
       // ────────────────────────────────────────────────────────

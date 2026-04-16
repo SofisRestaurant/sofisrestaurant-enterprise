@@ -1,173 +1,175 @@
 // src/features/auth/components/SignupForm.tsx
+// ============================================================================
+// SIGNUP FORM — Passwordless (2026)
+// ============================================================================
+// Used inside SignupModal or anywhere a standalone auth form is needed.
+// Google OAuth primary, magic link email fallback. No passwords.
+// ============================================================================
 
-import { useState } from 'react';
-import { Mail, Lock, User, AlertCircle, Eye, EyeOff, Loader2 } from 'lucide-react';
-import { authAPI } from '@/features/auth/auth.api';
+import { useState, type FormEvent } from 'react';
+import { supabase } from '@/lib/supabase/supabaseClient';
+import { GoogleSignInButton } from '@/features/auth/components/GoogleSignInButton';
 
 interface SignupFormProps {
   onSuccess: () => void;
   onSwitchToLogin: () => void;
 }
 
-export function SignupForm({ onSuccess, onSwitchToLogin }: SignupFormProps) {
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState<string>('');
-  const [isLoading, setIsLoading] = useState(false);
+type Stage = 'idle' | 'sending' | 'sent' | 'error';
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function SignupForm({ onSuccess, onSwitchToLogin }: SignupFormProps) {
+  const [email, setEmail] = useState('');
+  const [stage, setStage] = useState<Stage>('idle');
+  const [error, setError] = useState('');
+
+  const emailValid = EMAIL_RE.test(email.trim());
+
+  const handleMagicLink = async (e: FormEvent) => {
     e.preventDefault();
+    if (!emailValid || stage === 'sending') return;
+
+    setStage('sending');
     setError('');
-    setIsLoading(true);
 
     try {
-      if (!name || !email || !password) {
-        throw new Error('Please fill in all fields');
-      }
-
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(email)) {
-        throw new Error('Please enter a valid email address');
-      }
-
-      const { error } = await authAPI.signUp({
+      const { error: err } = await supabase.auth.signInWithOtp({
         email: email.trim(),
-        password,
-        fullName: name.trim(),
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          shouldCreateUser: true,
+        },
       });
-
-      if (error) {
-        setError(error.message);
-        return;
-      }
-
-      onSuccess();
+      if (err) throw err;
+      setStage('sent');
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to create account';
-      if (message.toLowerCase().includes('already')) {
-        setError('An account with this email already exists. Please sign in instead.');
-      } else {
-        setError(message);
-      }
-    } finally {
-      setIsLoading(false);
+      setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
+      setStage('error');
     }
   };
 
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4" noValidate>
-      {error && (
-        <div
-          className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700"
-          role="alert"
+  if (stage === 'sent') {
+    return (
+      <div className="space-y-4 text-center py-4">
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-amber-50">
+          <svg
+            width="24"
+            height="24"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="#d97706"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+            <polyline points="22,6 12,13 2,6" />
+          </svg>
+        </div>
+        <div>
+          <p className="font-semibold text-white">Magic link sent!</p>
+          <p className="mt-1 text-sm text-zinc-400">
+            Check your inbox at <span className="text-white">{email.trim()}</span>. The link expires
+            in 10 minutes.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setStage('idle');
+            setEmail('');
+          }}
+          className="text-sm text-amber-400 hover:text-amber-300 transition-colors"
         >
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
+          Use a different email
+        </button>
+      </div>
+    );
+  }
 
-      {/* Full Name */}
-      <div>
-        <label htmlFor="signup-name" className="block text-sm font-medium text-gray-700 mb-1.5">
-          Full Name
-        </label>
-        <div className="relative">
-          <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
-          <input
-            id="signup-name"
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="John Doe"
-            required
-            autoComplete="name"
-            disabled={isLoading}
-            className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none disabled:bg-gray-100 disabled:cursor-not-allowed"
-          />
-        </div>
+  return (
+    <div className="space-y-5">
+      {/* Google — primary */}
+      <GoogleSignInButton
+        label="Sign up with Google"
+        onBeforeRedirect={onSuccess}
+        onError={(err) => setError(err.message)}
+      />
+
+      {/* Divider */}
+      <div className="relative flex items-center gap-3">
+        <div className="h-px flex-1 bg-white/10" />
+        <span className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+          or continue with email
+        </span>
+        <div className="h-px flex-1 bg-white/10" />
       </div>
 
-      {/* Email */}
-      <div>
-        <label htmlFor="signup-email" className="block text-sm font-medium text-gray-700 mb-1.5">
-          Email Address
-        </label>
-        <div className="relative">
-          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+      {/* Magic link */}
+      <form
+        onSubmit={(e) => {
+          void handleMagicLink(e);
+        }}
+        className="space-y-3"
+        noValidate
+      >
+        {error && (
+          <div
+            role="alert"
+            className="rounded-xl bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-300"
+          >
+            {error}
+          </div>
+        )}
+
+        <div className="space-y-1.5">
+          <label
+            htmlFor="signup-email"
+            className="block text-xs font-semibold uppercase tracking-wider text-zinc-500"
+          >
+            Email address
+          </label>
           <input
             id="signup-email"
             type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@example.com"
-            required
+            inputMode="email"
             autoComplete="email"
-            disabled={isLoading}
-            className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none disabled:bg-gray-100 disabled:cursor-not-allowed"
-          />
-        </div>
-      </div>
-
-      {/* Password */}
-      <div>
-        <label htmlFor="signup-password" className="block text-sm font-medium text-gray-700 mb-1.5">
-          Password
-        </label>
-        <div className="relative">
-          <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
-          <input
-            id="signup-password"
-            type={showPassword ? 'text' : 'password'}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Create a password"
             required
-            autoComplete="new-password"
-            disabled={isLoading}
-            className="w-full pl-10 pr-12 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none disabled:bg-gray-100 disabled:cursor-not-allowed"
+            value={email}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              setError('');
+            }}
+            placeholder="you@example.com"
+            className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-white placeholder-zinc-600 outline-none transition-all focus:border-amber-500/60 focus:ring-2 focus:ring-amber-500/15"
           />
-          <button
-            type="button"
-            onClick={() => setShowPassword((prev) => !prev)}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors focus:outline-none"
-            tabIndex={-1}
-            aria-label={showPassword ? 'Hide password' : 'Show password'}
-          >
-            {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-          </button>
         </div>
-      </div>
 
-      {/* Submit */}
-      <button
-        type="submit"
-        disabled={isLoading || !name || !email || !password}
-        className="w-full py-3 px-4 bg-orange-500 hover:bg-orange-600 disabled:bg-orange-300 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
-      >
-        {isLoading ? (
-          <>
-            <Loader2 className="w-5 h-5 animate-spin" />
-            Creating account...
-          </>
-        ) : (
-          'Create Account'
-        )}
-      </button>
+        <button
+          type="submit"
+          disabled={!emailValid || stage === 'sending'}
+          className="w-full rounded-xl bg-amber-500 py-2.5 text-sm font-bold text-black shadow-lg shadow-amber-500/20 transition-all hover:bg-amber-400 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none"
+        >
+          {stage === 'sending' ? 'Sending link…' : 'Send magic link'}
+        </button>
+      </form>
 
-      {/* Switch to login */}
-      <p className="text-center text-sm text-gray-600 mt-6">
+      <p className="text-center text-xs text-zinc-600">
+        No password, no spam. Just a secure link to your inbox.
+      </p>
+
+      <p className="text-center text-sm text-zinc-500">
         Already have an account?{' '}
         <button
           type="button"
           onClick={onSwitchToLogin}
-          disabled={isLoading}
-          className="text-orange-600 hover:text-orange-700 font-semibold transition-colors focus:outline-none focus:underline disabled:opacity-50"
+          className="font-semibold text-amber-400 hover:text-amber-300 transition-colors"
         >
           Sign in
         </button>
       </p>
-    </form>
+    </div>
   );
 }
