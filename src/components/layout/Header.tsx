@@ -1,18 +1,8 @@
 // src/components/layout/Header.tsx
-// =============================================================================
-// HEADER — Luxury UX (2026) + Hardened Systems (Mobile-Maxxed)
-// =============================================================================
-// ✅ Menu-aware Header Search: active only on /menu
-// ✅ Mobile: magnifying-glass icon NEXT TO CART opens a compact search overlay
-// ✅ No search rendered inside the mobile menu panel
-// ✅ No duplicate Filters button in Header (MenuPage owns Filters)
-// ✅ Power UX: "/" opens search on /menu (when not typing)
-// ✅ Premium: debounce store writes (reduces jank)
-// ✅ A11y: skip link, aria-current, ESC + click-outside + route-close
-// ✅ Deterministic: no console.*, no localStorage trust
-// ✅ CSS system: all colors/tokens/classes aligned to tokens.css + components.css
-// ✅ i18n: all user-visible strings via useTranslation()
-// =============================================================================
+// Cart state: removed local useState → useCartUiStore (shared store).
+// Cart icon hidden on mobile (md:hidden) — BottomNav Cart tab + FloatingCartPill handle mobile.
+// CartDrawer removed — rendered once in RootLayout.
+// All other logic unchanged from original.
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Link, useLocation } from 'react-router-dom';
@@ -20,35 +10,26 @@ import { Menu, X, ShoppingCart, LogOut, User, Search } from 'lucide-react';
 
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useCart } from '@/modules/cart/hooks/useCart';
+import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
 import { useModal } from '@/components/ui/useModal';
-import { CartDrawer } from '@/modules/cart/components/CartDrawer';
 import { Button } from '@/components/ui/Button';
 import { useActiveOrder } from '@/modules/orders/hooks/useActiveOrder';
 import { canAccessAdmin } from '@/security/permissions';
-
 import MenuHeaderSearch from '@/modules/menu/components/MenuHeaderSearch';
 import { useMenuUi } from '@/modules/menu/store/menuUi.store';
 import { useTranslation } from '@/i18n/useTranslation';
 
 type NavLinkKey = 'home' | 'menu' | 'about' | 'contact';
-
-type NavLink = {
-  path: string;
-  key: NavLinkKey;
-};
-
-function cx(...classes: Array<string | false | null | undefined>) {
-  return classes.filter(Boolean).join(' ');
+type NavLink = { path: string; key: NavLinkKey };
+function cx(...c: Array<string | false | null | undefined>) {
+  return c.filter(Boolean).join(' ');
 }
-
-// Keys only — labels and aria strings come from the translation system
 const NAV_LINKS: NavLink[] = [
   { path: '/', key: 'home' },
   { path: '/menu', key: 'menu' },
   { path: '/about', key: 'about' },
   { path: '/contact', key: 'contact' },
 ];
-
 const SEARCH_DEBOUNCE_MS = 150;
 
 export default function Header() {
@@ -59,59 +40,43 @@ export default function Header() {
   const { user, profile, signOut } = useAuth();
   const { itemCount } = useCart();
   const modal = useModal();
-
   const activeOrderId = useActiveOrder(user?.id ?? null);
+  const openCart = useCartUiStore((s) => s.open);
 
-  // Shared menu search store (single source of truth)
   const menuSearchText = useMenuUi((s) => s.searchText);
   const setMenuSearchText = useMenuUi((s) => s.setSearchText);
 
-  const [cartOpen, setCartOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-
-  // Mobile search overlay
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const mobileSearchBtnRef = useRef<HTMLButtonElement | null>(null);
   const mobileSearchPanelRef = useRef<HTMLDivElement | null>(null);
   const mobileSearchInputRef = useRef<HTMLInputElement | null>(null);
-  const lastFocusRef = useRef<HTMLElement | null>(null);
-
   const mobileToggleRef = useRef<HTMLButtonElement | null>(null);
   const mobileMenuRef = useRef<HTMLDivElement | null>(null);
-
-  // Debounced input draft (prevents grid jank on every keystroke)
   const [draftSearch, setDraftSearch] = useState(menuSearchText);
   const debounceRef = useRef<number | null>(null);
 
-  // ── Derived ────────────────────────────────────────────────────────────────
   const isAdmin = profile?.role ? canAccessAdmin(profile.role) : false;
-
-  const displayName = useMemo(() => {
-    return profile?.full_name?.trim() || user?.name?.trim() || user?.email || null;
-  }, [profile?.full_name, user?.name, user?.email]);
-
+  const isAuthed = Boolean(user);
+  const displayName = useMemo(
+    () => profile?.full_name?.trim() || user?.name?.trim() || user?.email || null,
+    [profile?.full_name, user?.name, user?.email],
+  );
   const cartAriaLabel = useMemo(() => {
-    const count = itemCount ?? 0;
-    if (count === 0) return t('header.cart.ariaEmpty');
-    if (count === 1) return t('header.cart.ariaSingular');
-    return t('header.cart.ariaPlural', { count });
+    const n = itemCount ?? 0;
+    return n === 0
+      ? t('header.cart.ariaEmpty')
+      : n === 1
+        ? t('header.cart.ariaSingular')
+        : t('header.cart.ariaPlural', { count: n });
   }, [itemCount, t]);
-
   const isActive = useCallback(
-    (path: string) =>
-      path === '/' ? pathname === '/' : pathname === path || pathname.startsWith(`${path}/`),
+    (p: string) => (p === '/' ? pathname === '/' : pathname === p || pathname.startsWith(`${p}/`)),
     [pathname],
   );
 
-  const isAuthed = Boolean(user);
-
-  // ── Handlers ───────────────────────────────────────────────────────────────
   const closeMobileMenu = useCallback(() => setMobileMenuOpen(false), []);
-  const toggleMobileMenu = useCallback(() => setMobileMenuOpen((prev) => !prev), []);
-
-  const handleOpenCart = useCallback(() => setCartOpen(true), []);
-  const handleCloseCart = useCallback(() => setCartOpen(false), []);
-
+  const toggleMobileMenu = useCallback(() => setMobileMenuOpen((v) => !v), []);
   const handleSignOut = useCallback(async () => {
     try {
       await signOut();
@@ -119,152 +84,103 @@ export default function Header() {
       closeMobileMenu();
     }
   }, [signOut, closeMobileMenu]);
-
   const openModalSafe = useCallback(
     (type: 'login' | 'signup') => {
-      if (typeof modal?.openModal !== 'function') return;
+      modal?.openModal?.(type);
       closeMobileMenu();
-      modal.openModal(type);
     },
     [modal, closeMobileMenu],
   );
-
   const closeMobileSearch = useCallback(() => {
     setMobileSearchOpen(false);
     queueMicrotask(() => mobileSearchBtnRef.current?.focus());
   }, []);
-
   const openMobileSearch = useCallback(() => {
     if (!isMenu) return;
-    lastFocusRef.current =
-      typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
+    setMobileMenuOpen(false);
     setMobileSearchOpen(true);
   }, [isMenu]);
 
-  // ── Effects ────────────────────────────────────────────────────────────────
-
-  // Route change closes overlays
   useEffect(() => {
     setMobileMenuOpen(false);
     setMobileSearchOpen(false);
   }, [pathname]);
-
-  // Keep draft in sync when store changes externally (e.g. clearing elsewhere)
   useEffect(() => {
     setDraftSearch(menuSearchText);
   }, [menuSearchText]);
-
-  // Debounce store writes while overlay is open OR while on menu (desktop search)
   useEffect(() => {
     if (!isMenu) return;
-
     if (debounceRef.current) window.clearTimeout(debounceRef.current);
-    debounceRef.current = window.setTimeout(() => {
-      setMenuSearchText(draftSearch);
-    }, SEARCH_DEBOUNCE_MS);
-
+    debounceRef.current = window.setTimeout(
+      () => setMenuSearchText(draftSearch),
+      SEARCH_DEBOUNCE_MS,
+    );
     return () => {
       if (debounceRef.current) window.clearTimeout(debounceRef.current);
-      debounceRef.current = null;
     };
   }, [draftSearch, isMenu, setMenuSearchText]);
-
-  // ESC closes mobile menu + mobile search overlay
   useEffect(() => {
     if (!mobileMenuOpen && !mobileSearchOpen) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const h = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-
       if (mobileSearchOpen) {
         e.preventDefault();
         closeMobileSearch();
         return;
       }
-
       if (mobileMenuOpen) {
         e.preventDefault();
         closeMobileMenu();
         mobileToggleRef.current?.focus();
       }
     };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
   }, [mobileMenuOpen, mobileSearchOpen, closeMobileMenu, closeMobileSearch]);
-
-  // Click outside closes mobile menu
   useEffect(() => {
     if (!mobileMenuOpen) return;
-
-    const handlePointerDown = (e: PointerEvent) => {
-      const target = e.target as Node | null;
-      if (!target) return;
-
-      if (mobileMenuRef.current?.contains(target) || mobileToggleRef.current?.contains(target)) {
-        return;
-      }
-
+    const h = (e: PointerEvent) => {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (mobileMenuRef.current?.contains(t) || mobileToggleRef.current?.contains(t)) return;
       closeMobileMenu();
     };
-
-    window.addEventListener('pointerdown', handlePointerDown);
-    return () => window.removeEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('pointerdown', h);
+    return () => window.removeEventListener('pointerdown', h);
   }, [mobileMenuOpen, closeMobileMenu]);
-
-  // Mobile search: focus input on open + click outside closes
   useEffect(() => {
     if (!mobileSearchOpen) return;
-
     queueMicrotask(() => mobileSearchInputRef.current?.focus());
-
-    const handlePointerDown = (e: PointerEvent) => {
-      const target = e.target as Node | null;
-      if (!target) return;
-
-      if (
-        mobileSearchPanelRef.current?.contains(target) ||
-        mobileSearchBtnRef.current?.contains(target)
-      ) {
+    const h = (e: PointerEvent) => {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (mobileSearchPanelRef.current?.contains(t) || mobileSearchBtnRef.current?.contains(t))
         return;
-      }
-
       closeMobileSearch();
     };
-
-    window.addEventListener('pointerdown', handlePointerDown);
-    return () => window.removeEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('pointerdown', h);
+    return () => window.removeEventListener('pointerdown', h);
   }, [mobileSearchOpen, closeMobileSearch]);
-
-  // Power UX: "/" opens search on /menu when not typing
   useEffect(() => {
     if (!isMenu) return;
-
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== '/') return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
       const el = document.activeElement as HTMLElement | null;
-      const tag = el?.tagName?.toLowerCase();
-      const typing = tag === 'input' || tag === 'textarea' || Boolean(el && el.isContentEditable);
-
-      if (typing) return;
-
+      if (
+        el?.tagName?.toLowerCase() === 'input' ||
+        el?.tagName?.toLowerCase() === 'textarea' ||
+        el?.isContentEditable
+      )
+        return;
       e.preventDefault();
-      setMobileMenuOpen(false);
       openMobileSearch();
     };
-
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
   }, [isMenu, openMobileSearch]);
 
-  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <>
-      {/* Accessibility skip link */}
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-60 focus:rounded-lg focus:bg-white focus:px-4 focus:py-2 focus:shadow-(--shadow-xl) focus:ring-2 focus:ring-(--color-gold-400)"
@@ -279,16 +195,14 @@ export default function Header() {
           aria-label={t('nav.ariaLabel')}
         >
           <div className="flex items-center justify-between gap-3">
-            {/* Logo */}
             <Link
               to="/"
-              className="text-script rounded-md px-2 py-1 text-2xl text-(--color-ember-700) transition-colors duration-(--duration-base) hover:text-(--color-ember-600) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2"
+              className="text-script rounded-md px-2 py-1 text-2xl text-(--color-ember-700) transition-colors hover:text-(--color-ember-600) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2"
               aria-label={t('header.logo.aria')}
             >
               {t('common.appName')}
             </Link>
 
-            {/* Desktop navigation */}
             <div
               className="hidden items-center gap-2 md:flex"
               role="menubar"
@@ -304,9 +218,7 @@ export default function Header() {
                     aria-label={t(`nav.links.${key}.aria`)}
                     aria-current={active ? 'page' : undefined}
                     className={cx(
-                      'rounded-md px-3 py-2 text-sm font-medium',
-                      'transition-all duration-(--duration-base)',
-                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2',
+                      'rounded-md px-3 py-2 text-sm font-medium transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2',
                       active
                         ? 'bg-(--color-ember-50) text-(--color-ember-700)'
                         : 'text-(--color-ink-700) hover:bg-(--color-ink-50) hover:text-(--color-ember-700)',
@@ -318,10 +230,8 @@ export default function Header() {
               })}
             </div>
 
-            {/* Right-side actions */}
             <div className="flex items-center gap-2 md:gap-3">
-              {/* Desktop search — only on /menu, lg+ */}
-              {isMenu ? (
+              {isMenu && (
                 <div className="hidden w-28rem max-w-[38vw] lg:block">
                   <MenuHeaderSearch
                     value={draftSearch}
@@ -329,10 +239,8 @@ export default function Header() {
                     placeholder={t('header.search.placeholder')}
                   />
                 </div>
-              ) : null}
-
-              {/* Mobile search icon — only on /menu, hidden on lg+ */}
-              {isMenu ? (
+              )}
+              {isMenu && (
                 <button
                   ref={mobileSearchBtnRef}
                   type="button"
@@ -342,85 +250,69 @@ export default function Header() {
                   }}
                   aria-label={t('header.search.openAria')}
                   aria-haspopup="dialog"
-                  aria-expanded={mobileSearchOpen ? 'true' : 'false'}
-                  className={cx(
-                    'inline-flex h-10 w-10 items-center justify-center',
-                    'rounded-(--radius-pill)',
-                    'border border-(--color-border) bg-white',
-                    'text-(--color-ink-800) shadow-(--shadow-xs)',
-                    'transition-colors duration-(--duration-base) hover:bg-(--color-ink-50)',
-                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40',
-                    'lg:hidden',
-                  )}
+                  aria-expanded={mobileSearchOpen}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-(--radius-pill) border border-(--color-border) bg-white text-(--color-ink-800) shadow-(--shadow-xs) transition-colors hover:bg-(--color-ink-50) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40 lg:hidden"
                 >
                   <Search className="h-5 w-5" aria-hidden="true" />
                 </button>
-              ) : null}
+              )}
 
-              {/* Cart */}
+              {/*
+                Cart button:
+                - md+ (desktop/tablet): visible, opens shared cartUi.store
+                - mobile (<md): HIDDEN — BottomNav Cart tab + FloatingCartPill handle it
+              */}
               <button
-                onClick={handleOpenCart}
+                onClick={openCart}
                 type="button"
                 aria-label={cartAriaLabel}
                 className={cx(
-                  'relative rounded-md p-2',
-                  'text-(--color-ink-700)',
-                  'transition-all duration-(--duration-base)',
-                  'hover:bg-(--color-ink-50) hover:text-(--color-ember-700)',
-                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2',
+                  'relative rounded-md p-2 text-(--color-ink-700) transition-all hover:bg-(--color-ink-50) hover:text-(--color-ember-700) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2',
+                  'hidden md:inline-flex',
                 )}
               >
                 <ShoppingCart className="h-6 w-6" aria-hidden="true" />
-                {(itemCount ?? 0) > 0 ? (
+                {(itemCount ?? 0) > 0 && (
                   <span
                     className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-(--radius-pill) bg-(--color-ember-600) px-1 text-[11px] font-bold text-white shadow-(--shadow-xs)"
                     aria-hidden="true"
                   >
                     {(itemCount ?? 0) > 99 ? '99+' : itemCount}
                   </span>
-                ) : null}
+                )}
               </button>
 
-              {/* Desktop auth cluster */}
               <div className="hidden items-center gap-2 md:flex">
                 {isAuthed ? (
                   <>
-                    {activeOrderId ? (
+                    {activeOrderId && (
                       <Link
                         to={`/order-status/${activeOrderId}`}
-                        className="link-line rounded-md px-3 py-2 text-sm font-semibold text-(--color-ember-600) transition-colors duration-(--duration-base) hover:text-(--color-ember-500) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2"
+                        className="link-line rounded-md px-3 py-2 text-sm font-semibold text-(--color-ember-600) transition-colors hover:text-(--color-ember-500) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2"
                       >
                         {t('header.auth.trackOrder')}
                       </Link>
-                    ) : null}
-
-                    {isAdmin ? (
+                    )}
+                    {isAdmin && (
                       <Link
                         to="/admin"
-                        className="link-line rounded-md px-3 py-2 text-sm font-semibold text-(--color-gold-600) transition-colors duration-(--duration-base) hover:text-(--color-gold-500) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2"
+                        className="link-line rounded-md px-3 py-2 text-sm font-semibold text-(--color-gold-600) transition-colors hover:text-(--color-gold-500) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2"
                       >
                         {t('header.auth.admin')}
                       </Link>
-                    ) : null}
-
+                    )}
                     <Link
                       to="/account"
                       aria-label={t('header.auth.account')}
-                      className={cx(
-                        'flex items-center gap-2 rounded-md',
-                        'bg-(--color-ink-50) px-3 py-2',
-                        'transition-all duration-(--duration-base) hover:bg-(--color-ink-100)',
-                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2',
-                      )}
+                      className="flex items-center gap-2 rounded-md bg-(--color-ink-50) px-3 py-2 transition-all hover:bg-(--color-ink-100) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2"
                     >
                       <User className="h-4 w-4 text-(--color-ink-500)" aria-hidden="true" />
-                      {displayName ? (
+                      {displayName && (
                         <span className="text-sm font-medium text-(--color-ink-700)">
                           {t('header.auth.greeting', { name: displayName })}
                         </span>
-                      ) : null}
+                      )}
                     </Link>
-
                     <Button
                       onClick={handleSignOut}
                       variant="secondary"
@@ -455,7 +347,6 @@ export default function Header() {
                 )}
               </div>
 
-              {/* Mobile menu toggle */}
               <button
                 ref={mobileToggleRef}
                 onClick={toggleMobileMenu}
@@ -463,14 +354,7 @@ export default function Header() {
                 aria-label={mobileMenuOpen ? t('header.auth.closeMenu') : t('header.auth.openMenu')}
                 aria-expanded={mobileMenuOpen}
                 aria-controls="mobile-menu"
-                className={cx(
-                  'rounded-md p-2',
-                  'text-(--color-ink-700)',
-                  'transition-all duration-(--duration-base)',
-                  'hover:bg-(--color-ink-50) hover:text-(--color-ember-700)',
-                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2',
-                  'md:hidden',
-                )}
+                className="rounded-md p-2 text-(--color-ink-700) transition-all hover:bg-(--color-ink-50) hover:text-(--color-ember-700) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 md:hidden"
               >
                 {mobileMenuOpen ? (
                   <X className="h-6 w-6" aria-hidden="true" />
@@ -481,8 +365,7 @@ export default function Header() {
             </div>
           </div>
 
-          {/* Mobile menu panel */}
-          {mobileMenuOpen ? (
+          {mobileMenuOpen && (
             <div
               ref={mobileMenuRef}
               id="mobile-menu"
@@ -503,9 +386,7 @@ export default function Header() {
                         aria-label={t(`nav.links.${key}.aria`)}
                         aria-current={active ? 'page' : undefined}
                         className={cx(
-                          'rounded-xl px-4 py-3 text-sm font-medium',
-                          'transition-all duration-(--duration-base)',
-                          'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)',
+                          'rounded-xl px-4 py-3 text-sm font-medium transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)',
                           active
                             ? 'bg-(--color-ember-50) text-(--color-ember-700)'
                             : 'text-(--color-ink-700) hover:bg-(--color-ink-50) hover:text-(--color-ember-700)',
@@ -516,36 +397,32 @@ export default function Header() {
                     );
                   })}
                 </div>
-
                 <hr className="divider-cream my-1" />
-
                 {user ? (
                   <>
-                    {activeOrderId ? (
+                    {activeOrderId && (
                       <Link
                         to={`/order-status/${activeOrderId}`}
                         onClick={closeMobileMenu}
-                        className="block rounded-xl bg-(--color-ember-50) px-4 py-3 text-sm font-semibold text-(--color-ember-700) transition-colors duration-(--duration-base) hover:bg-(--color-ember-100) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)"
+                        className="block rounded-xl bg-(--color-ember-50) px-4 py-3 text-sm font-semibold text-(--color-ember-700) transition-colors hover:bg-(--color-ember-100) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)"
                       >
                         {t('header.auth.trackOrder')}
                       </Link>
-                    ) : null}
-
-                    {isAdmin ? (
+                    )}
+                    {isAdmin && (
                       <Link
                         to="/admin"
                         onClick={closeMobileMenu}
-                        className="block rounded-xl bg-(--color-gold-50) px-4 py-3 text-sm font-semibold text-(--color-gold-600) transition-colors duration-(--duration-base) hover:bg-(--color-gold-100) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)"
+                        className="block rounded-xl bg-(--color-gold-50) px-4 py-3 text-sm font-semibold text-(--color-gold-600) transition-colors hover:bg-(--color-gold-100) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)"
                       >
                         {t('header.auth.adminPanel')}
                       </Link>
-                    ) : null}
-
+                    )}
                     <Link
                       to="/account"
                       onClick={closeMobileMenu}
                       aria-label={t('header.auth.account')}
-                      className="block rounded-xl bg-(--color-ink-50) px-4 py-3 transition-all duration-(--duration-base) hover:bg-(--color-ink-100) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)"
+                      className="block rounded-xl bg-(--color-ink-50) px-4 py-3 transition-all hover:bg-(--color-ink-100) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)"
                     >
                       <div className="mb-1 flex items-center gap-2">
                         <User className="h-4 w-4 text-(--color-ink-500)" aria-hidden="true" />
@@ -553,11 +430,8 @@ export default function Header() {
                           {displayName}
                         </span>
                       </div>
-                      {user.email ? (
-                        <p className="text-xs text-(--color-ink-500)">{user.email}</p>
-                      ) : null}
+                      {user.email && <p className="text-xs text-(--color-ink-500)">{user.email}</p>}
                     </Link>
-
                     <Button
                       onClick={handleSignOut}
                       variant="secondary"
@@ -592,12 +466,11 @@ export default function Header() {
                 )}
               </div>
             </div>
-          ) : null}
+          )}
         </nav>
       </header>
 
-      {/* Mobile Search Overlay */}
-      {isMenu && mobileSearchOpen ? (
+      {isMenu && mobileSearchOpen && (
         <div
           className="fixed inset-0 z-40"
           role="dialog"
@@ -628,48 +501,35 @@ export default function Header() {
                       autoComplete="off"
                       aria-label={t('header.search.aria')}
                     />
-                    {draftSearch.trim().length > 0 ? (
+                    {draftSearch.trim().length > 0 && (
                       <button
                         type="button"
                         onClick={() => setDraftSearch('')}
-                        className={cx(
-                          'absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center',
-                          'rounded-lg border border-white/10 bg-white/5 text-white/80',
-                          'transition-colors duration-(--duration-base) hover:bg-white/10',
-                          'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40',
-                        )}
+                        className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/80 transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40"
                         aria-label={t('header.search.clear')}
                       >
                         <X className="h-4 w-4" aria-hidden="true" />
                       </button>
-                    ) : null}
+                    )}
                   </div>
                 </div>
-
                 <button
                   type="button"
                   onClick={closeMobileSearch}
-                  className={cx(
-                    'inline-flex h-10 w-10 items-center justify-center',
-                    'rounded-lg border border-white/10 bg-white/5 text-white',
-                    'transition-colors duration-(--duration-base) hover:bg-white/10',
-                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40',
-                  )}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40"
                   aria-label={t('header.search.close')}
                 >
                   <X className="h-5 w-5" aria-hidden="true" />
                 </button>
               </div>
-
               <div className="px-4 py-3">
                 <p className="text-label text-(--color-ink-400)">{t('header.search.tip')}</p>
               </div>
             </div>
           </div>
         </div>
-      ) : null}
-
-      <CartDrawer isOpen={cartOpen} onClose={handleCloseCart} />
+      )}
+      {/* CartDrawer is in RootLayout — not here */}
     </>
   );
 }

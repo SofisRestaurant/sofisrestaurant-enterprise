@@ -1,4 +1,5 @@
 // src/app/RootLayout.tsx
+// CartDrawer and FloatingCartPill added here — single render, no duplication.
 import { Outlet } from 'react-router-dom';
 import { LazyMotion, domAnimation, MotionConfig } from 'framer-motion';
 import { ActiveOrderProvider } from '@/app/ActiveOrderContext';
@@ -10,17 +11,14 @@ import SessionExpiryWarning from '@/components/auth/SessionExpiryWarning';
 import ModalRenderer from '@/components/ui/ModalRenderer';
 import AppBoot from './AppBoot';
 import ScrollSafety from '@/components/app/ScrollSafety';
+import { CartDrawer } from '@/modules/cart/components/CartDrawer';
+import { FloatingCartPill } from '@/modules/cart/components/FloatingCartPill';
 
 export default function RootLayout() {
   return (
     <LazyMotion features={domAnimation} strict>
       <MotionConfig reducedMotion="user">
         <AppBoot>
-          {/*
-            ActiveOrderProvider calls useActiveOrder() exactly once.
-            TopBar and BottomNav read useActiveOrderId() from context —
-            zero duplicate Supabase channels.
-          */}
           <ActiveOrderProvider>
             <div className="flex min-h-dvh flex-col">
               <TopBar />
@@ -33,12 +31,17 @@ export default function RootLayout() {
                 <Footer />
               </div>
 
+              {/* FloatingCartPill sits above BottomNav on mobile */}
+              <FloatingCartPill />
               <BottomNav />
 
               <SessionExpiryWarning />
               <AuthModals />
               <ModalRenderer />
               <ScrollSafety />
+
+              {/* Single CartDrawer instance — reads cartUi.store */}
+              <CartDrawer />
             </div>
           </ActiveOrderProvider>
         </AppBoot>
