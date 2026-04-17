@@ -82,7 +82,7 @@ function TabButton({ tab, isActive, badge, hasLivePulse, onCartClick }: TabButto
     <>
       <div
         className={cx(
-          'relative flex items-center justify-center h-7 w-7 rounded-xl',
+          'relative flex items-center justify-center h-7 w-7 shrink-0rounded-xl',
           // transition-colors only — not transition-all.
           // transition-all includes transform which puts this in the
           // compositor watch list on every scroll frame causing jitter.
@@ -93,7 +93,7 @@ function TabButton({ tab, isActive, badge, hasLivePulse, onCartClick }: TabButto
         {/* Icon scale is driven by CSS not JS — no transform transition needed */}
         <Icon
           className={cx(
-            'h-[1.1rem] w-[1.1rem] transition-colors duration-200',
+            'h-5 w-5 shrink-0 transition-colors duration-200',
             isActive ? 'text-(--color-ember-600)' : 'text-(--color-ink-400)',
           )}
           strokeWidth={isActive ? 2.2 : 1.75}
@@ -141,7 +141,7 @@ function TabButton({ tab, isActive, badge, hasLivePulse, onCartClick }: TabButto
 
   // Shared base — active:scale-95 kept but as a CSS active pseudo not transition-all
   const baseClass = cx(
-    'relative flex flex-1 flex-col items-center justify-center gap-0.5',
+    'relative flex flex-col items-center justify-center gap-0.5',
     'py-2 px-1 min-w-0 min-h-[56px]',
     'active:scale-95',
     'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-inset',
@@ -224,7 +224,7 @@ export default function BottomNav() {
         // preventing position recalculation jitter on every scroll frame.
         style={{ transform: 'translateZ(0)' }}
       >
-        <div className="flex items-stretch">
+        <div className="grid grid-cols-4">
           {resolvedTabs.map((tab) => (
             <TabButton
               key={tab.id}
