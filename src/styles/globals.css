@@ -10,7 +10,7 @@
    The correct fix for whileInView environments is to set initial state on each
    component explicitly and use viewport={{ once: true }} — not a global override.
    
-   Font declarxations live in fonts.css — not duplicated here.
+   Font declarations live in fonts.css — not duplicated here.
    Typography scale and heading styles live in typography.css — not duplicated here.
    ============================================================================= */
 
@@ -35,7 +35,6 @@ body {
   margin: 0;
   min-height: 100dvh;
   overflow-x: clip;
-  /* var(--font-sans) defined in fonts.css / tokens.css */
   font-family: var(--font-sans);
   color: var(--color-ink-900);
   background-color: var(--color-surface);
@@ -45,7 +44,6 @@ body {
 h1, h2, h3, h4, h5, h6 {
   margin: 0;
   line-height: var(--leading-tight, 1.2);
-  /* Display/heading font stack — full overrides in typography.css */
   font-family: var(--font-display);
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -62,10 +60,8 @@ table { border-collapse: collapse; }
 [hidden] { display: none !important; }
 
 /* ── Focus visible ───────────────────────────────────────────────────────── */
-/* Only show focus ring for keyboard navigation, not mouse clicks */
 :focus { outline: none; }
 :focus-visible {
-  /* Fallback hex kept as CSS-spec var() fallback — not a hard-coded color */
   outline: 2px solid var(--color-gold-400, #d4af37);
   outline-offset: 3px;
   border-radius: 2px;
@@ -73,7 +69,6 @@ table { border-collapse: collapse; }
 
 /* ── Selection ───────────────────────────────────────────────────────────── */
 ::selection {
-  /* Gold-400 at 22% opacity — matches brand accent */
   background-color: var(--color-selection-bg, rgb(212 175 55 / 0.22));
   color: inherit;
 }
@@ -85,9 +80,7 @@ a, button, [role='button'] {
 }
 
 /* ── Scrollbar ───────────────────────────────────────────────────────────── */
-/* Styled scrollbar for Webkit — minimal, brand-appropriate */
 ::-webkit-scrollbar               { width: 6px; height: 6px; }
-/* Fallback hex values in var() are correct CSS spec — not hard-coded colors */
 ::-webkit-scrollbar-track         { background: var(--color-cream-100, #faf6ef); }
 ::-webkit-scrollbar-thumb         { background: var(--color-ink-200, #ddd4c8); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover   { background: var(--color-ink-300, #c8b8a8); }
@@ -97,22 +90,42 @@ a, button, [role='button'] {
 
 /* ── Modal depth system ──────────────────────────────────────────────────── */
 /*
-   When a dialog is open the page behind scales and blurs slightly —
-   creates a cinematic layering effect.
+  When a dialog is open the page behind scales and blurs slightly.
+
+  FIX: `will-change` is now ONLY applied when the modal is actually open,
+  not permanently on #app-root. Permanently-active will-change: transform
+  promotes #app-root to its own compositor layer at all times, which causes
+  iOS Safari to recalculate position:fixed children (BottomNav) on every
+  scroll frame — producing the icon jitter/shake bug.
+
+  By scoping will-change to the :has() block, the compositor layer is only
+  created during the modal transition, which is exactly when it's needed.
 */
 #app-root {
-  transition:
-    transform 0.35s var(--ease-luxury, cubic-bezier(0.16, 1, 0.3, 1)),
-    filter    0.35s var(--ease-luxury, cubic-bezier(0.16, 1, 0.3, 1));
   transform-origin: top center;
-  will-change: transform, filter;
+  /* No will-change here — adding it permanently causes BottomNav icon jitter */
 }
 
 body:has([role='dialog'][data-state='open']) #app-root,
 body:has(.modal-open) #app-root {
   transform: scale(0.972) translateY(-8px);
-  /* Blur + brightness reduction — no color tokens needed here */
   filter: blur(1.5px) brightness(0.92);
+  /*
+    will-change is now scoped here — only active while a modal is open.
+    This is the correct pattern: hint the compositor only when the
+    property is about to change, not permanently.
+  */
+  will-change: transform, filter;
+  transition:
+    transform 0.35s var(--ease-luxury, cubic-bezier(0.16, 1, 0.3, 1)),
+    filter    0.35s var(--ease-luxury, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+/* Restore transition for closing (when :has no longer matches) */
+#app-root {
+  transition:
+    transform 0.35s var(--ease-luxury, cubic-bezier(0.16, 1, 0.3, 1)),
+    filter    0.35s var(--ease-luxury, cubic-bezier(0.16, 1, 0.3, 1));
 }
 
 /* ── Print ────────────────────────────────────────────────────────────────── */
@@ -132,7 +145,7 @@ body:has(.modal-open) #app-root {
 }
 
 /* =============================================================================
-   NEWSLETTER — globals.css additions
+   NEWSLETTER
    ============================================================================= */
 
 @keyframes newsletter-gradient-shift {
@@ -144,7 +157,6 @@ body:has(.modal-open) #app-root {
 .newsletter-gradient-text {
   background: linear-gradient(
     90deg,
-    /* Fallback hex values in var() are correct CSS spec — not hard-coded colors */
     var(--color-gold-400,  #d4af37)  0%,
     var(--color-ember-500, #a96840)  40%,
     var(--color-gold-300,  #e8c46a)  70%,
@@ -167,8 +179,7 @@ body:has(.modal-open) #app-root {
   }
 }
 
-/* ── sr-only — visually hidden, accessible to screen readers ─────────────── */
-/* Already in Tailwind — include here only for non-Tailwind contexts */
+/* ── sr-only ─────────────────────────────────────────────────────────────── */
 .sr-only {
   position: absolute;
   width: 1px;
