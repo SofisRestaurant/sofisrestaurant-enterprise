@@ -1,25 +1,17 @@
 // ============================================================================
 // src/modules/checkout/components/CheckoutButton.tsx
-// CheckoutButton — Enterprise UX (2026) + Review Order Modal (Production Ready)
+// CheckoutButton — routing via useCheckoutRouter (2026)
 // ----------------------------------------------------------------------------
-// Security / behavior guarantees:
-// - useCheckout() remains the only checkout executor + redirect source
-// - Strict runtime guards for cart shape + resilient totals display
-// - Double-submit protection + cooldown-safe retry behavior
-// - No token/session logging
-// - Accessible modal: ESC, outside click, focus restore, focus trap-lite
-// - Scroll lock handled centrally through useScrollLock
-// ✅ i18n: all user-visible strings via useTranslation()
+// CHANGE vs previous version:
+//   - useCheckout() → useCheckoutRouter()
+//   - Router picks auth vs guest endpoint based on session state
+//   - Guest: no more synthetic customer_uid, no Authorization header
+//   - Auth: unchanged behavior — still hits 'create-checkout' with Bearer token
 //
-// GUEST MODE (2026 addition):
-// - Accepts optional guestEmail prop from CheckoutPage
-// - When !isAuthenticated: uses guestEmail as the checkout identity
-// - Button enabled when guestEmail is a valid email (not auth state)
-// - doCheckout passes guestEmail as customer email when user is null
-// - No "Log in to pay" shown to guests — replaced with email validation
+// All other behavior (review modal, cooldown, focus trap, a11y, i18n) preserved.
 // ============================================================================
 
-import React, { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   CreditCard,
@@ -32,7 +24,7 @@ import {
 import type { LoyaltyRedeemValue } from '@/modules/checkout/components/RewardsRedeem';
 
 import { env } from '@/lib/config/env';
-import { useCheckout } from '@/modules/checkout/hooks/useCheckout';
+import { useCheckoutRouter } from '@/modules/checkout/hooks/useCheckoutRouter';
 import { useUserContext } from '@/contexts/useUserContext';
 import { useCart } from '@/modules/cart/hooks/useCart';
 import { useScrollLock } from '@/lib/ui/useScrollLock';
@@ -98,7 +90,6 @@ function normalizeOrderType(value: unknown): OrderType {
   return value === 'delivery' || value === 'dine_in' || value === 'pickup' ? value : 'pickup';
 }
 
-/** RFC-lite email check — UX only, server validates authoritatively */
 function isValidEmail(value: unknown): boolean {
   if (typeof value !== 'string') return false;
   const s = value.trim().toLowerCase();
@@ -151,20 +142,17 @@ function prefersReducedMotion(): boolean {
 
 function isCartModifier(value: unknown): value is CartModifier {
   if (!isRecord(value)) return false;
-
   const idOk = typeof value.id === 'string' && value.id.trim().length > 0;
   const groupOk = value.groupId === undefined || typeof value.groupId === 'string';
   const nameOk = value.name === undefined || typeof value.name === 'string';
   const priceOk =
     value.priceAdjustment === undefined ||
     (typeof value.priceAdjustment === 'number' && Number.isFinite(value.priceAdjustment));
-
   return idOk && groupOk && nameOk && priceOk;
 }
 
 function isCartItem(value: unknown): value is CartItem {
   if (!isRecord(value)) return false;
-
   const okId = typeof value.menuItemId === 'string' && value.menuItemId.trim().length > 0;
   const okName = typeof value.name === 'string';
   const okQty = typeof value.quantity === 'number' && Number.isFinite(value.quantity);
@@ -173,7 +161,6 @@ function isCartItem(value: unknown): value is CartItem {
   const okLine =
     value.lineTotalCents === undefined ||
     (typeof value.lineTotalCents === 'number' && Number.isFinite(value.lineTotalCents));
-
   return okId && okName && okQty && okUnit && okMods && okLine;
 }
 
@@ -188,7 +175,6 @@ function safeLineTotalCents(item: CartItem): number {
   if (typeof item.lineTotalCents === 'number' && Number.isFinite(item.lineTotalCents)) {
     return Math.max(0, Math.round(item.lineTotalCents));
   }
-
   const quantity = clampInt(item.quantity, 1, 100);
   const unitPrice = Math.max(0, Math.round(item.unitPriceCents));
   const modifierTotal = Array.isArray(item.modifiers)
@@ -197,7 +183,6 @@ function safeLineTotalCents(item: CartItem): number {
         0,
       )
     : 0;
-
   return (unitPrice + modifierTotal) * quantity;
 }
 
@@ -207,11 +192,9 @@ function sumCartSubtotalCents(items: CartItem[]): number {
 
 function modifierLabel(modifiers: CartModifier[]): string {
   if (!Array.isArray(modifiers) || modifiers.length === 0) return '';
-
   const names = modifiers
     .map((modifier) => (typeof modifier.name === 'string' ? modifier.name.trim() : ''))
     .filter(Boolean);
-
   return names.join(', ');
 }
 
@@ -224,7 +207,6 @@ const FOCUSABLE_SELECTOR =
 
 function getFocusable(root: HTMLElement | null): HTMLElement[] {
   if (!root) return [];
-
   return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter((element) => {
     if (element.hasAttribute('disabled')) return false;
     if (element.getAttribute('aria-hidden') === 'true') return false;
@@ -254,6 +236,10 @@ function CheckoutButton({
   const { user, loading: authLoading, isAuthenticated } = useUserContext();
   const cart = useCart();
 
+  // ── ROUTING LAYER ─────────────────────────────────────────────────────────
+  // useCheckoutRouter picks auth vs guest endpoint based on session state.
+  // Auth → create-checkout (Bearer header)
+  // Guest → create-checkout-guest (no Authorization header)
   const {
     redirectToCheckout,
     isLoading,
@@ -263,7 +249,8 @@ function CheckoutButton({
     retryAfter,
     reset,
     canCheckout,
-  } = useCheckout();
+    mode,
+  } = useCheckoutRouter();
 
   const mountedRef = useRef(true);
   const inflightRef = useRef(false);
@@ -282,7 +269,6 @@ function CheckoutButton({
 
   useEffect(() => {
     mountedRef.current = true;
-
     return () => {
       mountedRef.current = false;
       if (retryTimerRef.current !== null) {
@@ -305,12 +291,8 @@ function CheckoutButton({
   const stripeEnabled = Boolean(env?.stripe?.enabled);
 
   // ── Identity resolution ───────────────────────────────────────────────────
-  // isAuthed: true for logged-in users.
-  // For guests, we check guestEmail validity instead.
   const isAuthed = Boolean(isAuthenticated && user?.id);
   const guestEmailValid = !isAuthed && isValidEmail(guestEmail);
-
-  // canProceed: either logged in OR guest with valid email
   const canProceed = isAuthed || guestEmailValid;
 
   const hasItems = safeItems.length > 0;
@@ -324,41 +306,30 @@ function CheckoutButton({
       window.clearInterval(retryTimerRef.current);
       retryTimerRef.current = null;
     }
-
     if (!retryAfter || retryAfter <= 0) {
       setCountdown(null);
       return;
     }
-
     const untilMs = Date.now() + retryAfter;
-
     const tick = () => {
       if (!mountedRef.current) return;
-
       const secondsLeft = safeSecondsLeft(untilMs);
       if (secondsLeft <= 0) {
         setCountdown(null);
         reset();
-
         if (retryTimerRef.current !== null) {
           window.clearInterval(retryTimerRef.current);
           retryTimerRef.current = null;
         }
         return;
       }
-
       setCountdown({ secondsLeft, untilMs });
     };
-
     tick();
-
     retryTimerRef.current = window.setInterval(() => {
-      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
-        return;
-      }
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       tick();
     }, 250);
-
     return () => {
       if (retryTimerRef.current !== null) {
         window.clearInterval(retryTimerRef.current);
@@ -369,32 +340,24 @@ function CheckoutButton({
 
   useEffect(() => {
     if (!reviewOpen) return;
-
     lastActiveElRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
-
     const focusTimeout = window.setTimeout(() => {
       closeBtnRef.current?.focus();
     }, 0);
-
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
         setReviewOpen(false);
         return;
       }
-
       if (event.key !== 'Tab') return;
-
       const root = modalRef.current;
       const focusable = getFocusable(root);
-
       if (focusable.length === 0) return;
-
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-
       if (event.shiftKey) {
         if (!active || active === first || !root?.contains(active)) {
           event.preventDefault();
@@ -402,15 +365,12 @@ function CheckoutButton({
         }
         return;
       }
-
       if (!active || active === last || !root?.contains(active)) {
         event.preventDefault();
         first.focus();
       }
     };
-
     window.addEventListener('keydown', onKeyDown);
-
     return () => {
       window.clearTimeout(focusTimeout);
       window.removeEventListener('keydown', onKeyDown);
@@ -419,14 +379,11 @@ function CheckoutButton({
 
   useEffect(() => {
     if (reviewOpen) return;
-
     const previous = lastActiveElRef.current;
     if (!previous || typeof previous.focus !== 'function') return;
-
     const timeout = window.setTimeout(() => {
       previous.focus();
     }, 0);
-
     return () => {
       window.clearTimeout(timeout);
     };
@@ -435,27 +392,22 @@ function CheckoutButton({
   const cooldownSeconds = countdown?.secondsLeft ?? 0;
   const disabledBecauseCooldown = cooldownSeconds > 0;
 
-  // ── Disabled state ────────────────────────────────────────────────────────
-  // CHANGED: !isAuthed replaced with !canProceed
-  // Guests with a valid email are now allowed to proceed.
   const disabled =
     disabledProp ||
     authLoading ||
     !stripeEnabled ||
-    !canProceed || // was: !isAuthed
+    !canProceed ||
     !canCheckout ||
     !hasItems ||
     isLoading ||
     disabledBecauseCooldown ||
     inflightRef.current;
 
-  // ── Button label ──────────────────────────────────────────────────────────
-  // CHANGED: removed loginRequired branch, added guestEmailRequired
   const buttonLabel = useMemo(() => {
     if (!stripeEnabled) return t('checkout.button.unavailable');
     if (authLoading) return t('checkout.button.loading');
     if (!hasItems) return t('checkout.button.cartEmpty');
-    if (!canProceed && !isAuthed) return t('checkout.button.emailRequired'); // guest: enter email
+    if (!canProceed && !isAuthed) return t('checkout.button.emailRequired');
     if (isLoading) return t('checkout.button.processing');
     if (disabledBecauseCooldown) return t('checkout.button.retryIn', { seconds: cooldownSeconds });
     return reviewFirst ? t('checkout.button.reviewOrder') : t('checkout.button.proceedToPayment');
@@ -493,9 +445,7 @@ function CheckoutButton({
   }, [disabledBecauseCooldown, reset]);
 
   // ── doCheckout ────────────────────────────────────────────────────────────
-  // CHANGED: allows guest path when !isAuthed but guestEmail is valid.
-  // Uses a synthetic customer_uid for guests (crypto UUID — server ignores
-  // it for anonymous orders, Stripe session is the source of truth).
+  // The router decides which edge function to hit. We just assemble args.
   const doCheckout = useCallback(async () => {
     if (disabled) return;
 
@@ -504,46 +454,30 @@ function CheckoutButton({
       return;
     }
 
-    // Resolve identity: logged-in user takes priority, then guest email
-    const resolvedEmail =
-      isAuthed && user
-        ? typeof user.email === 'string'
-          ? user.email
-          : undefined
-        : typeof guestEmail === 'string' && isValidEmail(guestEmail)
-          ? guestEmail.trim().toLowerCase()
-          : undefined;
-
-    if (!resolvedEmail) {
-      // Should not happen if disabled logic is correct, but guard anyway
-      onPromoError?.(t('checkout.error.emailRequired') ?? 'Please enter a valid email.');
-      return;
-    }
-
     if (inflightRef.current) return;
     inflightRef.current = true;
 
     try {
-      await redirectToCheckout({
-        // Auth users: real user.id. Guests: ephemeral UUID (server uses Stripe session).
-        customer_uid: isAuthed && user?.id ? user.id : crypto.randomUUID(),
-        email: resolvedEmail,
-        name:
-          isAuthed && isRecord(user)
-            ? typeof user.name === 'string'
-              ? user.name
-              : typeof user.full_name === 'string'
-                ? user.full_name
-                : undefined
-            : undefined,
-        phone:
-          isAuthed && isRecord(user) && typeof user.phone === 'string' ? user.phone : undefined,
-        promo_code: normalizedPromo,
-        credit_id: normalizedCreditId,
-        orderType: normalizedOrderType,
-        notes,
-        loyalty: isAuthed ? loyalty : undefined, // loyalty only for auth users
-      });
+      if (isAuthed && user) {
+        // AUTH PATH → useAuthCheckout → create-checkout (Bearer)
+        await redirectToCheckout({
+          customer_uid: user.id,
+          orderType: normalizedOrderType,
+          notes,
+          promoCode: normalizedPromo,
+          promoId: undefined,
+          creditId: normalizedCreditId,
+          loyalty,
+        });
+      } else {
+        // GUEST PATH → useGuestCheckout → create-checkout-guest (no auth header)
+        // Router validates guestEmail; no customer_uid, no loyalty/promo/credit.
+        await redirectToCheckout({
+          guestEmail,
+          orderType: normalizedOrderType,
+          notes,
+        });
+      }
     } catch (checkoutError: unknown) {
       const message =
         checkoutError instanceof Error ? checkoutError.message : t('checkout.error.checkoutFailed');
@@ -577,12 +511,10 @@ function CheckoutButton({
 
   const handlePrimaryClick = useCallback(() => {
     if (disabled) return;
-
     if (reviewFirst) {
       setReviewOpen(true);
       return;
     }
-
     void doCheckout();
   }, [disabled, reviewFirst, doCheckout]);
 
@@ -621,7 +553,6 @@ function CheckoutButton({
             <p className="mt-1 text-xs text-amber-800">{t('checkout.error.notConfiguredBody')}</p>
           </div>
         </div>
-
         <button
           type="button"
           disabled
@@ -656,7 +587,6 @@ function CheckoutButton({
             ) : null}
           </div>
         </div>
-
         {canRetry ? (
           <button
             type="button"
@@ -676,7 +606,6 @@ function CheckoutButton({
             </span>
           </button>
         ) : null}
-
         <button
           type="button"
           onClick={reset}
@@ -697,6 +626,7 @@ function CheckoutButton({
         disabled={disabled}
         aria-disabled={disabled}
         aria-busy={isLoading ? 'true' : 'false'}
+        data-checkout-mode={mode}
         className={cx(
           'group relative w-full overflow-hidden rounded-xl px-6 py-4 transition',
           'bg-linear-to-r from-zinc-900 to-zinc-800 shadow-sm',
@@ -719,7 +649,6 @@ function CheckoutButton({
         <div className="relative flex items-center justify-center gap-3">
           {isAuthed ? <CreditCard className="h-5 w-5" /> : <ShieldCheck className="h-5 w-5" />}
           <span className="text-base font-semibold">{buttonLabel}</span>
-
           {shimmerEnabled ? (
             <span
               aria-hidden="true"
@@ -742,13 +671,10 @@ function CheckoutButton({
           aria-labelledby={modalTitleId}
           aria-describedby={modalDescId}
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setReviewOpen(false);
-            }
+            if (event.target === event.currentTarget) setReviewOpen(false);
           }}
         >
           <div ref={modalRef} className="w-full max-w-xl rounded-2xl bg-white shadow-2xl">
-            {/* Modal header */}
             <div className="flex items-start justify-between border-b border-zinc-200 p-5">
               <div className="min-w-0">
                 <h3 id={modalTitleId} className="text-lg font-semibold text-zinc-900">
@@ -758,7 +684,6 @@ function CheckoutButton({
                   {t('checkout.modal.description')}
                 </p>
               </div>
-
               <button
                 ref={closeBtnRef}
                 type="button"
@@ -770,7 +695,6 @@ function CheckoutButton({
               </button>
             </div>
 
-            {/* Modal body */}
             <div className="max-h-[60vh] overflow-y-auto p-5">
               {!hasItems ? (
                 <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-700">
@@ -782,7 +706,6 @@ function CheckoutButton({
                     {safeItems.map((item) => {
                       const key = cartItemKey(item.menuItemId, item.modifiers);
                       const modifiersText = modifierLabel(item.modifiers);
-
                       return (
                         <div key={key} className="rounded-xl border border-zinc-200 p-4">
                           <div className="flex items-start justify-between gap-3">
@@ -790,11 +713,9 @@ function CheckoutButton({
                               <p className="truncate text-sm font-semibold text-zinc-900">
                                 {item.name}
                               </p>
-
                               {modifiersText ? (
                                 <p className="mt-1 text-xs text-zinc-600">{modifiersText}</p>
                               ) : null}
-
                               {item.notes ? (
                                 <p className="mt-1 text-xs text-zinc-500">
                                   {t('checkout.modal.notePrefix')}
@@ -802,7 +723,6 @@ function CheckoutButton({
                                 </p>
                               ) : null}
                             </div>
-
                             <div className="shrink-0 text-right">
                               <p className="text-sm font-semibold text-zinc-900">
                                 {formatCents(safeLineTotalCents(item))}
@@ -819,7 +739,6 @@ function CheckoutButton({
                     })}
                   </div>
 
-                  {/* Totals */}
                   <div className="mt-5 rounded-2xl bg-zinc-50 p-4 ring-1 ring-zinc-200">
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-zinc-600">{t('checkout.modal.subtotal')}</span>
@@ -827,34 +746,29 @@ function CheckoutButton({
                         {reviewSubtotalLabel}
                       </span>
                     </div>
-
                     <div className="mt-3 flex items-center justify-between text-sm">
                       <span className="text-zinc-700">{t('checkout.modal.estimatedTotal')}</span>
                       <span className="text-base font-bold text-zinc-900 tabular-nums">
                         {reviewTotalLabel}
                       </span>
                     </div>
-
                     <p className="mt-2 text-[11px] text-zinc-500">
                       {t('checkout.modal.totalDisclaimer')}
                     </p>
                   </div>
 
-                  {/* Order meta */}
                   <div className="mt-4 space-y-1 text-xs text-zinc-600">
                     <div className="flex items-center justify-between">
                       <span>{t('checkout.modal.orderType')}</span>
                       <span className="font-semibold text-zinc-900">{orderTypeLabel}</span>
                     </div>
-
-                    {normalizedPromo ? (
+                    {normalizedPromo && isAuthed ? (
                       <div className="flex items-center justify-between">
                         <span>{t('checkout.modal.promoCode')}</span>
                         <span className="font-semibold text-zinc-900">{normalizedPromo}</span>
                       </div>
                     ) : null}
-
-                    {normalizedCreditId ? (
+                    {normalizedCreditId && isAuthed ? (
                       <div className="flex items-center justify-between">
                         <span>{t('checkout.modal.credit')}</span>
                         <span className="font-semibold text-zinc-900">
@@ -862,7 +776,6 @@ function CheckoutButton({
                         </span>
                       </div>
                     ) : null}
-
                     {safeNotesPreview ? (
                       <div className="mt-2 rounded-lg border border-zinc-200 bg-white p-3">
                         <p className="text-[11px] font-semibold text-zinc-800">
@@ -876,7 +789,6 @@ function CheckoutButton({
               )}
             </div>
 
-            {/* Modal footer */}
             <div className="flex flex-col gap-3 border-t border-zinc-200 p-5 sm:flex-row sm:justify-end">
               <button
                 type="button"
@@ -885,7 +797,6 @@ function CheckoutButton({
               >
                 {t('checkout.modal.back')}
               </button>
-
               <button
                 type="button"
                 disabled={disabled}
