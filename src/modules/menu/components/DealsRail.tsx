@@ -335,7 +335,7 @@ function DealsRailImpl({
       const isSelected = selectedDealId !== null && selectedDealId === deal.id;
 
       const sharedClassName = cx(
-        'group relative flex h-full min-h-[160px] w-[18.5rem] shrink-0 snap-start flex-col justify-between overflow-hidden rounded-2xl border',
+        'group relative flex h-full min-h-[160px] w-74 shrink-0 snap-start flex-col justify-between overflow-hidden rounded-2xl border',
         deal.featured ? 'border-amber-400/35' : 'border-white/10',
         isSelected ? 'ring-2 ring-amber-400/35' : 'ring-0',
         'bg-linear-to-br from-neutral-950 via-neutral-900 to-neutral-900 p-4 text-left shadow-sm transition',

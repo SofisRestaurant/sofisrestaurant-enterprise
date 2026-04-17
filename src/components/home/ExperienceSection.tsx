@@ -27,7 +27,7 @@ function ImageTile({
   alt,
   gradient,
   className  = '',
-  aspectClass = 'aspect-[4/3]',
+  aspectClass = 'aspect-4/3',
 }: ImageTileProps) {
   return (
     <m.div
@@ -238,7 +238,7 @@ export function ExperienceSection() {
             <ImageTile
               alt="Restaurant interior at Sofi's"
               gradient="radial-gradient(circle at 40% 30%, #7A4020 0%, #3A1A08 50%, #1C0E04 100%)"
-              aspectClass="aspect-[3/4]"
+              aspectClass="aspect-3/4"
               className="row-span-2"
             />
             <ImageTile

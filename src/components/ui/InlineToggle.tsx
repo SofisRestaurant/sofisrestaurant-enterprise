@@ -32,7 +32,7 @@ export function InlineToggle({
 
   const trackSize = size === 'sm' ? 'h-5 w-9' : 'h-6 w-11';
   const thumbSize = size === 'sm' ? 'h-3.5 w-3.5 translate-x-0.5' : 'h-4 w-4 translate-x-1';
-  const thumbChecked = size === 'sm' ? 'translate-x-[1.15rem]' : 'translate-x-[1.375rem]';
+  const thumbChecked = size === 'sm' ? 'translate-x-[1.15rem]' : 'translate-x-5.5';
 
   return (
     <label

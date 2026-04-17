@@ -174,7 +174,7 @@ function MenuRow({ entry, delay }: { entry: MenuEntry; delay: number }) {
             <span
               key={t}
               className="rounded-full border px-1.5 py-0.5 font-body
-                         text-[0.55rem] font-medium uppercase tracking-[0.10em]"
+                         text-[0.55rem] font-medium uppercase tracking-widest"
               style={
                 TAG_STYLES[t] ?? {
                   color: 'var(--color-ink-400, #a89888)',
@@ -192,7 +192,7 @@ function MenuRow({ entry, delay }: { entry: MenuEntry; delay: number }) {
       </div>
 
       <span
-        className="mt-0.5 flex-shrink-0 font-serif font-light"
+        className="mt-0.5 shrink-0 font-serif font-light"
         style={{ fontSize: '1.18rem', color: 'var(--color-ember-500, #a96840)' }}
       >
         {entry.price}
@@ -227,8 +227,8 @@ function Tab({ cat, active, onClick }: { cat: Category; active: boolean; onClick
       aria-selected={active}
       onClick={onClick}
       className={[
-        'relative flex-shrink-0 rounded-full font-body text-[0.70rem] font-medium',
-        'uppercase tracking-[0.10em] px-4 py-1.5 transition-all duration-200',
+        'relative shrink-0 rounded-full font-body text-[0.70rem] font-medium',
+        'uppercase tracking-widest px-4 py-1.5 transition-all duration-200',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
         active ? 'text-white shadow-sm' : 'border',
       ].join(' ')}

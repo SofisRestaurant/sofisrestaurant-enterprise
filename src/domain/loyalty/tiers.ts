@@ -64,7 +64,7 @@ export const LOYALTY_TIERS: Record<LoyaltyTier, TierConfig> = {
     gradient: 'from-amber-700 via-amber-600 to-amber-500',
     ring: 'ring-amber-600/40',
     badge: 'bg-amber-50 text-amber-800 border-amber-200',
-    bar: 'bg-gradient-to-r from-amber-600 to-amber-400',
+    bar: 'bg-linear-to-r from-amber-600 to-amber-400',
     glow: 'shadow-amber-200',
 
     qr: {
@@ -92,7 +92,7 @@ export const LOYALTY_TIERS: Record<LoyaltyTier, TierConfig> = {
     gradient: 'from-slate-500 via-slate-400 to-slate-300',
     ring: 'ring-slate-400/40',
     badge: 'bg-slate-50 text-slate-700 border-slate-200',
-    bar: 'bg-gradient-to-r from-slate-500 to-slate-300',
+    bar: 'bg-linear-to-r from-slate-500 to-slate-300',
     glow: 'shadow-slate-200',
 
     qr: {
@@ -120,7 +120,7 @@ export const LOYALTY_TIERS: Record<LoyaltyTier, TierConfig> = {
     gradient: 'from-yellow-600 via-amber-500 to-yellow-400',
     ring: 'ring-yellow-500/40',
     badge: 'bg-yellow-50 text-yellow-800 border-yellow-200',
-    bar: 'bg-gradient-to-r from-yellow-500 to-amber-400',
+    bar: 'bg-linear-to-r from-yellow-500 to-amber-400',
     glow: 'shadow-yellow-200',
 
     qr: {
@@ -148,7 +148,7 @@ export const LOYALTY_TIERS: Record<LoyaltyTier, TierConfig> = {
     gradient: 'from-blue-900 via-blue-700 to-indigo-500',
     ring: 'ring-blue-500/40',
     badge: 'bg-blue-50 text-blue-800 border-blue-200',
-    bar: 'bg-gradient-to-r from-blue-700 to-indigo-500',
+    bar: 'bg-linear-to-r from-blue-700 to-indigo-500',
     glow: 'shadow-blue-200',
 
     qr: {

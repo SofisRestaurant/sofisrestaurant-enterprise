@@ -2,22 +2,22 @@
 // =============================================================================
 // CartDrawer — zero Headless UI, pure CSS data-state transitions
 // =============================================================================
-// Why no Headless UI at all:
-//   Dialog's FocusTrap swallows pointer events on iOS Safari.
-//   Transition's wrapper divs create stacking contexts that compete with
-//   AuthModals, ModalRenderer, and ScrollSafety in RootLayout.
-//   Both issues are structural and cannot be patched around.
+// Architecture:
+//   - createPortal → document.body, z-9999 (above AuthModals, ModalRenderer)
+//   - CSS .cart-sheet / .cart-panel + data-state transitions (no JS animation)
+//   - pointer-events: none when closed — invisible panels never eat touches
+//   - touch-action: pan-y on sheet + scroll container (iOS tap-cancel fix)
+//   - useLayoutEffect clears stale drag inline styles before first paint
+//   - Manual focus trap + scroll lock, no Headless UI dependencies
 //
-// Solution (Radix/shadcn pattern):
-//   - createPortal to document.body
-//   - z-[9999] — above every other overlay in the app
-//   - data-[state=open/closed] CSS transitions — no JS animation library
-//   - pointer-events-none when closed (panels still in DOM for instant open)
-//   - touchAction: pan-y — prevents iOS from cancelling taps in scroll containers
-//   - Manual focus trap and scroll lock (30 lines, no dependencies)
+// Transform ownership contract:
+//   OPEN:   CSS data-state="open" owns transform (inline styles cleared)
+//   DRAG:   useCartDrawerDrag owns transform (inline style set directly)
+//   DISMISS:drag hook clears inline style BEFORE calling onClose, so React's
+//           next render starts clean — no race condition on Chrome or Safari
 // =============================================================================
 
-import { useCallback, useEffect, useRef, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { X } from 'lucide-react';
@@ -33,9 +33,11 @@ import { useCartDrawerDrag } from '@/modules/cart/gestures/useCartDrawerDrag';
 import { CartLineItem } from '@/modules/cart/components/CartLineItem';
 import { CartFooter } from '@/modules/cart/components/CartFooter';
 
-// ─── Inject transition CSS once ───────────────────────────────────────────────
+// ─── Inject CSS transition rules once ─────────────────────────────────────────
+// Kept in JS so this file is self-contained and the rules are guaranteed to
+// load regardless of CSS bundle splitting or SSR hydration order.
 
-const CSS = `
+const CART_CSS = `
 .cart-backdrop {
   transition: opacity 250ms ease;
 }
@@ -63,14 +65,14 @@ const CSS = `
 }
 `;
 
-let injected = false;
+let cssInjected = false;
 function injectCSS() {
-  if (injected || typeof document === 'undefined') return;
-  const s = document.createElement('style');
-  s.setAttribute('data-cart', '');
-  s.textContent = CSS;
-  document.head.appendChild(s);
-  injected = true;
+  if (cssInjected || typeof document === 'undefined') return;
+  const el = document.createElement('style');
+  el.setAttribute('data-cart-drawer', '');
+  el.textContent = CART_CSS;
+  document.head.appendChild(el);
+  cssInjected = true;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -102,11 +104,9 @@ function DragHandle({ onClose }: { onClose: () => void }) {
       className="flex cursor-grab touch-none select-none flex-col items-center justify-center gap-1 pb-2 pt-3 active:cursor-grabbing"
       aria-hidden="true"
     >
-      <div className="h-1.25px w-10 rounded-full" style={{ background: 'rgba(28,25,21,0.2)' }} />
-      <span
-        className="text-[9px] uppercase tracking-widest opacity-30"
-        style={{ color: '#1c1915', letterSpacing: '0.12em' }}
-      >
+      {/* h-1.25 = 5px in Tailwind v4 spacing scale */}
+      <div className="h-1.25 w-10 rounded-full bg-[rgba(28,25,21,0.2)]" />
+      <span className="text-[9px] uppercase tracking-[0.12em] text-stone-900 opacity-30">
         swipe down to close
       </span>
     </div>
@@ -126,15 +126,12 @@ function PricingRow({
   green?: boolean;
   muted?: boolean;
 }) {
+  const labelCls = green ? 'text-[#4a7a5a]' : muted ? 'text-[#a89080]' : 'text-[#8a7a6a]';
+  const valueCls = green ? 'text-[#2a6a3a]' : muted ? 'text-[#a89080]' : 'text-[#1c1915]';
   return (
     <div className="flex justify-between text-sm">
-      <span style={{ color: green ? '#4a7a5a' : muted ? '#a89080' : '#8a7a6a' }}>{label}</span>
-      <span
-        className="tabular-nums font-medium"
-        style={{ color: green ? '#2a6a3a' : muted ? '#a89080' : '#1c1915' }}
-      >
-        {value}
-      </span>
+      <span className={labelCls}>{label}</span>
+      <span className={`tabular-nums font-medium ${valueCls}`}>{value}</span>
     </div>
   );
 }
@@ -144,24 +141,17 @@ function PricingRow({
 function LoyaltyBanner({ pts }: { pts: number }) {
   if (pts <= 0) return null;
   return (
-    <div
-      className="relative mx-4 mb-3 flex shrink-0 items-center justify-between overflow-hidden rounded-xl px-4 py-2"
-      style={{ background: 'linear-gradient(90deg,#c9a42e 0%,#e8c46a 50%,#d4af37 100%)' }}
-    >
+    <div className="relative mx-4 mb-3 flex shrink-0 items-center justify-between overflow-hidden rounded-xl px-4 py-2 bg-[linear-gradient(90deg,#c9a42e_0%,#e8c46a_50%,#d4af37_100%)]">
+      {/* Shimmer sweep — animation references @keyframes cart-shimmer injected above */}
       <span
         aria-hidden="true"
-        className="pointer-events-none absolute inset-y-0 -left-full w-1/3"
-        style={{
-          background: 'linear-gradient(90deg,transparent,rgba(255,255,255,0.3),transparent)',
-          animation: 'cart-shimmer 3.5s ease-in-out 1s infinite',
-        }}
+        className="pointer-events-none absolute inset-y-0 -left-full w-1/3 bg-[linear-gradient(90deg,transparent,rgba(255,255,255,0.3),transparent)]"
+        style={{ animation: 'cart-shimmer 3.5s ease-in-out 1s infinite' }}
       />
-      <p className="relative text-xs font-semibold" style={{ color: '#1c1915' }}>
+      <p className="relative text-xs font-semibold text-[#1c1915]">
         ✨ Earn <strong>+{pts} pts</strong> on this order
       </p>
-      <p className="relative text-[10px] font-medium" style={{ color: 'rgba(28,25,21,0.55)' }}>
-        $1 = 1 pt
-      </p>
+      <p className="relative text-[10px] font-medium text-[rgba(28,25,21,0.55)]">$1 = 1 pt</p>
     </div>
   );
 }
@@ -184,14 +174,7 @@ function CartContent({
   if (!hasItems) {
     return (
       <div className="flex min-h-[40vh] flex-col items-center justify-center px-6 py-10 text-center">
-        <div
-          className="mb-5 flex h-20 w-20 items-center justify-center rounded-full"
-          style={{
-            background:
-              'radial-gradient(circle at 40% 35%,rgba(212,175,55,0.12),rgba(212,175,55,0.04))',
-            border: '2px dashed rgba(212,175,55,0.25)',
-          }}
-        >
+        <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-full border-2 border-dashed border-[rgba(212,175,55,0.25)] bg-[radial-gradient(circle_at_40%_35%,rgba(212,175,55,0.12),rgba(212,175,55,0.04))]">
           <svg
             width="30"
             height="30"
@@ -208,13 +191,10 @@ function CartContent({
             <path d="M16 10a4 4 0 01-8 0" />
           </svg>
         </div>
-        <h3
-          className="mb-2 text-xl font-semibold"
-          style={{ color: '#1c1915', fontFamily: 'var(--font-display,serif)' }}
-        >
+        <h3 className="mb-2 font-semibold text-xl text-[#1c1915] font-(family-name:--font-display,serif)">
           Your cart is empty
         </h3>
-        <p className="mb-7 text-sm leading-relaxed" style={{ color: '#8a7a6a' }}>
+        <p className="mb-7 text-sm leading-relaxed text-[#8a7a6a]">
           Fresh plates, made to order.
           <br />
           Add something delicious.
@@ -222,11 +202,7 @@ function CartContent({
         <button
           type="button"
           onClick={closeCart}
-          className="rounded-2xl px-8 py-3 text-sm font-bold text-white transition-all active:scale-95"
-          style={{
-            background: 'linear-gradient(135deg,#1c1915,#3e3830)',
-            boxShadow: '0 4px 16px rgba(28,25,21,0.3)',
-          }}
+          className="rounded-2xl px-8 py-3 text-sm font-bold text-white bg-[linear-gradient(135deg,#1c1915,#3e3830)] shadow-[0_4px_16px_rgba(28,25,21,0.3)] transition-all active:scale-95"
         >
           Browse Menu
         </button>
@@ -236,13 +212,13 @@ function CartContent({
 
   return (
     <div className="space-y-3 px-4 pb-4 pt-1">
-      <div className="divide-y rounded-2xl bg-white px-3" style={{ border: '1px solid #ede0ce' }}>
+      <div className="divide-y rounded-2xl bg-white px-3 border border-[#ede0ce]">
         {items.map((item) => (
           <CartLineItem key={cartItemKey(item.menuItemId, item.modifiers)} item={item} />
         ))}
       </div>
 
-      <div className="space-y-1.5 rounded-2xl bg-white p-4" style={{ border: '1px solid #ede0ce' }}>
+      <div className="space-y-1.5 rounded-2xl bg-white p-4 border border-[#ede0ce]">
         <PricingRow label="Subtotal" value={fmt(totals.subtotalCents)} />
         {totals.hasDiscount && (
           <PricingRow label="Promo discount" value={`−${fmt(totals.discountCents)}`} green />
@@ -251,20 +227,20 @@ function CartContent({
           <PricingRow label="Account credit" value={`−${fmt(totals.creditCents)}`} green />
         )}
         <PricingRow label="Est. tax (9.5%)" value={fmt(totals.taxCents)} muted />
-        <div className="flex justify-between border-t pt-2" style={{ borderColor: '#ede0ce' }}>
-          <span className="font-bold" style={{ color: '#1c1915' }}>
-            Total
-          </span>
-          <span className="text-base font-black tabular-nums" style={{ color: '#1c1915' }}>
+
+        <div className="flex justify-between border-t border-[#ede0ce] pt-2">
+          <span className="font-bold text-[#1c1915]">Total</span>
+          <span className="text-base font-black tabular-nums text-[#1c1915]">
             {fmt(totals.totalCents)}
           </span>
         </div>
+
         {flags.inconsistent && (
-          <p className="pt-0.5 text-[11px]" style={{ color: '#c05030' }}>
+          <p className="pt-0.5 text-[11px] text-[#c05030]">
             ⚠ Pricing inconsistent — confirmed at checkout.
           </p>
         )}
-        <p className="pt-0.5 text-[10px] leading-snug" style={{ color: '#c0b0a0' }}>
+        <p className="pt-0.5 text-[10px] leading-snug text-[#c0b0a0]">
           Final total confirmed at secure checkout via Stripe.
         </p>
       </div>
@@ -280,21 +256,27 @@ function useFocusTrap(ref: React.RefObject<HTMLElement | null>, active: boolean)
     const el = ref.current;
     if (!el) return;
 
-    const sel =
-      'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
-    const get = () => Array.from(el.querySelectorAll<HTMLElement>(sel));
+    const sel = [
+      'a[href]',
+      'button:not([disabled])',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      'textarea:not([disabled])',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(',');
 
-    get()[0]?.focus();
+    const focusable = () => Array.from(el.querySelectorAll<HTMLElement>(sel));
+    focusable()[0]?.focus();
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Tab') return;
-      const els = get();
-      if (!els.length) return;
+      const els = focusable();
       const first = els[0];
       const last = els[els.length - 1];
+      if (!first) return;
       if (e.shiftKey && document.activeElement === first) {
         e.preventDefault();
-        last.focus();
+        last?.focus();
       }
       if (!e.shiftKey && document.activeElement === last) {
         e.preventDefault();
@@ -348,14 +330,17 @@ export function CartDrawer() {
   const hasItems = items.length > 0;
   const pts = Math.max(0, Math.floor(sc(totals.subtotalCents) / 100));
 
+  // Inject CSS rules on first render
   useEffect(() => {
     injectCSS();
   }, []);
+
+  // Reset clear confirm when drawer closes
   useEffect(() => {
     if (!isOpen) setConfirmClear(false);
   }, [isOpen]);
 
-  // Close on route change
+  // Close on route change (e.g. user taps a link inside the drawer)
   useEffect(() => {
     if (isOpen) closeCart();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -373,7 +358,27 @@ export function CartDrawer() {
     };
   }, [isOpen, closeCart]);
 
-  // Focus trap targets the visible panel
+  /**
+   * useLayoutEffect — synchronous inline-style cleanup before paint.
+   *
+   * useCartDrawerDrag clears inline styles BEFORE calling onClose (see the
+   * hook). This useLayoutEffect is a belt-and-suspenders safety net: if for
+   * any reason the hook's cleanup didn't run (cancelled pointer, race on slow
+   * devices), this fires synchronously after React's DOM mutation but BEFORE
+   * the browser paints — guaranteeing the CSS class rule owns the transform
+   * from the very first frame the panel is open.
+   *
+   * useEffect would run after paint, creating a one-frame flash on Chrome
+   * where the panel could appear at translateY(110%) before snapping to 0.
+   */
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    const el = mobileRef.current;
+    if (!el) return;
+    el.style.transform = '';
+    el.style.transition = '';
+  }, [isOpen]);
+
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   useFocusTrap(isMobile ? mobileRef : desktopRef, isOpen);
   useScrollLock(isOpen);
@@ -387,10 +392,7 @@ export function CartDrawer() {
 
   const badge =
     count > 0 ? (
-      <span
-        className="inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-black"
-        style={{ background: '#d4af37', color: '#1c1915' }}
-      >
+      <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[#d4af37] px-1.5 text-[11px] font-black text-[#1c1915]">
         {count > 99 ? '99+' : count}
       </span>
     ) : null;
@@ -409,52 +411,35 @@ export function CartDrawer() {
 
   return createPortal(
     <>
-      {/* Backdrop */}
+      {/* ── Backdrop ──────────────────────────────────────────────────── */}
       <div
-        className="cart-backdrop fixed inset-0"
+        className="cart-backdrop fixed inset-0 z-9998 bg-black/50 backdrop-blur-[2px]"
         data-state={state}
         onClick={closeCart}
         aria-hidden="true"
-        style={{
-          backgroundColor: 'rgba(0,0,0,0.5)',
-          backdropFilter: 'blur(2px)',
-          WebkitBackdropFilter: 'blur(2px)',
-          zIndex: 9998,
-        }}
       />
 
-      {/* MOBILE — bottom sheet, hidden on md+ */}
+      {/* ── MOBILE: bottom sheet (< md) ───────────────────────────────── */}
       <div
         ref={mobileRef}
         data-cart-sheet
         data-state={state}
-        className="cart-sheet fixed inset-x-0 bottom-0 flex flex-col md:hidden"
-        style={{
-          background: '#faf8f4',
-          borderRadius: '1.5rem 1.5rem 0 0',
-          boxShadow: '0 -2px 0 rgba(212,175,55,0.18),0 -8px 40px rgba(28,25,21,0.18)',
-          maxHeight: '92dvh',
-          zIndex: 9999,
-          touchAction: 'pan-y',
-        }}
+        className="cart-sheet fixed inset-x-0 bottom-0 z-9999 flex max-h-[92dvh] flex-col rounded-t-3xl bg-[#faf8f4] shadow-[0_-2px_0_rgba(212,175,55,0.18),0_-8px_40px_rgba(28,25,21,0.18)] touch-pan-y md:hidden"
         role="dialog"
         aria-modal="true"
         aria-label="Your cart"
       >
         <DragHandle onClose={closeCart} />
 
+        {/* Header row */}
         <div className="flex shrink-0 items-center justify-between px-5 pb-3">
-          <h2
-            className="flex items-center gap-2 text-lg font-bold"
-            style={{ color: '#1c1915', fontFamily: 'var(--font-display,serif)' }}
-          >
+          <h2 className="flex items-center gap-2 text-lg font-bold text-[#1c1915] font-(family-name:--font-display,serif)">
             Your Order {badge}
           </h2>
           <button
             type="button"
             onClick={closeCart}
-            className="flex h-8 w-8 items-center justify-center rounded-full transition-colors active:scale-95"
-            style={{ background: 'rgba(28,25,21,0.07)', color: '#8a7a6a' }}
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-[rgba(28,25,21,0.07)] text-[#8a7a6a] transition-colors active:scale-95"
             aria-label="Close cart"
           >
             <X className="h-4 w-4" />
@@ -463,41 +448,31 @@ export function CartDrawer() {
 
         {hasItems && <LoyaltyBanner pts={pts} />}
 
-        <div
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
-          style={{ touchAction: 'pan-y' } as React.CSSProperties}
-        >
+        {/* Scroll body — touch-pan-y prevents iOS from cancelling button taps */}
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y">
           <CartContent {...contentProps} />
         </div>
 
         {hasItems && <CartFooter {...footerProps} />}
       </div>
 
-      {/* DESKTOP — right panel, hidden below md */}
+      {/* ── DESKTOP: right panel (md+) ────────────────────────────────── */}
       <div
         ref={desktopRef}
         data-state={state}
-        className="cart-panel fixed inset-y-0 right-0 hidden w-full max-w-md flex-col md:flex"
-        style={{ background: '#faf8f4', zIndex: 9999 }}
+        className="cart-panel fixed inset-y-0 right-0 z-9999 hidden w-full max-w-md flex-col bg-[#faf8f4] md:flex"
         role="dialog"
         aria-modal="true"
         aria-label="Your cart"
       >
-        <div
-          className="shrink-0 flex items-center justify-between px-5 py-4"
-          style={{
-            background: 'linear-gradient(135deg,rgba(28,25,21,0.97) 0%,rgba(46,42,36,0.97) 100%)',
-            backdropFilter: 'blur(20px)',
-            WebkitBackdropFilter: 'blur(20px)',
-            borderBottom: '1px solid rgba(212,175,55,0.2)',
-          }}
-        >
+        {/* Dark frosted header */}
+        <div className="flex shrink-0 items-center justify-between border-b border-[rgba(212,175,55,0.2)] px-5 py-4 backdrop-blur-xl bg-[linear-gradient(135deg,rgba(28,25,21,0.97)_0%,rgba(46,42,36,0.97)_100%)]">
           <div>
             <h2 className="flex items-center gap-2 text-base font-bold text-white">
               Your Order {badge}
             </h2>
             {hasItems && (
-              <p className="mt-0.5 text-xs" style={{ color: 'rgba(255,255,255,0.45)' }}>
+              <p className="mt-0.5 text-xs text-white/45">
                 {count} item{count !== 1 ? 's' : ''} · {fmt(totals.subtotalCents)} subtotal
               </p>
             )}
@@ -505,8 +480,7 @@ export function CartDrawer() {
           <button
             type="button"
             onClick={closeCart}
-            className="flex h-8 w-8 items-center justify-center rounded-full transition-colors hover:bg-white/10"
-            style={{ background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.65)' }}
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-white/80 text-white/65 transition-colors hover:bg-white/15"
             aria-label="Close cart"
           >
             <X className="h-4 w-4" />

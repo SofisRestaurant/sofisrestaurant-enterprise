@@ -41,10 +41,10 @@ export function Button({
     inline-flex items-center justify-center gap-2
     font-semibold tracking-tight
     transition-all duration-200
-    ease-[var(--ease-standard)]
+    ease-(--ease-standard)
     focus:outline-none
     focus-visible:ring-4
-    focus-visible:ring-[var(--color-gold-400)]/30
+    focus-visible:ring-(--color-gold-400)/30
     disabled:opacity-50 disabled:cursor-not-allowed
     relative
   `;
@@ -52,9 +52,9 @@ export function Button({
   const variants: Record<NonNullable<ButtonProps['variant']>, string> = {
     primary: `
   relative
-  bg-gradient-to-r 
-  from-[var(--color-gold-400)] 
-  to-[var(--color-gold-300)]
+  bg-linear-to-r 
+  from-(--color-gold-400) 
+  to-(--color-gold-300)
   text-black
 
   font-semibold tracking-tight
@@ -64,7 +64,7 @@ export function Button({
 
   shadow-[0_4px_14px_rgba(0,0,0,0.15)]
 
-  transition-all duration-200 ease-[var(--ease-luxury)]
+  transition-all duration-200 ease-(--ease-luxury)
 
   hover:shadow-[0_6px_20px_rgba(0,0,0,0.22)]
   hover:brightness-105
@@ -73,36 +73,36 @@ export function Button({
   active:shadow-[0_2px_8px_rgba(0,0,0,0.18)]
 
   focus-visible:ring-4
-  focus-visible:ring-[var(--color-gold-400)]/30
+  focus-visible:ring-(--color-gold-400)/30
 
   disabled:opacity-50
   disabled:cursor-not-allowed
 `,
     secondary: `
-      bg-[var(--btn-secondary-bg)]
-      text-[var(--btn-secondary-text)]
-      border border-[var(--btn-secondary-border)]
+      bg-(--btn-secondary-bg)
+      text-(--btn-secondary-text)
+      border border-(--btn-secondary-border)
       hover:brightness-105
       active:scale-[0.98]
     `,
     outline: `
-      border border-[var(--btn-outline-border)]
-      text-[var(--btn-outline-text)]
+      border border-(--btn-outline-border)
+      text-(--btn-outline-text)
       bg-transparent
-      hover:bg-[var(--btn-outline-border)]/10
+      hover:bg-(--btn-outline-border)/10
       active:scale-[0.98]
     `,
     danger: `
-      bg-[var(--btn-danger-bg)]
-      text-[var(--btn-danger-text)]
+      bg-(--btn-danger-bg)
+      text-(--btn-danger-text)
       hover:brightness-110
       active:scale-[0.98]
     `,
     glass: `
-      bg-[var(--btn-glass-bg)]
+      bg-(--btn-glass-bg)
       backdrop-blur
-      border border-[var(--btn-glass-border)]
-      text-[var(--text-primary)]
+      border border-(--btn-glass-border)
+      text-(--text-primary)
       hover:brightness-110
       active:scale-[0.98]
     `,

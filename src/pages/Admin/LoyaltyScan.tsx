@@ -908,7 +908,7 @@ export default function LoyaltyScan() {
     () =>
       isScanning
         ? 'mb-4 overflow-hidden rounded-2xl border border-white/8 bg-gray-900'
-        : 'pointer-events-none fixed -left-[10000px] top-0 h-[1px] w-[1px] overflow-hidden opacity-0',
+        : 'pointer-events-none fixed -left-[10000px] top-0 h-px w-px overflow-hidden opacity-0',
     [isScanning],
   );
 

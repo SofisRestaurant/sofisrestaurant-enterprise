@@ -180,7 +180,7 @@ export function AdminTaxesPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-white">
-      <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+      <div className="max-w-(--breakpoint-2xl) mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
         <PageHeader
           lastFetchedAt={tax.lastFetchedAt}
           isAnyLoading={tax.isAnyLoading}

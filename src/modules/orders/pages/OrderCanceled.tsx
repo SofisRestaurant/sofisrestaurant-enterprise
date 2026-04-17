@@ -263,9 +263,9 @@ const BANNER_CLASSES: Record<IconKind | 'loading', string> = {
   time: 'from-(--color-warning) to-(--color-gold-300)',
   warn: 'from-(--color-warning) to-(--color-gold-300)',
   cancel: 'from-(--color-error) to-(--color-ember-400)',
-  // bg-linear-to-r is the Tailwind v4 canonical form of bg-gradient-to-r
+  // bg-linear-to-r is the Tailwind v4 canonical form of bg-linear-to-r
   loading:
-    'from-(--color-cream-300) via-(--color-cream-200) to-(--color-cream-300) animate-shimmer bg-[length:300%_100%]',
+    'from-(--color-cream-300) via-(--color-cream-200) to-(--color-cream-300) animate-shimmer bg-size-[300%_100%]',
 };
 
 function StatusBanner({ kind }: BannerProps): React.ReactElement {
@@ -293,7 +293,7 @@ function SessionPill({ sessionId, badge }: SessionPillProps): React.ReactElement
 
   return (
     <div
-      // rounded-(--radius-pill) is the Tailwind v4 canonical form of rounded-[var(--radius-pill)]
+      // rounded-(--radius-pill) is the Tailwind v4 canonical form of rounded-(--radius-pill)
       className="inline-flex items-center gap-2 rounded-(--radius-pill) border border-(--color-cream-300) bg-(--color-cream-100) px-3 py-1.5 font-mono text-[0.7rem] text-(--color-ink-500)"
     >
       <span>cs_&hellip;{prefix}</span>
