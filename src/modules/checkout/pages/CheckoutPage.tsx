@@ -1148,6 +1148,7 @@ export default function CheckoutPage() {
                 orderType={orderDetails.orderType}
                 notes={orderDetails.notes || null}
                 loyalty={loyaltyIntent}
+                guestEmail={guestEmail || undefined}
                 onPromoError={(msg: string) =>
                   setPromo((prev) => ({ ...prev, error: msg, applied: false }))
                 }

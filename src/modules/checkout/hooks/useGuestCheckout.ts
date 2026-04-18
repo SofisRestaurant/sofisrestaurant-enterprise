@@ -1,4 +1,23 @@
 // src/modules/checkout/hooks/useGuestCheckout.ts
+// =============================================================================
+// Guest checkout hook — calls `create-checkout-guest` with NO Authorization
+// header but WITH the `apikey` header (Supabase anon key).
+//
+// WHY THE apikey HEADER IS REQUIRED:
+//   Supabase's edge gateway sits in front of every function and requires one
+//   of two things for the request to reach the handler:
+//     (a) Authorization: Bearer <JWT>   ← NOT what we want (guest = no JWT)
+//     (b) apikey: <anon_key>            ← what we use for anonymous requests
+//
+//   Without either, the gateway returns 401 BEFORE the function code runs —
+//   that's why the previous version showed zero invocations in Supabase logs:
+//   the requests were rejected at the gateway and never counted as invocations.
+//
+//   The anon key authenticates the REQUEST (proves it came from the frontend),
+//   not the USER. The function itself still sees no Authorization header, so
+//   the guest-only code path (IP-hash rate limit, no promo/credit/loyalty)
+//   still runs exactly as designed.
+// =============================================================================
 
 import { useState, useCallback } from "react";
 import { useCartStore } from "@/modules/cart/store/cart.store";
@@ -110,13 +129,38 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
         }
       }
 
+      // ─── ENV VAR GUARD ─────────────────────────────────────────────────────
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+      if (typeof supabaseUrl !== 'string' || supabaseUrl.length === 0) {
+        const err = 'Checkout is not configured. Please contact support.';
+        console.error('[useGuestCheckout] VITE_SUPABASE_URL is missing');
+        setState({ isLoading: false, error: err, sessionUrl: null });
+        return { ok: false, error: err };
+      }
+
+      if (typeof anonKey !== 'string' || anonKey.length === 0) {
+        const err = 'Checkout is not configured. Please contact support.';
+        console.error('[useGuestCheckout] VITE_SUPABASE_ANON_KEY is missing');
+        setState({ isLoading: false, error: err, sessionUrl: null });
+        return { ok: false, error: err };
+      }
+
       try {
         const response = await fetch(
-          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/${GUEST_CHECKOUT_ENDPOINT}`,
+          `${supabaseUrl}/functions/v1/${GUEST_CHECKOUT_ENDPOINT}`,
           {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
+              // apikey header authenticates the REQUEST (not the user) to
+              // Supabase's edge gateway. Without it the gateway returns 401
+              // before the function code runs → zero function invocations
+              // in Supabase logs. The function itself still sees no
+              // Authorization header, so guest logic (rate limiting,
+              // forbidden-field rejection) still applies.
+              apikey: anonKey,
             },
             body: JSON.stringify(requestBody),
           },
