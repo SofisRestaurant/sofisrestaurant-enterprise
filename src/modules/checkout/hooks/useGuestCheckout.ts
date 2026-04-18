@@ -1,22 +1,7 @@
 // src/modules/checkout/hooks/useGuestCheckout.ts
 // =============================================================================
-// Guest checkout hook — calls `create-checkout-guest` with NO Authorization
-// header but WITH the `apikey` header (Supabase anon key).
-//
-// WHY THE apikey HEADER IS REQUIRED:
-//   Supabase's edge gateway sits in front of every function and requires one
-//   of two things for the request to reach the handler:
-//     (a) Authorization: Bearer <JWT>   ← NOT what we want (guest = no JWT)
-//     (b) apikey: <anon_key>            ← what we use for anonymous requests
-//
-//   Without either, the gateway returns 401 BEFORE the function code runs —
-//   that's why the previous version showed zero invocations in Supabase logs:
-//   the requests were rejected at the gateway and never counted as invocations.
-//
-//   The anon key authenticates the REQUEST (proves it came from the frontend),
-//   not the USER. The function itself still sees no Authorization header, so
-//   the guest-only code path (IP-hash rate limit, no promo/credit/loyalty)
-//   still runs exactly as designed.
+// Guest checkout hook — calls `create-checkout-guest` with the `apikey` header
+// and no Authorization header. Server owns the Stripe redirect URLs.
 // =============================================================================
 
 import { useState, useCallback } from "react";
@@ -97,6 +82,8 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
       });
 
       // ─── REQUEST BODY ──────────────────────────────────────────────────────
+      // NOTE: success_url / cancel_url intentionally NOT sent.
+      // The Edge Function generates them from its SITE_URL env var.
       const requestBody: Record<string, unknown> = {
         items: itemsPayload,
         order_type: input.orderType,
@@ -104,8 +91,6 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
 
         ...(input.notes && { notes: input.notes }),
         ...(storedToken && { guest_token: storedToken }),
-        ...(input.successUrl && { success_url: input.successUrl }),
-        ...(input.cancelUrl && { cancel_url: input.cancelUrl }),
       };
 
       // ─── SAFETY CHECK (forbidden fields guard) ─────────────────────────────
@@ -154,12 +139,6 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              // apikey header authenticates the REQUEST (not the user) to
-              // Supabase's edge gateway. Without it the gateway returns 401
-              // before the function code runs → zero function invocations
-              // in Supabase logs. The function itself still sees no
-              // Authorization header, so guest logic (rate limiting,
-              // forbidden-field rejection) still applies.
               apikey: anonKey,
             },
             body: JSON.stringify(requestBody),
@@ -168,7 +147,6 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
 
         const json = await response.json().catch(() => null);
 
-        // ─── ERROR HANDLING ───────────────────────────────────────────────────
         if (!response.ok) {
           const message =
             json?.error?.message ||
@@ -191,7 +169,6 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
           return { ok: false, error: message, code };
         }
 
-        // ─── SUCCESS PARSE ────────────────────────────────────────────────────
         const data = json?.data ?? json;
 
         const url = data?.url;

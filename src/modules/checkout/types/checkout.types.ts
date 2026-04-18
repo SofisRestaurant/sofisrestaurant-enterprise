@@ -1,34 +1,13 @@
 // src/modules/checkout/types/checkout.types.ts
 // =============================================================================
-// Merged type definitions — existing pipeline + dual-pipeline additions.
-// Existing: CheckoutData, CheckoutSession (used by checkout.api.ts + useCheckout.ts)
-// New:      AuthCheckoutInput, GuestCheckoutInput, CheckoutResult, pricing responses
+// Type definitions for the dual-pipeline checkout (auth + guest).
+//
+// Stripe redirect URLs (success_url / cancel_url) are SERVER-CONTROLLED.
+// The Edge Functions build them from the SITE_URL env var — no field for
+// either URL appears in these input types.
 // =============================================================================
 
-// ─── Existing types (used by checkout.api.ts and original useCheckout.ts) ────
-
-export type CheckoutData = {
-  items: Array<Record<string, unknown>>;
-  customer: {
-    customer_uid: string;
-    email: string;
-    name?: string | null;
-    phone?: string | null;
-  };
-  successUrl: string;
-  cancelUrl: string;
-  // Optional extras passed through by useCheckout
-  orderType?: "pickup" | "delivery" | "dine_in";
-  notes?: string | null;
-};
-
-export type CheckoutSession = {
-  id: string;
-  url: string;
-  status: string;
-};
-
-// ─── New: dual-pipeline result type ──────────────────────────────────────────
+// ─── Dual-pipeline result type ──────────────────────────────────────────────
 
 export type CheckoutResult =
   | {
@@ -44,7 +23,7 @@ export type CheckoutResult =
       code?: string;
     };
 
-// ─── New: pricing response shapes ────────────────────────────────────────────
+// ─── Pricing response shapes ────────────────────────────────────────────────
 
 export type GuestCheckoutPricingResponse = {
   subtotalCents: number;
@@ -63,22 +42,20 @@ export type CheckoutPricingResponse =
   | GuestCheckoutPricingResponse
   | AuthCheckoutPricingResponse;
 
-// ─── New: guest checkout input ────────────────────────────────────────────────
-// Only fields the guest endpoint accepts.
-// promo, credit, loyalty fields are explicitly absent — not optional.
+// ─── Guest checkout input ────────────────────────────────────────────────────
+// Server owns Stripe redirect URLs via SITE_URL.
 
 export type GuestCheckoutInput = {
-  orderType: "pickup" | "delivery" | "dine_in";
+  orderType: 'pickup' | 'delivery' | 'dine_in';
   guestEmail: string;
   notes?: string;
-  successUrl?: string;
-  cancelUrl?: string;
 };
 
-// ─── New: auth checkout input ─────────────────────────────────────────────────
+// ─── Auth checkout input ─────────────────────────────────────────────────────
+// Server owns Stripe redirect URLs via SITE_URL.
 
 export type AuthCheckoutInput = {
-  orderType: "pickup" | "delivery" | "dine_in";
+  orderType: 'pickup' | 'delivery' | 'dine_in';
   notes?: string;
   promoCode?: string;
   promoId?: string;
@@ -88,6 +65,4 @@ export type AuthCheckoutInput = {
   loyaltyRewardId?: string;
   loyaltyRedemptionId?: string;
   clientIntegrityHash?: string;
-  successUrl?: string;
-  cancelUrl?: string;
 };

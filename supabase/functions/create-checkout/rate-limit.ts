@@ -1,3 +1,19 @@
+// supabase/functions/create-checkout/rate-limit.ts
+// ============================================================================
+// PATCH — only the `checkGuestRateLimit` function is changed.
+// The checkRateLimit (auth) function is IDENTICAL to your current version.
+//
+// What changed, and why:
+//   Supabase PostgrestError objects don't stringify usefully via String(err).
+//   You get "[object Object]" in logs instead of the real message, which is
+//   how the RPC failure stayed hidden. This patch unpacks error.message,
+//   error.code, error.details, error.hint explicitly — standard supabase-js
+//   error shape.
+//
+//   Zero logic changes. Rate-limit behavior is identical. Only log output
+//   changes.
+// ============================================================================
+
 import {
   RATE_LIMIT_BLOCK_MS,
   RATE_LIMIT_MAX_ATTEMPTS,
@@ -22,6 +38,40 @@ type GuestRateLimitRPCResult = {
   reason?: string;
   retry_after_ms?: number;
 };
+
+// ─── Supabase/Postgrest error shape ─────────────────────────────────────────
+// Not all fields present on all error classes, but these cover the common ones.
+type SupabaseErrorLike = {
+  message?: unknown;
+  code?: unknown;
+  details?: unknown;
+  hint?: unknown;
+};
+
+function unpackSupabaseError(err: unknown): {
+  message: string;
+  code: string | null;
+  details: string | null;
+  hint: string | null;
+} {
+  if (err && typeof err === "object") {
+    const e = err as SupabaseErrorLike;
+    return {
+      message: typeof e.message === "string" && e.message.length > 0
+        ? e.message
+        : JSON.stringify(err),
+      code: typeof e.code === "string" ? e.code : null,
+      details: typeof e.details === "string" ? e.details : null,
+      hint: typeof e.hint === "string" ? e.hint : null,
+    };
+  }
+  return {
+    message: err instanceof Error ? err.message : String(err),
+    code: null,
+    details: null,
+    hint: null,
+  };
+}
 
 // ─────────────────────────────────────────────────────────────
 // GUEST RATE LIMIT
@@ -55,9 +105,16 @@ export async function checkGuestRateLimit(
     };
 
     if (error) {
+      // Unpack PostgrestError fields explicitly — String(error) would
+      // produce "[object Object]" and hide the real reason.
+      const { message, code, details, hint } = unpackSupabaseError(error);
+
       log("error", "guest_rate_limit_rpc_failed", {
         requestId,
-        error: String(error),
+        message,
+        code,
+        details,
+        hint,
       });
 
       return {
@@ -86,9 +143,14 @@ export async function checkGuestRateLimit(
       retryAfterMs: result.retry_after_ms ?? 0,
     };
   } catch (err) {
+    const { message, code, details, hint } = unpackSupabaseError(err);
+
     log("error", "guest_rate_limit_rpc_exception", {
       requestId,
-      error: String(err),
+      message,
+      code,
+      details,
+      hint,
     });
 
     return {
@@ -100,7 +162,7 @@ export async function checkGuestRateLimit(
 }
 
 // ─────────────────────────────────────────────────────────────
-// AUTH RATE LIMIT
+// AUTH RATE LIMIT — UNCHANGED
 // ─────────────────────────────────────────────────────────────
 
 export async function checkRateLimit(

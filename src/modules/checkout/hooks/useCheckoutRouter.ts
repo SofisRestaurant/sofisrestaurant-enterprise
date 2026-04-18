@@ -1,6 +1,6 @@
 // src/modules/checkout/hooks/useCheckoutRouter.ts
 // =============================================================================
-// CHECKOUT ROUTER — the missing routing layer
+// CHECKOUT ROUTER — the single routing layer (auth vs guest)
 // =============================================================================
 // This is the ONLY place in the codebase that decides auth vs guest checkout.
 //
@@ -13,21 +13,14 @@
 //   1. Auth path always sends Authorization header (useAuthCheckout owns this).
 //   2. Guest path NEVER sends Authorization header (useGuestCheckout owns this).
 //   3. Loyalty/promo/credit/clientIntegrityHash fields are stripped for guests
-//      at the router layer — the guest hook also has a hard assertion that
-//      rejects them, and the server rejects them with 422. Three layers deep.
-//   4. The `isAuthenticated` gate is derived from Supabase session state via
-//      useAuth(), not from any user-controlled input.
-//
-// INFINITE-LOOP FIX:
-//   Previous version had `[authHook, guestHook]` in reset's deps. Those are
-//   whole hook return objects that get a new identity every render → reset
-//   changed identity every render → CheckoutButton's `useEffect(() => reset(),
-//   [..., reset])` fired on every render → setRouterError triggered re-render
-//   → infinite loop.
-//
-//   Fix: destructure the stable `clearError` callbacks (each is wrapped in
-//   useCallback inside its source hook, so they're identity-stable) and
-//   depend on those only.
+//      at the router layer — guest hook also rejects them, and the server
+//      rejects them with 422. Three layers deep.
+//   4. `isAuthenticated` is derived from Supabase session state via useAuth(),
+//      not from any user-controlled input.
+//   5. Stripe success_url / cancel_url are SERVER-CONTROLLED. The frontend
+//      does NOT send or influence them — the Edge Function reads SITE_URL
+//      from its env and builds the URLs itself. This is why CheckoutRouterArgs
+//      no longer has successUrl / cancelUrl fields.
 // =============================================================================
 
 import { useCallback, useMemo, useState } from 'react';
@@ -49,8 +42,6 @@ export type CheckoutRouterArgs = {
   guestEmail?: string;
   orderType?: OrderType;
   notes?: string | null;
-  successUrl?: string;
-  cancelUrl?: string;
   promoCode?: string;
   promoId?: string;
   creditId?: string;
@@ -62,6 +53,7 @@ export type CheckoutRouterArgs = {
     loyaltyRedemptionId?: string;
   };
   clientIntegrityHash?: string;
+  // NOTE: successUrl / cancelUrl intentionally absent. Server controls URLs.
 };
 
 export type CheckoutRouterReturn = {
@@ -105,11 +97,8 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
   const authHook  = useAuthCheckout();
   const guestHook = useGuestCheckout();
 
-  // ── STABILIZE callback refs ───────────────────────────────────────────────
-  // Pull the individual callbacks and state fields OUT of the hook objects.
-  // The callbacks are wrapped in useCallback inside each source hook so their
-  // identities are stable across renders. The hook return OBJECTS are new
-  // on every render, so depending on them directly causes infinite loops.
+  // Stabilize callback refs — depending on whole hook objects caused an
+  // infinite render loop in an earlier iteration.
   const initiateAuthCheckout  = authHook.initiateAuthCheckout;
   const initiateGuestCheckout = guestHook.initiateGuestCheckout;
   const clearAuthError        = authHook.clearError;
@@ -124,8 +113,6 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
 
   const mode: CheckoutRouterReturn['mode'] = isAuthenticated ? 'auth' : 'guest';
 
-  // reset() now only depends on the stable clearError callbacks.
-  // No whole-hook-object references → reset identity is stable across renders.
   const reset = useCallback(() => {
     setRouterError(null);
     clearAuthError();
@@ -157,8 +144,7 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
             : {}),
 
           clientIntegrityHash: trimOrUndefined(args.clientIntegrityHash),
-          successUrl:          trimOrUndefined(args.successUrl),
-          cancelUrl:           trimOrUndefined(args.cancelUrl),
+          // NO successUrl / cancelUrl — server owns them.
         };
 
         return initiateAuthCheckout(input);
@@ -175,8 +161,7 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
         guestEmail: args.guestEmail!.trim().toLowerCase(),
         orderType:  normOrderType(args.orderType),
         notes:      trimOrUndefined(args.notes),
-        successUrl: trimOrUndefined(args.successUrl),
-        cancelUrl:  trimOrUndefined(args.cancelUrl),
+        // NO successUrl / cancelUrl — server owns them.
       };
 
       return initiateGuestCheckout(input);

@@ -1,3 +1,5 @@
+///Users/sofisdev/Developer/SofisRestaurantV2/supabase/functions/create-checkout/index.ts
+
 import Stripe from "stripe";
 import {
   createAnonClient,
@@ -43,7 +45,7 @@ import { buildCheckoutIdempotencyKey, checkIntegrityHash } from "./security.ts";
 import { getStripe } from "./stripe-client.ts";
 import type { DbClient, PendingCartUpdate } from "./types.ts";
 import { validatePromo } from "./promos.ts";
-import { resolveCancelUrl, resolveSuccessUrl } from "./urls.ts";
+import { STRIPE_CANCEL_URL, STRIPE_SUCCESS_URL } from "../_shared/checkout-urls.ts";
 
 // ─── Loyalty helpers ──────────────────────────────────────────────────────────
 
@@ -927,8 +929,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
         mode: "payment",
         client_reference_id: pendingCart.cartId,
         line_items: stripeLineItems,
-        success_url: resolveSuccessUrl(body.success_url),
-        cancel_url: resolveCancelUrl(body.cancel_url),
+        success_url: STRIPE_SUCCESS_URL,
+        cancel_url: STRIPE_CANCEL_URL,
         expires_at: Math.floor(Date.now() / 1000) +
           SESSION_EXPIRES_AFTER_SECONDS,
         metadata: sessionMetadata,

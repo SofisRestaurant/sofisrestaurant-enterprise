@@ -1,4 +1,8 @@
 // src/modules/checkout/hooks/useAuthCheckout.ts
+// =============================================================================
+// Auth checkout hook — calls `create-checkout` with Authorization: Bearer JWT.
+// Server owns the Stripe redirect URLs (built from SITE_URL env var).
+// =============================================================================
 
 import { useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase/supabaseClient";
@@ -72,6 +76,8 @@ export function useAuthCheckout(): UseAuthCheckoutReturn {
       });
 
       // ─── REQUEST BODY ──────────────────────────────────────────────────────
+      // NOTE: success_url / cancel_url intentionally NOT sent.
+      // The Edge Function generates them from its SITE_URL env var.
       const requestBody: Record<string, unknown> = {
         items: itemsPayload,
         order_type: input.orderType,
@@ -100,9 +106,6 @@ export function useAuthCheckout(): UseAuthCheckoutReturn {
         ...(input.clientIntegrityHash && {
           client_integrity_hash: input.clientIntegrityHash,
         }),
-
-        ...(input.successUrl && { success_url: input.successUrl }),
-        ...(input.cancelUrl && { cancel_url: input.cancelUrl }),
       };
 
       try {
@@ -120,7 +123,6 @@ export function useAuthCheckout(): UseAuthCheckoutReturn {
 
         const json = await response.json().catch(() => null);
 
-        // ─── ERROR HANDLING ───────────────────────────────────────────────────
         if (!response.ok) {
           const message =
             json?.error?.message ||
@@ -149,7 +151,6 @@ export function useAuthCheckout(): UseAuthCheckoutReturn {
           return { ok: false, error: message, code };
         }
 
-        // ─── SUCCESS PARSE ────────────────────────────────────────────────────
         const data = json?.data ?? json;
 
         const url = data?.url;
