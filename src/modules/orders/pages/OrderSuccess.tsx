@@ -1,29 +1,27 @@
 // src/modules/orders/pages/OrderSuccess.tsx
 // ============================================================================
-// ORDER SUCCESS — Enterprise (2026) — Loyal + Sticky + Secure (V2-aligned)
+// ORDER SUCCESS — dual-pipeline (auth + guest)
 // ============================================================================
-// Changes from original:
-// ✅ Added "Track My Order" button linking to /order-status/{orderId}
-// ✅ Animated with Framer Motion (framer-motion):
-//    - Page-load entrance: staggered children via variants
-//    - "Track My Order" button: whileHover scale + glow, whileTap press
-//    - Success check icon: spring scale-in on mount
-//    - Loyalty card: fade+slide-up entrance
-//    - AnimatePresence on loyalty loading → loaded transition
-//    - MotionConfig for global reduced-motion respect
-// All cart/order display logic, retries, realtime, and security unchanged.
+// Data fetch rewrite (2026-04-18):
+//
+//   BEFORE: The page made two auth-only calls that broke for guests:
+//     1. supabase.from('orders').select() — 401 via RLS without a JWT
+//     2. finalize-order edge function — 401 via stripe_owner_mismatch
+//
+//   AFTER: Single unified call to `get-order-for-success` which:
+//     - For auth orders: validates Bearer JWT matches order.customer_uid
+//     - For guest orders: validates guest_token from sessionStorage
+//     - Returns { pending: true } while the Stripe webhook finishes persisting
+//
+// The Stripe webhook remains the single source of truth for order persistence.
+// This page only READS. Loyalty fetch stays auth-only (unchanged).
+//
+// UI, animations, and realtime subscription are untouched from prior version.
 // ============================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-// Import directly from framer-motion (framer-motion is a thin re-export shim
-// that can resolve to undefined in Vite's ESM bundling — framer-motion is
-// the actual package and always resolves correctly).
-import {
-  motion,
-  AnimatePresence,
-  MotionConfig,
-} from 'framer-motion';
+import { motion, AnimatePresence, MotionConfig } from 'framer-motion';
 import { MapPin } from 'lucide-react';
 
 import { supabase } from '@/lib/supabase/supabaseClient';
@@ -34,12 +32,11 @@ import type { Order, OrderStatus } from '@/domain/orders/order.types';
 import { LOYALTY_TIERS, asTier } from '@/domain/loyalty/tiers';
 
 // ---------------------------------------------------------------------------
-// Types (unchanged)
+// Types
 // ---------------------------------------------------------------------------
 
 type PageState = 'loading' | 'found' | 'timeout' | 'error';
 type OrderServiceType = 'pickup' | 'delivery' | 'dine_in';
-type FinalizeState = 'idle' | 'pending' | 'succeeded';
 
 type LoyaltyTxV2 = {
   entry_type: 'earn' | 'redeem' | 'bonus' | 'expired' | 'adjustment';
@@ -84,47 +81,36 @@ type LoyaltyForOrderResp = {
   code?: unknown;
 };
 
-type FinalizeResp = {
+// Response shape from get-order-for-success edge function.
+// `order` is typed loosely here because the server does SELECT * on the
+// orders table — we cast to the mapper's expected input at the call site.
+type GetOrderResp = {
   ok?: boolean;
-  order_id?: string | null;
-  already_finalized?: boolean;
-  payment_status?: string | null;
-  status?: string | null;
-  message?: string;
-  requestId?: string;
+  order?: Record<string, unknown> | null;
+  pending?: boolean;
   error?: unknown;
   code?: unknown;
 };
 
 type UnknownRecord = Record<string, unknown>;
-// TimeoutHandle uses the global `setTimeout` (not `window.setTimeout`).
-// All call sites also use bare `setTimeout`/`clearTimeout` (no window. prefix).
-//
-// Why: when @types/node is installed, TypeScript resolves window.setTimeout
-// as returning `number` (DOM) but the ref type resolves through @types/node
-// as NodeJS.Timeout — mismatch: "Type 'number' is not assignable to type 'Timeout'".
-//
-// Using the bare global for BOTH the type alias and the call sites forces
-// TypeScript to resolve both from the same declaration, so the types always
-// match regardless of whether @types/node is present.
 type TimeoutHandle = ReturnType<typeof setTimeout>;
 
 // ---------------------------------------------------------------------------
-// Constants (unchanged)
+// Constants
 // ---------------------------------------------------------------------------
 
 const POLL_INTERVAL_MS = 2_000;
 const POLL_MAX_ATTEMPTS = 25;
-const FINALIZE_MAX_ATTEMPTS = 6;
-const FINALIZE_RETRY_BASE_MS = 1_250;
-const FINALIZE_RETRY_MAX_MS = 8_000;
 const LOYALTY_RETRY_BASE_MS = 1_800;
 const LOYALTY_MAX_ATTEMPTS = 10;
 const LOYALTY_RETRY_MAX_MS = 5_200;
 const STRIPE_SESSION_RE = /^cs_(test|live)_[a-zA-Z0-9]+$/;
 
+// Must match the key used in useGuestCheckout.ts.
+const GUEST_TOKEN_STORAGE_KEY = 'checkout_guest_token';
+
 // ---------------------------------------------------------------------------
-// Pure helpers (unchanged)
+// Pure helpers
 // ---------------------------------------------------------------------------
 
 function isRecord(v: unknown): v is UnknownRecord {
@@ -179,53 +165,6 @@ function safeOrderNumber(n: unknown): string | null {
   if (typeof n !== 'number' || !Number.isFinite(n)) return null;
   return String(Math.trunc(n)).padStart(4, '0');
 }
-function getFinalizeIdempotencyKey(sessionId: string): string {
-  return `order-success-finalize:${sessionId}`;
-}
-function isFinalizeSuccess(resp: FinalizeResp | null): boolean {
-  if (!resp) return false;
-  if (resp.ok === true) return true;
-  if (resp.already_finalized === true) return true;
-  const normalizedPaymentStatus = (resp.payment_status ?? '').trim().toLowerCase();
-  const normalizedStatus = (resp.status ?? '').trim().toLowerCase();
-  const normalizedMessage = (resp.message ?? '').trim().toLowerCase();
-  return (
-    normalizedPaymentStatus === 'paid' ||
-    normalizedStatus === 'already_finalized' ||
-    normalizedStatus === 'finalized' ||
-    normalizedStatus === 'completed' ||
-    normalizedStatus === 'complete' ||
-    normalizedStatus === 'paid' ||
-    normalizedMessage.includes('already finalized')
-  );
-}
-function shouldRetryFinalize(error: unknown): boolean {
-  if (error == null) return true;
-  const rec = isRecord(error) ? error : null;
-  const message =
-    readString(rec?.message) ??
-    readString(rec?.error) ??
-    readString(rec?.code) ??
-    (error instanceof Error ? error.message : '');
-  const msg = message.toLowerCase();
-  if (!msg) return true;
-  if (msg.includes('network')) return true;
-  if (msg.includes('timeout')) return true;
-  if (msg.includes('fetch')) return true;
-  if (msg.includes('temporar')) return true;
-  if (msg.includes('429')) return true;
-  if (msg.includes('500')) return true;
-  if (msg.includes('502')) return true;
-  if (msg.includes('503')) return true;
-  if (msg.includes('504')) return true;
-  // 401/403 means the order was already finalized by the Stripe webhook
-  // (user session lost during redirect). Stop retrying — the order succeeded.
-  if (msg.includes('unauthorized')) return false;
-  if (msg.includes('forbidden')) return false;
-  if (msg.includes('401')) return false;
-  if (msg.includes('403')) return false;
-  return true;
-}
 function computeBackoffMs(baseMs: number, attempt: number, maxMs: number): number {
   const safeAttempt = clampInt(attempt, 1, 12);
   const jitter = Math.min(250, safeAttempt * 35);
@@ -233,14 +172,20 @@ function computeBackoffMs(baseMs: number, attempt: number, maxMs: number): numbe
   return clampInt(exp + jitter, baseMs, maxMs);
 }
 
+// Read guest token from sessionStorage (written during useGuestCheckout flow).
+function readGuestToken(): string | null {
+  try {
+    const v = sessionStorage.getItem(GUEST_TOKEN_STORAGE_KEY);
+    return typeof v === 'string' && v.trim().length > 0 ? v.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Animation variants
 // ---------------------------------------------------------------------------
 
-/**
- * Container variant: stagger children entering in sequence.
- * Each direct child uses `item` variant below.
- */
 const containerVariants = {
   hidden: {},
   visible: {
@@ -251,14 +196,9 @@ const containerVariants = {
   },
 };
 
-/**
- * Item variant: responsive entry — uses CSS variable for y offset so
- * Tailwind responsive modifiers can override the distance on larger screens.
- */
 const itemVariants = {
   hidden: {
     opacity: 0,
-    // CSS var set in className allows responsive overrides via Tailwind
     y: 'var(--entry-y, 18px)',
   },
   visible: {
@@ -272,7 +212,6 @@ const itemVariants = {
   },
 };
 
-/** Success icon: spring scale-in with slight overshoot */
 const checkIconVariants = {
   hidden: { scale: 0, opacity: 0 },
   visible: {
@@ -282,7 +221,6 @@ const checkIconVariants = {
   },
 };
 
-/** Button hover/tap variants reused across CTA buttons */
 const btnVariants = {
   rest: { scale: 1 },
   hover: { scale: 1.025 },
@@ -290,7 +228,7 @@ const btnVariants = {
 };
 
 // ---------------------------------------------------------------------------
-// Sub-components
+// Sub-components (unchanged)
 // ---------------------------------------------------------------------------
 
 function LoadingState({ attempt }: { attempt: number }) {
@@ -396,12 +334,6 @@ function LoyaltyResultCard({
             ? 'Matched by time window'
             : null;
 
-  const _isEarnLike =
-    loyalty.entry_type === 'earn' ||
-    loyalty.entry_type === 'bonus' ||
-    loyalty.entry_type === 'adjustment';
-  // isEarnLike reserved for future label differentiation
-
   return (
     <div className="overflow-hidden rounded-xl border border-amber-500/20 bg-linear-to-br from-amber-950/40 via-neutral-900 to-neutral-900">
       <div className="flex items-center justify-between border-b border-amber-500/10 px-4 py-3">
@@ -409,7 +341,6 @@ function LoyaltyResultCard({
           <span className="text-xl">✨</span>
           <span className="text-sm font-semibold text-amber-300">Loyalty Update</span>
         </div>
-        {/* Points counter — original static display, unchanged */}
         <span className="font-mono text-2xl font-bold text-amber-400">
           {pointsDelta >= 0 ? `+${fmt(earned)}` : `-${fmt(Math.abs(pointsDelta))}`} pts
         </span>
@@ -579,52 +510,35 @@ function StickyNextSteps({
 }
 
 // ---------------------------------------------------------------------------
-// Auth helper (unchanged)
+// Auth helper — returns the JWT if the user has a session, null otherwise.
+// Short-polls for 2.5s in case Supabase is still restoring a session from
+// localStorage after the Stripe redirect.
 // ---------------------------------------------------------------------------
 
-/**
- * Get a valid JWT, waiting up to 4 s for the session to be restored after
- * a Stripe redirect. Supabase restores the session from localStorage
- * asynchronously — calling getSession() immediately on page load can return
- * null even when the user is logged in.
- */
-async function getJwt(): Promise<string | null> {
+async function getJwtIfAuthed(): Promise<string | null> {
   // Fast path — session already in memory
   const { data: immediate } = await supabase.auth.getSession();
   if (immediate?.session?.access_token) {
     return immediate.session.access_token;
   }
 
-  // Try a single forced refresh in case the token is stale
-  try {
-    const { data: refreshed } = await supabase.auth.refreshSession();
-    if (refreshed?.session?.access_token) {
-      return refreshed.session.access_token;
-    }
-  } catch {
-    // ignore — fall through to event listener
-  }
-
-  // Wait up to 4 s for the session to be restored from storage
+  // Short-poll for the session to be restored from storage.
+  // Auth users returning from Stripe sometimes need ~1s for restore.
   return new Promise<string | null>((resolve) => {
-    let sub: { unsubscribe: () => void } | null = null;
-
     const deadline = setTimeout(() => {
-      sub?.unsubscribe();
+      subscription.unsubscribe();
       resolve(null);
-    }, 4_000);
+    }, 2_500);
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
+    } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.access_token) {
         clearTimeout(deadline);
         subscription.unsubscribe();
         resolve(session.access_token);
       }
     });
-
-    sub = subscription;
   });
 }
 
@@ -654,15 +568,9 @@ export default function OrderSuccess() {
   const [loyaltyMeta, setLoyaltyMeta] = useState<LoyaltyForOrderMeta | undefined>(undefined);
   const [loyaltyAttempt, setLoyaltyAttempt] = useState(0);
 
-  const finalizeStateRef = useRef<FinalizeState>('idle');
-  const finalizeAttemptsRef = useRef(0);
-  const finalizedOrderIdRef = useRef<string | null>(null);
   const loyaltyStartedForOrderRef = useRef<string | null>(null);
-  const finalizeRunnerRef = useRef<(() => Promise<void>) | null>(null);
-
   const pollTimerRef = useRef<TimeoutHandle | null>(null);
   const loyaltyTimerRef = useRef<TimeoutHandle | null>(null);
-  const finalizeTimerRef = useRef<TimeoutHandle | null>(null);
 
   const stopTimer = useCallback((ref: { current: TimeoutHandle | null }) => {
     if (ref.current !== null) {
@@ -671,6 +579,7 @@ export default function OrderSuccess() {
     }
   }, []);
 
+  // ── Loyalty fetch (auth-only, unchanged pattern) ────────────────────────
   const fetchLoyaltyWithRetry = useCallback(
     async (orderId: string) => {
       let retryCount = 0;
@@ -689,11 +598,10 @@ export default function OrderSuccess() {
         retryCount += 1;
         setLoyaltyAttempt(retryCount);
         try {
-          const token = await getJwt();
+          const token = await getJwtIfAuthed();
           if (!token) {
-            if (retryCount < LOYALTY_MAX_ATTEMPTS) {
-              schedule(computeBackoffMs(LOYALTY_RETRY_BASE_MS, retryCount, LOYALTY_RETRY_MAX_MS));
-            }
+            // No auth session → this is a guest order. Guests have no loyalty.
+            stopTimer(loyaltyTimerRef);
             return;
           }
           const resp = await invokeEdge<LoyaltyForOrderResp>(
@@ -737,106 +645,9 @@ export default function OrderSuccess() {
     [stopTimer],
   );
 
-  const finalizeIfNeeded = useCallback(async (): Promise<void> => {
-    if (!isValidSessionId) return;
-    if (finalizeStateRef.current === 'pending' || finalizeStateRef.current === 'succeeded') return;
-    if (finalizeAttemptsRef.current >= FINALIZE_MAX_ATTEMPTS) return;
-
-    finalizeStateRef.current = 'pending';
-    finalizeAttemptsRef.current += 1;
-
-    try {
-      const token = await getJwt();
-      if (!token) {
-        finalizeStateRef.current = 'idle';
-        if (finalizeAttemptsRef.current < FINALIZE_MAX_ATTEMPTS) {
-          stopTimer(finalizeTimerRef);
-          finalizeTimerRef.current = setTimeout(
-            () => {
-              void finalizeRunnerRef.current?.();
-            },
-            computeBackoffMs(
-              FINALIZE_RETRY_BASE_MS,
-              finalizeAttemptsRef.current,
-              FINALIZE_RETRY_MAX_MS,
-            ),
-          );
-        }
-        return;
-      }
-
-      const resp = await invokeEdge<FinalizeResp>(
-        'finalize-order',
-        { session_id: sessionId },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'x-request-id': crypto.randomUUID(),
-            'x-idempotency-key': getFinalizeIdempotencyKey(sessionId),
-          },
-        },
-      );
-
-      if (resp?.order_id && typeof resp.order_id === 'string') {
-        finalizedOrderIdRef.current = resp.order_id;
-      }
-
-      if (isFinalizeSuccess(resp ?? null)) {
-        finalizeStateRef.current = 'succeeded';
-        stopTimer(finalizeTimerRef);
-        return;
-      }
-
-      finalizeStateRef.current = 'idle';
-      if (finalizeAttemptsRef.current < FINALIZE_MAX_ATTEMPTS) {
-        stopTimer(finalizeTimerRef);
-        finalizeTimerRef.current = setTimeout(
-          () => {
-            void finalizeRunnerRef.current?.();
-          },
-          computeBackoffMs(
-            FINALIZE_RETRY_BASE_MS,
-            finalizeAttemptsRef.current,
-            FINALIZE_RETRY_MAX_MS,
-          ),
-        );
-      }
-    } catch (error) {
-      // If the server returned 401/403, the Stripe webhook already finalized
-      // the order — treat this as success so the page shows the confirmation.
-      const errMsg = (error instanceof Error ? error.message : String(error ?? '')).toLowerCase();
-      const isAuthError =
-        errMsg.includes('401') ||
-        errMsg.includes('unauthorized') ||
-        errMsg.includes('403') ||
-        errMsg.includes('forbidden');
-      if (isAuthError) {
-        finalizeStateRef.current = 'succeeded';
-        stopTimer(finalizeTimerRef);
-        return;
-      }
-
-      finalizeStateRef.current = 'idle';
-      if (shouldRetryFinalize(error) && finalizeAttemptsRef.current < FINALIZE_MAX_ATTEMPTS) {
-        stopTimer(finalizeTimerRef);
-        finalizeTimerRef.current = setTimeout(
-          () => {
-            void finalizeRunnerRef.current?.();
-          },
-          computeBackoffMs(
-            FINALIZE_RETRY_BASE_MS,
-            finalizeAttemptsRef.current,
-            FINALIZE_RETRY_MAX_MS,
-          ),
-        );
-      }
-    }
-  }, [isValidSessionId, sessionId, stopTimer]);
-
-  useEffect(() => {
-    finalizeRunnerRef.current = finalizeIfNeeded;
-  }, [finalizeIfNeeded]);
-
+  // ── Unified order fetch via get-order-for-success ──────────────────────
+  // Handles auth AND guest in a single call. Service-role read on server,
+  // authorization decided by which credential is presented.
   useEffect(() => {
     if (!isValidSessionId) {
       setPageState('error');
@@ -859,27 +670,26 @@ export default function OrderSuccess() {
       attempts += 1;
       setAttempt(attempts);
 
-      try {
-        await finalizeIfNeeded();
+      // Gather credentials: Bearer if available, guest_token otherwise.
+      // Both are sent when both are available; the server decides based on
+      // which one matches the stored order.
+      const [token, guestToken] = [await getJwtIfAuthed(), readGuestToken()];
 
-        const query = supabase.from('orders').select('*');
-        const { data, error } = finalizedOrderIdRef.current
-          ? await query.eq('id', finalizedOrderIdRef.current).maybeSingle()
-          : await query.eq('stripe_session_id', sessionId).maybeSingle();
+      const headers: Record<string, string> = {
+        'x-request-id': crypto.randomUUID(),
+      };
+      if (token) headers.Authorization = `Bearer ${token}`;
+
+      const body: Record<string, unknown> = { session_id: sessionId };
+      if (guestToken) body.guest_token = guestToken;
+
+      try {
+        const resp = await invokeEdge<GetOrderResp>('get-order-for-success', body, { headers });
 
         if (cancelled) return;
 
-        if (error) {
-          if (attempts >= POLL_MAX_ATTEMPTS) {
-            setPageState('error');
-            stopPoll();
-          } else {
-            schedulePoll();
-          }
-          return;
-        }
-
-        if (!data) {
+        // Still waiting for the Stripe webhook to persist the order.
+        if (resp?.pending === true || !resp?.order) {
           if (attempts >= POLL_MAX_ATTEMPTS) {
             setPageState('timeout');
             stopPoll();
@@ -889,20 +699,43 @@ export default function OrderSuccess() {
           return;
         }
 
-        const mapped = mapOrderRowToDomain(data);
+        // The server did SELECT * on the orders table, so resp.order has the
+        // full Database row shape that mapOrderRowToDomain accepts. Cast
+        // through unknown to silence the structural-mismatch complaint —
+        // this is the trust boundary where shape validation stops.
+        const orderRow = resp.order as unknown as Parameters<typeof mapOrderRowToDomain>[0];
+        const mapped = mapOrderRowToDomain(orderRow);
         setOrder((current) => (current?.id === mapped.id ? current : mapped));
         setLiveStatus(mapped.status);
         setPageState('found');
         clearCart();
 
+        // Loyalty fetch is auth-only and no-ops when there's no JWT.
         if (loyaltyStartedForOrderRef.current !== mapped.id) {
           loyaltyStartedForOrderRef.current = mapped.id;
           void fetchLoyaltyWithRetry(mapped.id);
         }
 
         stopPoll();
-      } catch {
+      } catch (err) {
         if (cancelled) return;
+
+        // Distinguish genuine auth failures (stop retrying) from transient
+        // errors (retry). A real 401/403 from the server means the caller
+        // doesn't own this order — no point retrying.
+        const message = (err instanceof Error ? err.message : String(err ?? '')).toLowerCase();
+        const isFatalAuth =
+          message.includes('401') ||
+          message.includes('403') ||
+          message.includes('unauthorized') ||
+          message.includes('forbidden');
+
+        if (isFatalAuth) {
+          setPageState('error');
+          stopPoll();
+          return;
+        }
+
         if (attempts >= POLL_MAX_ATTEMPTS) {
           setPageState('error');
           stopPoll();
@@ -910,7 +743,7 @@ export default function OrderSuccess() {
           schedulePoll();
         }
       }
-    };
+    };;
 
     void run();
 
@@ -918,23 +751,13 @@ export default function OrderSuccess() {
       cancelled = true;
       stopPoll();
       stopTimer(loyaltyTimerRef);
-      stopTimer(finalizeTimerRef);
     };
-  }, [clearCart, fetchLoyaltyWithRetry, finalizeIfNeeded, isValidSessionId, sessionId, stopTimer]);
+  }, [clearCart, fetchLoyaltyWithRetry, isValidSessionId, sessionId, stopTimer]);
 
-  useEffect(() => {
-    if (!isValidSessionId) return;
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') {
-        void finalizeRunnerRef.current?.();
-      }
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, [isValidSessionId]);
-
+  // ── Realtime subscription for live order status (unchanged) ─────────────
+  // Note: for guests this subscription will silently fail to receive updates
+  // (RLS blocks anon realtime). That's acceptable — the initial fetch is
+  // enough; live status updates are nice-to-have for logged-in users.
   useEffect(() => {
     if (!order?.id) return;
     const channel = supabase
@@ -972,16 +795,12 @@ export default function OrderSuccess() {
   const loyaltyStatusText = useMemo(() => {
     if (loyalty) return null;
     if (pageState !== 'found') return null;
-    if (loyaltyAttempt <= 0) return 'Updating your points… (this can take a few seconds)';
+    if (loyaltyAttempt <= 0) return null; // guest or not yet started — hide section
     if (loyaltyAttempt < LOYALTY_MAX_ATTEMPTS) return '✨ Updating your points…';
     return '✨ Your points are still updating — check your account in a moment.';
   }, [loyalty, loyaltyAttempt, pageState]);
 
   return (
-    /**
-     * MotionConfig: global spring defaults + respects user's OS reduced-motion pref.
-     * All child motion components inherit these unless they override locally.
-     */
     <MotionConfig reducedMotion="user">
       <div className="flex min-h-svh items-center justify-center bg-neutral-950 px-4 py-10 text-neutral-200">
         <div className="w-full max-w-md">
@@ -993,11 +812,6 @@ export default function OrderSuccess() {
               {pageState === 'error' ? <ErrorState /> : null}
 
               {pageState === 'found' && order && liveStatus ? (
-                /**
-                 * Container: stagger entrance of all direct item children.
-                 * `[--entry-y:18px] md:[--entry-y:32px]` sets the CSS var that
-                 * itemVariants reads for responsive vertical entry distance.
-                 */
                 <motion.div
                   className="space-y-5 [--entry-y:18px] md:[--entry-y:32px]"
                   variants={containerVariants}
@@ -1006,7 +820,6 @@ export default function OrderSuccess() {
                 >
                   {/* ── Header ── */}
                   <motion.div className="text-center" variants={itemVariants}>
-                    {/* Success icon: spring scale-in */}
                     <div className="mb-4 flex justify-center">
                       <motion.div
                         className="flex h-16 w-16 items-center justify-center rounded-full bg-amber-500/15 ring-1 ring-amber-500/30"
@@ -1065,54 +878,50 @@ export default function OrderSuccess() {
                     </div>
                   </motion.div>
 
-                  {/* ── Loyalty (AnimatePresence: placeholder → card transition) ── */}
-                  <motion.div variants={itemVariants}>
-                    <AnimatePresence mode="wait">
-                      {loyalty ? (
-                        <motion.div
-                          key="loyalty-card"
-                          initial={{ opacity: 0, y: 12 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: -8 }}
-                          transition={{ type: 'spring', stiffness: 320, damping: 26 }}
-                        >
-                          <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.2em] text-neutral-500">
-                            Loyalty Rewards
-                          </p>
-                          <LoyaltyResultCard
-                            loyalty={loyalty}
-                            account={loyaltyAccount}
-                            meta={loyaltyMeta}
-                          />
-                        </motion.div>
-                      ) : (
-                        <motion.div
-                          key="loyalty-loading"
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          exit={{ opacity: 0 }}
-                          transition={{ duration: 0.2 }}
-                          className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"
-                        >
-                          {loyaltyStatusText ?? '✨ Updating your points…'}
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </motion.div>
+                  {/* ── Loyalty (auth only — hidden for guests) ── */}
+                  {loyalty || loyaltyStatusText ? (
+                    <motion.div variants={itemVariants}>
+                      <AnimatePresence mode="wait">
+                        {loyalty ? (
+                          <motion.div
+                            key="loyalty-card"
+                            initial={{ opacity: 0, y: 12 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -8 }}
+                            transition={{ type: 'spring', stiffness: 320, damping: 26 }}
+                          >
+                            <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.2em] text-neutral-500">
+                              Loyalty Rewards
+                            </p>
+                            <LoyaltyResultCard
+                              loyalty={loyalty}
+                              account={loyaltyAccount}
+                              meta={loyaltyMeta}
+                            />
+                          </motion.div>
+                        ) : loyaltyStatusText ? (
+                          <motion.div
+                            key="loyalty-loading"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            transition={{ duration: 0.2 }}
+                            className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"
+                          >
+                            {loyaltyStatusText}
+                          </motion.div>
+                        ) : null}
+                      </AnimatePresence>
+                    </motion.div>
+                  ) : null}
 
                   {/* ── CTAs ── */}
                   <motion.div className="space-y-2" variants={itemVariants}>
-                    {/* Track My Order — primary new button */}
                     <motion.div
                       variants={btnVariants}
                       initial="rest"
                       whileHover="hover"
                       whileTap="tap"
-                      /**
-                       * Drop shadow glow pulses in on hover via box-shadow.
-                       * Hardware-accelerated scale via transform; no Tailwind
-                       * transition- conflict since Motion owns the transform.
-                       */
                       style={{ originX: 0.5, originY: 0.5 }}
                     >
                       <Link
@@ -1130,7 +939,6 @@ export default function OrderSuccess() {
                       </Link>
                     </motion.div>
 
-                    {/* View Order History */}
                     <motion.div
                       variants={btnVariants}
                       initial="rest"
