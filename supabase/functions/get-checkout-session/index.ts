@@ -25,7 +25,7 @@
 import Stripe from 'stripe';
 import { createAnonClient, createServiceClient } from '../_shared/supabase.ts';
 import { STRIPE_API_VERSION } from '../_shared/stripe-client.ts';
-
+import { getStripe } from "../_shared/stripe-client.ts";
 // ─────────────────────────────────────────────────────────────
 // Config
 // ─────────────────────────────────────────────────────────────
@@ -222,10 +222,7 @@ function getStripeOrThrow(): { stripe: Stripe; apiVersion: typeof STRIPE_API_VER
     return { stripe: STRIPE_SINGLETON, apiVersion: STRIPE_API_VERSION };
   }
 
-  const stripe = new Stripe(secret, {
-    apiVersion: STRIPE_API_VERSION,
-    httpClient: Stripe.createFetchHttpClient(),
-  });
+const stripe = getStripe();
 
   STRIPE_SINGLETON = stripe;
   STRIPE_SINGLETON_VERSION = STRIPE_API_VERSION;
