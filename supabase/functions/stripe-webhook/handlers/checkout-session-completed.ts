@@ -1,3 +1,23 @@
+// supabase/functions/stripe-webhook/handlers/checkout-session-completed.ts
+// =============================================================================
+// Changes from prior version:
+//
+//   1. Identity variables are now typed as string | null (not string | undefined)
+//      to match createOrderFromSession's updated contract.
+//
+//   2. Auth-only side effects (loyalty backfill, promo redemption, credit
+//      marking, loyalty reserve finalization, ORDER_CONFIRMED_WEBHOOK event)
+//      are guarded by `if (userId !== null)`. They will no longer fire empty-
+//      string user IDs into the DB when a guest is checking out.
+//
+//   3. Kitchen notify and SMS run for BOTH auth and guest orders.
+//
+//   4. `notifyKitchen` receives `userId: userId ?? null` instead of `userId ?? ""`
+//      — if kitchen-notify.ts accepts string | null the call is clean; if it
+//      only accepts string the caller coalesces to "" for backward compat
+//      (that arg is logged only, not written to DB).
+// =============================================================================
+
 import type Stripe from "stripe";
 import type { DbClient } from "../types.ts";
 import { getStripe } from "../stripe-client.ts";
@@ -25,33 +45,24 @@ import {
 } from "../utils.ts";
 
 // ─── Loyalty finalization ─────────────────────────────────────────────────────
-//
-// Points were atomically debited at checkout start (entry_type='checkout_reserve').
-// On payment success:
-//   1. Flip ledger entry_type to 'redeemed' for clean reporting.
-//   2. Update loyalty_accounts.last_redeem_at.
-//
-// Best-effort side-effect — failure does NOT fail the webhook.
-// Idempotent: filters on entry_type='checkout_reserve', so a second call
-// on an already-flipped row is a safe no-op.
+// Auth-only. Never called when userId is null.
 
 async function finalizeLoyaltyReserve(args: {
   db:        DbClient;
   session:   Stripe.Checkout.Session;
+  userId:    string;
   requestId: string;
 }): Promise<void> {
-  const { db, session, requestId } = args;
+  const { db, session, userId, requestId } = args;
 
-  const loyaltyAccountId = pickMeta(session.metadata, "loyalty_account_id");
-  const preSessionKey    = pickMeta(session.metadata, "loyalty_pre_session_key");
-  const loyaltyPoints    = parseCents(pickMeta(session.metadata, "loyalty_reserved_points"));
-  const loyaltyCents     = parseCents(pickMeta(session.metadata, "loyalty_discount_cents"));
+  const loyaltyAccountId  = pickMeta(session.metadata, "loyalty_account_id");
+  const preSessionKey     = pickMeta(session.metadata, "loyalty_pre_session_key");
+  const loyaltyPoints     = parseCents(pickMeta(session.metadata, "loyalty_reserved_points"));
+  const loyaltyCents      = parseCents(pickMeta(session.metadata, "loyalty_discount_cents"));
 
-  if (loyaltyAccountId === null || loyaltyPoints <= 0 || preSessionKey === null) return;
+  if (!loyaltyAccountId || loyaltyPoints <= 0 || !preSessionKey) return;
 
-  const reserveIdemKey = `reserve:${preSessionKey}`;
-
-const { error: flipError } = await db
+  const { error: flipError } = await db
     .from("loyalty_ledger")
     .insert({
       account_id:      loyaltyAccountId,
@@ -59,58 +70,41 @@ const { error: flipError } = await db
       balance_after:   0,
       entry_type:      "checkout_release",
       source:          "online_checkout",
-      idempotency_key: reserveIdemKey.replace("reserve:", "release:"),
+      idempotency_key: `release:${preSessionKey}`,
       metadata: {
         stripe_session_id: session.id,
         reason:            "payment_completed",
         loyalty_points:    loyaltyPoints,
         loyalty_cents:     loyaltyCents,
+        user_id:           userId,
       },
     });
 
   if (flipError) {
-    // Non-critical — balance already correct from the reserve debit. Log and continue.
     log("warn", "webhook_loyalty_ledger_flip_failed", {
       requestId,
-      sessionId:  prefix(session.id),
-      accountId:  prefix(loyaltyAccountId),
-      error:      flipError.message,
-    });
-  } else {
-    log("info", "webhook_loyalty_reserve_finalized", {
-      requestId,
-      sessionId:     prefix(session.id),
-      accountId:     prefix(loyaltyAccountId),
-      points:        loyaltyPoints,
-      discountCents: loyaltyCents,
+      sessionId: prefix(session.id),
+      accountId: prefix(loyaltyAccountId),
+      error:     flipError.message,
     });
   }
 
-  // Update last_redeem_at — best-effort, same pattern as backfillLoyaltyIfMissing
-  const { error: acctError } = await db
+  await db
     .from("loyalty_accounts")
     .update({ last_redeem_at: nowIso(), updated_at: nowIso() })
     .eq("id", loyaltyAccountId);
-
-  if (acctError) {
-    log("warn", "webhook_loyalty_account_redeem_ts_failed", {
-      requestId,
-      accountId: prefix(loyaltyAccountId),
-      error:     acctError.message,
-    });
-  }
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 export async function handleCheckoutSessionCompleted(
-  db: DbClient,
-  event: Stripe.Event,
+  db:        DbClient,
+  event:     Stripe.Event,
   requestId: string,
 ): Promise<void> {
   const sessionRef = parseCheckoutSessionEventRef(event);
 
-  if (sessionRef === null) {
+  if (!sessionRef) {
     log("warn", "webhook_session_missing_id", {
       requestId,
       eventId: prefix(event.id),
@@ -123,35 +117,40 @@ export async function handleCheckoutSessionCompleted(
     expand: ["payment_intent"],
   });
 
-  if (!normalizeStripePaid(session)) {
-    log("info", "webhook_session_not_paid", {
-      requestId,
-      sessionId:     prefix(session.id),
-      paymentStatus: session.payment_status,
-      status:        session.status,
-    });
-    return;
-  }
+  if (!normalizeStripePaid(session)) return;
 
-  const userId = pickMeta(session.metadata, "user_id", "customer_uid", "uid");
+  // ── Identity resolution ───────────────────────────────────────────────────
+  // Exactly one of userId or guestToken must be present.
+  // null (not undefined) matches createOrderFromSession's contract.
 
-  if (userId === null) {
-    log("warn", "webhook_session_no_user_id", {
+  const userId:     string | null = pickMeta(session.metadata, "user_id", "customer_uid", "uid") ?? null;
+  const guestToken: string | null = pickMeta(session.metadata, "guest_token") ?? null;
+
+  if (userId === null && guestToken === null) {
+    log("warn", "webhook_session_no_identity", {
       requestId,
       sessionId: prefix(session.id),
     });
     return;
   }
 
+  const isGuest = userId === null;
+
+  // ── Find or create order ──────────────────────────────────────────────────
+
   let order = await findOrderBySessionId(db, session.id);
   let wasNewOrder = false;
 
-  if (order === null) {
-    order = await createOrderFromSession({ db, session, userId, requestId });
+  if (!order) {
+    order = await createOrderFromSession({
+      db,
+      session,
+      userId,
+      guestToken,
+      requestId,
+    });
 
-    if (order === null) {
-      throw new Error(`webhook_order_create_failed:${session.id}`);
-    }
+    if (!order) throw new Error(`webhook_order_create_failed:${session.id}`);
 
     wasNewOrder = true;
   } else if (shouldRepairToPaid(order)) {
@@ -165,85 +164,23 @@ export async function handleCheckoutSessionCompleted(
       .eq("id", order.id);
   }
 
-  const orderId            = order.id;
-  const orderTotal         = order.amount_total;
-  const promoId            = pickMeta(session.metadata, "promo_id");
-  const creditId           = pickMeta(session.metadata, "credit_id");
-  const promoDiscountCents = parseCents(pickMeta(session.metadata, "promo_discount_cents"));
-  const subtotalCents = parseCents(pickMeta(session.metadata, "subtotal_cents")) ?? orderTotal;
-  const creditCents        = parseCents(pickMeta(session.metadata, "credit_cents"));
-  const totalCents         = typeof session.amount_total === "number"
-    ? session.amount_total
-    : orderTotal;
+  const orderId    = order.id;
+  const orderTotal = order.amount_total;
+
+  // ── Side effects ──────────────────────────────────────────────────────────
+  // Rules:
+  //   - upsertPaymentTransaction: runs for ALL orders (auth + guest)
+  //   - notifyKitchen:            runs for ALL orders (auth + guest)
+  //   - sendOrderConfirmationSms: runs for ALL orders (auth + guest)
+  //   - loyalty, promo, credit:   auth-only (guard with `userId !== null`)
 
   const sideEffects: Promise<void>[] = [
+    // ── Always ──────────────────────────────────────────────────────────────
     upsertPaymentTransaction({ db, orderId, session, requestId }),
-    backfillLoyaltyIfMissing({
-      db,
-      userId,
-      orderId,
-      amountCents: subtotalCents,
-      requestId,
-    }),
-    emitOrderEvent(
-      db,
-      orderId,
-      userId,
-      "REVIEW_NUDGE_READY",
-      toJson({
-        amount_cents: orderTotal,
-        source:       "stripe-webhook",
-        event_id:     event.id,
-      }),
-      requestId,
-    ),
-    // Finalize loyalty reserve — flip checkout_reserve → redeemed in ledger.
-    // Best-effort: runs concurrently, never blocks order creation.
-    finalizeLoyaltyReserve({ db, session, requestId }),
   ];
-
-  if (promoId !== null) {
-    sideEffects.push(
-      recordPromoRedemptionIfMissing({
-        db,
-        promotionId:     promoId,
-        userId,
-        sessionId:       session.id,
-        discountCents:   promoDiscountCents,
-        orderTotalCents: totalCents,
-        requestId,
-      }),
-    );
-  }
-
-  if (creditId !== null) {
-    sideEffects.push(
-      markCreditUsedIfPending({
-        db,
-        creditId,
-        userId,
-        sessionId: session.id,
-        requestId,
-      }),
-    );
-  }
 
   if (wasNewOrder) {
     sideEffects.push(
-      emitOrderEvent(
-        db,
-        orderId,
-        userId,
-        "ORDER_CONFIRMED_WEBHOOK",
-        toJson({
-          event_id:             event.id,
-          session_id:           session.id,
-          source:               "stripe-webhook",
-          credit_cents:         creditCents,
-          promo_discount_cents: promoDiscountCents,
-        }),
-        requestId,
-      ),
       notify(
         db,
         orderId,
@@ -251,19 +188,107 @@ export async function handleCheckoutSessionCompleted(
         "New order confirmed via Stripe webhook.",
         requestId,
       ),
-      // ✅ Kitchen screen notification — triggers Realtime on order_events
-      // so new orders appear instantly without polling.
-      notifyKitchen({
+    );
+  }
+
+  // ── Auth-only side effects ─────────────────────────────────────────────────
+  // These involve user-linked tables (loyalty_ledger, promos, credits,
+  // order_events with user_id FK). Sending an empty string crashes or
+  // produces garbage rows, so we skip entirely for guest orders.
+
+  if (userId !== null) {
+    const promoId          = pickMeta(session.metadata, "promo_id") ?? undefined;
+    const creditId         = pickMeta(session.metadata, "credit_id") ?? undefined;
+    const subtotalCents    = parseCents(pickMeta(session.metadata, "subtotal_cents")) ?? orderTotal;
+    const promoDiscountCents = parseCents(pickMeta(session.metadata, "promo_discount_cents"));
+    const totalCents       =
+      typeof session.amount_total === "number" ? session.amount_total : orderTotal;
+
+    sideEffects.push(
+      backfillLoyaltyIfMissing({
+        db,
+        userId,
+        orderId,
+        amountCents: subtotalCents,
+        requestId,
+      }),
+
+      emitOrderEvent(
         db,
         orderId,
         userId,
+        "REVIEW_NUDGE_READY",
+        toJson({
+          amount_cents: orderTotal,
+          source:       "stripe-webhook",
+          event_id:     event.id,
+        }),
+        requestId,
+      ),
+
+      finalizeLoyaltyReserve({ db, session, userId, requestId }),
+    );
+
+    if (promoId) {
+      sideEffects.push(
+        recordPromoRedemptionIfMissing({
+          db,
+          promotionId:     promoId,
+          userId,
+          sessionId:       session.id,
+          discountCents:   promoDiscountCents,
+          orderTotalCents: totalCents,
+          requestId,
+        }),
+      );
+    }
+
+    if (creditId) {
+      sideEffects.push(
+        markCreditUsedIfPending({
+          db,
+          creditId,
+          userId,
+          sessionId: session.id,
+          requestId,
+        }),
+      );
+    }
+
+    if (wasNewOrder) {
+      sideEffects.push(
+        emitOrderEvent(
+          db,
+          orderId,
+          userId,
+          "ORDER_CONFIRMED_WEBHOOK",
+          toJson({
+            event_id:   event.id,
+            session_id: session.id,
+            source:     "stripe-webhook",
+          }),
+          requestId,
+        ),
+      );
+    }
+  }
+
+  // ── Kitchen + SMS — always fire for both auth and guest ───────────────────
+
+  if (wasNewOrder) {
+    sideEffects.push(
+      notifyKitchen({
+        db,
+        orderId,
+        // kitchen-notify.ts takes userId for logging only (not written to DB).
+        // Pass empty string to maintain backward compat with any string-typed
+        // signatures; a future update can switch this to string | null.
+        userId:          userId ?? "",
         fulfillmentType: pickMeta(session.metadata, "order_type") ?? "pickup",
         amountTotal:     orderTotal,
         requestId,
       }),
-      // ✅ SMS confirmation — calls send-sms Edge Function via internal key.
-      // Best-effort: never blocks order creation. send-sms handles idempotency,
-      // rate limiting, and phone normalization internally.
+
       sendOrderConfirmationSms({ db, orderId, requestId }),
     );
   }
@@ -276,6 +301,7 @@ export async function handleCheckoutSessionCompleted(
     sessionId:  prefix(session.id),
     wasNewOrder,
     orderTotal,
-    userId:     prefix(userId),
+    isGuest,
+    userId:     prefix(userId ?? "guest"),
   });
 }

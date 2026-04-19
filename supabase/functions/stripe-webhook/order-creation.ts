@@ -1,3 +1,23 @@
+// supabase/functions/stripe-webhook/order-creation.ts
+// =============================================================================
+// Changes from prior version:
+//
+//   1. createOrderFromSession now accepts:
+//        userId:     string | null   (null for guest checkouts)
+//        guestToken: string | null   (non-null for guest checkouts)
+//
+//   2. Validates that exactly one identity is provided.
+//
+//   3. INSERT now sets:
+//        customer_uid → userId (null for guests)
+//        guest_token  → guestToken (null for auth users)
+//        source       → 'guest' | 'auth'
+//      These columns already exist on the orders table.
+//
+//   4. prepareAuthoritativeCartState receives the nullable userId and the
+//      guestToken so it can apply the correct ownership check.
+// =============================================================================
+
 import type Stripe from "stripe";
 
 import { DB_ORD_CONFIRMED, DB_PMT_PAID } from "./env.ts";
@@ -31,7 +51,7 @@ const VALID_ORDER_TYPES = new Set<OrderType>(['pickup', 'delivery', 'dine_in'] a
 type ValidatedOrderState = {
   orderType:            OrderType;
   totalCents:           number;
-  stripeAmountTotal:    number;  // actual amount Stripe charged (post-loyalty-discount)
+  stripeAmountTotal:    number;
   cart:                 PreparedCartState['cart'];
   snapshot:             PricingSnapshot;
   pricingHash:          string;
@@ -55,8 +75,8 @@ function assertPricingSnapshot(
 }
 
 function buildValidatedOrderState(
-  prepared: PreparedCartState,
-  session:  Stripe.Checkout.Session,
+  prepared:  PreparedCartState,
+  session:   Stripe.Checkout.Session,
   requestId: string,
 ): ValidatedOrderState {
   assertPricingSnapshot(prepared.snapshot, requestId);
@@ -76,8 +96,6 @@ function buildValidatedOrderState(
     );
   }
 
-  // Read the loyalty discount from session metadata so we can record the
-  // actual amount charged (not the pre-discount snapshot total).
   const loyaltyDiscountCents = parseInt(
     pickMeta(session.metadata, "loyalty_discount_cents") ?? "0",
     10,
@@ -112,8 +130,8 @@ type OrderCreationPricing = {
   deliveryFeeCents:      number;
   serviceFeeCents:       number;
   tipCents:              number;
-  totalCents:            number;  // snapshot total (pre-loyalty)
-  chargedCents:          number;  // what Stripe actually charged
+  totalCents:            number;
+  chargedCents:          number;
   currency:              string;
 };
 
@@ -144,18 +162,20 @@ function buildOrderCreationPricing(
 // ─── Metadata ─────────────────────────────────────────────────────────────────
 
 function buildOrderMetadata(args: {
-  requestId:   string;
-  session:     Stripe.Checkout.Session;
-  cartId:      string;
-  orderType:   OrderType;
-  pricingHash: string;
-  consumedNow: boolean;
-  pricing:     OrderCreationPricing;
-  snapshot:    unknown;
+  requestId:    string;
+  session:      Stripe.Checkout.Session;
+  cartId:       string;
+  orderType:    OrderType;
+  pricingHash:  string;
+  consumedNow:  boolean;
+  pricing:      OrderCreationPricing;
+  snapshot:     unknown;
+  isGuest:      boolean;
+  guestToken:   string | null;
 }): ReturnType<typeof toJson> {
   const {
     requestId, session, cartId, orderType,
-    pricingHash, consumedNow, pricing, snapshot,
+    pricingHash, consumedNow, pricing, snapshot, isGuest, guestToken,
   } = args;
 
   const paymentIntentId = typeof session.payment_intent === "string"
@@ -173,6 +193,8 @@ function buildOrderMetadata(args: {
     stripe_payment_status:    session.payment_status ?? null,
     order_category:           "food",
     fulfillment_type:         orderType,
+    is_guest:                 isGuest,
+    guest_token:              guestToken ?? null,
     promo_id:                 snapshotString(snapshot, "promoId"),
     credit_id:                snapshotString(snapshot, "creditId"),
     applied_campaign_ids:     snapshotStringArray(snapshot, "appliedCampaignIds"),
@@ -189,16 +211,16 @@ function buildOrderMetadata(args: {
         pricing.campaignDiscountCents +
         pricing.creditCents +
         pricing.loyaltyDiscountCents,
-      taxCents:          pricing.taxCents,
-      deliveryFeeCents:  pricing.deliveryFeeCents,
-      serviceFeeCents:   pricing.serviceFeeCents,
-      tipCents:          pricing.tipCents,
-      totalCents:        pricing.chargedCents,  // actual charged
-      snapshotTotal:     pricing.totalCents,    // pre-discount snapshot
-      currency:          pricing.currency,
+      taxCents:         pricing.taxCents,
+      deliveryFeeCents: pricing.deliveryFeeCents,
+      serviceFeeCents:  pricing.serviceFeeCents,
+      tipCents:         pricing.tipCents,
+      totalCents:       pricing.chargedCents,
+      snapshotTotal:    pricing.totalCents,
+      currency:         pricing.currency,
     }),
-    stripe_amount_total:      pricing.chargedCents,
-    stripe_currency:          pricing.currency,
+    stripe_amount_total:       pricing.chargedCents,
+    stripe_currency:           pricing.currency,
     pending_cart_consumed_now: consumedNow,
   });
 }
@@ -276,17 +298,31 @@ async function insertOrderItemsFromSnapshot(args: {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export async function createOrderFromSession(args: {
-  db:        DbClient;
-  session:   Stripe.Checkout.Session;
-  userId:    string;
-  requestId: string;
+  db:         DbClient;
+  session:    Stripe.Checkout.Session;
+  userId:     string | null;   // null for guest checkouts
+  guestToken: string | null;   // null for auth checkouts
+  requestId:  string;
 }): Promise<OrderLocated | null> {
-  const { db, session, userId, requestId } = args;
+  const { db, session, userId, guestToken, requestId } = args;
 
-  const prepared = await prepareAuthoritativeCartState({
+  // Exactly one identity must be present — both null means the handler
+  // should have already rejected the session before reaching here.
+  if (userId === null && guestToken === null) {
+    log("error", "webhook_order_no_identity", {
+      requestId,
+      sessionId: prefix(session.id),
+    });
+    return null;
+  }
+
+  const isGuest = userId === null;
+
+const prepared = await prepareAuthoritativeCartState({
     db,
     session,
     userId,
+    _guestToken: guestToken,
     requestId,
   });
 
@@ -315,27 +351,39 @@ export async function createOrderFromSession(args: {
   const metadata = buildOrderMetadata({
     requestId,
     session,
-    cartId: cart.id,
+    cartId:     cart.id,
     orderType,
     pricingHash,
     consumedNow,
     pricing,
     snapshot,
+    isGuest,
+    guestToken,
   });
+
+  // ── Build insert ───────────────────────────────────────────────────────────
+  // guest_token and source are columns that already exist on the orders table.
+  // Auth orders set customer_uid; guest orders set guest_token.
+  // Both set source to distinguish the pipeline in queries and logs.
 
   const insert = {
     stripe_session_id:         session.id,
     stripe_payment_intent_id:  paymentIntentId,
     order_type:                "food",
     fulfillment_type:          orderType,
+    // Identity — one of these will be non-null
     customer_uid:              userId,
+    guest_token:               guestToken ?? null,
+    source:                    isGuest ? "guest" : "auth",
+    // Customer details from Stripe (populated for both pipelines when available)
     customer_email:            session.customer_details?.email ?? null,
     customer_name:             session.customer_details?.name ?? null,
     customer_phone:            session.customer_details?.phone ?? null,
+    // Pricing
     amount_subtotal:           pricing.subtotalCents,
     amount_tax:                pricing.taxCents,
     amount_shipping:           pricing.deliveryFeeCents,
-    amount_total:              pricing.chargedCents,   // actual Stripe charge
+    amount_total:              pricing.chargedCents,
     subtotal_cents:            pricing.subtotalCents,
     tax_cents:                 pricing.taxCents,
     tip_cents:                 pricing.tipCents,
@@ -346,14 +394,14 @@ export async function createOrderFromSession(args: {
       pricing.loyaltyDiscountCents,
     delivery_fee_cents:        pricing.deliveryFeeCents,
     service_fee_cents:         pricing.serviceFeeCents,
-    total_cents:               pricing.chargedCents,   // actual Stripe charge
+    total_cents:               pricing.chargedCents,
     currency:                  pricing.currency,
     payment_status:            DB_PMT_PAID,
     status:                    DB_ORD_CONFIRMED,
     cart_items:                cart.items,
     metadata,
     notes:                     snapshotString(snapshot, "orderNotes"),
-  } as OrderInsert & { fulfillment_type: string };
+  } as OrderInsert & { fulfillment_type: string; guest_token: string | null; source: string };
 
   const { data: inserted, error: insertError } = await db
     .from("orders")
@@ -370,6 +418,7 @@ export async function createOrderFromSession(args: {
       code:             insertError.code ?? null,
       message:          insertError.message,
       orderType,
+      isGuest,
       subtotalCents:    pricing.subtotalCents,
       taxCents:         pricing.taxCents,
       deliveryFeeCents: pricing.deliveryFeeCents,
@@ -381,14 +430,15 @@ export async function createOrderFromSession(args: {
   if (inserted !== null) {
     log("info", "webhook_order_created", {
       requestId,
-      orderId:             prefix(inserted.id),
-      sessionId:           prefix(session.id),
-      orderCategory:       "food",
-      fulfillmentType:     orderType,
-      chargedCents:        pricing.chargedCents,
+      orderId:              prefix(inserted.id),
+      sessionId:            prefix(session.id),
+      orderCategory:        "food",
+      fulfillmentType:      orderType,
+      chargedCents:         pricing.chargedCents,
       loyaltyDiscountCents: pricing.loyaltyDiscountCents,
-      subtotalCents:       pricing.subtotalCents,
-      taxCents:            pricing.taxCents,
+      subtotalCents:        pricing.subtotalCents,
+      taxCents:             pricing.taxCents,
+      isGuest,
       consumedNow,
     });
 

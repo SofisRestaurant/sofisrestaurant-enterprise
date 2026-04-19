@@ -31,7 +31,7 @@ export const DEFAULT_ALLOWED_ORIGINS = [
   "https://sofisrestaurant-enterprise.vercel.app",
 ] as const;
 
-export const DEFAULT_STRIPE_API_VERSION = "2026-02-25.clover";
+export const DEFAULT_STRIPE_API_VERSION = "2026-03-25.dahlia";
 
 export function isOrderType(value: string): value is OrderType {
   return ALLOWED_ORDER_TYPES.some((entry) => entry === value);

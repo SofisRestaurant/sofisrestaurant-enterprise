@@ -24,6 +24,7 @@
 
 import Stripe from 'stripe';
 import { createAnonClient, createServiceClient } from '../_shared/supabase.ts';
+import { STRIPE_API_VERSION } from '../_shared/stripe-client.ts';
 
 // ─────────────────────────────────────────────────────────────
 // Config
@@ -42,13 +43,13 @@ const CONFIG = {
   APP_HEADER_NAME: 'x-application-name',
   REQUEST_ID_HEADER: 'x-request-id',
 
-  // Optional geo restriction (Cloudflare style headers). Leave disabled unless you’re behind CF.
+  // Optional geo restriction (Cloudflare style headers). Leave disabled unless you're behind CF.
   ENABLE_GEO_RESTRICTION: false,
   ALLOWED_COUNTRIES: ['US'] as const, // ISO-3166-1 alpha-2
-
-  // Stripe pinned version (upgrade intentionally)
-  DEFAULT_STRIPE_API_VERSION: '2026-03-25.dahlia',
 } as const;
+
+// Stripe API version is imported from _shared/stripe-client.ts.
+// Do not define it here — there is one source of truth.
 
 const STRIPE_SESSION_RE = /^cs_(test|live)_[a-zA-Z0-9]+$/;
 
@@ -206,38 +207,29 @@ function mustStripeSessionId(v: unknown): string {
   return s;
 }
 
-function isValidStripeApiVersion(v: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}(\.[a-zA-Z0-9_-]+)?$/.test(v);
-}
-
 // ─────────────────────────────────────────────────────────────
-// Stripe (lazy init — no top-level env throws)
+// Stripe (lazy singleton — no top-level env throws)
 // ─────────────────────────────────────────────────────────────
 
 let STRIPE_SINGLETON: Stripe | null = null;
 let STRIPE_SINGLETON_VERSION: string | null = null;
 
-function getStripeOrThrow(): { stripe: Stripe; apiVersion: string } {
+function getStripeOrThrow(): { stripe: Stripe; apiVersion: typeof STRIPE_API_VERSION } {
   const secret = (Deno.env.get('STRIPE_SECRET_KEY') ?? '').trim();
   if (!secret) throw new Error('MISSING_STRIPE_SECRET_KEY');
 
-  const envVer = (Deno.env.get('STRIPE_API_VERSION') ?? '').trim();
-  const v = isValidStripeApiVersion(envVer) ? envVer : CONFIG.DEFAULT_STRIPE_API_VERSION;
-
-  if (STRIPE_SINGLETON && STRIPE_SINGLETON_VERSION === v) {
-    return { stripe: STRIPE_SINGLETON, apiVersion: v };
+  if (STRIPE_SINGLETON && STRIPE_SINGLETON_VERSION === STRIPE_API_VERSION) {
+    return { stripe: STRIPE_SINGLETON, apiVersion: STRIPE_API_VERSION };
   }
 
   const stripe = new Stripe(secret, {
-    apiVersion: v,
+    apiVersion: STRIPE_API_VERSION,
     httpClient: Stripe.createFetchHttpClient(),
   });
 
-
-
   STRIPE_SINGLETON = stripe;
-  STRIPE_SINGLETON_VERSION = v;
-  return { stripe, apiVersion: v };
+  STRIPE_SINGLETON_VERSION = STRIPE_API_VERSION;
+  return { stripe, apiVersion: STRIPE_API_VERSION };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -259,7 +251,6 @@ async function checkRateLimit(
     .maybeSingle();
 
   if (error) {
-    // Fail-open (don’t lock users out if DB hiccups)
     log('warn', 'rate_limit_read_failed', {
       requestId,
       userId: prefix(userId),
@@ -356,9 +347,7 @@ async function authenticateAndAuthorize(args: {
       expand: ['line_items', 'customer', 'payment_intent'],
     });
 
-    // Support multiple metadata conventions
-    const owner = pickString(session.metadata, 'user_id', 'customer_uid', 'uid') || ''; // force string
-
+    const owner = pickString(session.metadata, 'user_id', 'customer_uid', 'uid');
     if (!owner || owner !== userId) return { ok: false, reason: 'owner_mismatch' };
 
     return { ok: true, userId, session };
@@ -379,7 +368,6 @@ async function authenticateAndAuthorize(args: {
 function geoAllowed(req: Request): boolean {
   if (!CONFIG.ENABLE_GEO_RESTRICTION) return true;
 
-  // Common CF header: CF-IPCountry (e.g. "US"). If absent, fail-open.
   const country = (req.headers.get('cf-ipcountry') ?? req.headers.get('CF-IPCountry') ?? '')
     .trim()
     .toUpperCase();
@@ -399,7 +387,6 @@ Deno.serve(async (req: Request) => {
   const cors = corsHeaders(req);
   if (!cors) return new Response('Origin not allowed', { status: 403 });
 
-  // Preflight
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
 
   if (req.method !== 'POST') {
@@ -413,17 +400,10 @@ Deno.serve(async (req: Request) => {
   if (CONFIG.REQUIRE_APP_HEADER) {
     const appName = (req.headers.get(CONFIG.APP_HEADER_NAME) ?? '').trim();
     if (!appName) {
-      return errorJson(
-        cors,
-        requestId,
-        'MISSING_APP_HEADER',
-        `Missing ${CONFIG.APP_HEADER_NAME}`,
-        400,
-      );
+      return errorJson(cors, requestId, 'MISSING_APP_HEADER', `Missing ${CONFIG.APP_HEADER_NAME}`, 400);
     }
   }
 
-  // Stripe init (lazy)
   let stripe: Stripe;
   let stripeApiVersion: string;
   try {
@@ -431,16 +411,9 @@ Deno.serve(async (req: Request) => {
     stripe = s.stripe;
     stripeApiVersion = s.apiVersion;
   } catch {
-    return errorJson(
-      cors,
-      requestId,
-      'STRIPE_INIT_FAILED',
-      'Stripe is not configured on the server',
-      500,
-    );
+    return errorJson(cors, requestId, 'STRIPE_INIT_FAILED', 'Stripe is not configured on the server', 500);
   }
 
-  // Body parse (strict)
   let raw: unknown;
   try {
     raw = await readJsonWithLimit(req, CONFIG.MAX_BODY_BYTES);
@@ -449,13 +422,7 @@ Deno.serve(async (req: Request) => {
     if (msg === 'PAYLOAD_TOO_LARGE')
       return errorJson(cors, requestId, 'PAYLOAD_TOO_LARGE', 'Payload too large', 413);
     if (msg === 'UNSUPPORTED_CONTENT_TYPE')
-      return errorJson(
-        cors,
-        requestId,
-        'UNSUPPORTED_MEDIA_TYPE',
-        'Content-Type must be application/json',
-        415,
-      );
+      return errorJson(cors, requestId, 'UNSUPPORTED_MEDIA_TYPE', 'Content-Type must be application/json', 415);
     if (msg === 'EMPTY_BODY')
       return errorJson(cors, requestId, 'EMPTY_BODY', 'Request body is empty', 400);
     return errorJson(cors, requestId, 'INVALID_JSON', 'Invalid JSON', 400);
@@ -469,58 +436,44 @@ Deno.serve(async (req: Request) => {
 
   const svc = createServiceClient();
 
-  // Auth + owner check
   const auth = await authenticateAndAuthorize({ req, requestId, sessionId, svc, stripe });
   if (!auth.ok) {
     if (auth.reason === 'rate_limited') {
-      return errorJson(
-        cors,
-        requestId,
-        'RATE_LIMITED',
-        'Too many requests. Please wait and try again.',
-        429,
-      );
+      return errorJson(cors, requestId, 'RATE_LIMITED', 'Too many requests. Please wait and try again.', 429);
     }
     if (auth.reason === 'owner_mismatch') {
       return errorJson(cors, requestId, 'UNAUTHORIZED', 'Unauthorized', 401);
     }
     if (auth.reason === 'stripe_error') {
-      return errorJson(
-        cors,
-        requestId,
-        'STRIPE_UNAVAILABLE',
-        'Unable to retrieve checkout session',
-        502,
-      );
+      return errorJson(cors, requestId, 'STRIPE_UNAVAILABLE', 'Unable to retrieve checkout session', 502);
     }
     return errorJson(cors, requestId, 'UNAUTHORIZED', 'Unauthorized', 401);
   }
 
   const { session } = auth;
 
-  // Response: keep it minimal + safe
   const resp: OkResp = {
     ok: true,
     requestId,
     data: {
-      id: session.id,
-      status: session.status ?? null,
-      payment_status: session.payment_status ?? null,
-      amount_total: typeof session.amount_total === 'number' ? session.amount_total : null,
+      id:              session.id,
+      status:          session.status ?? null,
+      payment_status:  session.payment_status ?? null,
+      amount_total:    typeof session.amount_total === 'number' ? session.amount_total : null,
       amount_subtotal: typeof session.amount_subtotal === 'number' ? session.amount_subtotal : null,
-      currency: typeof session.currency === 'string' ? session.currency : null,
-      customer_email: session.customer_details?.email ?? null,
-      customer_name: session.customer_details?.name ?? null,
-      line_items: session.line_items?.data ?? [],
-      created: typeof session.created === 'number' ? session.created : null,
-      expires_at: typeof session.expires_at === 'number' ? session.expires_at : null,
+      currency:        typeof session.currency === 'string' ? session.currency : null,
+      customer_email:  session.customer_details?.email ?? null,
+      customer_name:   session.customer_details?.name ?? null,
+      line_items:      session.line_items?.data ?? [],
+      created:         typeof session.created === 'number' ? session.created : null,
+      expires_at:      typeof session.expires_at === 'number' ? session.expires_at : null,
     },
   };
 
   log('info', 'ok', {
     requestId,
-    ms: Date.now() - start,
-    sessionId: prefix(sessionId),
+    ms:               Date.now() - start,
+    sessionId:        prefix(sessionId),
     stripeApiVersion,
   });
 
