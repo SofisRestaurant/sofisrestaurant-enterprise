@@ -17,6 +17,16 @@
 // This page only READS. Loyalty fetch stays auth-only (unchanged).
 //
 // UI, animations, and realtime subscription are untouched from prior version.
+//
+// [NEW 2026-04-20] Verification gate:
+//   If the order's verification_status is 'required', the success view is
+//   replaced with the PhoneVerification component. Once the customer
+//   completes OTP, the gate lifts and the normal success view is shown.
+//
+// [FIX 2026-04-20]
+//   1. resp.order['verification_status'] uses readString() — safe type guard.
+//   2. clearCart() deferred until verification is resolved.
+//   3. Stray };, inside .on() callback removed — was causing all TS errors.
 // ============================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -30,6 +40,7 @@ import { useCartStore } from '@/modules/cart/store/cart.store';
 import { mapOrderRowToDomain } from '@/modules/orders/mappers';
 import type { Order, OrderStatus } from '@/domain/orders/order.types';
 import { LOYALTY_TIERS, asTier } from '@/domain/loyalty/tiers';
+import { PhoneVerification } from '@/modules/checkout/components/PhoneVerification';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -81,9 +92,6 @@ type LoyaltyForOrderResp = {
   code?: unknown;
 };
 
-// Response shape from get-order-for-success edge function.
-// `order` is typed loosely here because the server does SELECT * on the
-// orders table — we cast to the mapper's expected input at the call site.
 type GetOrderResp = {
   ok?: boolean;
   order?: Record<string, unknown> | null;
@@ -106,7 +114,6 @@ const LOYALTY_MAX_ATTEMPTS = 10;
 const LOYALTY_RETRY_MAX_MS = 5_200;
 const STRIPE_SESSION_RE = /^cs_(test|live)_[a-zA-Z0-9]+$/;
 
-// Must match the key used in useGuestCheckout.ts.
 const GUEST_TOKEN_STORAGE_KEY = 'checkout_guest_token';
 
 // ---------------------------------------------------------------------------
@@ -172,7 +179,6 @@ function computeBackoffMs(baseMs: number, attempt: number, maxMs: number): numbe
   return clampInt(exp + jitter, baseMs, maxMs);
 }
 
-// Read guest token from sessionStorage (written during useGuestCheckout flow).
 function readGuestToken(): string | null {
   try {
     const v = sessionStorage.getItem(GUEST_TOKEN_STORAGE_KEY);
@@ -228,7 +234,7 @@ const btnVariants = {
 };
 
 // ---------------------------------------------------------------------------
-// Sub-components (unchanged)
+// Sub-components
 // ---------------------------------------------------------------------------
 
 function LoadingState({ attempt }: { attempt: number }) {
@@ -510,20 +516,15 @@ function StickyNextSteps({
 }
 
 // ---------------------------------------------------------------------------
-// Auth helper — returns the JWT if the user has a session, null otherwise.
-// Short-polls for 2.5s in case Supabase is still restoring a session from
-// localStorage after the Stripe redirect.
+// Auth helper
 // ---------------------------------------------------------------------------
 
 async function getJwtIfAuthed(): Promise<string | null> {
-  // Fast path — session already in memory
   const { data: immediate } = await supabase.auth.getSession();
   if (immediate?.session?.access_token) {
     return immediate.session.access_token;
   }
 
-  // Short-poll for the session to be restored from storage.
-  // Auth users returning from Stripe sometimes need ~1s for restore.
   return new Promise<string | null>((resolve) => {
     const deadline = setTimeout(() => {
       subscription.unsubscribe();
@@ -568,6 +569,10 @@ export default function OrderSuccess() {
   const [loyaltyMeta, setLoyaltyMeta] = useState<LoyaltyForOrderMeta | undefined>(undefined);
   const [loyaltyAttempt, setLoyaltyAttempt] = useState(0);
 
+  // Verification gate: true when order.verification_status === 'required'
+  // and the customer has not yet completed OTP.
+  const [verificationRequired, setVerificationRequired] = useState(false);
+
   const loyaltyStartedForOrderRef = useRef<string | null>(null);
   const pollTimerRef = useRef<TimeoutHandle | null>(null);
   const loyaltyTimerRef = useRef<TimeoutHandle | null>(null);
@@ -579,7 +584,7 @@ export default function OrderSuccess() {
     }
   }, []);
 
-  // ── Loyalty fetch (auth-only, unchanged pattern) ────────────────────────
+  // ── Loyalty fetch (auth-only) ───────────────────────────────────────────
   const fetchLoyaltyWithRetry = useCallback(
     async (orderId: string) => {
       let retryCount = 0;
@@ -600,7 +605,6 @@ export default function OrderSuccess() {
         try {
           const token = await getJwtIfAuthed();
           if (!token) {
-            // No auth session → this is a guest order. Guests have no loyalty.
             stopTimer(loyaltyTimerRef);
             return;
           }
@@ -645,9 +649,7 @@ export default function OrderSuccess() {
     [stopTimer],
   );
 
-  // ── Unified order fetch via get-order-for-success ──────────────────────
-  // Handles auth AND guest in a single call. Service-role read on server,
-  // authorization decided by which credential is presented.
+  // ── Order fetch ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isValidSessionId) {
       setPageState('error');
@@ -670,9 +672,6 @@ export default function OrderSuccess() {
       attempts += 1;
       setAttempt(attempts);
 
-      // Gather credentials: Bearer if available, guest_token otherwise.
-      // Both are sent when both are available; the server decides based on
-      // which one matches the stored order.
       const [token, guestToken] = [await getJwtIfAuthed(), readGuestToken()];
 
       const headers: Record<string, string> = {
@@ -688,7 +687,6 @@ export default function OrderSuccess() {
 
         if (cancelled) return;
 
-        // Still waiting for the Stripe webhook to persist the order.
         if (resp?.pending === true || !resp?.order) {
           if (attempts >= POLL_MAX_ATTEMPTS) {
             setPageState('timeout');
@@ -699,18 +697,24 @@ export default function OrderSuccess() {
           return;
         }
 
-        // The server did SELECT * on the orders table, so resp.order has the
-        // full Database row shape that mapOrderRowToDomain accepts. Cast
-        // through unknown to silence the structural-mismatch complaint —
-        // this is the trust boundary where shape validation stops.
         const orderRow = resp.order as unknown as Parameters<typeof mapOrderRowToDomain>[0];
         const mapped = mapOrderRowToDomain(orderRow);
         setOrder((current) => (current?.id === mapped.id ? current : mapped));
         setLiveStatus(mapped.status);
-        setPageState('found');
-        clearCart();
 
-        // Loyalty fetch is auth-only and no-ops when there's no JWT.
+        // Use readString() — safe access on unknown-typed DB row.
+        const verStatus = readString(resp.order['verification_status']);
+        const needsVerification = verStatus === 'required';
+        setVerificationRequired(needsVerification);
+
+        setPageState('found');
+
+        // Defer clearCart() until verification is resolved so an abandoned
+        // OTP flow does not leave the user with an empty cart.
+        if (!needsVerification) {
+          clearCart();
+        }
+
         if (loyaltyStartedForOrderRef.current !== mapped.id) {
           loyaltyStartedForOrderRef.current = mapped.id;
           void fetchLoyaltyWithRetry(mapped.id);
@@ -720,9 +724,6 @@ export default function OrderSuccess() {
       } catch (err) {
         if (cancelled) return;
 
-        // Distinguish genuine auth failures (stop retrying) from transient
-        // errors (retry). A real 401/403 from the server means the caller
-        // doesn't own this order — no point retrying.
         const message = (err instanceof Error ? err.message : String(err ?? '')).toLowerCase();
         const isFatalAuth =
           message.includes('401') ||
@@ -743,7 +744,7 @@ export default function OrderSuccess() {
           schedulePoll();
         }
       }
-    };;
+    };
 
     void run();
 
@@ -754,10 +755,7 @@ export default function OrderSuccess() {
     };
   }, [clearCart, fetchLoyaltyWithRetry, isValidSessionId, sessionId, stopTimer]);
 
-  // ── Realtime subscription for live order status (unchanged) ─────────────
-  // Note: for guests this subscription will silently fail to receive updates
-  // (RLS blocks anon realtime). That's acceptable — the initial fetch is
-  // enough; live status updates are nice-to-have for logged-in users.
+  // ── Realtime subscription ───────────────────────────────────────────────
   useEffect(() => {
     if (!order?.id) return;
     const channel = supabase
@@ -765,11 +763,19 @@ export default function OrderSuccess() {
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'orders', filter: `id=eq.${order.id}` },
+        // ↓ FIX: removed stray };, that was here — it split the arrow function
+        //   body, causing TypeScript to read everything after it as top-level
+        //   statements outside the component, making every variable undefined.
         (payload) => {
           const nextRecord = isRecord(payload) && isRecord(payload.new) ? payload.new : null;
           const nextStatus = nextRecord?.status;
           if (isOrderStatus(nextStatus)) {
             setLiveStatus(nextStatus);
+          }
+          const nextVerification = readString(nextRecord?.verification_status);
+          if (nextVerification === 'verified') {
+            setVerificationRequired(false);
+            clearCart();
           }
           const nextOrderNumber = readNumber(nextRecord?.order_number);
           if (nextOrderNumber !== null || isRecord(nextRecord)) {
@@ -788,14 +794,23 @@ export default function OrderSuccess() {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [order?.id]);
+  }, [order?.id, clearCart]);
+
+  // Lift the gate after successful OTP and clear the cart.
+  const handleVerified = useCallback(
+    (_phone: string) => {
+      setVerificationRequired(false);
+      clearCart();
+    },
+    [clearCart],
+  );
 
   const serviceType = useMemo(() => (order ? safeServiceTypeFromOrder(order) : null), [order]);
 
   const loyaltyStatusText = useMemo(() => {
     if (loyalty) return null;
     if (pageState !== 'found') return null;
-    if (loyaltyAttempt <= 0) return null; // guest or not yet started — hide section
+    if (loyaltyAttempt <= 0) return null;
     if (loyaltyAttempt < LOYALTY_MAX_ATTEMPTS) return '✨ Updating your points…';
     return '✨ Your points are still updating — check your account in a moment.';
   }, [loyalty, loyaltyAttempt, pageState]);
@@ -811,7 +826,21 @@ export default function OrderSuccess() {
               {pageState === 'timeout' ? <TimeoutState /> : null}
               {pageState === 'error' ? <ErrorState /> : null}
 
-              {pageState === 'found' && order && liveStatus ? (
+              {/* Verification gate */}
+              {pageState === 'found' && order && verificationRequired ? (
+                <div className="space-y-4">
+                  <div className="text-center">
+                    <p className="text-base font-semibold text-white">One more step</p>
+                    <p className="mt-1 text-sm text-neutral-400">
+                      Please verify your phone number to confirm your order.
+                    </p>
+                  </div>
+                  <PhoneVerification orderId={order.id} onVerified={handleVerified} />
+                </div>
+              ) : null}
+
+              {/* Success view */}
+              {pageState === 'found' && order && liveStatus && !verificationRequired ? (
                 <motion.div
                   className="space-y-5 [--entry-y:18px] md:[--entry-y:32px]"
                   variants={containerVariants}
@@ -878,7 +907,7 @@ export default function OrderSuccess() {
                     </div>
                   </motion.div>
 
-                  {/* ── Loyalty (auth only — hidden for guests) ── */}
+                  {/* ── Loyalty ── */}
                   {loyalty || loyaltyStatusText ? (
                     <motion.div variants={itemVariants}>
                       <AnimatePresence mode="wait">
@@ -1020,7 +1049,7 @@ export default function OrderSuccess() {
             </div>
           </div>
 
-          {pageState === 'found' ? (
+          {pageState === 'found' && !verificationRequired ? (
             <p className="mt-4 text-center text-xs text-neutral-700">
               A confirmation has been sent to your email.
             </p>

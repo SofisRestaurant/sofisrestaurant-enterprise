@@ -16,6 +16,12 @@
 //
 //   4. prepareAuthoritativeCartState receives the nullable userId and the
 //      guestToken so it can apply the correct ownership check.
+//
+//   5. [NEW] Order risk evaluated via ../_shared/order-risk.ts (Deno-safe).
+//        Import path fixed: no longer references src/ which is inaccessible
+//        inside the Deno Edge Function sandbox.
+//        risk_score, risk_level, verification_status written atomically.
+//        Fails open — a crash in risk eval never loses an order.
 // =============================================================================
 
 import type Stripe from "stripe";
@@ -41,6 +47,15 @@ import {
   snapshotStringArray,
   toJson,
 } from "./utils.ts";
+
+// [FIXED] Import from _shared — the only Deno-accessible path.
+// Previously this incorrectly referenced ../../../src/domain/... which is
+// outside the Edge Function sandbox and causes a cold-start module crash.
+import {
+  evaluateOrderRisk,
+  deriveVerificationStatus,
+  type OrderRiskResult,
+} from "../_shared/order-risk.ts";
 
 // ─── Valid values (kept in sync with DB CHECK constraint) ─────────────────────
 
@@ -172,10 +187,11 @@ function buildOrderMetadata(args: {
   snapshot:     unknown;
   isGuest:      boolean;
   guestToken:   string | null;
+  risk:         OrderRiskResult | null;
 }): ReturnType<typeof toJson> {
   const {
     requestId, session, cartId, orderType,
-    pricingHash, consumedNow, pricing, snapshot, isGuest, guestToken,
+    pricingHash, consumedNow, pricing, snapshot, isGuest, guestToken, risk,
   } = args;
 
   const paymentIntentId = typeof session.payment_intent === "string"
@@ -222,6 +238,13 @@ function buildOrderMetadata(args: {
     stripe_amount_total:       pricing.chargedCents,
     stripe_currency:           pricing.currency,
     pending_cart_consumed_now: consumedNow,
+    // Risk breakdown for audit trail. Top-level DB columns are source of truth.
+    order_risk: risk !== null ? toJson({
+      score:                 risk.score,
+      level:                 risk.level,
+      requires_verification: risk.requiresVerification,
+      breakdown:             risk.breakdown,
+    }) : null,
   });
 }
 
@@ -295,19 +318,41 @@ async function insertOrderItemsFromSnapshot(args: {
   }
 }
 
+// ─── Safe risk evaluation wrapper ─────────────────────────────────────────────
+// Fails open: a crash in risk logic never loses an order.
+
+function safeEvaluateOrderRisk(args: {
+  chargedCents:  number;
+  isGuest:       boolean;
+  customerPhone: string | null;
+  requestId:     string;
+}): OrderRiskResult | null {
+  try {
+    return evaluateOrderRisk({
+      chargedCents:  args.chargedCents,
+      isGuest:       args.isGuest,
+      customerPhone: args.customerPhone,
+    });
+  } catch (err) {
+    log("warn", "webhook_order_risk_eval_failed", {
+      requestId: args.requestId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export async function createOrderFromSession(args: {
   db:         DbClient;
   session:    Stripe.Checkout.Session;
-  userId:     string | null;   // null for guest checkouts
-  guestToken: string | null;   // null for auth checkouts
+  userId:     string | null;
+  guestToken: string | null;
   requestId:  string;
 }): Promise<OrderLocated | null> {
   const { db, session, userId, guestToken, requestId } = args;
 
-  // Exactly one identity must be present — both null means the handler
-  // should have already rejected the session before reaching here.
   if (userId === null && guestToken === null) {
     log("error", "webhook_order_no_identity", {
       requestId,
@@ -318,7 +363,7 @@ export async function createOrderFromSession(args: {
 
   const isGuest = userId === null;
 
-const prepared = await prepareAuthoritativeCartState({
+  const prepared = await prepareAuthoritativeCartState({
     db,
     session,
     userId,
@@ -347,7 +392,36 @@ const prepared = await prepareAuthoritativeCartState({
     ? session.payment_intent
     : session.payment_intent?.id ?? null;
 
-  const pricing  = buildOrderCreationPricing(snapshot, currency, loyaltyDiscountCents, stripeAmountTotal);
+  const pricing = buildOrderCreationPricing(
+    snapshot, currency, loyaltyDiscountCents, stripeAmountTotal,
+  );
+
+  // ── Risk evaluation (after pricing, before insert) ─────────────────────────
+  const risk = safeEvaluateOrderRisk({
+    chargedCents:  pricing.chargedCents,
+    isGuest,
+    customerPhone: session.customer_details?.phone ?? null,
+    requestId,
+  });
+
+  // Fail-open default: if eval crashed, treat as not_required so the order
+  // is never blocked by a risk module error. Payment must never be orphaned.
+  const verificationStatus = risk !== null
+    ? deriveVerificationStatus(risk)
+    : 'not_required';
+
+  if (risk !== null) {
+    log("info", "webhook_order_risk_evaluated", {
+      requestId,
+      sessionId:            prefix(session.id),
+      riskScore:            risk.score,
+      riskLevel:            risk.level,
+      requiresVerification: risk.requiresVerification,
+      isGuest,
+      chargedCents:         pricing.chargedCents,
+    });
+  }
+
   const metadata = buildOrderMetadata({
     requestId,
     session,
@@ -359,27 +433,20 @@ const prepared = await prepareAuthoritativeCartState({
     snapshot,
     isGuest,
     guestToken,
+    risk,
   });
-
-  // ── Build insert ───────────────────────────────────────────────────────────
-  // guest_token and source are columns that already exist on the orders table.
-  // Auth orders set customer_uid; guest orders set guest_token.
-  // Both set source to distinguish the pipeline in queries and logs.
 
   const insert = {
     stripe_session_id:         session.id,
     stripe_payment_intent_id:  paymentIntentId,
     order_type:                "food",
     fulfillment_type:          orderType,
-    // Identity — one of these will be non-null
     customer_uid:              userId,
     guest_token:               guestToken ?? null,
     source:                    isGuest ? "guest" : "auth",
-    // Customer details from Stripe (populated for both pipelines when available)
     customer_email:            session.customer_details?.email ?? null,
     customer_name:             session.customer_details?.name ?? null,
     customer_phone:            session.customer_details?.phone ?? null,
-    // Pricing
     amount_subtotal:           pricing.subtotalCents,
     amount_tax:                pricing.taxCents,
     amount_shipping:           pricing.deliveryFeeCents,
@@ -401,7 +468,19 @@ const prepared = await prepareAuthoritativeCartState({
     cart_items:                cart.items,
     metadata,
     notes:                     snapshotString(snapshot, "orderNotes"),
-  } as OrderInsert & { fulfillment_type: string; guest_token: string | null; source: string };
+    // Risk fields — written atomically. NULL when eval crashed (fail-open).
+    risk_score:          risk?.score          ?? null,
+    risk_level:          risk?.level          ?? null,
+    verification_status: verificationStatus,
+    // verified_at intentionally omitted — set by verify-phone on OTP confirm.
+  } as OrderInsert & {
+    fulfillment_type:    string;
+    guest_token:         string | null;
+    source:              string;
+    risk_score:          number | null;
+    risk_level:          string | null;
+    verification_status: string;
+  };
 
   const { data: inserted, error: insertError } = await db
     .from("orders")
@@ -423,6 +502,8 @@ const prepared = await prepareAuthoritativeCartState({
       taxCents:         pricing.taxCents,
       deliveryFeeCents: pricing.deliveryFeeCents,
       chargedCents:     pricing.chargedCents,
+      riskScore:        risk?.score ?? null,
+      riskLevel:        risk?.level ?? null,
     });
     return null;
   }
@@ -440,6 +521,9 @@ const prepared = await prepareAuthoritativeCartState({
       taxCents:             pricing.taxCents,
       isGuest,
       consumedNow,
+      riskScore:            risk?.score          ?? null,
+      riskLevel:            risk?.level          ?? null,
+      verificationStatus,
     });
 
     await insertOrderItemsFromSnapshot({

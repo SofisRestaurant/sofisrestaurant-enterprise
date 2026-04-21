@@ -16,6 +16,11 @@
 //      — if kitchen-notify.ts accepts string | null the call is clean; if it
 //      only accepts string the caller coalesces to "" for backward compat
 //      (that arg is logged only, not written to DB).
+//
+//   5. [NEW] Kitchen notify and SMS are SKIPPED when verification_status is
+//      'required'. The order is persisted and payment is recorded, but
+//      fulfillment is held until the customer completes OTP verification.
+//      The order lookup after creation reads verification_status from the DB.
 // =============================================================================
 
 import type Stripe from "stripe";
@@ -95,6 +100,43 @@ async function finalizeLoyaltyReserve(args: {
     .eq("id", loyaltyAccountId);
 }
 
+// ─── Verification status helper ───────────────────────────────────────────────
+// Reads verification_status from the persisted order row.
+// Returns null if the column is absent or the query fails — caller treats
+// null as "not required" (fail-open) so no order is silently held forever.
+
+async function readVerificationStatus(
+  db:        DbClient,
+  orderId:   string,
+  requestId: string,
+): Promise<string | null> {
+  try {
+    const { data, error } = await db
+      .from("orders")
+      .select("verification_status")
+      .eq("id", orderId)
+      .maybeSingle<{ verification_status: string | null }>();
+
+    if (error) {
+      log("warn", "webhook_read_verification_status_failed", {
+        requestId,
+        orderId: prefix(orderId),
+        error:   error.message,
+      });
+      return null;
+    }
+
+    return data?.verification_status ?? null;
+  } catch (err) {
+    log("warn", "webhook_read_verification_status_crashed", {
+      requestId,
+      orderId: prefix(orderId),
+      error:   err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 export async function handleCheckoutSessionCompleted(
@@ -167,15 +209,37 @@ export async function handleCheckoutSessionCompleted(
   const orderId    = order.id;
   const orderTotal = order.amount_total;
 
+  // ── [NEW] Read verification_status to gate fulfillment ────────────────────
+  // Only relevant for new orders — existing orders that we're seeing for the
+  // second time have already had their side effects run.
+  //
+  // Fail-open: if the read fails or returns null, we treat it as not_required
+  // and proceed normally. A payment must never be silently lost.
+
+  let verificationRequired = false;
+  if (wasNewOrder) {
+    const verificationStatus = await readVerificationStatus(db, orderId, requestId);
+    verificationRequired = verificationStatus === "required";
+
+    if (verificationRequired) {
+      log("info", "webhook_fulfillment_held_pending_verification", {
+        requestId,
+        orderId:    prefix(orderId),
+        sessionId:  prefix(session.id),
+        isGuest,
+      });
+    }
+  }
+
   // ── Side effects ──────────────────────────────────────────────────────────
   // Rules:
   //   - upsertPaymentTransaction: runs for ALL orders (auth + guest)
-  //   - notifyKitchen:            runs for ALL orders (auth + guest)
-  //   - sendOrderConfirmationSms: runs for ALL orders (auth + guest)
+  //   - notifyKitchen:            runs ONLY when verification is not required
+  //   - sendOrderConfirmationSms: runs ONLY when verification is not required
   //   - loyalty, promo, credit:   auth-only (guard with `userId !== null`)
 
   const sideEffects: Promise<void>[] = [
-    // ── Always ──────────────────────────────────────────────────────────────
+    // ── Always — payment must be recorded regardless of verification ────────
     upsertPaymentTransaction({ db, orderId, session, requestId }),
   ];
 
@@ -192,16 +256,13 @@ export async function handleCheckoutSessionCompleted(
   }
 
   // ── Auth-only side effects ─────────────────────────────────────────────────
-  // These involve user-linked tables (loyalty_ledger, promos, credits,
-  // order_events with user_id FK). Sending an empty string crashes or
-  // produces garbage rows, so we skip entirely for guest orders.
 
   if (userId !== null) {
-    const promoId          = pickMeta(session.metadata, "promo_id") ?? undefined;
-    const creditId         = pickMeta(session.metadata, "credit_id") ?? undefined;
-    const subtotalCents    = parseCents(pickMeta(session.metadata, "subtotal_cents")) ?? orderTotal;
+    const promoId            = pickMeta(session.metadata, "promo_id") ?? undefined;
+    const creditId           = pickMeta(session.metadata, "credit_id") ?? undefined;
+    const subtotalCents      = parseCents(pickMeta(session.metadata, "subtotal_cents")) ?? orderTotal;
     const promoDiscountCents = parseCents(pickMeta(session.metadata, "promo_discount_cents"));
-    const totalCents       =
+    const totalCents         =
       typeof session.amount_total === "number" ? session.amount_total : orderTotal;
 
     sideEffects.push(
@@ -273,16 +334,17 @@ export async function handleCheckoutSessionCompleted(
     }
   }
 
-  // ── Kitchen + SMS — always fire for both auth and guest ───────────────────
+  // ── Kitchen + SMS ─────────────────────────────────────────────────────────
+  // Skipped when verification_status = 'required'.
+  // The order is fully persisted and payment is recorded above — only the
+  // kitchen print and customer SMS are held. They will be triggered by the
+  // verify-phone flow once the customer completes OTP (future work).
 
-  if (wasNewOrder) {
+  if (wasNewOrder && !verificationRequired) {
     sideEffects.push(
       notifyKitchen({
         db,
         orderId,
-        // kitchen-notify.ts takes userId for logging only (not written to DB).
-        // Pass empty string to maintain backward compat with any string-typed
-        // signatures; a future update can switch this to string | null.
         userId:          userId ?? "",
         fulfillmentType: pickMeta(session.metadata, "order_type") ?? "pickup",
         amountTotal:     orderTotal,
@@ -297,11 +359,12 @@ export async function handleCheckoutSessionCompleted(
 
   log("info", "webhook_checkout_completed", {
     requestId,
-    orderId:    prefix(orderId),
-    sessionId:  prefix(session.id),
+    orderId:               prefix(orderId),
+    sessionId:             prefix(session.id),
     wasNewOrder,
     orderTotal,
     isGuest,
-    userId:     prefix(userId ?? "guest"),
+    userId:                prefix(userId ?? "guest"),
+    verificationRequired,
   });
 }

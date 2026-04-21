@@ -1,4 +1,24 @@
 // supabase/functions/verify-phone/index.ts
+// =============================================================================
+// Changes from prior version:
+//
+//   [FIX 1] Ownership check now runs BEFORE the idempotency guard.
+//     Previously: fetch → idempotency → ownership → write
+//     Now:        fetch → ownership → idempotency → write
+//     A caller who does not own the order never reaches state inspection.
+//     This prevents internal order status from being observable by
+//     non-owners, even indirectly via log patterns.
+//
+//   [FIX 2] Idempotency guard changed from two-condition allowlist to
+//     a single inequality: verification_status !== 'required'.
+//     The prior check (=== 'verified' || === 'not_required') had a gap —
+//     NULL (pre-migration rows) and any unknown future status both fell
+//     through and could be upgraded to 'verified'. The new check is:
+//     "only write when the order was explicitly gated". This also safely
+//     handles NULL status rows from before the migration.
+//
+//   All other logic (send OTP, rate limiting, CORS) is unchanged.
+// =============================================================================
 
 import { createClient } from "@supabase/supabase-js";
 import { getTwilioEnv, sendVerifyOtp, checkVerifyOtp, normalizePhone } from "../_shared/twilio.ts";
@@ -22,6 +42,24 @@ async function hashPhone(phone: string): Promise<string> {
   const data = new TextEncoder().encode(phone);
   const hash = await crypto.subtle.digest("SHA-256", data);
   return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// ─── Ownership helpers ────────────────────────────────────────────────────────
+
+function phonesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  const na = normalizePhone(a);
+  const nb = normalizePhone(b);
+  return na !== null && nb !== null && na === nb;
+}
+
+// ─── Order row type (only columns we need) ────────────────────────────────────
+
+interface OrderVerifyRow {
+  id:                  string;
+  customer_phone:      string | null;
+  guest_token:         string | null;
+  verification_status: string | null;
 }
 
 Deno.serve(async (req: Request) => {
@@ -83,6 +121,9 @@ Deno.serve(async (req: Request) => {
     const normalized = normalizePhone(typeof body.phone === "string" ? body.phone : "");
     const code       = typeof body.code === "string" ? body.code.replace(/\D/g, "").slice(0, 8) : "";
     const orderId    = typeof body.order_id === "string" && UUID_RE.test(body.order_id) ? body.order_id : null;
+    const guestToken = typeof body.guest_token === "string" && body.guest_token.trim().length > 0
+      ? body.guest_token.trim()
+      : null;
 
     if (!normalized) return jsonResponse(req, { ok: false, error: "Invalid phone number" }, 400);
     if (!code)       return jsonResponse(req, { ok: false, error: "Code is required" }, 400);
@@ -98,16 +139,97 @@ Deno.serve(async (req: Request) => {
       return jsonResponse(req, { ok: true, valid: false, error: "Incorrect code. Please try again." });
     }
 
+    // ── OTP is valid — update order if an order_id was provided ───────────
+
     if (orderId) {
+      const { data: orderRow, error: fetchError } = await db
+        .from("orders")
+        .select("id, customer_phone, guest_token, verification_status")
+        .eq("id", orderId)
+        .maybeSingle<OrderVerifyRow>();
+
+      if (fetchError || !orderRow) {
+        structuredLog("db_warn", "check", {
+          detail:   "order_not_found_for_update",
+          order_id: orderId,
+          error:    fetchError?.message ?? "no row",
+        });
+        return jsonResponse(req, { ok: true, valid: true });
+      }
+
+      // ── [FIX 1] Ownership check runs FIRST ────────────────────────────
+      // A caller who does not own this order never reaches the idempotency
+      // check or any inspection of internal order state. This prevents
+      // observable differences between "wrong token" and "already verified"
+      // from being used to probe order status.
+      //
+      // guest_token security model: guest_token is a 64-char cryptographically
+      // random secret generated at checkout creation. It is stored only in
+      // sessionStorage (cleared on tab close) and never appears in URLs,
+      // analytics, or server logs. Possession of both order_id + guest_token
+      // is treated as equivalent to authenticated ownership for guest orders.
+      const phoneOwned  = phonesMatch(normalized, orderRow.customer_phone);
+      const guestOwned  = guestToken !== null && guestToken === orderRow.guest_token;
+      const ownershipOk = phoneOwned || guestOwned;
+
+      if (!ownershipOk) {
+        structuredLog("ownership_failed", "check", {
+          order_id:         orderId,
+          phone_suffix:     normalized.slice(-4),
+          has_guest_token:  guestToken !== null,
+          stored_phone_set: orderRow.customer_phone !== null,
+        });
+        // OTP was correct but caller does not own this order.
+        // Return valid:true without any write — prevents cross-order attacks
+        // without leaking whether the order exists or its current state.
+        return jsonResponse(req, { ok: true, valid: true });
+      }
+
+      // ── [FIX 2] Idempotency / write guard ─────────────────────────────
+      // Only write when the order was explicitly marked as requiring
+      // verification. All other states — including NULL (pre-migration rows),
+      // 'not_required', 'verified', and 'failed' — are left untouched.
+      //
+      // The inequality (!== 'required') is intentionally broad:
+      //   NULL            → pre-migration row, was never gated, skip
+      //   'not_required'  → risk engine cleared it, skip
+      //   'verified'      → already done, idempotent skip
+      //   'failed'        → expired/exhausted, do not reopen
+      //   'required'      → the only state that should receive a write
+      if (orderRow.verification_status !== "required") {
+        structuredLog("skipped", "check", {
+          detail:              "no_write_needed",
+          order_id:            orderId,
+          verification_status: orderRow.verification_status,
+        });
+        return jsonResponse(req, { ok: true, valid: true });
+      }
+
+      // ── Write verification fields ─────────────────────────────────────
+      const now = new Date().toISOString();
       const { error: updateError } = await db
         .from("orders")
-        .update({ customer_phone: result.normalizedPhone ?? normalized, updated_at: new Date().toISOString() })
+        .update({
+          customer_phone:      result.normalizedPhone ?? normalized,
+          verification_status: "verified",
+          verified_at:         now,
+          updated_at:          now,
+        })
         .eq("id", orderId);
 
       if (updateError) {
-        structuredLog("db_error", "check", { detail: "customer_phone update failed", order_id: orderId, error: updateError.message });
+        structuredLog("db_error", "check", {
+          detail:   "order_verification_update_failed",
+          order_id: orderId,
+          error:    updateError.message,
+        });
+        // OTP was correct — return valid:true even on DB write failure.
+        // The customer proved identity; a retry will attempt the write again.
       } else {
-        structuredLog("verified", "check", { order_id: orderId, phone_suffix: normalized.slice(-4) });
+        structuredLog("verified", "check", {
+          order_id:     orderId,
+          phone_suffix: normalized.slice(-4),
+        });
       }
     }
 

@@ -1,5 +1,5 @@
-// =============================================================================
-// supabase/functions/get-order-for-success/index.ts
+// FILE: supabase/functions/get-order-for-success/index.ts
+// FIXED VERSION
 // =============================================================================
 // Unified order fetch for the /order-success page. Replaces two broken calls:
 //   - supabase.from('orders').select() — 401 via RLS for guests and stale JWTs
