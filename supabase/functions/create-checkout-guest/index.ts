@@ -52,6 +52,12 @@ import { getStripe } from "../create-checkout/stripe-client.ts";
 import type { DbClient } from "../create-checkout/types.ts";
 import { STRIPE_CANCEL_URL, STRIPE_SUCCESS_URL } from "../_shared/checkout-urls.ts";
 
+// ─── Minimum order enforcement ────────────────────────────────────────────────
+// Enforced against server-calculated pricing only — never against client input.
+// Must match the value in create-checkout/index.ts (MIN_ORDER_CENTS).
+
+const MIN_ORDER_CENTS = 15_00; // $15.00
+
 // ─── Local sha256Hex ──────────────────────────────────────────────────────────
 // Defined locally because security.ts declares sha256Hex but does not export it.
 // Used for: IP hashing (never stores raw IPs) and cart item hashing.
@@ -314,6 +320,25 @@ Deno.serve(async (req: Request): Promise<Response> => {
       422,
       "pricing_failed",
       "Unable to calculate pricing. Please try again.",
+      corsHeaders,
+    );
+  }
+
+  // ── Minimum order enforcement ─────────────────────────────────────────────
+  // Checked against server-calculated snapshot.totalCents — never client input.
+  // Runs after all discounts are applied and before any Stripe API call or
+  // database write, so no session is created and no charge can occur.
+  if (snapshot.totalCents < MIN_ORDER_CENTS) {
+    log("warn", "guest_checkout_below_minimum", {
+      requestId,
+      totalCents: snapshot.totalCents,
+      minimumCents: MIN_ORDER_CENTS,
+    });
+    return errorResponse(
+      requestId,
+      400,
+      "validation_failed",
+      `Minimum order is $${(MIN_ORDER_CENTS / 100).toFixed(2)}. Please add more items to continue.`,
       corsHeaders,
     );
   }

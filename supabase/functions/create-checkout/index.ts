@@ -47,6 +47,12 @@ import type { DbClient, PendingCartUpdate } from "./types.ts";
 import { validatePromo } from "./promos.ts";
 import { STRIPE_CANCEL_URL, STRIPE_SUCCESS_URL } from "../_shared/checkout-urls.ts";
 
+// ─── Minimum order enforcement ────────────────────────────────────────────────
+// Enforced against server-calculated pricing only — never against client input.
+// Must match the value documented in order-creation.ts (MIN_EXPECTED_ORDER_CENTS).
+
+const MIN_ORDER_CENTS = 15_00; // $15.00
+
 // ─── Loyalty helpers ──────────────────────────────────────────────────────────
 
 async function createLoyaltyCoupon(
@@ -430,6 +436,27 @@ Deno.serve(async (req: Request): Promise<Response> => {
       422,
       "pricing_failed",
       "Unable to calculate pricing. Please try again.",
+      corsHeaders,
+    );
+  }
+
+  // ── Minimum order enforcement ─────────────────────────────────────────────
+  // Checked against server-calculated snapshot.totalCents — never client input.
+  // Runs after all discounts and credits are applied so a $20 order with a $6
+  // credit (net $14) is correctly rejected. Runs before any Stripe API call
+  // so no session is created and no charge can occur.
+  if (snapshot.totalCents < MIN_ORDER_CENTS) {
+    log("warn", "checkout_below_minimum", {
+      requestId,
+      userId: prefix(userId),
+      totalCents: snapshot.totalCents,
+      minimumCents: MIN_ORDER_CENTS,
+    });
+    return errorResponse(
+      requestId,
+      400,
+      "validation_failed",
+      `Minimum order is $${(MIN_ORDER_CENTS / 100).toFixed(2)}. Please add more items to continue.`,
       corsHeaders,
     );
   }
