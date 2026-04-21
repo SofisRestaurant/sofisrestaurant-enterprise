@@ -1,5 +1,4 @@
-// FILE: supabase/functions/_shared/order-risk.ts
-// FIXED VERSION
+// supabase/functions/_shared/order-risk.ts
 // =============================================================================
 // ORDER RISK — pure logic for Deno Edge Functions.
 // No Supabase calls. No side effects. No frontend imports.
@@ -15,18 +14,32 @@
 //   ─────────────────────────────────────────────────────────────────────────
 //   Guest checkout                 30   isGuest === true
 //   Missing phone (guest only)     20   isGuest && no phone
-//   Large order (≥ $150)           25   chargedCents ≥ 150_00
-//   Medium order ($75–$149)        10   chargedCents ≥ 75_00
+//   Large order (≥ $100)           25   chargedCents ≥ 100_00
+//   Medium order ($25–$99)         10   chargedCents ≥ 25_00
 //   Compound (guest + no phone)    10   isGuest && no phone
 //   ─────────────────────────────────────────────────────────────────────────
 //
+// Tier thresholds (based on order value in cents):
+//   score  0–29  → low    → not_required
+//   score 30–59  → medium → not_required  (monitored, not gated)
+//   score 60+    → high   → required
+//
+// Score examples after threshold update:
+//   Auth user, $120 order, has phone  → 25 pts (large only)    → low
+//   Guest, $20 order, has phone       → 30 pts (guest only)    → medium
+//   Guest, $20 order, no phone        → 60 pts (guest+missing+compound) → high → gated
+//   Guest, $120 order, no phone       → 85 pts                 → high → gated
+//   Auth user, any order              → max 25 pts             → always low, never gated
+//
 // compoundPts is intentional — it penalises the *combination* of guest+no-phone
-// more than either signal alone, which matches real-world fraud patterns.
-// It does not double-count: guestPts, missingPhonePts, and compoundPts are
+// more than either signal alone. guestPts, missingPhonePts, and compoundPts are
 // independent additive terms, each with their own weight.
 //
-// Auth users can score at most 25 (large order only) → always below HIGH_FLOOR.
-// Auth users are therefore never gated by verification.
+// IMPORTANT — minimum order enforcement is NOT done here.
+// This module only scores fraud risk. Minimum order value ($15 or any other
+// amount) must be enforced in create-checkout / create-checkout-guest BEFORE
+// a Stripe session is created. Rejecting a paid order post-webhook means a
+// customer paid real money and received nothing — that must never happen here.
 // =============================================================================
 
 // ─── Public types ──────────────────────────────────────────────────────────────
@@ -65,8 +78,11 @@ export interface OrderRiskBreakdown {
 // ─── Scoring constants ─────────────────────────────────────────────────────────
 
 const THRESHOLDS = {
-  LARGE_ORDER_CENTS:  150_00,  // $150.00
-  MEDIUM_ORDER_CENTS:  75_00,  // $75.00
+  // [UPDATED] Aligned to owner's business rules:
+  //   $100+ → "large" (high risk value)
+  //   $25+  → "medium" (routine order range)
+  LARGE_ORDER_CENTS:  100_00,   // $100.00
+  MEDIUM_ORDER_CENTS:  25_00,   // $25.00
 } as const;
 
 const WEIGHTS = {
@@ -101,10 +117,8 @@ function scoreToLevel(score: number): OrderRiskLevel {
 export function evaluateOrderRisk(input: OrderRiskInput): OrderRiskResult {
   const { isGuest } = input;
 
-  // [FIX] Guard chargedCents against NaN, Infinity, and negative values.
-  // Any of these can arrive if an upstream cast fails (e.g. parseFloat on a
-  // malformed snapshot string). Treat as zero — the score still reflects
-  // guest/phone signals correctly, and zero-amount risk is a separate concern.
+  // Guard chargedCents against NaN, Infinity, and negative values.
+  // Treat as zero — score still reflects guest/phone signals correctly.
   const chargedCents = Number.isFinite(input.chargedCents) && input.chargedCents >= 0
     ? input.chargedCents
     : 0;

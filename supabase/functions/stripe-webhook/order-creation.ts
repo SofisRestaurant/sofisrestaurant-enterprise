@@ -17,11 +17,16 @@
 //   4. prepareAuthoritativeCartState receives the nullable userId and the
 //      guestToken so it can apply the correct ownership check.
 //
-//   5. [NEW] Order risk evaluated via ../_shared/order-risk.ts (Deno-safe).
-//        Import path fixed: no longer references src/ which is inaccessible
-//        inside the Deno Edge Function sandbox.
+//   5. Order risk evaluated via ../_shared/order-risk.ts (Deno-safe).
 //        risk_score, risk_level, verification_status written atomically.
 //        Fails open — a crash in risk eval never loses an order.
+//
+//   6. [NEW] Low-amount warning log added for observability.
+//        Orders below the expected minimum ($15 / 1500 cents) are logged
+//        as a warning so they are visible in monitoring. They are NOT
+//        rejected here — minimum order enforcement must happen in
+//        create-checkout / create-checkout-guest BEFORE the Stripe session
+//        is created. A paid order must never be silently dropped.
 // =============================================================================
 
 import type Stripe from "stripe";
@@ -48,16 +53,18 @@ import {
   toJson,
 } from "./utils.ts";
 
-// [FIXED] Import from _shared — the only Deno-accessible path.
-// Previously this incorrectly referenced ../../../src/domain/... which is
-// outside the Edge Function sandbox and causes a cold-start module crash.
 import {
   evaluateOrderRisk,
   deriveVerificationStatus,
   type OrderRiskResult,
 } from "../_shared/order-risk.ts";
 
-// ─── Valid values (kept in sync with DB CHECK constraint) ─────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+// Minimum expected order value in cents. Orders below this are unusual and
+// logged as a warning for monitoring. They are never rejected here — that
+// enforcement belongs in create-checkout before the Stripe session is created.
+const MIN_EXPECTED_ORDER_CENTS = 15_00; // $15.00
 
 const VALID_ORDER_TYPES = new Set<OrderType>(['pickup', 'delivery', 'dine_in'] as const);
 
@@ -238,7 +245,6 @@ function buildOrderMetadata(args: {
     stripe_amount_total:       pricing.chargedCents,
     stripe_currency:           pricing.currency,
     pending_cart_consumed_now: consumedNow,
-    // Risk breakdown for audit trail. Top-level DB columns are source of truth.
     order_risk: risk !== null ? toJson({
       score:                 risk.score,
       level:                 risk.level,
@@ -319,7 +325,6 @@ async function insertOrderItemsFromSnapshot(args: {
 }
 
 // ─── Safe risk evaluation wrapper ─────────────────────────────────────────────
-// Fails open: a crash in risk logic never loses an order.
 
 function safeEvaluateOrderRisk(args: {
   chargedCents:  number;
@@ -396,6 +401,20 @@ export async function createOrderFromSession(args: {
     snapshot, currency, loyaltyDiscountCents, stripeAmountTotal,
   );
 
+  // ── Low-amount observability warning ──────────────────────────────────────
+  // Orders below the expected minimum are unusual. Log them for monitoring.
+  // They are NOT rejected here — the customer has already paid and dropping
+  // a paid order would cause real harm. Minimum enforcement belongs in
+  // create-checkout / create-checkout-guest before the session is created.
+  if (pricing.chargedCents < MIN_EXPECTED_ORDER_CENTS) {
+    log("warn", "webhook_order_below_minimum", {
+      requestId,
+      sessionId:    prefix(session.id),
+      chargedCents: pricing.chargedCents,
+      isGuest,
+    });
+  }
+
   // ── Risk evaluation (after pricing, before insert) ─────────────────────────
   const risk = safeEvaluateOrderRisk({
     chargedCents:  pricing.chargedCents,
@@ -404,8 +423,6 @@ export async function createOrderFromSession(args: {
     requestId,
   });
 
-  // Fail-open default: if eval crashed, treat as not_required so the order
-  // is never blocked by a risk module error. Payment must never be orphaned.
   const verificationStatus = risk !== null
     ? deriveVerificationStatus(risk)
     : 'not_required';
@@ -468,11 +485,9 @@ export async function createOrderFromSession(args: {
     cart_items:                cart.items,
     metadata,
     notes:                     snapshotString(snapshot, "orderNotes"),
-    // Risk fields — written atomically. NULL when eval crashed (fail-open).
     risk_score:          risk?.score          ?? null,
     risk_level:          risk?.level          ?? null,
     verification_status: verificationStatus,
-    // verified_at intentionally omitted — set by verify-phone on OTP confirm.
   } as OrderInsert & {
     fulfillment_type:    string;
     guest_token:         string | null;
@@ -489,7 +504,6 @@ export async function createOrderFromSession(args: {
     .returns<OrderLocated[]>()
     .maybeSingle();
 
-  // 23505 = unique_violation (stripe_session_id UNIQUE) → already exists
   if (insertError !== null && insertError.code !== "23505") {
     log("error", "webhook_order_insert_failed", {
       requestId,
@@ -537,7 +551,6 @@ export async function createOrderFromSession(args: {
     return inserted;
   }
 
-  // Stripe retry path — order already exists, return it
   const existing = await findOrderBySessionId(db, session.id);
 
   if (existing !== null) {
