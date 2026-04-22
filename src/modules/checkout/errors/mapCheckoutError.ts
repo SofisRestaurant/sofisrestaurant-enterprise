@@ -1,14 +1,30 @@
-// src/modules/checkout/errors/mapCheckoutError.ts
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
 export type CheckoutError = {
   message: string;
   code: string;
   status?: number;
 };
 
-// ─── Mapper ───────────────────────────────────────────────────────────────────
+function extractError(json: any) {
+  if (!json) return { code: "checkout_failed", message: "" };
+
+  // normalize different backend shapes
+  const errorObj =
+    typeof json.error === "object" && json.error !== null
+      ? json.error
+      : null;
+
+  return {
+    code:
+      errorObj?.code ||
+      json.code ||
+      "checkout_failed",
+
+    message:
+      errorObj?.message ||
+      json.message ||
+      "",
+  };
+}
 
 export function mapCheckoutError(
   json: Record<string, unknown> | null,
@@ -16,7 +32,7 @@ export function mapCheckoutError(
 ): CheckoutError {
   const status = response.status;
 
-  // ─── 401 Session expired ──────────────────────────────────────────────────
+  // ─── Auth expired ─────────────────────────────────────────────────────────
   if (status === 401) {
     return {
       message: "Session expired. Please sign in again.",
@@ -25,47 +41,32 @@ export function mapCheckoutError(
     };
   }
 
-  // ─── 429 Rate limited ─────────────────────────────────────────────────────
+  // ─── Rate limit ───────────────────────────────────────────────────────────
   if (status === 429) {
     const retryAfter = response.headers.get("Retry-After");
-    const message = retryAfter
-      ? `Too many attempts. Please wait ${retryAfter} seconds.`
-      : "Too many attempts. Please try again shortly.";
 
-    const code =
-      (json?.error as Record<string, unknown>)?.code as string ||
-      (json?.code as string) ||
-      "rate_limited";
-
-    return { message, code, status };
+    return {
+      message: retryAfter
+        ? `Too many attempts. Please wait ${retryAfter} seconds.`
+        : "Too many attempts. Please try again shortly.",
+      code: "rate_limited",
+      status,
+    };
   }
 
-  // ─── Extract code and message from JSON body ──────────────────────────────
-  const errorObj =
-    json?.error !== null && typeof json?.error === "object"
-      ? (json.error as Record<string, unknown>)
-      : null;
+  const { code, message } = extractError(json);
 
-  const code =
-    (errorObj?.code as string | undefined)?.trim() ||
-    (json?.code as string | undefined)?.trim() ||
-    "checkout_failed";
-
-  const backendMessage =
-    (errorObj?.message as string | undefined)?.trim() ||
-    (json?.message as string | undefined)?.trim() ||
-    "";
-
-  // ─── validation_failed — always surface backend message verbatim ──────────
+  // ─── VALIDATION (critical path — never override backend) ────────────────
   if (code === "validation_failed") {
     return {
-      message: backendMessage || "Your order couldn't be validated. Please review your cart.",
+      message:
+        message || "Your order couldn't be validated. Please review your cart.",
       code,
       status,
     };
   }
 
-  // ─── pricing_failed ───────────────────────────────────────────────────────
+  // ─── PRICING ERROR (keep generic UX, backend not shown) ───────────────────
   if (code === "pricing_failed") {
     return {
       message: "We couldn't calculate pricing. Please try again.",
@@ -74,9 +75,18 @@ export function mapCheckoutError(
     };
   }
 
-  // ─── Fallback — generic message ───────────────────────────────────────────
+  // ─── STRIPE ERRORS ───────────────────────────────────────────────────────
+  if (code === "stripe_session_failed") {
+    return {
+      message: "Payment system temporarily unavailable. Please try again.",
+      code,
+      status,
+    };
+  }
+
+  // ─── GENERIC FALLBACK (last resort only) ──────────────────────────────────
   return {
-    message: backendMessage || "Checkout failed. Please try again.",
+    message: message || "Checkout failed. Please try again.",
     code,
     status,
   };

@@ -1,4 +1,9 @@
-///Users/sofisdev/Developer/SofisRestaurantV2/supabase/functions/create-checkout/index.ts
+// supabase/functions/create-checkout/index.ts
+// =============================================================================
+// Authenticated checkout pipeline.
+// All error responses are emitted via errorResponse() from responses.ts.
+// Shape: { ok: false, error: { code, message, requestId } }
+// =============================================================================
 
 import Stripe from "stripe";
 import {
@@ -117,6 +122,7 @@ async function tryReleaseLoyalty(
     });
   }
 }
+
 const LOYALTY_REDEEM_COOLDOWN_MINUTES = 30;
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
@@ -541,9 +547,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // findReusableSession enforces MIN_ORDER_CENTS internally (defense-in-depth).
-  // The primary check above already blocked any below-minimum request, but the
-  // guard inside findReusableSession ensures the invariant holds regardless of
-  // call order.
   const reusableSession = await findReusableSession({
     db,
     stripe,
@@ -860,8 +863,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
   }
 
-  // StripeLineItem is defined in _shared/pricing.ts — avoids Stripe.Checkout.SessionCreateParams.LineItem
-  // which does not exist in stripe@22 for Deno.
   let stripeLineItems: ReturnType<typeof buildStripeLineItemsFromPricing>;
   try {
     stripeLineItems = buildStripeLineItemsFromPricing(snapshot);

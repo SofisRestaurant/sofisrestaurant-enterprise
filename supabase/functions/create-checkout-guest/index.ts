@@ -1,7 +1,8 @@
-// =============================================================================
 // supabase/functions/create-checkout-guest/index.ts
 // =============================================================================
 // Guest checkout pipeline — minimal, isolated, no auth dependencies.
+// All error responses are emitted via errorResponse() from responses.ts.
+// Shape: { ok: false, error: { code, message, requestId } }
 //
 // HARD CONSTRAINTS (enforced at import level, not just documented):
 //   - No import of loyalty.ts, credits.ts, promos.ts, riskScore.ts
@@ -459,8 +460,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // ── Build Stripe line items ─────────────────────────────────────────────────
-  // StripeLineItem is defined in _shared/pricing.ts — avoids Stripe.Checkout.SessionCreateParams.LineItem
-  // which does not exist in stripe@22 for Deno.
   let stripeLineItems: ReturnType<typeof buildStripeLineItemsFromPricing>;
   try {
     stripeLineItems = buildStripeLineItemsFromPricing(snapshot);
