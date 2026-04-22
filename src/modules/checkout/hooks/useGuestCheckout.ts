@@ -6,6 +6,7 @@
 
 import { useState, useCallback } from "react";
 import { useCartStore } from "@/modules/cart/store/cart.store";
+import { mapCheckoutError } from "@/modules/checkout/errors/mapCheckoutError";
 import type {
   GuestCheckoutInput,
   CheckoutResult,
@@ -118,16 +119,16 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-      if (typeof supabaseUrl !== 'string' || supabaseUrl.length === 0) {
-        const err = 'Checkout is not configured. Please contact support.';
-        console.error('[useGuestCheckout] VITE_SUPABASE_URL is missing');
+      if (typeof supabaseUrl !== "string" || supabaseUrl.length === 0) {
+        const err = "Checkout is not configured. Please contact support.";
+        console.error("[useGuestCheckout] VITE_SUPABASE_URL is missing");
         setState({ isLoading: false, error: err, sessionUrl: null });
         return { ok: false, error: err };
       }
 
-      if (typeof anonKey !== 'string' || anonKey.length === 0) {
-        const err = 'Checkout is not configured. Please contact support.';
-        console.error('[useGuestCheckout] VITE_SUPABASE_ANON_KEY is missing');
+      if (typeof anonKey !== "string" || anonKey.length === 0) {
+        const err = "Checkout is not configured. Please contact support.";
+        console.error("[useGuestCheckout] VITE_SUPABASE_ANON_KEY is missing");
         setState({ isLoading: false, error: err, sessionUrl: null });
         return { ok: false, error: err };
       }
@@ -147,28 +148,14 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
 
         const json = await response.json().catch(() => null);
 
+        // ─── ERROR HANDLING ───────────────────────────────────────────────────
         if (!response.ok) {
-          const message =
-            json?.error?.message ||
-            json?.message ||
-            "Checkout failed. Please try again.";
-
-          const code = json?.error?.code || "checkout_failed";
-
-          if (response.status === 429) {
-            const retryAfter = response.headers.get("Retry-After");
-            const msg = retryAfter
-              ? `Too many attempts. Please wait ${retryAfter} seconds.`
-              : message;
-
-            setState({ isLoading: false, error: msg, sessionUrl: null });
-            return { ok: false, error: msg, code };
-          }
-
-          setState({ isLoading: false, error: message, sessionUrl: null });
-          return { ok: false, error: message, code };
+          const err = mapCheckoutError(json, response);
+          setState({ isLoading: false, error: err.message, sessionUrl: null });
+          return { ok: false, error: err.message, code: err.code };
         }
 
+        // ─── SUCCESS PARSE ────────────────────────────────────────────────────
         const data = json?.data ?? json;
 
         const url = data?.url;
