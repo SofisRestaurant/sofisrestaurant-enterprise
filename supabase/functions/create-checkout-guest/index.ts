@@ -12,10 +12,11 @@
 //   - promoId, promoCode, creditId hardcoded to null in pricing call
 //
 // MINIMUM ORDER ENFORCEMENT:
-//   MIN_ORDER_CENTS check runs BEFORE findReusableGuestSession and before
-//   any Stripe API call. findReusableGuestSession also enforces the same
-//   check internally (defense-in-depth) to ensure the invariant holds
-//   regardless of call order or future refactors.
+//   MIN_ORDER_CENTS is imported from _shared/constants.ts — NOT declared locally.
+//   The check runs BEFORE findReusableGuestSession and before any Stripe API call.
+//   findReusableGuestSession also enforces the same check internally
+//   (defense-in-depth) to ensure the invariant holds regardless of call order or
+//   future refactors.
 //   Must match MIN_ORDER_CENTS in pending-cart.ts and create-checkout/index.ts.
 // =============================================================================
 
@@ -29,6 +30,7 @@ import {
   PricingValidationError,
   resolvePricingForCheckout,
 } from "../_shared/pricing.ts";
+import { MIN_ORDER_CENTS } from "../_shared/constants.ts";
 
 import { loadCanonicalCartItems } from "../create-checkout/catalog.ts";
 import { corsHeadersFor } from "../create-checkout/cors.ts";
@@ -58,12 +60,6 @@ import { buildGuestIdempotencyKey } from "../create-checkout/security.ts";
 import { getStripe } from "../create-checkout/stripe-client.ts";
 import type { DbClient } from "../create-checkout/types.ts";
 import { STRIPE_CANCEL_URL, STRIPE_SUCCESS_URL } from "../_shared/checkout-urls.ts";
-
-// ─── Minimum order enforcement ────────────────────────────────────────────────
-// Enforced against server-calculated pricing only — never against client input.
-// Must match MIN_ORDER_CENTS in pending-cart.ts and create-checkout/index.ts.
-
-const MIN_ORDER_CENTS = 15_00; // $15.00
 
 // ─── Local sha256Hex ──────────────────────────────────────────────────────────
 // Defined locally because security.ts declares sha256Hex but does not export it.

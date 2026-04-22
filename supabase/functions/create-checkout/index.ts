@@ -14,6 +14,7 @@ import {
   PricingValidationError,
   resolvePricingForCheckout,
 } from "../_shared/pricing.ts";
+import { MIN_ORDER_CENTS } from "../_shared/constants.ts";
 
 import { loadCanonicalCartItems } from "./catalog.ts";
 import { corsHeadersFor } from "./cors.ts";
@@ -46,13 +47,6 @@ import { getStripe } from "./stripe-client.ts";
 import type { DbClient, PendingCartUpdate } from "./types.ts";
 import { validatePromo } from "./promos.ts";
 import { STRIPE_CANCEL_URL, STRIPE_SUCCESS_URL } from "../_shared/checkout-urls.ts";
-
-// ─── Minimum order enforcement ────────────────────────────────────────────────
-// Enforced against server-calculated pricing only — never against client input.
-// Must match MIN_ORDER_CENTS in pending-cart.ts and create-checkout-guest/index.ts.
-// Checked TWICE: once before findReusableSession (primary), once after (defense-in-depth).
-
-const MIN_ORDER_CENTS = 15_00; // $15.00
 
 // ─── Loyalty helpers ──────────────────────────────────────────────────────────
 
@@ -546,9 +540,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
-  // findReusableSession now also enforces MIN_ORDER_CENTS internally (defense-in-depth).
-  // The primary check above already blocked any below-minimum request, but the guard
-  // inside findReusableSession ensures the invariant holds regardless of call order.
+  // findReusableSession enforces MIN_ORDER_CENTS internally (defense-in-depth).
+  // The primary check above already blocked any below-minimum request, but the
+  // guard inside findReusableSession ensures the invariant holds regardless of
+  // call order.
   const reusableSession = await findReusableSession({
     db,
     stripe,

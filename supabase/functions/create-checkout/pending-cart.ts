@@ -12,6 +12,9 @@
 //   before returning a session. This prevents a reused session from bypassing
 //   minimum order validation if the cart was modified between the original
 //   creation and the reuse attempt.
+//
+//   MIN_ORDER_CENTS is imported from _shared/constants.ts — it is NOT declared
+//   locally. This is the single source of truth across all checkout pipelines.
 // =============================================================================
 
 import type Stripe from "stripe";
@@ -19,6 +22,7 @@ import {
   pricingSnapshotToJson,
   type PricingSnapshot,
 } from "../_shared/pricing.ts";
+import { MIN_ORDER_CENTS } from "../_shared/constants.ts";
 import { log, prefix, asErr } from "./logging.ts";
 import type {
   DbClient,
@@ -26,14 +30,6 @@ import type {
   PendingCartUpdate,
   RequestCartItemInput,
 } from "./types.ts";
-
-// ─── Minimum order constant ───────────────────────────────────────────────────
-// Single source of truth for session-reuse enforcement within this module.
-// The value MUST match MIN_ORDER_CENTS in index.ts and create-checkout-guest/index.ts.
-// Both index files also run the check before calling find*Session — this provides
-// defense-in-depth: the guard here catches any caller that forgets the pre-check.
-
-const MIN_ORDER_CENTS = 15_00; // $15.00
 
 // ─── Internal row shapes ──────────────────────────────────────────────────────
 // These are cast from Supabase query results. The generated types will not
