@@ -60,4 +60,4 @@ export const STRIPE_SUCCESS_URL =
   `${SITE_URL}/order-success?session_id={CHECKOUT_SESSION_ID}`;
 
 export const STRIPE_CANCEL_URL =
-  `${SITE_URL}/checkout?canceled=true`;
+  "https://sofisrestaurant-enterprise.vercel.app/order-canceled";
