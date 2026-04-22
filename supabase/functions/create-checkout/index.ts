@@ -49,7 +49,8 @@ import { STRIPE_CANCEL_URL, STRIPE_SUCCESS_URL } from "../_shared/checkout-urls.
 
 // ─── Minimum order enforcement ────────────────────────────────────────────────
 // Enforced against server-calculated pricing only — never against client input.
-// Must match the value documented in order-creation.ts (MIN_EXPECTED_ORDER_CENTS).
+// Must match MIN_ORDER_CENTS in pending-cart.ts and create-checkout-guest/index.ts.
+// Checked TWICE: once before findReusableSession (primary), once after (defense-in-depth).
 
 const MIN_ORDER_CENTS = 15_00; // $15.00
 
@@ -440,11 +441,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
-  // ── Minimum order enforcement ─────────────────────────────────────────────
+  // ── Minimum order enforcement (PRIMARY CHECK) ─────────────────────────────
   // Checked against server-calculated snapshot.totalCents — never client input.
-  // Runs after all discounts and credits are applied so a $20 order with a $6
-  // credit (net $14) is correctly rejected. Runs before any Stripe API call
-  // so no session is created and no charge can occur.
+  // Runs after all discounts and credits are applied and BEFORE any reuse lookup
+  // or Stripe API call, so no session is created and no charge can occur.
+  // A second guard also lives inside findReusableSession for defense-in-depth.
   if (snapshot.totalCents < MIN_ORDER_CENTS) {
     log("warn", "checkout_below_minimum", {
       requestId,
@@ -545,6 +546,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
+  // findReusableSession now also enforces MIN_ORDER_CENTS internally (defense-in-depth).
+  // The primary check above already blocked any below-minimum request, but the guard
+  // inside findReusableSession ensures the invariant holds regardless of call order.
   const reusableSession = await findReusableSession({
     db,
     stripe,

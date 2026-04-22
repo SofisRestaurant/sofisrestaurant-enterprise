@@ -6,6 +6,12 @@
 //
 // Auth exports:   persistPendingCart, findReusableSession, backfillCartSessionId
 // Guest exports:  persistGuestPendingCart, findReusableGuestSession
+//
+// SECURITY (2026):
+//   findReusableSession and findReusableGuestSession both enforce MIN_ORDER_CENTS
+//   before returning a session. This prevents a reused session from bypassing
+//   minimum order validation if the cart was modified between the original
+//   creation and the reuse attempt.
 // =============================================================================
 
 import type Stripe from "stripe";
@@ -20,6 +26,14 @@ import type {
   PendingCartUpdate,
   RequestCartItemInput,
 } from "./types.ts";
+
+// ─── Minimum order constant ───────────────────────────────────────────────────
+// Single source of truth for session-reuse enforcement within this module.
+// The value MUST match MIN_ORDER_CENTS in index.ts and create-checkout-guest/index.ts.
+// Both index files also run the check before calling find*Session — this provides
+// defense-in-depth: the guard here catches any caller that forgets the pre-check.
+
+const MIN_ORDER_CENTS = 15_00; // $15.00
 
 // ─── Internal row shapes ──────────────────────────────────────────────────────
 // These are cast from Supabase query results. The generated types will not
@@ -140,6 +154,21 @@ export type FindReusableSessionResult = {
 export async function findReusableSession(
   input: FindReusableSessionInput,
 ): Promise<FindReusableSessionResult> {
+  // ── SECURITY: minimum order enforcement ──────────────────────────────────
+  // Reject reuse if the current snapshot is below minimum.
+  // This is defense-in-depth — index.ts also runs this check before calling
+  // here, but we enforce it at the source to protect against any future caller
+  // that forgets the pre-check.
+  if (input.totalCents < MIN_ORDER_CENTS) {
+    log("warn", "session_reuse_blocked_below_minimum", {
+      requestId: input.requestId,
+      userId: prefix(input.userId),
+      totalCents: input.totalCents,
+      minimumCents: MIN_ORDER_CENTS,
+    });
+    return null;
+  }
+
   const { data: rawData } = await input.db
     .from("pending_carts")
     .select("id, stripe_session_id, pricing_hash, idempotency_key")
@@ -336,6 +365,9 @@ export async function persistGuestPendingCart(
 // Looks up an open Stripe session for this guest by:
 //   1. guest_token + idempotency_key (same device, same cart)
 //   2. idempotency_key only          (same email+cart+price, different device)
+//
+// SECURITY: enforces MIN_ORDER_CENTS before returning any session.
+// Same invariant as findReusableSession — no reuse path bypasses minimum order.
 
 export type FindReusableGuestSessionInput = {
   db: DbClient;
@@ -356,6 +388,17 @@ export type FindReusableGuestSessionResult = {
 export async function findReusableGuestSession(
   input: FindReusableGuestSessionInput,
 ): Promise<FindReusableGuestSessionResult> {
+  // ── SECURITY: minimum order enforcement ──────────────────────────────────
+  // Same guard as findReusableSession. Guests cannot bypass via session reuse.
+  if (input.totalCents < MIN_ORDER_CENTS) {
+    log("warn", "guest_session_reuse_blocked_below_minimum", {
+      requestId: input.requestId,
+      totalCents: input.totalCents,
+      minimumCents: MIN_ORDER_CENTS,
+    });
+    return null;
+  }
+
   let cartRow: GuestCartRow | null = null;
 
   // Prefer token-scoped match (same device, same cart)

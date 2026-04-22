@@ -10,6 +10,13 @@
 //   - No checkIntegrityHash
 //   - No user_id in Stripe metadata
 //   - promoId, promoCode, creditId hardcoded to null in pricing call
+//
+// MINIMUM ORDER ENFORCEMENT:
+//   MIN_ORDER_CENTS check runs BEFORE findReusableGuestSession and before
+//   any Stripe API call. findReusableGuestSession also enforces the same
+//   check internally (defense-in-depth) to ensure the invariant holds
+//   regardless of call order or future refactors.
+//   Must match MIN_ORDER_CENTS in pending-cart.ts and create-checkout/index.ts.
 // =============================================================================
 
 import Stripe from "stripe";
@@ -54,7 +61,7 @@ import { STRIPE_CANCEL_URL, STRIPE_SUCCESS_URL } from "../_shared/checkout-urls.
 
 // ─── Minimum order enforcement ────────────────────────────────────────────────
 // Enforced against server-calculated pricing only — never against client input.
-// Must match the value in create-checkout/index.ts (MIN_ORDER_CENTS).
+// Must match MIN_ORDER_CENTS in pending-cart.ts and create-checkout/index.ts.
 
 const MIN_ORDER_CENTS = 15_00; // $15.00
 
@@ -313,7 +320,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
-  // ── Total bounds check ──────────────────────────────────────────────────────
   if (snapshot.totalCents <= 0 || snapshot.totalCents > MAX_ORDER_TOTAL_CENTS) {
     return errorResponse(
       requestId,
@@ -324,10 +330,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
-  // ── Minimum order enforcement ─────────────────────────────────────────────
+  // ── Minimum order enforcement (PRIMARY CHECK) ─────────────────────────────
   // Checked against server-calculated snapshot.totalCents — never client input.
   // Runs after all discounts are applied and before any Stripe API call or
   // database write, so no session is created and no charge can occur.
+  // findReusableGuestSession also enforces this internally (defense-in-depth).
   if (snapshot.totalCents < MIN_ORDER_CENTS) {
     log("warn", "guest_checkout_below_minimum", {
       requestId,
@@ -382,6 +389,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // ── Session reuse check ─────────────────────────────────────────────────────
+  // findReusableGuestSession enforces MIN_ORDER_CENTS internally as a second
+  // layer of defense — even though the primary check above already blocked any
+  // below-minimum request, the guard inside the function ensures the invariant
+  // holds if call order ever changes in a future refactor.
   const reusableSession = await findReusableGuestSession({
     db,
     stripe,
