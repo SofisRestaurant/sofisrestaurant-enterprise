@@ -1,3 +1,5 @@
+// path: supabase/functions/create-checkout/request-validation.ts
+
 import type Stripe from "stripe";
 
 import type { Json } from "../_shared/database.types.ts";

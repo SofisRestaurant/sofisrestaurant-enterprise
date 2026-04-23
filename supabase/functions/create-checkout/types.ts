@@ -1,3 +1,4 @@
+//path: supabase/functions/create-checkout/types.ts
 import { createServiceClient } from "../_shared/supabase.ts";
 import type { Database, Json } from "../_shared/database.types.ts";
 import type { OrderType } from "../_shared/pricing.ts";

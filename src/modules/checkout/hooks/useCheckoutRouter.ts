@@ -22,8 +22,8 @@
 //      from its env and builds the URLs itself. This is why CheckoutRouterArgs
 //      no longer has successUrl / cancelUrl fields.
 //   6. pickup_time is forwarded as-is from args to both pipelines.
-//      Normalization to seconds-precision ISO 8601 happens in each hook before
-//      it is placed in the request body, keeping the router layer thin.
+//      request-validation.ts on the server is the single normalization point —
+//      the router does not re-normalize.
 // =============================================================================
 
 import { useCallback, useMemo, useState } from 'react';
@@ -92,29 +92,14 @@ function trimOrUndefined(v: unknown): string | undefined {
   return t.length > 0 ? t : undefined;
 }
 
-// Normalize a pickup time value to a seconds-precision ISO 8601 string.
-// Strips milliseconds so the value is stable for idempotency-key hashing and
-// consistent with what parsePickupTimeFromMetadata() expects in the webhook.
-// Returns undefined if the value is absent, empty, or not a parseable date.
-function normalizePickupTime(v: unknown): string | undefined {
-  if (typeof v !== 'string' || v.trim().length === 0) return undefined;
-  const ms = Date.parse(v.trim());
-  if (!Number.isFinite(ms)) return undefined;
-  // Drop milliseconds: "2026-04-22T18:30:00.000Z" → "2026-04-22T18:30:00Z"
-  return new Date(Math.floor(ms / 1000) * 1000).toISOString().replace('.000Z', 'Z');
-}
-
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useCheckoutRouter(): CheckoutRouterReturn {
   const { isAuthenticated } = useAuth();
 
-  // Both hooks must be instantiated every render (React rules of hooks).
   const authHook  = useAuthCheckout();
   const guestHook = useGuestCheckout();
 
-  // Stabilize callback refs — depending on whole hook objects caused an
-  // infinite render loop in an earlier iteration.
   const initiateAuthCheckout  = authHook.initiateAuthCheckout;
   const initiateGuestCheckout = guestHook.initiateGuestCheckout;
   const clearAuthError        = authHook.clearError;
@@ -139,18 +124,19 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
     async (args: CheckoutRouterArgs): Promise<CheckoutResult> => {
       setRouterError(null);
 
-      // Normalize once at the router boundary so both pipelines receive a
-      // consistent, seconds-precision ISO string (or undefined).
-      const pickupTime = normalizePickupTime(args.pickupTime);
+      // pickup_time is forwarded as the raw string the caller provides.
+      // request-validation.ts on the server normalizes and validates it —
+      // the router has no normalization responsibility.
+      const pickupTime: string | undefined = trimOrUndefined(args.pickupTime);
 
       // ─── AUTH PATH ─────────────────────────────────────────────────────
       if (isAuthenticated) {
         const input: AuthCheckoutInput = {
-          orderType: normOrderType(args.orderType),
-          notes:     trimOrUndefined(args.notes),
-          promoCode: trimOrUndefined(args.promoCode),
-          promoId:   trimOrUndefined(args.promoId),
-          creditId:  trimOrUndefined(args.creditId),
+          orderType:   normOrderType(args.orderType),
+          notes:       trimOrUndefined(args.notes),
+          promoCode:   trimOrUndefined(args.promoCode),
+          promoId:     trimOrUndefined(args.promoId),
+          creditId:    trimOrUndefined(args.creditId),
           pickup_time: pickupTime,
 
           ...(args.loyalty?.applyPoints &&
@@ -165,7 +151,6 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
             : {}),
 
           clientIntegrityHash: trimOrUndefined(args.clientIntegrityHash),
-          // NO successUrl / cancelUrl — server owns them.
         };
 
         return initiateAuthCheckout(input);
@@ -183,7 +168,6 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
         orderType:   normOrderType(args.orderType),
         notes:       trimOrUndefined(args.notes),
         pickup_time: pickupTime,
-        // NO successUrl / cancelUrl — server owns them.
       };
 
       return initiateGuestCheckout(input);
@@ -194,19 +178,13 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
   const redirectToCheckout = useCallback(
     async (args: CheckoutRouterArgs): Promise<void> => {
       const result = await checkout(args);
-
-      if (!result.ok) {
-        throw new Error(result.error ?? 'Checkout failed');
-      }
-      if (!result.url) {
-        throw new Error('Checkout failed: missing session URL.');
-      }
+      if (!result.ok) throw new Error(result.error ?? 'Checkout failed');
+      if (!result.url) throw new Error('Checkout failed: missing session URL.');
       window.location.assign(result.url);
     },
     [checkout],
   );
 
-  // ─── Unified state view ───────────────────────────────────────────────────
   const activeError     = isAuthenticated ? authError     : guestError;
   const activeIsLoading = isAuthenticated ? authIsLoading : guestIsLoading;
 
