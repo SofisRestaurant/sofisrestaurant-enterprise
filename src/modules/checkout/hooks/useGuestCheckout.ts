@@ -85,16 +85,19 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
       // ─── REQUEST BODY ──────────────────────────────────────────────────────
       // NOTE: success_url / cancel_url intentionally NOT sent.
       // The Edge Function generates them from its SITE_URL env var.
+      // pickup_time is only included when present — never sent as null/undefined.
       const requestBody: Record<string, unknown> = {
-        items: itemsPayload,
-        order_type: input.orderType,
+        items:       itemsPayload,
+        order_type:  input.orderType,
         guest_email: input.guestEmail,
 
-        ...(input.notes && { notes: input.notes }),
-        ...(storedToken && { guest_token: storedToken }),
+        ...(input.notes        && { notes:        input.notes }),
+        ...(input.pickup_time  && { pickup_time:  input.pickup_time }),
+        ...(storedToken        && { guest_token:  storedToken }),
       };
 
       // ─── SAFETY CHECK (forbidden fields guard) ─────────────────────────────
+      // pickup_time is NOT in this list — it is permitted for guest checkout.
       const FORBIDDEN_FIELDS = [
         "promo_code",
         "promo_id",
@@ -176,9 +179,9 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
         return {
           ok: true,
           url,
-          sessionId: data?.sessionId,
+          sessionId:   data?.sessionId,
           pricingHash: data?.pricingHash,
-          pricing: data?.pricing,
+          pricing:     data?.pricing,
         };
       } catch (err) {
         const message =

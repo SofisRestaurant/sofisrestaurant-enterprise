@@ -44,15 +44,18 @@ export type CheckoutPricingResponse =
 
 // ─── Guest checkout input ────────────────────────────────────────────────────
 // Server owns Stripe redirect URLs via SITE_URL.
+// pickup_time: ISO 8601 string (seconds precision), omit if not a scheduled order.
 
 export type GuestCheckoutInput = {
   orderType: 'pickup' | 'delivery' | 'dine_in';
   guestEmail: string;
   notes?: string;
+  pickup_time?: string;
 };
 
 // ─── Auth checkout input ─────────────────────────────────────────────────────
 // Server owns Stripe redirect URLs via SITE_URL.
+// pickup_time: ISO 8601 string (seconds precision), omit if not a scheduled order.
 
 export type AuthCheckoutInput = {
   orderType: 'pickup' | 'delivery' | 'dine_in';
@@ -65,4 +68,5 @@ export type AuthCheckoutInput = {
   loyaltyRewardId?: string;
   loyaltyRedemptionId?: string;
   clientIntegrityHash?: string;
+  pickup_time?: string;
 };

@@ -60,6 +60,7 @@ type CheckoutButtonProps = {
   onPromoError?: (msg: string) => void;
   className?: string;
   disabled?: boolean;
+  pickupTime?: string;
   /** Guest mode: email entered by unauthenticated user. Enables checkout when valid. */
   guestEmail?: string;
 };
@@ -249,6 +250,7 @@ function CheckoutButton({
   onPromoError,
   className,
   disabled: disabledProp = false,
+  pickupTime,
   guestEmail,
 }: CheckoutButtonProps) {
   const { t } = useTranslation();

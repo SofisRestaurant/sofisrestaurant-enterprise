@@ -34,10 +34,13 @@ export type GuestRequestBody = {
   guest_token: string | null;
   success_url: string | null;
   cancel_url: string | null;
+  // pickup_time: ISO 8601, seconds precision. null when not a scheduled order.
+  pickup_time: string | null;
 };
 
 // ─── Fields that are forbidden in guest checkout ──────────────────────────────
 // Any of these present in the request body → hard 422. Never silently ignore.
+// pickup_time is intentionally NOT in this list — guests may schedule pickups.
 
 const GUEST_FORBIDDEN_FIELDS = [
   "promo_code",
@@ -156,6 +159,28 @@ export function pickMeta(
   }
 
   return null;
+}
+
+// ─── pickup_time normalizer ───────────────────────────────────────────────────
+// Light validation only — server-side business logic (e.g. minimum lead time,
+// operating hours) is enforced by the Edge Function and/or webhook, not here.
+// Accepts any parseable ISO 8601 string and normalizes to seconds precision.
+// Returns null when the field is absent, empty, or not a parseable date so the
+// caller can safely store it without a nullable type branch.
+
+function normalizePickupTime(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") return null;
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+
+  const ms = Date.parse(trimmed);
+  if (!Number.isFinite(ms)) return null;
+
+  // Seconds-precision ISO 8601 — drop milliseconds for consistency with
+  // parsePickupTimeFromMetadata() in the webhook.
+  return new Date(Math.floor(ms / 1000) * 1000).toISOString().replace(".000Z", "Z");
 }
 
 // ─── Item normalization (used by BOTH validators — copied, not shared) ────────
@@ -615,6 +640,13 @@ export function validateGuestBody(raw: unknown): ValidationResult<GuestRequestBo
     guestToken = trimmed;
   }
 
+  // pickup_time — optional. Light validation only; business-rule enforcement
+  // (lead time, operating hours) happens in the Edge Function / webhook.
+  const pickupTime = normalizePickupTime(raw["pickup_time"]);
+  if (raw["pickup_time"] !== undefined && raw["pickup_time"] !== null && pickupTime === null) {
+    return { ok: false, error: "'pickup_time' must be a valid ISO 8601 date string" };
+  }
+
   // success_url
   const successUrlRaw = normalizeString(raw["success_url"]);
   if (successUrlRaw) {
@@ -641,8 +673,9 @@ export function validateGuestBody(raw: unknown): ValidationResult<GuestRequestBo
       notes,
       guest_email: guestEmail,
       guest_token: guestToken,
+      pickup_time: pickupTime,
       success_url: successUrlRaw ?? null,
-      cancel_url: cancelUrlRaw ?? null,
+      cancel_url:  cancelUrlRaw ?? null,
     },
   };
 }
@@ -710,6 +743,12 @@ export function validateAuthBody(raw: unknown): ValidationResult<RequestBody> {
     typeof notesValue === "string" && notesValue.trim().length > MAX_NOTES_LEN
   ) {
     return { ok: false, error: `'notes' too long (max ${MAX_NOTES_LEN})` };
+  }
+
+  // pickup_time — optional. Light validation only.
+  const pickupTime = normalizePickupTime(raw["pickup_time"]);
+  if (raw["pickup_time"] !== undefined && raw["pickup_time"] !== null && pickupTime === null) {
+    return { ok: false, error: "'pickup_time' must be a valid ISO 8601 date string" };
   }
 
   const promoCode = normalizeString(raw["promo_code"]);
@@ -837,6 +876,7 @@ export function validateAuthBody(raw: unknown): ValidationResult<RequestBody> {
       items,
       order_type: rawOrderType,
       notes,
+      pickup_time: pickupTime ?? null,
       promo_code: promoCode ?? null,
       promo_id: typeof promoIdRaw === "string" ? promoIdRaw.trim() : null,
       credit_id: typeof creditIdRaw === "string" ? creditIdRaw.trim() : null,

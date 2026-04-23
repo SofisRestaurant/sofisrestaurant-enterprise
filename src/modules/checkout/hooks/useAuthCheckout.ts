@@ -79,34 +79,26 @@ export function useAuthCheckout(): UseAuthCheckoutReturn {
       // ─── REQUEST BODY ──────────────────────────────────────────────────────
       // NOTE: success_url / cancel_url intentionally NOT sent.
       // The Edge Function generates them from its SITE_URL env var.
+      // pickup_time is only included when present — never sent as null/undefined
+      // to avoid confusing the server-side validator.
       const requestBody: Record<string, unknown> = {
         items: itemsPayload,
         order_type: input.orderType,
 
-        ...(input.notes && { notes: input.notes }),
-        ...(input.promoCode && { promo_code: input.promoCode }),
-        ...(input.promoId && { promo_id: input.promoId }),
-        ...(input.creditId && { credit_id: input.creditId }),
+        ...(input.notes               && { notes:                 input.notes }),
+        ...(input.promoCode           && { promo_code:            input.promoCode }),
+        ...(input.promoId             && { promo_id:              input.promoId }),
+        ...(input.creditId            && { credit_id:             input.creditId }),
+        ...(input.pickup_time         && { pickup_time:           input.pickup_time }),
 
         ...(input.loyaltyRedeemPoints
           ? { loyalty_redeem_points: input.loyaltyRedeemPoints }
           : {}),
 
-        ...(input.loyaltyAccountId && {
-          loyalty_account_id: input.loyaltyAccountId,
-        }),
-
-        ...(input.loyaltyRewardId && {
-          loyalty_reward_id: input.loyaltyRewardId,
-        }),
-
-        ...(input.loyaltyRedemptionId && {
-          loyalty_redemption_id: input.loyaltyRedemptionId,
-        }),
-
-        ...(input.clientIntegrityHash && {
-          client_integrity_hash: input.clientIntegrityHash,
-        }),
+        ...(input.loyaltyAccountId    && { loyalty_account_id:    input.loyaltyAccountId }),
+        ...(input.loyaltyRewardId     && { loyalty_reward_id:     input.loyaltyRewardId }),
+        ...(input.loyaltyRedemptionId && { loyalty_redemption_id: input.loyaltyRedemptionId }),
+        ...(input.clientIntegrityHash && { client_integrity_hash: input.clientIntegrityHash }),
       };
 
       try {
@@ -146,9 +138,9 @@ export function useAuthCheckout(): UseAuthCheckoutReturn {
         return {
           ok: true,
           url,
-          sessionId: data?.sessionId,
+          sessionId:   data?.sessionId,
           pricingHash: data?.pricingHash,
-          pricing: data?.pricing,
+          pricing:     data?.pricing,
         };
       } catch (err) {
         const message =

@@ -27,6 +27,12 @@
 //        rejected here — minimum order enforcement must happen in
 //        create-checkout / create-checkout-guest BEFORE the Stripe session
 //        is created. A paid order must never be silently dropped.
+//
+//   7. [NEW] pickup_time extracted from Stripe session metadata.
+//        Stored as TIMESTAMPTZ in orders.pickup_time.
+//        NULL means ASAP. Only populated for pickup order_type.
+//        Extraction is defensive — a malformed value is logged and dropped
+//        rather than failing the order. A paid order must never be lost.
 // =============================================================================
 
 import type Stripe from "stripe";
@@ -67,6 +73,82 @@ import {
 const MIN_EXPECTED_ORDER_CENTS = 15_00; // $15.00
 
 const VALID_ORDER_TYPES = new Set<OrderType>(['pickup', 'delivery', 'dine_in'] as const);
+
+// Maximum seconds in the future a pickup_time may be scheduled.
+// 24 hours is generous — tighten if the business only accepts same-day orders.
+const MAX_PICKUP_TIME_FUTURE_MS = 24 * 60 * 60 * 1000;
+
+// ─── pickup_time parser ───────────────────────────────────────────────────────
+//
+// Reads pickup_time from Stripe session metadata and converts it to an ISO
+// 8601 string suitable for the TIMESTAMPTZ column in orders.
+//
+// Defensive contract:
+//   - A missing or empty value returns null (ASAP order).
+//   - A malformed ISO string returns null and logs a warning.
+//   - A value too far in the past or future is accepted with a warning log
+//     (the order has already been paid — never drop it).
+//
+// The function never throws.
+
+function parsePickupTimeFromMetadata(
+  metadata: Stripe.Metadata | null | undefined,
+  requestId: string,
+  sessionId: string,
+): string | null {
+  const raw = pickMeta(metadata, "pickup_time");
+
+  if (!raw || raw.trim().length === 0) {
+    return null; // ASAP — normal case
+  }
+
+  let parsed: Date;
+  try {
+    parsed = new Date(raw);
+  } catch {
+    log("warn", "webhook_pickup_time_parse_failed", {
+      requestId,
+      sessionId: prefix(sessionId),
+      raw,
+      reason: "threw on new Date()",
+    });
+    return null;
+  }
+
+  if (!Number.isFinite(parsed.getTime())) {
+    log("warn", "webhook_pickup_time_invalid", {
+      requestId,
+      sessionId: prefix(sessionId),
+      raw,
+      reason: "NaN timestamp",
+    });
+    return null;
+  }
+
+  const nowMs  = Date.now();
+  const diffMs = parsed.getTime() - nowMs;
+
+  if (diffMs < -60 * 60 * 1000) {
+    // More than 1 hour in the past — suspicious but still store it; do not drop the order.
+    log("warn", "webhook_pickup_time_in_past", {
+      requestId,
+      sessionId: prefix(sessionId),
+      raw,
+      diffMinutes: Math.round(diffMs / 60_000),
+    });
+  }
+
+  if (diffMs > MAX_PICKUP_TIME_FUTURE_MS) {
+    log("warn", "webhook_pickup_time_too_far_future", {
+      requestId,
+      sessionId: prefix(sessionId),
+      raw,
+      diffHours: Math.round(diffMs / 3_600_000),
+    });
+  }
+
+  return parsed.toISOString();
+}
 
 // ─── Order state validation factory ──────────────────────────────────────────
 
@@ -195,10 +277,12 @@ function buildOrderMetadata(args: {
   isGuest:      boolean;
   guestToken:   string | null;
   risk:         OrderRiskResult | null;
+  pickupTime:   string | null;
 }): ReturnType<typeof toJson> {
   const {
     requestId, session, cartId, orderType,
     pricingHash, consumedNow, pricing, snapshot, isGuest, guestToken, risk,
+    pickupTime,
   } = args;
 
   const paymentIntentId = typeof session.payment_intent === "string"
@@ -245,6 +329,7 @@ function buildOrderMetadata(args: {
     stripe_amount_total:       pricing.chargedCents,
     stripe_currency:           pricing.currency,
     pending_cart_consumed_now: consumedNow,
+    pickup_time:               pickupTime ?? null,
     order_risk: risk !== null ? toJson({
       score:                 risk.score,
       level:                 risk.level,
@@ -393,6 +478,25 @@ export async function createOrderFromSession(args: {
     loyaltyDiscountCents,
   } = state;
 
+  // ── pickup_time extraction ───────────────────────────────────────────────
+  // Read from Stripe session metadata. The create-checkout pipelines write it
+  // as a string key "pickup_time" when the user selects a scheduled time.
+  // NULL = ASAP (the common case). parsePickupTimeFromMetadata never throws.
+  const pickupTime = parsePickupTimeFromMetadata(
+    session.metadata,
+    requestId,
+    session.id,
+  );
+
+  if (pickupTime !== null) {
+    log("info", "webhook_order_pickup_time_set", {
+      requestId,
+      sessionId: prefix(session.id),
+      pickupTime,
+      orderType,
+    });
+  }
+
   const paymentIntentId = typeof session.payment_intent === "string"
     ? session.payment_intent
     : session.payment_intent?.id ?? null;
@@ -402,10 +506,6 @@ export async function createOrderFromSession(args: {
   );
 
   // ── Low-amount observability warning ──────────────────────────────────────
-  // Orders below the expected minimum are unusual. Log them for monitoring.
-  // They are NOT rejected here — the customer has already paid and dropping
-  // a paid order would cause real harm. Minimum enforcement belongs in
-  // create-checkout / create-checkout-guest before the session is created.
   if (pricing.chargedCents < MIN_EXPECTED_ORDER_CENTS) {
     log("warn", "webhook_order_below_minimum", {
       requestId,
@@ -451,6 +551,7 @@ export async function createOrderFromSession(args: {
     isGuest,
     guestToken,
     risk,
+    pickupTime,
   });
 
   const insert = {
@@ -485,13 +586,15 @@ export async function createOrderFromSession(args: {
     cart_items:                cart.items,
     metadata,
     notes:                     snapshotString(snapshot, "orderNotes"),
-    risk_score:          risk?.score          ?? null,
-    risk_level:          risk?.level          ?? null,
-    verification_status: verificationStatus,
+    pickup_time:               pickupTime,   // ← NULL = ASAP, ISO string = scheduled
+    risk_score:                risk?.score          ?? null,
+    risk_level:                risk?.level          ?? null,
+    verification_status:       verificationStatus,
   } as OrderInsert & {
     fulfillment_type:    string;
     guest_token:         string | null;
     source:              string;
+    pickup_time:         string | null;
     risk_score:          number | null;
     risk_level:          string | null;
     verification_status: string;
@@ -535,6 +638,7 @@ export async function createOrderFromSession(args: {
       taxCents:             pricing.taxCents,
       isGuest,
       consumedNow,
+      pickupTime:           pickupTime ?? "asap",
       riskScore:            risk?.score          ?? null,
       riskLevel:            risk?.level          ?? null,
       verificationStatus,

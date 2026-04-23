@@ -19,6 +19,14 @@
 //   (defense-in-depth) to ensure the invariant holds regardless of call order or
 //   future refactors.
 //   Must match MIN_ORDER_CENTS in pending-cart.ts and create-checkout/index.ts.
+//
+// pickup_time support:
+//   Accepted as an optional ISO 8601 string in the request body.
+//   Guests MAY schedule pickup times — this is not auth-only functionality.
+//   Validated with the same rules as the auth pipeline.
+//   Written to Stripe session metadata as "pickup_time".
+//   The stripe-webhook function reads it from metadata and writes to orders.
+//   NULL / absent = ASAP.
 // =============================================================================
 
 import Stripe from "stripe";
@@ -63,8 +71,6 @@ import type { DbClient } from "../create-checkout/types.ts";
 import { STRIPE_CANCEL_URL, STRIPE_SUCCESS_URL } from "../_shared/checkout-urls.ts";
 
 // ─── Local sha256Hex ──────────────────────────────────────────────────────────
-// Defined locally because security.ts declares sha256Hex but does not export it.
-// Used for: IP hashing (never stores raw IPs) and cart item hashing.
 
 async function sha256Hex(value: string): Promise<string> {
   const bytes = new TextEncoder().encode(value);
@@ -82,6 +88,53 @@ function generateGuestToken(): string {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+// ─── pickup_time validation ───────────────────────────────────────────────────
+// Identical logic to the auth pipeline — kept inline to avoid a shared import
+// that would couple the guest function's dependency graph.
+
+const PICKUP_TIME_TOLERANCE_MS  =  5 * 60 * 1000;
+const PICKUP_TIME_MAX_FUTURE_MS = 24 * 60 * 60 * 1000;
+
+function validatePickupTime(
+  raw: unknown,
+): { ok: true; value: string | null } | { ok: false; error: string } {
+  if (raw === null || raw === undefined || raw === "") {
+    return { ok: true, value: null };
+  }
+
+  if (typeof raw !== "string") {
+    return { ok: false, error: "pickup_time must be an ISO 8601 string or null." };
+  }
+
+  let parsed: Date;
+  try {
+    parsed = new Date(raw);
+  } catch {
+    return { ok: false, error: "pickup_time is not a valid date." };
+  }
+
+  if (!Number.isFinite(parsed.getTime())) {
+    return { ok: false, error: "pickup_time is not a valid date." };
+  }
+
+  const nowMs  = Date.now();
+  const diffMs = parsed.getTime() - nowMs;
+
+  if (diffMs < -PICKUP_TIME_TOLERANCE_MS) {
+    return { ok: false, error: "Pickup time cannot be in the past." };
+  }
+
+  if (diffMs > PICKUP_TIME_MAX_FUTURE_MS) {
+    return {
+      ok: false,
+      error: "Pickup time cannot be more than 24 hours in the future.",
+    };
+  }
+
+  const normalised = new Date(Math.round(parsed.getTime() / 1000) * 1000).toISOString();
+  return { ok: true, value: normalised };
 }
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
@@ -118,7 +171,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // ── Hard reject any Authorization header ───────────────────────────────────
-  // This endpoint is exclusively for unauthenticated guests.
   if (req.headers.get("authorization")) {
     log("warn", "guest_checkout_auth_header_rejected", { requestId });
     return errorResponse(
@@ -181,14 +233,29 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // ── Guest validation ────────────────────────────────────────────────────────
-  // validateGuestBody runs forbidden-field rejection FIRST.
-  // promo_code, promo_id, credit_id, loyalty_*, client_integrity_hash → 422.
   const validated = validateGuestBody(parsedBody);
   if (!validated.ok) {
     return errorResponse(requestId, 422, "validation_failed", validated.error, corsHeaders);
   }
 
   const body: GuestRequestBody = validated.value;
+
+  // ── pickup_time validation ─────────────────────────────────────────────────
+  const pickupTimeResult = validatePickupTime(
+    (body as unknown as Record<string, unknown>).pickup_time ?? null,
+  );
+
+  if (!pickupTimeResult.ok) {
+    return errorResponse(
+      requestId,
+      422,
+      "validation_failed",
+      pickupTimeResult.error,
+      corsHeaders,
+    );
+  }
+
+  const pickupTime = pickupTimeResult.value;
 
   // ── Service init ────────────────────────────────────────────────────────────
   let db: DbClient;
@@ -208,7 +275,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // ── IP-based rate limiting ──────────────────────────────────────────────────
-  // Hash the raw IP before any storage — never persist raw IPs.
   const requestIp = getRequestIp(req);
   const rawIp = requestIp ?? "unknown";
   const ipHash = await sha256Hex(rawIp);
@@ -251,14 +317,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // ── Pricing resolution ──────────────────────────────────────────────────────
-  // CRITICAL: promoId, promoCode, creditId are HARDCODED to null.
-  // They are NEVER read from body. This is a second protection layer independent
-  // of validateGuestBody — both must be disabled for a promo to slip through.
-  //
-  // The `userId` field is required by the ResolvePricingInput type (non-optional
-  // string). We pass "guest:<token>" as a non-empty sentinel. loadPromotion and
-  // loadCredit both early-return on null IDs, so this value never reaches a DB
-  // query. It is written into snapshot.userId solely for the audit trail.
   let snapshot: PricingSnapshot;
   let pricingHash = "";
 
@@ -327,11 +385,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
-  // ── Minimum order enforcement (PRIMARY CHECK) ─────────────────────────────
-  // Checked against server-calculated snapshot.totalCents — never client input.
-  // Runs after all discounts are applied and before any Stripe API call or
-  // database write, so no session is created and no charge can occur.
-  // findReusableGuestSession also enforces this internally (defense-in-depth).
+  // ── Minimum order enforcement ─────────────────────────────────────────────
   if (snapshot.totalCents < MIN_ORDER_CENTS) {
     log("warn", "guest_checkout_below_minimum", {
       requestId,
@@ -348,8 +402,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // ── Defensive snapshot integrity assertion ──────────────────────────────────
-  // promoDiscountCents and creditCents MUST be zero for a guest session.
-  // A non-zero value means the pricing engine behaved unexpectedly — abort.
   if ((snapshot.promoDiscountCents ?? 0) !== 0 || (snapshot.creditCents ?? 0) !== 0) {
     log("error", "guest_checkout_unexpected_discount_in_snapshot", {
       requestId,
@@ -386,10 +438,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // ── Session reuse check ─────────────────────────────────────────────────────
-  // findReusableGuestSession enforces MIN_ORDER_CENTS internally as a second
-  // layer of defense — even though the primary check above already blocked any
-  // below-minimum request, the guard inside the function ensures the invariant
-  // holds if call order ever changes in a future refactor.
   const reusableSession = await findReusableGuestSession({
     db,
     stripe,
@@ -447,7 +495,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
     pricingHash,
     idempotencyKey,
     requestId,
-  });
+    pickup_time: pickupTime ?? undefined,
+  } as Parameters<typeof persistGuestPendingCart>[0]);
 
   if (!pendingCart) {
     return errorResponse(
@@ -497,6 +546,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
     total_cents: String(snapshot.totalCents),
     idempotency_key: idempotencyKey,
     guest_token: guestToken,
+    // ── pickup_time ── written only when non-null (ASAP = key absent)
+    ...(pickupTime ? { pickup_time: pickupTime } : {}),
     ...(snapshot.appliedCampaignIds.length
       ? { applied_campaign_ids: snapshot.appliedCampaignIds.join(",") }
       : {}),
@@ -516,12 +567,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
         metadata: sessionMetadata,
         payment_intent_data: { metadata: sessionMetadata },
         billing_address_collection: "auto",
-        // guest_email → Stripe native customer_email field (not metadata)
         customer_email: body.guest_email,
         ...(body.order_type === "delivery"
           ? { phone_number_collection: { enabled: true } }
           : {}),
-        // No discounts[] — guest has no loyalty coupons and no promo codes
       },
       { idempotencyKey },
     );
@@ -601,6 +650,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     sessionId: prefix(authoritativeSession.id),
     amountTotal: snapshot.totalCents,
     orderType: body.order_type,
+    pickupTime: pickupTime ?? "asap",
     ms,
   });
 

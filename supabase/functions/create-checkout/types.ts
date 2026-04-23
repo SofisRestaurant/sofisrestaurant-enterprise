@@ -123,6 +123,10 @@ export type RequestBody = {
   items: RequestCartItemInput[];
   order_type: OrderType;
   notes: string | null;
+  // Normalized ISO 8601 (seconds precision) or null for ASAP orders.
+  // Optional here so that existing callers that do not yet send the field
+  // are not affected — validateAuthBody sets it to null when absent.
+  pickup_time?: string | null;
   promo_code: string | null;
   promo_id: string | null;
   credit_id: string | null;

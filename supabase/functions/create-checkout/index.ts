@@ -3,6 +3,13 @@
 // Authenticated checkout pipeline.
 // All error responses are emitted via errorResponse() from responses.ts.
 // Shape: { ok: false, error: { code, message, requestId } }
+//
+// pickup_time support:
+//   Accepted as an optional ISO 8601 string in the request body.
+//   Validated: must be a finite date, must be ≥ now (with 5-min tolerance).
+//   Written to Stripe session metadata as "pickup_time".
+//   The stripe-webhook function reads it from metadata and writes to orders.
+//   NULL / absent = ASAP.
 // =============================================================================
 
 import Stripe from "stripe";
@@ -52,6 +59,63 @@ import { getStripe } from "./stripe-client.ts";
 import type { DbClient, PendingCartUpdate } from "./types.ts";
 import { validatePromo } from "./promos.ts";
 import { STRIPE_CANCEL_URL, STRIPE_SUCCESS_URL } from "../_shared/checkout-urls.ts";
+
+// ─── pickup_time validation ───────────────────────────────────────────────────
+//
+// Accepts an optional ISO 8601 string. Returns the normalised ISO string
+// (always UTC, seconds-precision) or null (= ASAP).
+//
+// Rules:
+//   - Missing / empty → null (ASAP — valid and common)
+//   - Not a parseable date → 422 validation_failed
+//   - More than 5 minutes in the past → 422 (clock skew tolerance applied)
+//   - More than 24 hours in the future → 422
+//
+// Returns { ok: true, value } | { ok: false, error: string }.
+
+const PICKUP_TIME_TOLERANCE_MS   =  5 * 60 * 1000; // 5 min past allowed (clock skew)
+const PICKUP_TIME_MAX_FUTURE_MS  = 24 * 60 * 60 * 1000; // 24 h
+
+function validatePickupTime(
+  raw: unknown,
+): { ok: true; value: string | null } | { ok: false; error: string } {
+  if (raw === null || raw === undefined || raw === "") {
+    return { ok: true, value: null };
+  }
+
+  if (typeof raw !== "string") {
+    return { ok: false, error: "pickup_time must be an ISO 8601 string or null." };
+  }
+
+  let parsed: Date;
+  try {
+    parsed = new Date(raw);
+  } catch {
+    return { ok: false, error: "pickup_time is not a valid date." };
+  }
+
+  if (!Number.isFinite(parsed.getTime())) {
+    return { ok: false, error: "pickup_time is not a valid date." };
+  }
+
+  const nowMs  = Date.now();
+  const diffMs = parsed.getTime() - nowMs;
+
+  if (diffMs < -PICKUP_TIME_TOLERANCE_MS) {
+    return { ok: false, error: "Pickup time cannot be in the past." };
+  }
+
+  if (diffMs > PICKUP_TIME_MAX_FUTURE_MS) {
+    return {
+      ok: false,
+      error: "Pickup time cannot be more than 24 hours in the future.",
+    };
+  }
+
+  // Normalise to UTC ISO string, seconds precision (strips sub-second noise).
+  const normalised = new Date(Math.round(parsed.getTime() / 1000) * 1000).toISOString();
+  return { ok: true, value: normalised };
+}
 
 // ─── Loyalty helpers ──────────────────────────────────────────────────────────
 
@@ -305,6 +369,25 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   const body = validated.value;
 
+  // ── pickup_time validation ─────────────────────────────────────────────────
+  // Validated independently so the error message is specific.
+  // body.pickup_time is typed as string | null | undefined by validateAuthBody.
+  const pickupTimeResult = validatePickupTime(
+    (body as unknown as Record<string, unknown>).pickup_time ?? null,
+  );
+
+  if (!pickupTimeResult.ok) {
+    return errorResponse(
+      requestId,
+      422,
+      "validation_failed",
+      pickupTimeResult.error,
+      corsHeaders,
+    );
+  }
+
+  const pickupTime = pickupTimeResult.value; // string (ISO UTC) | null
+
   let db: DbClient;
   let stripe: Stripe;
   try {
@@ -441,11 +524,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
-  // ── Minimum order enforcement (PRIMARY CHECK) ─────────────────────────────
-  // Checked against server-calculated snapshot.totalCents — never client input.
-  // Runs after all discounts and credits are applied and BEFORE any reuse lookup
-  // or Stripe API call, so no session is created and no charge can occur.
-  // A second guard also lives inside findReusableSession for defense-in-depth.
   if (snapshot.totalCents < MIN_ORDER_CENTS) {
     log("warn", "checkout_below_minimum", {
       requestId,
@@ -546,7 +624,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
-  // findReusableSession enforces MIN_ORDER_CENTS internally (defense-in-depth).
   const reusableSession = await findReusableSession({
     db,
     stripe,
@@ -605,7 +682,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
     creditId: resolvedCreditId,
     idempotencyKey,
     requestId,
-  });
+    // pickup_time stored in pending_carts for direct-DB queries
+    // (kitchen dashboard, session-reuse lookup). Stripe metadata is the
+    // authoritative source used by the webhook.
+    pickup_time: pickupTime ?? undefined,
+  } as Parameters<typeof persistPendingCart>[0]);
 
   if (!pendingCart) {
     return errorResponse(
@@ -918,6 +999,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
     tax_cents: String(snapshot.taxCents),
     total_cents: String(snapshot.totalCents),
     idempotency_key: idempotencyKey,
+    // ── pickup_time ── written as a top-level metadata key so the webhook
+    // can read it with pickMeta(session.metadata, "pickup_time").
+    // Omitted entirely when null so the webhook correctly treats a missing
+    // key as ASAP rather than as a malformed value.
+    ...(pickupTime ? { pickup_time: pickupTime } : {}),
     ...(safeRequestIp ? { customer_ip: safeRequestIp } : {}),
     ...(userAgent ? { customer_user_agent: userAgent.slice(0, 500) } : {}),
     ...(deviceFingerprint
@@ -1091,6 +1177,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     amountTotal: snapshot.totalCents,
     loyaltyOff: loyaltyDiscountCents,
     orderType: body.order_type,
+    pickupTime: pickupTime ?? "asap",
     ms,
   });
 

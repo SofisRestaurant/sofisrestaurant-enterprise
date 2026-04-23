@@ -21,6 +21,9 @@
 //      does NOT send or influence them — the Edge Function reads SITE_URL
 //      from its env and builds the URLs itself. This is why CheckoutRouterArgs
 //      no longer has successUrl / cancelUrl fields.
+//   6. pickup_time is forwarded as-is from args to both pipelines.
+//      Normalization to seconds-precision ISO 8601 happens in each hook before
+//      it is placed in the request body, keeping the router layer thin.
 // =============================================================================
 
 import { useCallback, useMemo, useState } from 'react';
@@ -40,6 +43,7 @@ type OrderType = 'pickup' | 'delivery' | 'dine_in';
 export type CheckoutRouterArgs = {
   customer_uid?: string;
   guestEmail?: string;
+  pickupTime?: string;
   orderType?: OrderType;
   notes?: string | null;
   promoCode?: string;
@@ -88,6 +92,18 @@ function trimOrUndefined(v: unknown): string | undefined {
   return t.length > 0 ? t : undefined;
 }
 
+// Normalize a pickup time value to a seconds-precision ISO 8601 string.
+// Strips milliseconds so the value is stable for idempotency-key hashing and
+// consistent with what parsePickupTimeFromMetadata() expects in the webhook.
+// Returns undefined if the value is absent, empty, or not a parseable date.
+function normalizePickupTime(v: unknown): string | undefined {
+  if (typeof v !== 'string' || v.trim().length === 0) return undefined;
+  const ms = Date.parse(v.trim());
+  if (!Number.isFinite(ms)) return undefined;
+  // Drop milliseconds: "2026-04-22T18:30:00.000Z" → "2026-04-22T18:30:00Z"
+  return new Date(Math.floor(ms / 1000) * 1000).toISOString().replace('.000Z', 'Z');
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useCheckoutRouter(): CheckoutRouterReturn {
@@ -123,6 +139,10 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
     async (args: CheckoutRouterArgs): Promise<CheckoutResult> => {
       setRouterError(null);
 
+      // Normalize once at the router boundary so both pipelines receive a
+      // consistent, seconds-precision ISO string (or undefined).
+      const pickupTime = normalizePickupTime(args.pickupTime);
+
       // ─── AUTH PATH ─────────────────────────────────────────────────────
       if (isAuthenticated) {
         const input: AuthCheckoutInput = {
@@ -131,6 +151,7 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
           promoCode: trimOrUndefined(args.promoCode),
           promoId:   trimOrUndefined(args.promoId),
           creditId:  trimOrUndefined(args.creditId),
+          pickup_time: pickupTime,
 
           ...(args.loyalty?.applyPoints &&
               args.loyalty.pointsToRedeem &&
@@ -158,9 +179,10 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
       }
 
       const input: GuestCheckoutInput = {
-        guestEmail: args.guestEmail!.trim().toLowerCase(),
-        orderType:  normOrderType(args.orderType),
-        notes:      trimOrUndefined(args.notes),
+        guestEmail:  args.guestEmail!.trim().toLowerCase(),
+        orderType:   normOrderType(args.orderType),
+        notes:       trimOrUndefined(args.notes),
+        pickup_time: pickupTime,
         // NO successUrl / cancelUrl — server owns them.
       };
 
