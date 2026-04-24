@@ -6,9 +6,7 @@
 //
 // pickup_time support:
 //   Accepted as an optional ISO 8601 string in the request body.
-//   Normalized and validated by validateAuthBody() in request-validation.ts —
-//   that is the single and only transformation point for pickup_time.
-//   This file consumes body.pickup_time directly with no re-validation.
+//   Validated: must be a finite date, must be ≥ now (with 5-min tolerance).
 //   Written to Stripe session metadata as "pickup_time".
 //   The stripe-webhook function reads it from metadata and writes to orders.
 //   NULL / absent = ASAP.
@@ -28,6 +26,7 @@ import {
   PricingValidationError,
   resolvePricingForCheckout,
 } from "../_shared/pricing.ts";
+import { MIN_ORDER_CENTS } from "../_shared/constants.ts";
 
 import { loadCanonicalCartItems } from "./catalog.ts";
 import { corsHeadersFor } from "./cors.ts";
@@ -61,9 +60,62 @@ import type { DbClient, PendingCartUpdate } from "./types.ts";
 import { validatePromo } from "./promos.ts";
 import { STRIPE_CANCEL_URL, STRIPE_SUCCESS_URL } from "../_shared/checkout-urls.ts";
 
-// ─── Minimum order enforcement ────────────────────────────────────────────────
+// ─── pickup_time validation ───────────────────────────────────────────────────
+//
+// Accepts an optional ISO 8601 string. Returns the normalised ISO string
+// (always UTC, seconds-precision) or null (= ASAP).
+//
+// Rules:
+//   - Missing / empty → null (ASAP — valid and common)
+//   - Not a parseable date → 422 validation_failed
+//   - More than 5 minutes in the past → 422 (clock skew tolerance applied)
+//   - More than 24 hours in the future → 422
+//
+// Returns { ok: true, value } | { ok: false, error: string }.
 
-const MIN_ORDER_CENTS = 15_00; // $15.00
+const PICKUP_TIME_TOLERANCE_MS   =  5 * 60 * 1000; // 5 min past allowed (clock skew)
+const PICKUP_TIME_MAX_FUTURE_MS  = 24 * 60 * 60 * 1000; // 24 h
+
+function validatePickupTime(
+  raw: unknown,
+): { ok: true; value: string | null } | { ok: false; error: string } {
+  if (raw === null || raw === undefined || raw === "") {
+    return { ok: true, value: null };
+  }
+
+  if (typeof raw !== "string") {
+    return { ok: false, error: "pickup_time must be an ISO 8601 string or null." };
+  }
+
+  let parsed: Date;
+  try {
+    parsed = new Date(raw);
+  } catch {
+    return { ok: false, error: "pickup_time is not a valid date." };
+  }
+
+  if (!Number.isFinite(parsed.getTime())) {
+    return { ok: false, error: "pickup_time is not a valid date." };
+  }
+
+  const nowMs  = Date.now();
+  const diffMs = parsed.getTime() - nowMs;
+
+  if (diffMs < -PICKUP_TIME_TOLERANCE_MS) {
+    return { ok: false, error: "Pickup time cannot be in the past." };
+  }
+
+  if (diffMs > PICKUP_TIME_MAX_FUTURE_MS) {
+    return {
+      ok: false,
+      error: "Pickup time cannot be more than 24 hours in the future.",
+    };
+  }
+
+  // Normalise to UTC ISO string, seconds precision (strips sub-second noise).
+  const normalised = new Date(Math.round(parsed.getTime() / 1000) * 1000).toISOString();
+  return { ok: true, value: normalised };
+}
 
 // ─── Loyalty helpers ──────────────────────────────────────────────────────────
 
@@ -148,30 +200,65 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   if (req.method === "OPTIONS") {
     if (!corsHeaders) {
-      return errorResponse(requestId, 403, "origin_not_allowed", "Origin not allowed.", { "Vary": "Origin" });
+      return errorResponse(
+        requestId,
+        403,
+        "origin_not_allowed",
+        "Origin not allowed.",
+        { "Vary": "Origin" },
+      );
     }
+
     return new Response(null, {
       status: 204,
-      headers: { ...BASE_HEADERS, ...corsHeaders, "X-Request-Id": requestId },
+      headers: {
+        ...BASE_HEADERS,
+        ...corsHeaders,
+        "X-Request-Id": requestId,
+      },
     });
   }
 
   if (!corsHeaders) {
-    return errorResponse(requestId, 403, "origin_not_allowed", "Origin not allowed.", { "Vary": "Origin" });
+    return errorResponse(
+      requestId,
+      403,
+      "origin_not_allowed",
+      "Origin not allowed.",
+      { "Vary": "Origin" },
+    );
   }
 
   if (req.method !== "POST") {
-    return errorResponse(requestId, 405, "method_not_allowed", "Method not allowed.", corsHeaders);
+    return errorResponse(
+      requestId,
+      405,
+      "method_not_allowed",
+      "Method not allowed.",
+      corsHeaders,
+    );
   }
 
   const contentType = req.headers.get("content-type")?.toLowerCase() ?? "";
   if (!contentType.includes("application/json")) {
-    return errorResponse(requestId, 415, "unsupported_content_type", "Content-Type must be application/json.", corsHeaders);
+    return errorResponse(
+      requestId,
+      415,
+      "unsupported_content_type",
+      "Content-Type must be application/json.",
+      corsHeaders,
+    );
   }
 
   const bearerToken = readBearerToken(req);
   if (!bearerToken) {
-    return errorResponse(requestId, 401, "authorization_required", "Authorization required.", corsHeaders);
+    return errorResponse(
+      requestId,
+      401,
+      "authorization_required",
+      "Authorization required.",
+      corsHeaders,
+    );
   }
 
   const userClient = createAnonClient(bearerToken);
@@ -183,7 +270,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
       requestId,
       error: authError?.message ?? "No user returned",
     });
-    return errorResponse(requestId, 401, "invalid_token", "Invalid or expired token.", corsHeaders);
+
+    return errorResponse(
+      requestId,
+      401,
+      "invalid_token",
+      "Invalid or expired token.",
+      corsHeaders,
+    );
   }
 
   const userId = user.id;
@@ -195,43 +289,104 @@ Deno.serve(async (req: Request): Promise<Response> => {
   let rawBody = "";
   try {
     const buffer = await req.arrayBuffer();
+
     if (buffer.byteLength === 0) {
-      return errorResponse(requestId, 400, "empty_body", "Request body is required.", corsHeaders);
+      return errorResponse(
+        requestId,
+        400,
+        "empty_body",
+        "Request body is required.",
+        corsHeaders,
+      );
     }
+
     if (buffer.byteLength > MAX_BODY_BYTES) {
-      log("warn", "checkout_body_too_large", { requestId, userId: prefix(userId), bytes: buffer.byteLength });
-      return errorResponse(requestId, 413, "body_too_large", "Request body too large.", corsHeaders);
+      log("warn", "checkout_body_too_large", {
+        requestId,
+        userId: prefix(userId),
+        bytes: buffer.byteLength,
+      });
+
+      return errorResponse(
+        requestId,
+        413,
+        "body_too_large",
+        "Request body too large.",
+        corsHeaders,
+      );
     }
+
     rawBody = new TextDecoder().decode(buffer);
   } catch (error) {
-    log("error", "checkout_body_read_failed", { requestId, userId: prefix(userId), error: asErr(error) });
-    return errorResponse(requestId, 400, "body_read_failed", "Failed to read request body.", corsHeaders);
+    log("error", "checkout_body_read_failed", {
+      requestId,
+      userId: prefix(userId),
+      error: asErr(error),
+    });
+
+    return errorResponse(
+      requestId,
+      400,
+      "body_read_failed",
+      "Failed to read request body.",
+      corsHeaders,
+    );
   }
 
   if (rawBody.trim().length === 0) {
-    return errorResponse(requestId, 400, "empty_body", "Request body is required.", corsHeaders);
+    return errorResponse(
+      requestId,
+      400,
+      "empty_body",
+      "Request body is required.",
+      corsHeaders,
+    );
   }
 
   let parsedBody: unknown;
   try {
     parsedBody = JSON.parse(rawBody);
   } catch {
-    return errorResponse(requestId, 400, "invalid_json", "Invalid JSON.", corsHeaders);
+    return errorResponse(
+      requestId,
+      400,
+      "invalid_json",
+      "Invalid JSON.",
+      corsHeaders,
+    );
   }
 
-  // validateAuthBody is the single and only transformation point for all
-  // request fields including pickup_time. It normalizes, validates, and
-  // produces the canonical shape. Nothing below re-transforms any field.
   const validated = validateAuthBody(parsedBody);
   if (!validated.ok) {
-    return errorResponse(requestId, 422, "validation_failed", validated.error, corsHeaders);
+    return errorResponse(
+      requestId,
+      422,
+      "validation_failed",
+      validated.error,
+      corsHeaders,
+    );
   }
 
   const body = validated.value;
 
-  // pickup_time is already a normalized ISO string (seconds precision) or null.
-  // Assigned once here — never re-processed below.
-  const pickupTime: string | null = body.pickup_time ?? null;
+  // ── pickup_time validation ─────────────────────────────────────────────────
+  // Validated independently so the error message is specific.
+  // body.pickup_time is typed as string | null | undefined by validateAuthBody.
+  const pickupTimeResult = validatePickupTime(
+    (body as unknown as Record<string, unknown>).pickup_time ?? null,
+  );
+
+  if (!pickupTimeResult.ok) {
+    return errorResponse(
+      requestId,
+      422,
+      "validation_failed",
+      pickupTimeResult.error,
+      corsHeaders,
+    );
+  }
+
+  const pickupTime = pickupTimeResult.value; // string (ISO UTC) | null
 
   let db: DbClient;
   let stripe: Stripe;
@@ -239,25 +394,56 @@ Deno.serve(async (req: Request): Promise<Response> => {
     db = createServiceClient();
     stripe = getStripe();
   } catch (error) {
-    log("error", "checkout_service_init_failed", { requestId, userId: prefix(userId), error: asErr(error) });
-    return errorResponse(requestId, 500, "service_unavailable", "Checkout service is temporarily unavailable.", corsHeaders);
+    log("error", "checkout_service_init_failed", {
+      requestId,
+      userId: prefix(userId),
+      error: asErr(error),
+    });
+
+    return errorResponse(
+      requestId,
+      500,
+      "service_unavailable",
+      "Checkout service is temporarily unavailable.",
+      corsHeaders,
+    );
   }
 
   const rateLimit = await checkRateLimit(db, userId, requestIp, requestId);
   if (!rateLimit.allowed) {
-    return errorResponse(requestId, 429, "rate_limited", rateLimit.reason, {
-      ...corsHeaders,
-      "Retry-After": String(Math.ceil(rateLimit.retryAfterMs / 1000)),
-    });
+    return errorResponse(
+      requestId,
+      429,
+      "rate_limited",
+      rateLimit.reason,
+      {
+        ...corsHeaders,
+        "Retry-After": String(Math.ceil(rateLimit.retryAfterMs / 1000)),
+      },
+    );
   }
 
   let canonicalItems: CanonicalCartItem[];
   try {
     canonicalItems = await loadCanonicalCartItems(db, body.items);
   } catch (error) {
-    if (error instanceof PricingValidationError) return mapPricingError(requestId, error, corsHeaders);
-    log("error", "checkout_canonical_cart_failed", { requestId, userId: prefix(userId), error: asErr(error) });
-    return errorResponse(requestId, 422, "pricing_failed", "Unable to calculate pricing. Please try again.", corsHeaders);
+    if (error instanceof PricingValidationError) {
+      return mapPricingError(requestId, error, corsHeaders);
+    }
+
+    log("error", "checkout_canonical_cart_failed", {
+      requestId,
+      userId: prefix(userId),
+      error: asErr(error),
+    });
+
+    return errorResponse(
+      requestId,
+      422,
+      "pricing_failed",
+      "Unable to calculate pricing. Please try again.",
+      corsHeaders,
+    );
   }
 
   let snapshot: PricingSnapshot;
@@ -275,33 +461,69 @@ Deno.serve(async (req: Request): Promise<Response> => {
       orderNotes: body.notes,
       taxRate: resolveTaxRate(),
     });
+
     snapshot = pricing.snapshot;
     pricingHash = pricing.pricingHash;
   } catch (error) {
-    if (error instanceof PricingValidationError) return mapPricingError(requestId, error, corsHeaders);
-    log("error", "checkout_pricing_failed", { requestId, userId: prefix(userId), error: asErr(error) });
-    return errorResponse(requestId, 422, "pricing_failed", "Unable to calculate pricing. Please try again.", corsHeaders);
+    if (error instanceof PricingValidationError) {
+      return mapPricingError(requestId, error, corsHeaders);
+    }
+
+    log("error", "checkout_pricing_failed", {
+      requestId,
+      userId: prefix(userId),
+      error: asErr(error),
+    });
+
+    return errorResponse(
+      requestId,
+      422,
+      "pricing_failed",
+      "Unable to calculate pricing. Please try again.",
+      corsHeaders,
+    );
   }
 
   if (!pricingHash) {
     try {
       pricingHash = await hashPricingSnapshot(snapshot);
     } catch (error) {
-      log("error", "checkout_pricing_hash_failed", { requestId, userId: prefix(userId), error: asErr(error) });
-      return errorResponse(requestId, 500, "pricing_hash_failed", "Internal error during checkout. Please try again.", corsHeaders);
+      log("error", "checkout_pricing_hash_failed", {
+        requestId,
+        userId: prefix(userId),
+        error: asErr(error),
+      });
+
+      return errorResponse(
+        requestId,
+        500,
+        "pricing_hash_failed",
+        "Internal error during checkout. Please try again.",
+        corsHeaders,
+      );
     }
   }
 
   if (!pricingHash.trim() || pricingHash.trim().length < 16) {
-    return errorResponse(requestId, 500, "pricing_hash_failed", "Internal error during checkout. Please try again.", corsHeaders);
+    return errorResponse(
+      requestId,
+      500,
+      "pricing_hash_failed",
+      "Internal error during checkout. Please try again.",
+      corsHeaders,
+    );
   }
 
   if (snapshot.totalCents <= 0 || snapshot.totalCents > MAX_ORDER_TOTAL_CENTS) {
-    return errorResponse(requestId, 422, "pricing_failed", "Unable to calculate pricing. Please try again.", corsHeaders);
+    return errorResponse(
+      requestId,
+      422,
+      "pricing_failed",
+      "Unable to calculate pricing. Please try again.",
+      corsHeaders,
+    );
   }
 
-  // Minimum order enforcement — checked against server-calculated total,
-  // after all discounts, before any Stripe call or DB write.
   if (snapshot.totalCents < MIN_ORDER_CENTS) {
     log("warn", "checkout_below_minimum", {
       requestId,
@@ -337,9 +559,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
       subtotalCents: snapshot.subtotalCents,
       requestId,
     });
+
     if (!promoValidation.valid) {
-      return errorResponse(requestId, 422, "promo_invalid", promoValidation.error, corsHeaders);
+      return errorResponse(
+        requestId,
+        422,
+        "promo_invalid",
+        promoValidation.error,
+        corsHeaders,
+      );
     }
+
     resolvedPromoId = promoValidation.promoId;
   }
 
@@ -351,9 +581,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
       userId,
       requestId,
     });
+
     if (!creditValidation.valid) {
-      return errorResponse(requestId, 422, "credit_invalid", creditValidation.error, corsHeaders);
+      return errorResponse(
+        requestId,
+        422,
+        "credit_invalid",
+        creditValidation.error,
+        corsHeaders,
+      );
     }
+
     resolvedCreditId = creditValidation.creditId;
   }
 
@@ -371,8 +609,19 @@ Deno.serve(async (req: Request): Promise<Response> => {
       loyaltyRedemptionId: body.loyalty_redemption_id,
     });
   } catch (error) {
-    log("error", "checkout_idempotency_key_failed", { requestId, userId: prefix(userId), error: asErr(error) });
-    return errorResponse(requestId, 500, "internal_error", "Unable to create checkout session. Please try again.", corsHeaders);
+    log("error", "checkout_idempotency_key_failed", {
+      requestId,
+      userId: prefix(userId),
+      error: asErr(error),
+    });
+
+    return errorResponse(
+      requestId,
+      500,
+      "internal_error",
+      "Unable to create checkout session. Please try again.",
+      corsHeaders,
+    );
   }
 
   const reusableSession = await findReusableSession({
@@ -389,9 +638,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (reusableSession) {
     const reusableUrl = reusableSession.session.url;
     if (!reusableUrl) {
-      return errorResponse(requestId, 502, "stripe_session_failed", "Unable to reuse Stripe session. Please try again.", corsHeaders);
+      return errorResponse(
+        requestId,
+        502,
+        "stripe_session_failed",
+        "Unable to reuse Stripe session. Please try again.",
+        corsHeaders,
+      );
     }
+
     const ms = Date.now() - start;
+
     log("info", "checkout_session_reused", {
       requestId,
       userId: prefix(userId),
@@ -401,12 +658,18 @@ Deno.serve(async (req: Request): Promise<Response> => {
       orderType: body.order_type,
       ms,
     });
-    return successResponse(requestId, "checkout_session_reused", {
-      sessionId: reusableSession.session.id,
-      url: reusableUrl,
-      pricingHash,
-      pricing: buildAuthPricingResponse(snapshot),
-    }, corsHeaders);
+
+    return successResponse(
+      requestId,
+      "checkout_session_reused",
+      {
+        sessionId: reusableSession.session.id,
+        url: reusableUrl,
+        pricingHash,
+        pricing: buildAuthPricingResponse(snapshot),
+      },
+      corsHeaders,
+    );
   }
 
   const pendingCart = await persistPendingCart({
@@ -419,11 +682,20 @@ Deno.serve(async (req: Request): Promise<Response> => {
     creditId: resolvedCreditId,
     idempotencyKey,
     requestId,
+    // pickup_time stored in pending_carts for direct-DB queries
+    // (kitchen dashboard, session-reuse lookup). Stripe metadata is the
+    // authoritative source used by the webhook.
     pickup_time: pickupTime ?? undefined,
   } as Parameters<typeof persistPendingCart>[0]);
 
   if (!pendingCart) {
-    return errorResponse(requestId, 500, "pending_cart_persist_failed", "Unable to create checkout session. Please try again.", corsHeaders);
+    return errorResponse(
+      requestId,
+      500,
+      "pending_cart_persist_failed",
+      "Unable to create checkout session. Please try again.",
+      corsHeaders,
+    );
   }
 
   const preSessionKey = `${userId}:${pendingCart.cartId}:${requestId}`;
@@ -434,7 +706,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
   let stripeCouponId: string | null = null;
 
   const loyaltyIntent: LoyaltyIntent | null =
-    body.loyalty_redeem_points && body.loyalty_redeem_points > 0 && body.loyalty_account_id
+    body.loyalty_redeem_points && body.loyalty_redeem_points > 0 &&
+      body.loyalty_account_id
       ? {
         applyPoints: true,
         pointsToRedeem: body.loyalty_redeem_points,
@@ -443,7 +716,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
       : null;
 
   if (loyaltyIntent && (resolvedPromoId || body.promo_code)) {
-    return errorResponse(requestId, 422, "discount_conflict", "Cannot combine promo codes with loyalty points.", corsHeaders);
+    return errorResponse(
+      requestId,
+      422,
+      "discount_conflict",
+      "Cannot combine promo codes with loyalty points.",
+      corsHeaders,
+    );
   }
 
   if (loyaltyIntent) {
@@ -454,12 +733,19 @@ Deno.serve(async (req: Request): Promise<Response> => {
       .maybeSingle();
 
     if (acct?.last_redeem_at) {
-      const minutesSince = (Date.now() - new Date(acct.last_redeem_at).getTime()) / 60000;
+      const minutesSince =
+        (Date.now() - new Date(acct.last_redeem_at).getTime()) / 60000;
+
       if (minutesSince < LOYALTY_REDEEM_COOLDOWN_MINUTES) {
         const minutesLeft = Math.ceil(LOYALTY_REDEEM_COOLDOWN_MINUTES - minutesSince);
-        return errorResponse(requestId, 422, "loyalty_cooldown",
+
+        return errorResponse(
+          requestId,
+          422,
+          "loyalty_cooldown",
           `You recently redeemed points. Please wait ${minutesLeft} more minute${minutesLeft !== 1 ? "s" : ""} before redeeming again.`,
-          corsHeaders);
+          corsHeaders,
+        );
       }
     }
   }
@@ -479,13 +765,21 @@ Deno.serve(async (req: Request): Promise<Response> => {
       userId: prefix(userId),
       recentOrderId: prefix(recentOrder.id),
     });
-    return errorResponse(requestId, 429, "recent_order_exists",
+    return errorResponse(
+      requestId,
+      429,
+      "recent_order_exists",
       "You placed an order very recently. Please wait a moment before ordering again.",
-      corsHeaders);
+      corsHeaders,
+    );
   }
 
   if (loyaltyIntent) {
-    const subtotalAfterCredit = Math.max(0, snapshot.subtotalCents - (snapshot.creditCents ?? 0));
+    const subtotalAfterCredit = Math.max(
+      0,
+      snapshot.subtotalCents - (snapshot.creditCents ?? 0),
+    );
+
     const loyaltyResult = await applyLoyaltyToCheckout({
       intent: loyaltyIntent,
       userId,
@@ -515,6 +809,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           for (const row of activeReserves ?? []) {
             const idemKey = row.idempotency_key as string ?? "";
             const releaseKey = idemKey.replace("reserve:", "release:");
+
             const { data: released } = await db
               .from("loyalty_ledger")
               .select("id")
@@ -522,11 +817,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
               .maybeSingle();
             if (released?.id) continue;
 
-            const sessionKey = (row.metadata as Record<string, string>)?.stripe_session_id ?? "";
+            const sessionKey = (row.metadata as Record<string, string>)
+              ?.stripe_session_id ?? "";
             const parts = sessionKey.split(":");
             const cartId = parts[1];
 
-            if (!cartId) { staleSessionKeys.push(sessionKey); continue; }
+            if (!cartId) {
+              staleSessionKeys.push(sessionKey);
+              continue;
+            }
 
             const { data: cart } = await db
               .from("pending_carts")
@@ -536,7 +835,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
               .maybeSingle();
 
             const stripeSessionId = cart?.stripe_session_id;
-            if (!stripeSessionId) { staleSessionKeys.push(sessionKey); continue; }
+            if (!stripeSessionId) {
+              staleSessionKeys.push(sessionKey);
+              continue;
+            }
 
             try {
               const existing = await stripe.checkout.sessions.retrieve(stripeSessionId);
@@ -557,21 +859,30 @@ Deno.serve(async (req: Request): Promise<Response> => {
             }
           }
         } catch (err) {
-          log("warn", "checkout_loyalty_reserve_lookup_failed", { requestId, error: asErr(err) });
+          log("warn", "checkout_loyalty_reserve_lookup_failed", {
+            requestId,
+            error: asErr(err),
+          });
         }
 
         if (resumeUrl) {
-          return successResponse(requestId, "checkout_session_reused", {
-            sessionId: resumeSessionId,
-            url: resumeUrl,
-            pricingHash,
-            pricing: buildAuthPricingResponse(snapshot),
-          }, corsHeaders);
+          return successResponse(
+            requestId,
+            "checkout_session_reused",
+            {
+              sessionId: resumeSessionId,
+              url: resumeUrl,
+              pricingHash,
+              pricing: buildAuthPricingResponse(snapshot),
+            },
+            corsHeaders,
+          );
         }
 
         for (const sessionKey of staleSessionKeys) {
           await tryReleaseLoyalty(db, sessionKey, "stale_reserve_auto_release", requestId);
         }
+
         log("info", "checkout_loyalty_stale_reserve_cleared", {
           requestId,
           userId: prefix(userId),
@@ -580,12 +891,22 @@ Deno.serve(async (req: Request): Promise<Response> => {
       }
 
       if (reason === "daily_limit_exceeded") {
-        return errorResponse(requestId, 422, "loyalty_daily_limit",
-          "You've reached your daily loyalty redemption limit. Try again tomorrow.", corsHeaders);
+        return errorResponse(
+          requestId,
+          422,
+          "loyalty_daily_limit",
+          "You've reached your daily loyalty redemption limit. Try again tomorrow.",
+          corsHeaders,
+        );
       }
       if (reason === "per_order_limit_exceeded") {
-        return errorResponse(requestId, 422, "loyalty_order_limit",
-          "You've selected more points than the per-order maximum.", corsHeaders);
+        return errorResponse(
+          requestId,
+          422,
+          "loyalty_order_limit",
+          "You've selected more points than the per-order maximum.",
+          corsHeaders,
+        );
       }
     }
 
@@ -594,10 +915,20 @@ Deno.serve(async (req: Request): Promise<Response> => {
       loyaltyAccountId = loyaltyResult.accountId;
       loyaltyPoints = loyaltyResult.reservedPoints;
 
-      stripeCouponId = await createLoyaltyCoupon(stripe, loyaltyDiscountCents, snapshot.currency, requestId);
+      stripeCouponId = await createLoyaltyCoupon(
+        stripe,
+        loyaltyDiscountCents,
+        snapshot.currency,
+        requestId,
+      );
 
       if (!stripeCouponId) {
-        await tryReleaseLoyalty(db, preSessionKey, "coupon_create_failed", requestId);
+        await tryReleaseLoyalty(
+          db,
+          preSessionKey,
+          "coupon_create_failed",
+          requestId,
+        );
         loyaltyDiscountCents = 0;
         loyaltyAccountId = "";
         loyaltyPoints = 0;
@@ -623,12 +954,26 @@ Deno.serve(async (req: Request): Promise<Response> => {
       cartId: prefix(pendingCart.cartId),
       error: asErr(error),
     });
+
     if (loyaltyAccountId && loyaltyPoints > 0) {
-      await tryReleaseLoyalty(db, preSessionKey, "line_items_build_failed", requestId);
+      await tryReleaseLoyalty(
+        db,
+        preSessionKey,
+        "line_items_build_failed",
+        requestId,
+      );
     }
     if (stripeCouponId) await deleteCouponSilently(stripe, stripeCouponId, requestId);
-    return errorResponse(requestId, 500, "line_items_failed", "Unable to build checkout. Please try again.", corsHeaders);
+
+    return errorResponse(
+      requestId,
+      500,
+      "line_items_failed",
+      "Unable to build checkout. Please try again.",
+      corsHeaders,
+    );
   }
+console.log("DEBUG pickupTime before metadata:", pickupTime);
 
   const sessionMetadata: Stripe.MetadataParam = {
     user_id: userId,
@@ -646,8 +991,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
     subtotal_cents: String(snapshot.subtotalCents),
     discount_cents: String(
       (snapshot.promoDiscountCents ?? 0) +
-      (snapshot.campaignDiscountCents ?? 0) +
-      (snapshot.creditCents ?? 0),
+        (snapshot.campaignDiscountCents ?? 0) +
+        (snapshot.creditCents ?? 0),
     ),
     promo_discount_cents: String(snapshot.promoDiscountCents ?? 0),
     campaign_discount_cents: String(snapshot.campaignDiscountCents ?? 0),
@@ -655,14 +1000,16 @@ Deno.serve(async (req: Request): Promise<Response> => {
     tax_cents: String(snapshot.taxCents),
     total_cents: String(snapshot.totalCents),
     idempotency_key: idempotencyKey,
-    // pickup_time: written unconditionally. null / absent = ASAP.
-    // The webhook reads this with pickMeta(session.metadata, "pickup_time").
-    // Writing null as a string ("null") would be misread, so we omit entirely
-    // when null — matching the webhook's contract of "missing key = ASAP".
-    ...(pickupTime !== null ? { pickup_time: pickupTime } : {}),
+    // ── pickup_time ── written as a top-level metadata key so the webhook
+    // can read it with pickMeta(session.metadata, "pickup_time").
+    // Omitted entirely when null so the webhook correctly treats a missing
+    // key as ASAP rather than as a malformed value.
+    pickup_time: pickupTime ?? null,
     ...(safeRequestIp ? { customer_ip: safeRequestIp } : {}),
     ...(userAgent ? { customer_user_agent: userAgent.slice(0, 500) } : {}),
-    ...(deviceFingerprint ? { device_fingerprint: deviceFingerprint.slice(0, 256) } : {}),
+    ...(deviceFingerprint
+      ? { device_fingerprint: deviceFingerprint.slice(0, 256) }
+      : {}),
     ...(resolvedPromoId ? { promo_id: resolvedPromoId } : {}),
     ...(resolvedCreditId ? { credit_id: resolvedCreditId } : {}),
     ...(snapshot.appliedCampaignIds.length
@@ -673,8 +1020,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
         body.loyalty_redeem_points > 0
       ? { loyalty_redeem_points: String(body.loyalty_redeem_points) }
       : {}),
-    ...(body.loyalty_reward_id ? { loyalty_reward_id: body.loyalty_reward_id } : {}),
-    ...(body.loyalty_redemption_id ? { loyalty_redemption_id: body.loyalty_redemption_id } : {}),
+    ...(body.loyalty_reward_id
+      ? { loyalty_reward_id: body.loyalty_reward_id }
+      : {}),
+    ...(body.loyalty_redemption_id
+      ? { loyalty_redemption_id: body.loyalty_redemption_id }
+      : {}),
     ...(loyaltyAccountId
       ? {
         loyalty_account_id: loyaltyAccountId,
@@ -694,15 +1045,22 @@ Deno.serve(async (req: Request): Promise<Response> => {
         line_items: stripeLineItems,
         success_url: STRIPE_SUCCESS_URL,
         cancel_url: STRIPE_CANCEL_URL,
-        expires_at: Math.floor(Date.now() / 1000) + SESSION_EXPIRES_AFTER_SECONDS,
+        expires_at: Math.floor(Date.now() / 1000) +
+          SESSION_EXPIRES_AFTER_SECONDS,
         metadata: sessionMetadata,
-        payment_intent_data: { metadata: sessionMetadata },
+        payment_intent_data: {
+          metadata: sessionMetadata,
+        },
         billing_address_collection: "auto",
         ...(user.email ? { customer_email: user.email } : {}),
-        ...(body.order_type === "delivery" ? { phone_number_collection: { enabled: true } } : {}),
+        ...(body.order_type === "delivery"
+          ? { phone_number_collection: { enabled: true } }
+          : {}),
         ...(stripeCouponId ? { discounts: [{ coupon: stripeCouponId }] } : {}),
       },
-      { idempotencyKey },
+      {
+        idempotencyKey,
+      },
     );
   } catch (error) {
     log("error", "checkout_stripe_session_failed", {
@@ -711,11 +1069,24 @@ Deno.serve(async (req: Request): Promise<Response> => {
       cartId: prefix(pendingCart.cartId),
       error: asErr(error),
     });
+
     if (loyaltyAccountId && loyaltyPoints > 0) {
-      await tryReleaseLoyalty(db, preSessionKey, "stripe_session_create_failed", requestId);
+      await tryReleaseLoyalty(
+        db,
+        preSessionKey,
+        "stripe_session_create_failed",
+        requestId,
+      );
     }
     if (stripeCouponId) await deleteCouponSilently(stripe, stripeCouponId, requestId);
-    return errorResponse(requestId, 502, "stripe_session_failed", "Unable to create Stripe session. Please try again.", corsHeaders);
+
+    return errorResponse(
+      requestId,
+      502,
+      "stripe_session_failed",
+      "Unable to create Stripe session. Please try again.",
+      corsHeaders,
+    );
   }
 
   if (!stripeSession.url) {
@@ -725,15 +1096,28 @@ Deno.serve(async (req: Request): Promise<Response> => {
       cartId: prefix(pendingCart.cartId),
       sessionId: prefix(stripeSession.id),
     });
-    return errorResponse(requestId, 502, "stripe_session_failed", "Unable to create Stripe session. Please try again.", corsHeaders);
+
+    return errorResponse(
+      requestId,
+      502,
+      "stripe_session_failed",
+      "Unable to create Stripe session. Please try again.",
+      corsHeaders,
+    );
   }
 
   let authoritativeSession = stripeSession;
   try {
-    const retrievedSession = await stripe.checkout.sessions.retrieve(stripeSession.id, {
-      expand: ["payment_intent"],
-    });
-    if (retrievedSession.url) authoritativeSession = retrievedSession;
+    const retrievedSession = await stripe.checkout.sessions.retrieve(
+      stripeSession.id,
+      {
+        expand: ["payment_intent"],
+      },
+    );
+
+    if (retrievedSession.url) {
+      authoritativeSession = retrievedSession;
+    }
   } catch (error) {
     log("warn", "checkout_stripe_session_refetch_failed", {
       requestId,
@@ -746,10 +1130,23 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   const checkoutUrl = authoritativeSession.url ?? stripeSession.url;
   if (!checkoutUrl) {
-    return errorResponse(requestId, 502, "stripe_session_failed", "Unable to create Stripe session. Please try again.", corsHeaders);
+    return errorResponse(
+      requestId,
+      502,
+      "stripe_session_failed",
+      "Unable to create Stripe session. Please try again.",
+      corsHeaders,
+    );
   }
 
-  await backfillCartSessionId(db, pendingCart.cartId, authoritativeSession.id, snapshot, pricingHash, requestId);
+  await backfillCartSessionId(
+    db,
+    pendingCart.cartId,
+    authoritativeSession.id,
+    snapshot,
+    pricingHash,
+    requestId,
+  );
 
   if (loyaltyAccountId) {
     const { error: loyaltyUpdateErr } = await db
@@ -772,6 +1169,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   const ms = Date.now() - start;
+
   log("info", "checkout_session_created", {
     requestId,
     userId: prefix(userId),
@@ -784,10 +1182,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
     ms,
   });
 
-  return successResponse(requestId, "checkout_session_created", {
-    sessionId: authoritativeSession.id,
-    url: checkoutUrl,
-    pricingHash,
-    pricing: buildAuthPricingResponse(snapshot),
-  }, corsHeaders);
+  return successResponse(
+    requestId,
+    "checkout_session_created",
+    {
+      sessionId: authoritativeSession.id,
+      url: checkoutUrl,
+      pricingHash,
+      pricing: buildAuthPricingResponse(snapshot),
+    },
+    corsHeaders,
+  );
 });
