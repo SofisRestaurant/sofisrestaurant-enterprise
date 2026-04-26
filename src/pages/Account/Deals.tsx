@@ -3,7 +3,7 @@
 // ACCOUNT • DEALS — Production (2026)
 // =============================================================================
 // Purpose:
-// - Customer-facing “Deals” page under Account
+// - Customer-facing "Deals" page under Account
 // - Shows active promos/specials with search + filters
 // - Safe + defensive against partial/unknown data
 // - No business-truth on client: this is informational UI only
@@ -615,7 +615,7 @@ export default function Deals() {
                       {ends ? ` • Ends ${ends}` : ''}
                     </p>
                     <p className="mt-1 text-[11px] text-neutral-500">
-                      If a deal doesn’t apply, Stripe shows the final total.
+                      If a deal doesn't apply, Stripe shows the final total.
                     </p>
                   </div>
                 </div>
@@ -660,7 +660,7 @@ export default function Deals() {
 
       <footer className="mt-10 rounded-2xl border border-neutral-200 bg-white p-5">
         <p className="text-xs text-neutral-600">
-          Tip: If your promo code doesn’t apply, it usually means the deal conditions weren’t met
+          Tip: If your promo code doesn't apply, it usually means the deal conditions weren't met
           (minimum order, timing, or item restrictions). Your final total is always confirmed on the
           Stripe checkout screen.
         </p>

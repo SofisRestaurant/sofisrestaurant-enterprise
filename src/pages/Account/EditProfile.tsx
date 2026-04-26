@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useUserContext } from '@/contexts/useUserContext';
 import { Button } from '@/components/ui/Button';
-import { Spinner } from '@/components/ui/Spinner';
+import Spinner from '@/components/ui/Spinner';
 import { getMyProfile } from '@/lib/supabase/db/profile.api';
 import type { Profile } from '@/types/profile';
 

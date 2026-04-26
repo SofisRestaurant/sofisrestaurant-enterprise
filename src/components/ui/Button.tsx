@@ -8,7 +8,6 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
   children?: ReactNode;
 
-  /** ✅ FIXED */
   labelKey?: TranslationKey;
 
   isLoading?: boolean;
@@ -51,33 +50,25 @@ export function Button({
 
   const variants: Record<NonNullable<ButtonProps['variant']>, string> = {
     primary: `
-  relative
-  bg-linear-to-r 
-  from-(--color-gold-400) 
-  to-(--color-gold-300)
-  text-black
-
-  font-semibold tracking-tight
-
-  rounded-xl
-  px-5 py-3
-
-  shadow-[0_4px_14px_rgba(0,0,0,0.15)]
-
-  transition-all duration-200 ease-(--ease-luxury)
-
-  hover:shadow-[0_6px_20px_rgba(0,0,0,0.22)]
-  hover:brightness-105
-
-  active:scale-[0.97]
-  active:shadow-[0_2px_8px_rgba(0,0,0,0.18)]
-
-  focus-visible:ring-4
-  focus-visible:ring-(--color-gold-400)/30
-
-  disabled:opacity-50
-  disabled:cursor-not-allowed
-`,
+      relative
+      bg-linear-to-r
+      from-(--color-gold-400)
+      to-(--color-gold-300)
+      text-black
+      font-semibold tracking-tight
+      rounded-xl
+      px-5 py-3
+      shadow-[0_4px_14px_rgba(0,0,0,0.15)]
+      transition-all duration-200 ease-(--ease-luxury)
+      hover:shadow-[0_6px_20px_rgba(0,0,0,0.22)]
+      hover:brightness-105
+      active:scale-[0.97]
+      active:shadow-[0_2px_8px_rgba(0,0,0,0.18)]
+      focus-visible:ring-4
+      focus-visible:ring-(--color-gold-400)/30
+      disabled:opacity-50
+      disabled:cursor-not-allowed
+    `,
     secondary: `
       bg-(--btn-secondary-bg)
       text-(--btn-secondary-text)
@@ -107,7 +98,6 @@ export function Button({
       active:scale-[0.98]
     `,
   };
-<span className="absolute inset-0 rounded-xl opacity-0 transition-opacity duration-300 hover:opacity-100 bg-white/10 pointer-events-none" />;
 
   const sizes: Record<NonNullable<ButtonProps['size']>, string> = {
     sm: 'px-3 py-1.5 text-sm rounded-md',
@@ -116,8 +106,8 @@ export function Button({
     xl: 'px-9 py-4 text-xl rounded-2xl',
   };
 
-  // Determine displayed content
-const content = labelKey ? t(labelKey) : children;
+  const content = labelKey ? t(labelKey) : children;
+
   return (
     <button
       type={type}
