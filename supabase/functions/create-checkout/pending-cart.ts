@@ -65,6 +65,7 @@ export type PersistPendingCartInput = {
   creditId: string | null;
   idempotencyKey: string;
   requestId: string;
+  pickupTime: string | null;            // ← ADD
 };
 
 export type PersistPendingCartResult = { cartId: string } | null;

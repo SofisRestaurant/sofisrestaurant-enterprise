@@ -193,9 +193,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const body: GuestRequestBody = validated.value;
 
   // ── pickup_time validation ─────────────────────────────────────────────────
-  const pickupTimeResult = validatePickupTime(
-    (body as unknown as Record<string, unknown>).pickup_time ?? null,
-  );
+const pickupTimeResult = validatePickupTime(body.pickup_time ?? null);
 
   if (!pickupTimeResult.ok) {
     return errorResponse(

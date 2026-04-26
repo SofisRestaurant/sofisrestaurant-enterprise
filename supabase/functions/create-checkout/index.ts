@@ -313,9 +313,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const body = validated.value;
 
   // ── pickup_time validation ─────────────────────────────────────────────────
-  const pickupTimeResult = validatePickupTime(
-    (body as unknown as Record<string, unknown>).pickup_time ?? null,
-  );
+const pickupTimeResult = validatePickupTime(body.pickup_time ?? null);
 
   if (!pickupTimeResult.ok) {
     return errorResponse(
@@ -538,17 +536,18 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   let idempotencyKey = "";
   try {
-    idempotencyKey = await buildCheckoutIdempotencyKey({
-      userId,
-      orderType: body.order_type,
-      notes: body.notes,
-      pricingHash,
-      promoId: resolvedPromoId,
-      creditId: resolvedCreditId,
-      loyaltyRedeemPoints: body.loyalty_redeem_points,
-      loyaltyRewardId: body.loyalty_reward_id,
-      loyaltyRedemptionId: body.loyalty_redemption_id,
-    });
+idempotencyKey = await buildCheckoutIdempotencyKey({
+  userId,
+  orderType: body.order_type,
+  notes: body.notes,
+  pricingHash,
+  promoId: resolvedPromoId,
+  creditId: resolvedCreditId,
+  loyaltyRedeemPoints: body.loyalty_redeem_points,
+  loyaltyRewardId: body.loyalty_reward_id,
+  loyaltyRedemptionId: body.loyalty_redemption_id,
+  pickupTime,                            // ← ADD
+});
   } catch (error) {
     log("error", "checkout_idempotency_key_failed", {
       requestId,
@@ -613,18 +612,18 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
-  const pendingCart = await persistPendingCart({
-    db,
-    userId,
-    items: body.items,
-    snapshot,
-    pricingHash,
-    promoId: resolvedPromoId,
-    creditId: resolvedCreditId,
-    idempotencyKey,
-    requestId,
-    pickup_time: pickupTime ?? undefined,
-  } as Parameters<typeof persistPendingCart>[0]);
+const pendingCart = await persistPendingCart({
+  db,
+  userId,
+  items: body.items,
+  snapshot,
+  pricingHash,
+  promoId: resolvedPromoId,
+  creditId: resolvedCreditId,
+  idempotencyKey,
+  requestId,
+  pickupTime,                            // ← ADD (renamed from pickup_time, cast removed)
+});     
 
   if (!pendingCart) {
     return errorResponse(

@@ -27,6 +27,7 @@ export async function buildCheckoutIdempotencyKey(args: {
   loyaltyRedeemPoints: number | null;
   loyaltyRewardId: string | null;
   loyaltyRedemptionId: string | null;
+  pickupTime: string | null;            // ← ADD
 }): Promise<string> {
   const payload = JSON.stringify({
     userId: args.userId,
@@ -38,7 +39,9 @@ export async function buildCheckoutIdempotencyKey(args: {
     loyaltyRedeemPoints: args.loyaltyRedeemPoints,
     loyaltyRewardId: args.loyaltyRewardId,
     loyaltyRedemptionId: args.loyaltyRedemptionId,
+    pickupTime: args.pickupTime,        // ← ADD
   });
+
 
   return await sha256Hex(payload);
 }
