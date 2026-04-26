@@ -37,6 +37,22 @@ function getTimeSince(timestamp: string): string {
   return `${minutes} mins ago`;
 }
 
+// Add this helper at the top of the file (or in kitchen.helpers.ts)
+function sortKitchenOrders(orders: KitchenOrderWithType[]): KitchenOrderWithType[] {
+  return [...orders].sort((a, b) => {
+    const aTime = a.pickup_time ? new Date(a.pickup_time).getTime() : null;
+    const bTime = b.pickup_time ? new Date(b.pickup_time).getTime() : null;
+
+    // Both scheduled → earliest pickup first
+    if (aTime !== null && bTime !== null) return aTime - bTime;
+    // Scheduled before ASAP
+    if (aTime !== null) return -1;
+    if (bTime !== null) return 1;
+    // Both ASAP → most recent first
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  });
+}
+
 export default function KitchenScreen() {
   const [orders, setOrders] = useState<KitchenOrderWithType[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -83,7 +99,11 @@ export default function KitchenScreen() {
       const { data, error } = await supabase
         .from('orders')
         .select(
-          'id,created_at,updated_at,currency,order_type,payment_status,status,stripe_session_id,amount_shipping,amount_subtotal,amount_tax,amount_total,assigned_to,cart_items,customer_email,customer_name,customer_phone,customer_uid,notes,shipping_name,shipping_phone,stripe_payment_intent_id,metadata,order_number,shipping_address',
+          'id,created_at,updated_at,currency,order_type,payment_status,status,' +
+            'stripe_session_id,amount_shipping,amount_subtotal,amount_tax,amount_total,' +
+            'assigned_to,cart_items,customer_email,customer_name,customer_phone,' +
+            'customer_uid,notes,shipping_name,shipping_phone,stripe_payment_intent_id,' +
+            'metadata,order_number,shipping_address,pickup_time', // ← ADD pickup_time
         )
         .eq('payment_status', PaymentStatus.PAID)
         .in('status', [OrderStatus.CONFIRMED, OrderStatus.PREPARING, OrderStatus.READY])
@@ -148,7 +168,26 @@ export default function KitchenScreen() {
     onInsert: handleRealtime,
     onUpdate: handleRealtime,
   });
+  // Alert kitchen when a scheduled pickup is within 15 minutes
+  useEffect(() => {
+    const ALERT_WINDOW_MS = 15 * 60 * 1000;
 
+    const checkUpcoming = () => {
+      const now = Date.now();
+      orders.forEach((order) => {
+        if (!order.pickup_time) return;
+        const due = new Date(order.pickup_time).getTime();
+        const diff = due - now;
+        if (diff > 0 && diff <= ALERT_WINDOW_MS && order.status === OrderStatus.CONFIRMED) {
+          if (soundEnabled) playNotification(audioRef.current);
+        }
+      });
+    };
+
+    const id = window.setInterval(checkUpcoming, 60_000); // check every minute
+    checkUpcoming(); // also check immediately on orders change
+    return () => window.clearInterval(id);
+  }, [orders, soundEnabled]);
   useEffect(() => {
     const intervalId = window.setInterval(() => {
       void loadOrders();
