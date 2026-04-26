@@ -21,6 +21,7 @@ export type PendingCartInsert =
     // Guest checkout columns (added by migration 001_guest_checkout.sql)
     guest_email?: string | null;
     guest_token?: string | null;
+    pickup_time?: string | null; 
   };
 
 export type PendingCartUpdate =

@@ -85,15 +85,16 @@ export async function persistPendingCart(
     return null;
   }
 
-  const insert: PendingCartInsert = {
-    user_id: input.userId,
-    items: JSON.parse(JSON.stringify(input.items)),
-    pricing_snapshot: pricingSnapshotJson as never,
-    pricing_hash: input.pricingHash,
-    promo_id: input.promoId ?? null,
-    credit_id: input.creditId ?? null,
-    idempotency_key: input.idempotencyKey,
-  };
+const insert: PendingCartInsert = {
+  user_id: input.userId,
+  items: JSON.parse(JSON.stringify(input.items)),
+  pricing_snapshot: pricingSnapshotJson as never,
+  pricing_hash: input.pricingHash,
+  promo_id: input.promoId ?? null,
+  credit_id: input.creditId ?? null,
+  idempotency_key: input.idempotencyKey,
+  pickup_time: input.pickupTime ?? null, // ← ADD (column must exist in schema)
+};
 
   const { data: rawData, error } = await input.db
     .from("pending_carts")
