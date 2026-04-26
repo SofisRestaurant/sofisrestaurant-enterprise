@@ -24,9 +24,13 @@
 //   Accepted as an optional ISO 8601 string in the request body.
 //   Guests MAY schedule pickup times — this is not auth-only functionality.
 //   Validated with the same rules as the auth pipeline.
-//   Written to Stripe session metadata as "pickup_time".
+//   Written to Stripe session metadata as "pickup_time" via conditional spread
+//   so the key is ABSENT (not null) for ASAP orders.
 //   The stripe-webhook function reads it from metadata and writes to orders.
 //   NULL / absent = ASAP.
+//
+//   SENTINEL REJECTION: "asap" and "now" are rejected with 422 as
+//   defense-in-depth; the router layer is the primary rejection point.
 // =============================================================================
 
 import Stripe from "stripe";
@@ -93,9 +97,17 @@ function generateGuestToken(): string {
 // ─── pickup_time validation ───────────────────────────────────────────────────
 // Identical logic to the auth pipeline — kept inline to avoid a shared import
 // that would couple the guest function's dependency graph.
+//
+// Sentinel strings "asap" / "now" are rejected with 422. ASAP orders must
+// omit pickup_time entirely; sending a sentinel string is a frontend bug.
 
 const PICKUP_TIME_TOLERANCE_MS  =  5 * 60 * 1000;
 const PICKUP_TIME_MAX_FUTURE_MS = 24 * 60 * 60 * 1000;
+
+// Sentinel strings that originate in the UI state machine and must never be
+// treated as valid pickup times. Sending "asap" to the backend is always a
+// frontend bug — ASAP is represented by the ABSENCE of pickup_time.
+const PICKUP_TIME_SENTINEL_STRINGS = new Set(["asap", "now"]);
 
 function validatePickupTime(
   raw: unknown,
@@ -106,6 +118,17 @@ function validatePickupTime(
 
   if (typeof raw !== "string") {
     return { ok: false, error: "pickup_time must be an ISO 8601 string or null." };
+  }
+
+  // Reject UI sentinel strings. ASAP orders must omit pickup_time entirely;
+  // sending a sentinel string here is always a frontend contract violation.
+  if (PICKUP_TIME_SENTINEL_STRINGS.has(raw.trim().toLowerCase())) {
+    return {
+      ok: false,
+      error:
+        'pickup_time must be an ISO 8601 timestamp. ' +
+        'For ASAP orders, omit the field entirely — do not send "asap" or "now".',
+    };
   }
 
   let parsed: Date;
@@ -530,6 +553,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // ── Guest Stripe metadata ───────────────────────────────────────────────────
   // MUST NOT contain: user_id, customer_uid, uid, device_fingerprint,
   // customer_ip, promo_id, credit_id, any loyalty_* fields.
+  //
+  // pickup_time is written via conditional spread so the key is COMPLETELY
+  // ABSENT from metadata when the order is ASAP (pickupTime === null).
+  // Explicit null in Stripe.MetadataParam has implementation-defined
+  // serialization; key omission is unambiguous and safe.
   const sessionMetadata: Stripe.MetadataParam = {
     pending_cart_id: pendingCart.cartId,
     cart_ref: pendingCart.cartId,
@@ -546,8 +574,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
     total_cents: String(snapshot.totalCents),
     idempotency_key: idempotencyKey,
     guest_token: guestToken,
-    // ── pickup_time ── written only when non-null (ASAP = key absent)
-    pickup_time: pickupTime ?? null,
+    // pickup_time: written only when non-null (ASAP = key absent from metadata).
+    // The webhook reads this key; a missing key is correctly treated as ASAP.
+    // Do NOT use `pickup_time: pickupTime ?? null` — explicit null in Stripe
+    // metadata has undefined serialization behavior during session creation.
+    ...(pickupTime ? { pickup_time: pickupTime } : {}),
     ...(snapshot.appliedCampaignIds.length
       ? { applied_campaign_ids: snapshot.appliedCampaignIds.join(",") }
       : {}),
@@ -650,7 +681,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     sessionId: prefix(authoritativeSession.id),
     amountTotal: snapshot.totalCents,
     orderType: body.order_type,
-    pickupTime: pickupTime ?? "asap",
+    pickupTime: pickupTime ?? null,
     ms,
   });
 

@@ -1,72 +1,160 @@
 // src/modules/checkout/types/checkout.types.ts
 // =============================================================================
-// Type definitions for the dual-pipeline checkout (auth + guest).
-//
-// Stripe redirect URLs (success_url / cancel_url) are SERVER-CONTROLLED.
-// The Edge Functions build them from the SITE_URL env var — no field for
-// either URL appears in these input types.
+// CHECKOUT DOMAIN — intent layer types
 // =============================================================================
 
-// ─── Dual-pipeline result type ──────────────────────────────────────────────
+import {
+  toTransport,
+  type PickupSchedule,
+  type IsoTimestamp,
+  ASAP_PICKUP,
+  scheduledPickup,
+} from '@/domain/adapters/pickup-schedule.adapter';
+
+export type { PickupSchedule, IsoTimestamp };
+export { ASAP_PICKUP, scheduledPickup };
+
+export {
+  isAsapPickup,
+  isScheduledPickup,
+  formatPickupSchedule,
+} from '@/domain/orders/pickup-schedule';
+
+// FulfillmentType inline — avoids tsc -b re-export resolution issues
+export type FulfillmentType = 'pickup' | 'delivery' | 'dine_in';
+
+// =============================================================================
+// CHECKOUT RESULT
+// =============================================================================
 
 export type CheckoutResult =
   | {
-      ok: true;
-      url: string;
-      sessionId?: string;
-      pricingHash?: string;
-      pricing?: CheckoutPricingResponse;
+      readonly ok:           true;
+      readonly url:          string;
+      readonly sessionId?:   string;
+      readonly pricingHash?: string;
+      readonly pricing?:     CheckoutPricingResponse;
     }
   | {
-      ok: false;
-      error: string;
-      code?: string;
+      readonly ok:    false;
+      readonly error: string;
+      readonly code?: string;
     };
 
-// ─── Pricing response shapes ────────────────────────────────────────────────
+// =============================================================================
+// PRICING RESPONSE SHAPES
+// =============================================================================
 
 export type GuestCheckoutPricingResponse = {
-  subtotalCents: number;
-  campaignDiscountCents: number;
-  taxCents: number;
-  totalCents: number;
-  currency: string;
+  readonly subtotalCents:         number;
+  readonly campaignDiscountCents: number;
+  readonly taxCents:              number;
+  readonly totalCents:            number;
+  readonly currency:              string;
 };
 
 export type AuthCheckoutPricingResponse = GuestCheckoutPricingResponse & {
-  promoDiscountCents: number;
-  creditCents: number;
+  readonly promoDiscountCents: number;
+  readonly creditCents:        number;
 };
 
 export type CheckoutPricingResponse =
   | GuestCheckoutPricingResponse
   | AuthCheckoutPricingResponse;
 
-// ─── Guest checkout input ────────────────────────────────────────────────────
-// Server owns Stripe redirect URLs via SITE_URL.
-// pickup_time: ISO 8601 string (seconds precision), omit if not a scheduled order.
+export function isAuthPricingResponse(
+  r: CheckoutPricingResponse,
+): r is AuthCheckoutPricingResponse {
+  return 'promoDiscountCents' in r;
+}
+
+// =============================================================================
+// CHECKOUT INPUT TYPES
+// =============================================================================
 
 export type GuestCheckoutInput = {
-  orderType: 'pickup' | 'delivery' | 'dine_in';
-  guestEmail: string;
-  notes?: string;
-  pickup_time?: string;
+  readonly orderType:       FulfillmentType;
+  readonly guestEmail:      string;
+  readonly notes?:          string;
+  readonly pickupSchedule?: PickupSchedule;
 };
-
-// ─── Auth checkout input ─────────────────────────────────────────────────────
-// Server owns Stripe redirect URLs via SITE_URL.
-// pickup_time: ISO 8601 string (seconds precision), omit if not a scheduled order.
 
 export type AuthCheckoutInput = {
-  orderType: 'pickup' | 'delivery' | 'dine_in';
-  notes?: string;
-  promoCode?: string;
-  promoId?: string;
-  creditId?: string;
-  loyaltyRedeemPoints?: number;
-  loyaltyAccountId?: string;
-  loyaltyRewardId?: string;
-  loyaltyRedemptionId?: string;
-  clientIntegrityHash?: string;
-  pickup_time?: string;
+  readonly orderType:            FulfillmentType;
+  readonly notes?:               string;
+  readonly promoCode?:           string;
+  readonly promoId?:             string;
+  readonly creditId?:            string;
+  readonly loyaltyRedeemPoints?: number;
+  readonly loyaltyAccountId?:    string;
+  readonly loyaltyRewardId?:     string;
+  readonly loyaltyRedemptionId?: string;
+  readonly clientIntegrityHash?: string;
+  readonly pickupSchedule?:      PickupSchedule;
 };
+
+// =============================================================================
+// WIRE BODY SHAPES
+// =============================================================================
+
+export type GuestCheckoutWireBody = {
+  readonly order_type:   FulfillmentType;
+  readonly guest_email:  string;
+  readonly notes?:       string;
+  readonly pickup_time?: string;
+};
+
+export type AuthCheckoutWireBody = {
+  readonly order_type:             FulfillmentType;
+  readonly notes?:                 string;
+  readonly promo_code?:            string;
+  readonly promo_id?:              string;
+  readonly credit_id?:             string;
+  readonly loyalty_redeem_points?: number;
+  readonly loyalty_account_id?:    string;
+  readonly loyalty_reward_id?:     string;
+  readonly loyalty_redemption_id?: string;
+  readonly client_integrity_hash?: string;
+  readonly pickup_time?:           string;
+};
+
+// =============================================================================
+// SERIALISERS
+// =============================================================================
+
+export function serialiseGuestCheckoutInput(
+  input: GuestCheckoutInput,
+): GuestCheckoutWireBody {
+  const pickupTime: IsoTimestamp | undefined = input.pickupSchedule
+    ? toTransport(input.pickupSchedule)
+    : undefined;
+
+  return {
+    order_type:  input.orderType,
+    guest_email: input.guestEmail,
+    ...(input.notes ? { notes: input.notes }     : {}),
+    ...(pickupTime  ? { pickup_time: pickupTime } : {}),
+  };
+}
+
+export function serialiseAuthCheckoutInput(
+  input: AuthCheckoutInput,
+): AuthCheckoutWireBody {
+  const pickupTime: IsoTimestamp | undefined = input.pickupSchedule
+    ? toTransport(input.pickupSchedule)
+    : undefined;
+
+  return {
+    order_type: input.orderType,
+    ...(input.notes               ? { notes: input.notes }                               : {}),
+    ...(input.promoCode           ? { promo_code: input.promoCode }                      : {}),
+    ...(input.promoId             ? { promo_id: input.promoId }                          : {}),
+    ...(input.creditId            ? { credit_id: input.creditId }                        : {}),
+    ...(input.loyaltyRedeemPoints ? { loyalty_redeem_points: input.loyaltyRedeemPoints } : {}),
+    ...(input.loyaltyAccountId    ? { loyalty_account_id: input.loyaltyAccountId }       : {}),
+    ...(input.loyaltyRewardId     ? { loyalty_reward_id: input.loyaltyRewardId }         : {}),
+    ...(input.loyaltyRedemptionId ? { loyalty_redemption_id: input.loyaltyRedemptionId } : {}),
+    ...(input.clientIntegrityHash ? { client_integrity_hash: input.clientIntegrityHash } : {}),
+    ...(pickupTime                ? { pickup_time: pickupTime }                          : {}),
+  };
+}

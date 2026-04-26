@@ -2,49 +2,63 @@
 // =============================================================================
 // CHECKOUT ROUTER — the single routing layer (auth vs guest)
 // =============================================================================
-// This is the ONLY place in the codebase that decides auth vs guest checkout.
 //
-// Flow:
-//   CheckoutButton → useCheckoutRouter()
-//                      ├─ isAuthenticated → useAuthCheckout → create-checkout
-//                      └─ !isAuthenticated → useGuestCheckout → create-checkout-guest
+// Import rules (critical — wrong imports here caused the TS2322 brand errors):
 //
-// Security invariants enforced HERE (in addition to server-side enforcement):
-//   1. Auth path always sends Authorization header (useAuthCheckout owns this).
-//   2. Guest path NEVER sends Authorization header (useGuestCheckout owns this).
-//   3. Loyalty/promo/credit/clientIntegrityHash fields are stripped for guests
-//      at the router layer — guest hook also rejects them, and the server
-//      rejects them with 422. Three layers deep.
-//   4. `isAuthenticated` is derived from Supabase session state via useAuth(),
-//      not from any user-controlled input.
-//   5. Stripe success_url / cancel_url are SERVER-CONTROLLED. The frontend
-//      does NOT send or influence them — the Edge Function reads SITE_URL
-//      from its env and builds the URLs itself. This is why CheckoutRouterArgs
-//      no longer has successUrl / cancelUrl fields.
-//   6. pickup_time is forwarded as-is from args to both pipelines.
-//      Normalization to seconds-precision ISO 8601 happens in each hook before
-//      it is placed in the request body, keeping the router layer thin.
+//   ✅ ASAP_PICKUP, scheduledPickup, PickupSchedule
+//        → from '@/domain/adapters/pickup-schedule.adapter'
+//          OR from '@/domain/order/pickup-schedule'
+//        (both resolve to the same IsoTimestamp brand from
+//         @/domain/value-objects/pickup-time)
+//
+//   ❌ NEVER import from '@/modules/shared/domain/pickup'
+//        That file is deleted. It contained a SECOND unique symbol brand for
+//        IsoTimestamp, which made ScheduledPickup structurally incompatible
+//        with the ScheduledPickup from the new domain layers — hence TS2322.
+//
+// All types in this file now resolve to the same brand declarations in
+// src/domain/value-objects/pickup-time.ts. No duplicate symbols exist.
 // =============================================================================
 
 import { useCallback, useMemo, useState } from 'react';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useAuthCheckout }  from '@/modules/checkout/hooks/useAuthCheckout';
 import { useGuestCheckout } from '@/modules/checkout/hooks/useGuestCheckout';
+
+// ─── Pickup constructors — from adapter (single source of truth) ──────────────
+// Using the adapter path ensures the PickupSchedule and IsoTimestamp types here
+// share the exact same unique symbol brands as those in checkout.types.ts.
+import {
+  ASAP_PICKUP,
+  scheduledPickup,
+  type PickupSchedule,
+} from '@/domain/adapters/pickup-schedule.adapter';
+
 import type {
   AuthCheckoutInput,
   GuestCheckoutInput,
   CheckoutResult,
+  FulfillmentType,
 } from '@/modules/checkout/types/checkout.types';
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
-type OrderType = 'pickup' | 'delivery' | 'dine_in';
-
 export type CheckoutRouterArgs = {
   customer_uid?: string;
   guestEmail?: string;
+  /**
+   * Preferred: typed PickupSchedule from domain constructors.
+   * Use ASAP_PICKUP for immediate orders.
+   * Use scheduledPickup(isoString) for scheduled orders.
+   */
+  pickupSchedule?: PickupSchedule;
+  /**
+   * @deprecated Use pickupSchedule. Accepted for backward compatibility with
+   * call sites that pass a raw ISO string (e.g. from PickupTimeSelector state).
+   * "asap", "now", empty, and unparseable values → ASAP_PICKUP silently.
+   */
   pickupTime?: string;
-  orderType?: OrderType;
+  orderType?: FulfillmentType;
   notes?: string | null;
   promoCode?: string;
   promoId?: string;
@@ -57,7 +71,7 @@ export type CheckoutRouterArgs = {
     loyaltyRedemptionId?: string;
   };
   clientIntegrityHash?: string;
-  // NOTE: successUrl / cancelUrl intentionally absent. Server controls URLs.
+  // successUrl / cancelUrl intentionally absent — server controls them.
 };
 
 export type CheckoutRouterReturn = {
@@ -82,7 +96,7 @@ function isValidEmail(value: unknown): boolean {
   return s.length > 0 && s.length <= 320 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 }
 
-function normOrderType(v: unknown): OrderType {
+function normOrderType(v: unknown): FulfillmentType {
   return v === 'delivery' || v === 'dine_in' || v === 'pickup' ? v : 'pickup';
 }
 
@@ -92,16 +106,38 @@ function trimOrUndefined(v: unknown): string | undefined {
   return t.length > 0 ? t : undefined;
 }
 
-// Normalize a pickup time value to a seconds-precision ISO 8601 string.
-// Strips milliseconds so the value is stable for idempotency-key hashing and
-// consistent with what parsePickupTimeFromMetadata() expects in the webhook.
-// Returns undefined if the value is absent, empty, or not a parseable date.
-function normalizePickupTime(v: unknown): string | undefined {
-  if (typeof v !== 'string' || v.trim().length === 0) return undefined;
-  const ms = Date.parse(v.trim());
-  if (!Number.isFinite(ms)) return undefined;
-  // Drop milliseconds: "2026-04-22T18:30:00.000Z" → "2026-04-22T18:30:00Z"
-  return new Date(Math.floor(ms / 1000) * 1000).toISOString().replace('.000Z', 'Z');
+/**
+ * Resolves a PickupSchedule from CheckoutRouterArgs.
+ *
+ * Priority:
+ *   1. args.pickupSchedule — typed, used directly.
+ *   2. args.pickupTime — legacy string, normalised here.
+ *      Sentinel strings / unparseable values → ASAP_PICKUP (no throw).
+ *      Valid ISO string → scheduledPickup(iso).
+ *
+ * After this function returns, all downstream code works with PickupSchedule.
+ * No raw pickup string ever passes the router boundary.
+ */
+function resolvePickupSchedule(args: CheckoutRouterArgs): PickupSchedule {
+  if (args.pickupSchedule != null) {
+    return args.pickupSchedule;
+  }
+
+  const raw = args.pickupTime;
+  if (!raw || typeof raw !== 'string' || raw.trim().length === 0) {
+    return ASAP_PICKUP;
+  }
+
+  const lower = raw.trim().toLowerCase();
+  if (lower === 'asap' || lower === 'now') {
+    return ASAP_PICKUP;
+  }
+
+  try {
+    return scheduledPickup(raw.trim());
+  } catch {
+    return ASAP_PICKUP;
+  }
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
@@ -109,21 +145,18 @@ function normalizePickupTime(v: unknown): string | undefined {
 export function useCheckoutRouter(): CheckoutRouterReturn {
   const { isAuthenticated } = useAuth();
 
-  // Both hooks must be instantiated every render (React rules of hooks).
   const authHook  = useAuthCheckout();
   const guestHook = useGuestCheckout();
 
-  // Stabilize callback refs — depending on whole hook objects caused an
-  // infinite render loop in an earlier iteration.
   const initiateAuthCheckout  = authHook.initiateAuthCheckout;
   const initiateGuestCheckout = guestHook.initiateGuestCheckout;
   const clearAuthError        = authHook.clearError;
   const clearGuestError       = guestHook.clearError;
 
-  const authError        = authHook.error;
-  const authIsLoading    = authHook.isLoading;
-  const guestError       = guestHook.error;
-  const guestIsLoading   = guestHook.isLoading;
+  const authError      = authHook.error;
+  const authIsLoading  = authHook.isLoading;
+  const guestError     = guestHook.error;
+  const guestIsLoading = guestHook.isLoading;
 
   const [routerError, setRouterError] = useState<string | null>(null);
 
@@ -139,20 +172,17 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
     async (args: CheckoutRouterArgs): Promise<CheckoutResult> => {
       setRouterError(null);
 
-      // Normalize once at the router boundary so both pipelines receive a
-      // consistent, seconds-precision ISO string (or undefined).
-      const pickupTime = normalizePickupTime(args.pickupTime);
+      const pickupSchedule = resolvePickupSchedule(args);
 
-      // ─── AUTH PATH ─────────────────────────────────────────────────────
       if (isAuthenticated) {
         const input: AuthCheckoutInput = {
-          orderType: normOrderType(args.orderType),
-          notes:     trimOrUndefined(args.notes),
-          promoCode: trimOrUndefined(args.promoCode),
-          promoId:   trimOrUndefined(args.promoId),
-          creditId:  trimOrUndefined(args.creditId),
-          pickup_time: pickupTime,
-          
+          orderType:    normOrderType(args.orderType),
+          notes:        trimOrUndefined(args.notes),
+          promoCode:    trimOrUndefined(args.promoCode),
+          promoId:      trimOrUndefined(args.promoId),
+          creditId:     trimOrUndefined(args.creditId),
+          pickupSchedule,
+
           ...(args.loyalty?.applyPoints &&
               args.loyalty.pointsToRedeem &&
               args.loyalty.loyaltyAccountId
@@ -165,13 +195,11 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
             : {}),
 
           clientIntegrityHash: trimOrUndefined(args.clientIntegrityHash),
-          // NO successUrl / cancelUrl — server owns them.
         };
 
         return initiateAuthCheckout(input);
       }
 
-      // ─── GUEST PATH ────────────────────────────────────────────────────
       if (!isValidEmail(args.guestEmail)) {
         const err = 'A valid email is required for guest checkout.';
         setRouterError(err);
@@ -179,11 +207,10 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
       }
 
       const input: GuestCheckoutInput = {
-        guestEmail:  args.guestEmail!.trim().toLowerCase(),
-        orderType:   normOrderType(args.orderType),
-        notes:       trimOrUndefined(args.notes),
-        pickup_time: pickupTime,
-        // NO successUrl / cancelUrl — server owns them.
+        guestEmail:    args.guestEmail!.trim().toLowerCase(),
+        orderType:     normOrderType(args.orderType),
+        notes:         trimOrUndefined(args.notes),
+        pickupSchedule,
       };
 
       return initiateGuestCheckout(input);
@@ -194,19 +221,13 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
   const redirectToCheckout = useCallback(
     async (args: CheckoutRouterArgs): Promise<void> => {
       const result = await checkout(args);
-
-      if (!result.ok) {
-        throw new Error(result.error ?? 'Checkout failed');
-      }
-      if (!result.url) {
-        throw new Error('Checkout failed: missing session URL.');
-      }
+      if (!result.ok) throw new Error(result.error ?? 'Checkout failed');
+      if (!result.url) throw new Error('Checkout failed: missing session URL.');
       window.location.assign(result.url);
     },
     [checkout],
   );
 
-  // ─── Unified state view ───────────────────────────────────────────────────
   const activeError     = isAuthenticated ? authError     : guestError;
   const activeIsLoading = isAuthenticated ? authIsLoading : guestIsLoading;
 
@@ -214,16 +235,14 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
   const isLoading = activeIsLoading;
 
   const errorCode: string | null = null;
-  const canRetry  = Boolean(error);
+  const canRetry   = Boolean(error);
   const retryAfter = 0;
 
   const canCheckout = useMemo(() => {
     switch (mode) {
       case 'auth':
-      case 'guest':
-        return true;
-      default:
-        return false;
+      case 'guest': return true;
+      default:      return false;
     }
   }, [mode]);
 

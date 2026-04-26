@@ -172,6 +172,9 @@ function mapToExpoOrder(order: Order, rawOrderType?: unknown): ExpoOrder {
     minutes,
     priority,
     order_type: typeof rawOrderType === 'string' ? rawOrderType : undefined,
+    fulfillment_type: order.fulfillment_type,
+    pickup_time: order.pickup_time,
+    notes: order.notes,
   };
 }
 

@@ -16,5 +16,8 @@ export function mapToKitchenOrder(order: Order, rawOrderType?: unknown): Kitchen
     cart_items: order.cart_items ?? [],
     assigned_to: order.assigned_to ?? null,
     order_type: typeof rawOrderType === 'string' ? rawOrderType : undefined,
+    fulfillment_type: order.fulfillment_type,
+    pickup_time: order.pickup_time,
+    notes: order.notes,
   };
 }

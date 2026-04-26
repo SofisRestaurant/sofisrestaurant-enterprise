@@ -10,6 +10,14 @@
 //   Written to Stripe session metadata as "pickup_time".
 //   The stripe-webhook function reads it from metadata and writes to orders.
 //   NULL / absent = ASAP.
+//
+//   SENTINEL REJECTION: "asap" and "now" are UI state strings that must never
+//   reach this function. They are rejected with a 422 here as defense-in-depth;
+//   the frontend router layer (useCheckoutRouter) is the primary rejection point.
+//
+//   STRIPE METADATA: pickup_time is written using conditional spread so the key
+//   is completely absent for ASAP orders. Explicit null in Stripe metadata has
+//   implementation-defined serialization behavior; omission is unambiguous.
 // =============================================================================
 
 import Stripe from "stripe";
@@ -66,7 +74,8 @@ import { STRIPE_CANCEL_URL, STRIPE_SUCCESS_URL } from "../_shared/checkout-urls.
 // (always UTC, seconds-precision) or null (= ASAP).
 //
 // Rules:
-//   - Missing / empty → null (ASAP — valid and common)
+//   - Missing / empty / null → null (ASAP — valid and common)
+//   - Sentinel strings "asap" / "now" → 422 (UI state must not reach backend)
 //   - Not a parseable date → 422 validation_failed
 //   - More than 5 minutes in the past → 422 (clock skew tolerance applied)
 //   - More than 24 hours in the future → 422
@@ -75,6 +84,11 @@ import { STRIPE_CANCEL_URL, STRIPE_SUCCESS_URL } from "../_shared/checkout-urls.
 
 const PICKUP_TIME_TOLERANCE_MS   =  5 * 60 * 1000; // 5 min past allowed (clock skew)
 const PICKUP_TIME_MAX_FUTURE_MS  = 24 * 60 * 60 * 1000; // 24 h
+
+// Sentinel strings that originate in the UI state machine and must never be
+// treated as valid pickup times. Sending "asap" to the backend is always a
+// frontend bug — ASAP is represented by the ABSENCE of pickup_time.
+const PICKUP_TIME_SENTINEL_STRINGS = new Set(["asap", "now"]);
 
 function validatePickupTime(
   raw: unknown,
@@ -85,6 +99,17 @@ function validatePickupTime(
 
   if (typeof raw !== "string") {
     return { ok: false, error: "pickup_time must be an ISO 8601 string or null." };
+  }
+
+  // Reject UI sentinel strings. ASAP orders must omit pickup_time entirely;
+  // sending a sentinel string here is always a frontend contract violation.
+  if (PICKUP_TIME_SENTINEL_STRINGS.has(raw.trim().toLowerCase())) {
+    return {
+      ok: false,
+      error:
+        'pickup_time must be an ISO 8601 timestamp. ' +
+        'For ASAP orders, omit the field entirely — do not send "asap" or "now".',
+    };
   }
 
   let parsed: Date;
@@ -973,8 +998,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
       corsHeaders,
     );
   }
-console.log("DEBUG pickupTime before metadata:", pickupTime);
 
+  console.log("DEBUG pickupTime before metadata:", pickupTime);
+
+  // ── Stripe session metadata ────────────────────────────────────────────────
+  // pickup_time is written via conditional spread so the key is COMPLETELY
+  // ABSENT from metadata when the order is ASAP (pickupTime === null).
+  // Explicit null in Stripe.MetadataParam has implementation-defined
+  // serialization; key omission is unambiguous and safe.
   const sessionMetadata: Stripe.MetadataParam = {
     user_id: userId,
     customer_uid: userId,
@@ -1000,11 +1031,11 @@ console.log("DEBUG pickupTime before metadata:", pickupTime);
     tax_cents: String(snapshot.taxCents),
     total_cents: String(snapshot.totalCents),
     idempotency_key: idempotencyKey,
-    // ── pickup_time ── written as a top-level metadata key so the webhook
-    // can read it with pickMeta(session.metadata, "pickup_time").
-    // Omitted entirely when null so the webhook correctly treats a missing
-    // key as ASAP rather than as a malformed value.
-    pickup_time: pickupTime ?? null,
+    // pickup_time: written only when non-null (ASAP = key absent from metadata).
+    // The webhook reads this key; a missing key is correctly treated as ASAP.
+    // Do NOT use `pickup_time: pickupTime ?? null` — explicit null in Stripe
+    // metadata has undefined serialization behavior during session creation.
+    ...(pickupTime ? { pickup_time: pickupTime } : {}),
     ...(safeRequestIp ? { customer_ip: safeRequestIp } : {}),
     ...(userAgent ? { customer_user_agent: userAgent.slice(0, 500) } : {}),
     ...(deviceFingerprint
@@ -1178,7 +1209,7 @@ console.log("DEBUG pickupTime before metadata:", pickupTime);
     amountTotal: snapshot.totalCents,
     loyaltyOff: loyaltyDiscountCents,
     orderType: body.order_type,
-    pickupTime: pickupTime ?? "asap",
+    pickupTime: pickupTime ?? null,
     ms,
   });
 
