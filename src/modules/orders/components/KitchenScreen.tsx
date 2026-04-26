@@ -12,12 +12,7 @@ import { KitchenColumn } from './kitchen/KitchenColumn';
 import { KitchenHandoffModal } from './kitchen/KitchenHandoffModal';
 import { playNotification } from './kitchen/kitchen.audio';
 import { CONFIG } from './kitchen/kitchen.constants';
-import {
-  isPaidPaymentStatus,
-  normalizeOrderType,
-  resolveStaffId,
-  sortOrdersByCreatedAtDesc,
-} from './kitchen/kitchen.helpers';
+import { isPaidPaymentStatus, normalizeOrderType, resolveStaffId } from './kitchen/kitchen.helpers';
 import { mapToKitchenOrder } from './kitchen/kitchen.order-mappers';
 import type { HandoffContext, KitchenOrderWithType } from './kitchen/kitchen.types';
 
@@ -37,8 +32,11 @@ function getTimeSince(timestamp: string): string {
   return `${minutes} mins ago`;
 }
 
-// Add this helper at the top of the file (or in kitchen.helpers.ts)
-function sortKitchenOrders(orders: KitchenOrderWithType[]): KitchenOrderWithType[] {
+/**
+ * Sort kitchen orders with scheduled (pickup_time) orders first by earliest
+ * pickup, then ASAP orders by most-recent created_at.
+ */
+function sortKitchenOrders(orders: readonly KitchenOrderWithType[]): KitchenOrderWithType[] {
   return [...orders].sort((a, b) => {
     const aTime = a.pickup_time ? new Date(a.pickup_time).getTime() : null;
     const bTime = b.pickup_time ? new Date(b.pickup_time).getTime() : null;
@@ -52,6 +50,37 @@ function sortKitchenOrders(orders: KitchenOrderWithType[]): KitchenOrderWithType
     return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
   });
 }
+
+// ── Debug helpers ─────────────────────────────────────────────────────────────
+
+const DEBUG = process.env.NODE_ENV !== 'production';
+
+function debugLog(stage: string, data: unknown): void {
+  if (DEBUG) {
+    // eslint-disable-next-line no-console
+    console.log(`[KitchenScreen] ${stage}`, data);
+  }
+}
+
+function debugOrderSummary(
+  label: string,
+  orders: readonly KitchenOrderWithType[],
+): void {
+  if (!DEBUG) return;
+  // eslint-disable-next-line no-console
+  console.table(
+    orders.map((o) => ({
+      id: o.id.slice(0, 8),
+      status: o.status,
+      pickup_time: o.pickup_time ?? 'ASAP',
+      created_at: o.created_at,
+      customer: o.customer_name,
+    })),
+  );
+  debugLog(label, `${orders.length} orders`);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 
 export default function KitchenScreen() {
   const [orders, setOrders] = useState<KitchenOrderWithType[]>([]);
@@ -103,7 +132,7 @@ export default function KitchenScreen() {
             'stripe_session_id,amount_shipping,amount_subtotal,amount_tax,amount_total,' +
             'assigned_to,cart_items,customer_email,customer_name,customer_phone,' +
             'customer_uid,notes,shipping_name,shipping_phone,stripe_payment_intent_id,' +
-            'metadata,order_number,shipping_address,pickup_time', // ← ADD pickup_time
+            'metadata,order_number,shipping_address,pickup_time',
         )
         .eq('payment_status', PaymentStatus.PAID)
         .in('status', [OrderStatus.CONFIRMED, OrderStatus.PREPARING, OrderStatus.READY])
@@ -114,11 +143,32 @@ export default function KitchenScreen() {
         throw error;
       }
 
+      debugLog('loadOrders:raw', {
+        rowCount: data?.length ?? 0,
+        pickupTimes: (data ?? []).map((r) => ({
+          id: r.id?.slice(0, 8),
+          pickup_time: r.pickup_time,
+          status: r.status,
+          payment_status: r.payment_status,
+        })),
+      });
+
       const kitchenOrders = (data ?? []).map((row) =>
         mapToKitchenOrder(mapOrderRowToDomain(row), row.order_type),
       );
 
-      setOrders(sortOrdersByCreatedAtDesc(kitchenOrders));
+      debugLog('loadOrders:mapped', {
+        count: kitchenOrders.length,
+        pickupTimes: kitchenOrders.map((o) => ({
+          id: o.id.slice(0, 8),
+          pickup_time: o.pickup_time,
+        })),
+      });
+
+      const sorted = sortKitchenOrders(kitchenOrders);
+      debugOrderSummary('loadOrders:sorted', sorted);
+
+      setOrders(sorted);
       setLastRefreshAt(new Date());
     } catch (error: unknown) {
       setErrorMessage(error instanceof Error ? error.message : 'Unable to load kitchen orders.');
@@ -135,16 +185,31 @@ export default function KitchenScreen() {
     (row: OrderRow): void => {
       const order = mapOrderRowToDomain(row);
 
+      debugLog('realtime:incoming', {
+        id: order.id.slice(0, 8),
+        status: order.status,
+        payment_status: order.payment_status,
+        pickup_time: order.pickup_time,
+      });
+
       if (!isPaidPaymentStatus(order.payment_status)) {
+        debugLog('realtime:skipped', 'not paid');
         return;
       }
 
       setOrders((previous) => {
         if (order.status === OrderStatus.DELIVERED || order.status === OrderStatus.CANCELLED) {
+          debugLog('realtime:removed', order.id.slice(0, 8));
           return previous.filter((entry) => entry.id !== order.id);
         }
 
         const mapped = mapToKitchenOrder(order, row.order_type);
+
+        debugLog('realtime:mapped', {
+          id: mapped.id.slice(0, 8),
+          pickup_time: mapped.pickup_time,
+        });
+
         const exists = previous.some((entry) => entry.id === order.id);
 
         if (!exists) {
@@ -152,12 +217,16 @@ export default function KitchenScreen() {
             playNotification(audioRef.current);
           }
 
-          return sortOrdersByCreatedAtDesc([mapped, ...previous]);
+          const next = sortKitchenOrders([mapped, ...previous]);
+          debugOrderSummary('realtime:inserted', next);
+          return next;
         }
 
-        return sortOrdersByCreatedAtDesc(
+        const next = sortKitchenOrders(
           previous.map((entry) => (entry.id === order.id ? mapped : entry)),
         );
+        debugOrderSummary('realtime:updated', next);
+        return next;
       });
     },
     [soundEnabled],
@@ -168,6 +237,7 @@ export default function KitchenScreen() {
     onInsert: handleRealtime,
     onUpdate: handleRealtime,
   });
+
   // Alert kitchen when a scheduled pickup is within 15 minutes
   useEffect(() => {
     const ALERT_WINDOW_MS = 15 * 60 * 1000;
@@ -184,10 +254,11 @@ export default function KitchenScreen() {
       });
     };
 
-    const id = window.setInterval(checkUpcoming, 60_000); // check every minute
-    checkUpcoming(); // also check immediately on orders change
+    const id = window.setInterval(checkUpcoming, 60_000);
+    checkUpcoming();
     return () => window.clearInterval(id);
   }, [orders, soundEnabled]);
+
   useEffect(() => {
     const intervalId = window.setInterval(() => {
       void loadOrders();
@@ -220,7 +291,7 @@ export default function KitchenScreen() {
       const updated = await updateOrderStatus(id, status);
 
       setOrders((previous) =>
-        sortOrdersByCreatedAtDesc(
+        sortKitchenOrders(
           previous.map((entry) => (entry.id === id ? { ...entry, status: updated.status } : entry)),
         ),
       );
@@ -265,7 +336,7 @@ export default function KitchenScreen() {
         const updated = await updateOrderStatus(context.orderId, context.nextStatus);
 
         setOrders((previous) =>
-          sortOrdersByCreatedAtDesc(
+          sortKitchenOrders(
             previous.map((entry) =>
               entry.id === context.orderId ? { ...entry, status: updated.status } : entry,
             ),
@@ -343,6 +414,18 @@ export default function KitchenScreen() {
     () => orders.filter((entry) => entry.status === OrderStatus.READY),
     [orders],
   );
+
+  // Debug: log final render state
+  useEffect(() => {
+    debugLog('render:state', {
+      total: orders.length,
+      confirmed: confirmedOrders.length,
+      preparing: preparingOrders.length,
+      ready: readyOrders.length,
+      scheduled: orders.filter((o) => o.pickup_time !== null).length,
+      asap: orders.filter((o) => o.pickup_time === null).length,
+    });
+  }, [orders, confirmedOrders, preparingOrders, readyOrders]);
 
   if (loading) {
     return (

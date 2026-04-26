@@ -12,6 +12,31 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.1"
   }
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
       abandoned_cart_sessions: {
@@ -457,13 +482,6 @@ export type Database = {
             foreignKeyName: "cost_of_goods_menu_item_id_fkey"
             columns: ["menu_item_id"]
             isOneToOne: true
-            referencedRelation: "menu_items_public"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "cost_of_goods_menu_item_id_fkey"
-            columns: ["menu_item_id"]
-            isOneToOne: true
             referencedRelation: "menu_items_view"
             referencedColumns: ["id"]
           },
@@ -845,6 +863,33 @@ export type Database = {
         }
         Relationships: []
       }
+      guest_rate_limits: {
+        Row: {
+          blocked_until: string | null
+          ip_hash: string
+          overrun_count: number
+          request_count: number
+          updated_at: string
+          window_start: string
+        }
+        Insert: {
+          blocked_until?: string | null
+          ip_hash: string
+          overrun_count?: number
+          request_count?: number
+          updated_at?: string
+          window_start?: string
+        }
+        Update: {
+          blocked_until?: string | null
+          ip_hash?: string
+          overrun_count?: number
+          request_count?: number
+          updated_at?: string
+          window_start?: string
+        }
+        Relationships: []
+      }
       health_check: {
         Row: {
           id: number
@@ -1210,13 +1255,6 @@ export type Database = {
             columns: ["menu_item_id"]
             isOneToOne: false
             referencedRelation: "menu_items_admin_full"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "menu_item_modifier_groups_menu_item_id_fkey"
-            columns: ["menu_item_id"]
-            isOneToOne: false
-            referencedRelation: "menu_items_public"
             referencedColumns: ["id"]
           },
           {
@@ -2238,9 +2276,12 @@ export type Database = {
           amount_tax: number
           amount_total: number
           assigned_to: string | null
+          campaign_discount_cents: number
           cart_items: Json | null
           charge_captured_at: string | null
           created_at: string
+          credit_cents: number
+          credit_id: string | null
           currency: string
           customer_email: string | null
           customer_name: string | null
@@ -2254,8 +2295,14 @@ export type Database = {
           dispute_status: Database["public"]["Enums"]["dispute_status_enum"]
           disputed_at: string | null
           fulfillment_type: string
+          guest_email: string | null
+          guest_token: string | null
           id: string
+          idempotency_key: string | null
           last_payment_error: string | null
+          loyalty_account_id: string | null
+          loyalty_discount_cents: number | null
+          loyalty_points_redeemed: number | null
           metadata: Json | null
           net_amount_cents: number | null
           notes: string | null
@@ -2264,12 +2311,22 @@ export type Database = {
           payment_failed_at: string | null
           payment_method_type: Database["public"]["Enums"]["payment_method_type_enum"]
           payment_status: string
+          pending_cart_id: string | null
+          phone_verified: boolean
+          pickup_time: string | null
+          pricing_hash: string | null
+          pricing_snapshot: Json | null
+          promo_discount_cents: number
+          promo_id: string | null
           refunded_amount_cents: number
           refunded_at: string | null
+          risk_level: string | null
+          risk_score: number | null
           service_fee_cents: number
           shipping_address: Json | null
           shipping_name: string | null
           shipping_phone: string | null
+          source: string | null
           status: string
           stripe_charge_id: string | null
           stripe_checkout_session_id: string | null
@@ -2282,6 +2339,8 @@ export type Database = {
           tip_cents: number
           total_cents: number
           updated_at: string
+          verification_status: string
+          verified_at: string | null
         }
         Insert: {
           amount_received_cents?: number
@@ -2290,9 +2349,12 @@ export type Database = {
           amount_tax?: number
           amount_total?: number
           assigned_to?: string | null
+          campaign_discount_cents?: number
           cart_items?: Json | null
           charge_captured_at?: string | null
           created_at?: string
+          credit_cents?: number
+          credit_id?: string | null
           currency?: string
           customer_email?: string | null
           customer_name?: string | null
@@ -2306,8 +2368,14 @@ export type Database = {
           dispute_status?: Database["public"]["Enums"]["dispute_status_enum"]
           disputed_at?: string | null
           fulfillment_type?: string
+          guest_email?: string | null
+          guest_token?: string | null
           id?: string
+          idempotency_key?: string | null
           last_payment_error?: string | null
+          loyalty_account_id?: string | null
+          loyalty_discount_cents?: number | null
+          loyalty_points_redeemed?: number | null
           metadata?: Json | null
           net_amount_cents?: number | null
           notes?: string | null
@@ -2316,12 +2384,22 @@ export type Database = {
           payment_failed_at?: string | null
           payment_method_type?: Database["public"]["Enums"]["payment_method_type_enum"]
           payment_status?: string
+          pending_cart_id?: string | null
+          phone_verified?: boolean
+          pickup_time?: string | null
+          pricing_hash?: string | null
+          pricing_snapshot?: Json | null
+          promo_discount_cents?: number
+          promo_id?: string | null
           refunded_amount_cents?: number
           refunded_at?: string | null
+          risk_level?: string | null
+          risk_score?: number | null
           service_fee_cents?: number
           shipping_address?: Json | null
           shipping_name?: string | null
           shipping_phone?: string | null
+          source?: string | null
           status?: string
           stripe_charge_id?: string | null
           stripe_checkout_session_id?: string | null
@@ -2334,6 +2412,8 @@ export type Database = {
           tip_cents?: number
           total_cents?: number
           updated_at?: string
+          verification_status?: string
+          verified_at?: string | null
         }
         Update: {
           amount_received_cents?: number
@@ -2342,9 +2422,12 @@ export type Database = {
           amount_tax?: number
           amount_total?: number
           assigned_to?: string | null
+          campaign_discount_cents?: number
           cart_items?: Json | null
           charge_captured_at?: string | null
           created_at?: string
+          credit_cents?: number
+          credit_id?: string | null
           currency?: string
           customer_email?: string | null
           customer_name?: string | null
@@ -2358,8 +2441,14 @@ export type Database = {
           dispute_status?: Database["public"]["Enums"]["dispute_status_enum"]
           disputed_at?: string | null
           fulfillment_type?: string
+          guest_email?: string | null
+          guest_token?: string | null
           id?: string
+          idempotency_key?: string | null
           last_payment_error?: string | null
+          loyalty_account_id?: string | null
+          loyalty_discount_cents?: number | null
+          loyalty_points_redeemed?: number | null
           metadata?: Json | null
           net_amount_cents?: number | null
           notes?: string | null
@@ -2368,12 +2457,22 @@ export type Database = {
           payment_failed_at?: string | null
           payment_method_type?: Database["public"]["Enums"]["payment_method_type_enum"]
           payment_status?: string
+          pending_cart_id?: string | null
+          phone_verified?: boolean
+          pickup_time?: string | null
+          pricing_hash?: string | null
+          pricing_snapshot?: Json | null
+          promo_discount_cents?: number
+          promo_id?: string | null
           refunded_amount_cents?: number
           refunded_at?: string | null
+          risk_level?: string | null
+          risk_score?: number | null
           service_fee_cents?: number
           shipping_address?: Json | null
           shipping_name?: string | null
           shipping_phone?: string | null
+          source?: string | null
           status?: string
           stripe_charge_id?: string | null
           stripe_checkout_session_id?: string | null
@@ -2386,8 +2485,18 @@ export type Database = {
           tip_cents?: number
           total_cents?: number
           updated_at?: string
+          verification_status?: string
+          verified_at?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "orders_pending_cart_id_fkey"
+            columns: ["pending_cart_id"]
+            isOneToOne: false
+            referencedRelation: "pending_carts"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       password_attempts: {
         Row: {
@@ -2430,12 +2539,15 @@ export type Database = {
           currency: string
           discount_cents: number
           expires_at: string | null
+          guest_email: string | null
+          guest_token: string | null
           id: string
           idempotency_key: string | null
           items: Json
           loyalty_account_id: string | null
           loyalty_discount_cents: number | null
           loyalty_reserved_points: number | null
+          pickup_time: string | null
           pricing_hash: string | null
           pricing_snapshot: Json
           promo_id: string | null
@@ -2443,7 +2555,7 @@ export type Database = {
           subtotal_cents: number
           tax_cents: number
           total_cents: number
-          user_id: string
+          user_id: string | null
         }
         Insert: {
           consumed_at?: string | null
@@ -2452,20 +2564,23 @@ export type Database = {
           currency?: string
           discount_cents?: number
           expires_at?: string | null
-          id: string
+          guest_email?: string | null
+          guest_token?: string | null
+          id?: string
           idempotency_key?: string | null
           items: Json
           loyalty_account_id?: string | null
           loyalty_discount_cents?: number | null
           loyalty_reserved_points?: number | null
+          pickup_time?: string | null
           pricing_hash?: string | null
-          pricing_snapshot: Json
+          pricing_snapshot?: Json
           promo_id?: string | null
           stripe_session_id?: string | null
           subtotal_cents?: number
           tax_cents?: number
           total_cents?: number
-          user_id: string
+          user_id?: string | null
         }
         Update: {
           consumed_at?: string | null
@@ -2474,12 +2589,15 @@ export type Database = {
           currency?: string
           discount_cents?: number
           expires_at?: string | null
+          guest_email?: string | null
+          guest_token?: string | null
           id?: string
           idempotency_key?: string | null
           items?: Json
           loyalty_account_id?: string | null
           loyalty_discount_cents?: number | null
           loyalty_reserved_points?: number | null
+          pickup_time?: string | null
           pricing_hash?: string | null
           pricing_snapshot?: Json
           promo_id?: string | null
@@ -2487,7 +2605,7 @@ export type Database = {
           subtotal_cents?: number
           tax_cents?: number
           total_cents?: number
-          user_id?: string
+          user_id?: string | null
         }
         Relationships: [
           {
@@ -2758,6 +2876,93 @@ export type Database = {
           start_hour?: number | null
           type?: string | null
           value?: number | null
+        }
+        Relationships: []
+      }
+      sms_log: {
+        Row: {
+          created_at: string
+          error: string | null
+          event: string
+          id: string
+          order_id: string
+          phone_suffix: string
+          status: string
+          twilio_sid: string | null
+        }
+        Insert: {
+          created_at?: string
+          error?: string | null
+          event: string
+          id?: string
+          order_id: string
+          phone_suffix: string
+          status: string
+          twilio_sid?: string | null
+        }
+        Update: {
+          created_at?: string
+          error?: string | null
+          event?: string
+          id?: string
+          order_id?: string
+          phone_suffix?: string
+          status?: string
+          twilio_sid?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sms_log_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "admin_tax_order_breakdown"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "sms_log_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "financial_revenue_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sms_log_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "order_performance"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "sms_log_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "order_timeline"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "sms_log_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sms_verify_attempts: {
+        Row: {
+          created_at: string
+          id: string
+          phone_hash: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          phone_hash: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          phone_hash?: string
         }
         Relationships: []
       }
@@ -3296,27 +3501,6 @@ export type Database = {
         }
         Relationships: []
       }
-      menu_items_public: {
-        Row: {
-          allergens: string[] | null
-          available: boolean | null
-          category: Database["public"]["Enums"]["menu_category"] | null
-          description: string | null
-          featured: boolean | null
-          id: string | null
-          image_url: string | null
-          is_gluten_free: boolean | null
-          is_vegan: boolean | null
-          is_vegetarian: boolean | null
-          modifier_groups: Json | null
-          name: string | null
-          pairs_with: string[] | null
-          price: number | null
-          sort_order: number | null
-          spicy_level: number | null
-        }
-        Relationships: []
-      }
       menu_items_view: {
         Row: {
           allergens: string[] | null
@@ -3851,6 +4035,20 @@ export type Database = {
         Args: { p_amount_cents: number; p_order_id: string; p_user_id: string }
         Returns: Json
       }
+      check_guest_rate_limit: {
+        Args: {
+          p_block_duration_ms?: number
+          p_ip_hash: string
+          p_max_requests?: number
+          p_overrun_limit?: number
+          p_window_ms?: number
+        }
+        Returns: {
+          allowed: boolean
+          reason: string
+          retry_after_ms: number
+        }[]
+      }
       cleanup_pending_carts: { Args: never; Returns: undefined }
       custom_access_token_hook: { Args: { event: Json }; Returns: Json }
       get_admin_layout_snapshot: { Args: never; Returns: Json }
@@ -3905,6 +4103,29 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      get_menu_item_public: { Args: { p_item_id: string }; Returns: Json }
+      get_menu_items: {
+        Args: never
+        Returns: {
+          allergens: string[]
+          available: boolean
+          category: string
+          description: string
+          featured: boolean
+          id: string
+          image_url: string
+          is_gluten_free: boolean
+          is_vegan: boolean
+          is_vegetarian: boolean
+          modifier_groups: Json
+          name: string
+          pairs_with: string
+          price: number
+          sort_order: number
+          spicy_level: number
+        }[]
+      }
+      get_menu_public: { Args: never; Returns: Json }
       get_next_order_number: { Args: never; Returns: number }
       get_order_dispute_timeline: {
         Args: { p_order_id: string }
@@ -4061,9 +4282,12 @@ export type Database = {
           amount_tax: number
           amount_total: number
           assigned_to: string | null
+          campaign_discount_cents: number
           cart_items: Json | null
           charge_captured_at: string | null
           created_at: string
+          credit_cents: number
+          credit_id: string | null
           currency: string
           customer_email: string | null
           customer_name: string | null
@@ -4077,8 +4301,14 @@ export type Database = {
           dispute_status: Database["public"]["Enums"]["dispute_status_enum"]
           disputed_at: string | null
           fulfillment_type: string
+          guest_email: string | null
+          guest_token: string | null
           id: string
+          idempotency_key: string | null
           last_payment_error: string | null
+          loyalty_account_id: string | null
+          loyalty_discount_cents: number | null
+          loyalty_points_redeemed: number | null
           metadata: Json | null
           net_amount_cents: number | null
           notes: string | null
@@ -4087,12 +4317,22 @@ export type Database = {
           payment_failed_at: string | null
           payment_method_type: Database["public"]["Enums"]["payment_method_type_enum"]
           payment_status: string
+          pending_cart_id: string | null
+          phone_verified: boolean
+          pickup_time: string | null
+          pricing_hash: string | null
+          pricing_snapshot: Json | null
+          promo_discount_cents: number
+          promo_id: string | null
           refunded_amount_cents: number
           refunded_at: string | null
+          risk_level: string | null
+          risk_score: number | null
           service_fee_cents: number
           shipping_address: Json | null
           shipping_name: string | null
           shipping_phone: string | null
+          source: string | null
           status: string
           stripe_charge_id: string | null
           stripe_checkout_session_id: string | null
@@ -4105,6 +4345,8 @@ export type Database = {
           tip_cents: number
           total_cents: number
           updated_at: string
+          verification_status: string
+          verified_at: string | null
         }
         SetofOptions: {
           from: "*"
@@ -4214,6 +4456,30 @@ export type Database = {
         }
       }
       v2_award_points:
+        | {
+            Args: {
+              p_account_id: string
+              p_admin_id: string
+              p_amount: number
+              p_amount_cents: number
+              p_base_points: number
+              p_idempotency_key: string
+              p_reference_id: string
+              p_streak: number
+              p_streak_mult: number
+              p_tier_at_time: string
+              p_tier_mult: number
+            }
+            Returns: {
+              new_balance: number
+              new_lifetime: number
+              new_tier: string
+              points_earned: number
+              streak: number
+              tier_changed: boolean
+              was_duplicate: boolean
+            }[]
+          }
         | {
             Args: {
               p_account_id: string
@@ -4542,6 +4808,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
       avs_check_enum: ["pass", "fail", "unavailable", "unchecked", "unknown"],

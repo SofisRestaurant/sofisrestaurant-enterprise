@@ -2252,6 +2252,7 @@ export type Database = {
           cart_items: Json | null
           charge_captured_at: string | null
           created_at: string
+          pickup_time: string | null;
           currency: string
           customer_email: string | null
           customer_name: string | null
