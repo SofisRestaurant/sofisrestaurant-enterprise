@@ -519,7 +519,6 @@ function CheckoutButton({
 
     try {
       if (isAuthed && user) {
-        // AUTH PATH → useAuthCheckout → create-checkout (Bearer)
         await redirectToCheckout({
           customer_uid: user.id,
           orderType: normalizedOrderType,
@@ -528,6 +527,7 @@ function CheckoutButton({
           promoId: undefined,
           creditId: normalizedCreditId,
           loyalty,
+          pickupTime,
         });
       } else {
         // GUEST PATH → useGuestCheckout → create-checkout-guest (no auth header)
@@ -536,6 +536,7 @@ function CheckoutButton({
           guestEmail,
           orderType: normalizedOrderType,
           notes,
+          pickupTime,
         });
       }
     } catch (checkoutError: unknown) {
@@ -567,6 +568,7 @@ function CheckoutButton({
     onPromoError,
     t,
     loyalty,
+    pickupTime,
   ]);
 
   const handlePrimaryClick = useCallback(() => {
