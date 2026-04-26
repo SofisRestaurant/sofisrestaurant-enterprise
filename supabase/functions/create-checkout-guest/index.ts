@@ -21,16 +21,10 @@
 //   Must match MIN_ORDER_CENTS in pending-cart.ts and create-checkout/index.ts.
 //
 // pickup_time support:
-//   Accepted as an optional ISO 8601 string in the request body.
-//   Guests MAY schedule pickup times — this is not auth-only functionality.
-//   Validated with the same rules as the auth pipeline.
-//   Written to Stripe session metadata as "pickup_time" via conditional spread
-//   so the key is ABSENT (not null) for ASAP orders.
-//   The stripe-webhook function reads it from metadata and writes to orders.
+//   Validated via shared _shared/pickup-time.ts (single source of truth).
+//   Written to Stripe metadata via pickupTimeToMetadata() — key is ABSENT
+//   (not null) for ASAP orders. The webhook reads it and writes to orders.
 //   NULL / absent = ASAP.
-//
-//   SENTINEL REJECTION: "asap" and "now" are rejected with 422 as
-//   defense-in-depth; the router layer is the primary rejection point.
 // =============================================================================
 
 import Stripe from "stripe";
@@ -44,6 +38,7 @@ import {
   resolvePricingForCheckout,
 } from "../_shared/pricing.ts";
 import { MIN_ORDER_CENTS } from "../_shared/constants.ts";
+import { validatePickupTime, pickupTimeToMetadata } from "../_shared/pickup-time.ts";
 
 import { loadCanonicalCartItems } from "../create-checkout/catalog.ts";
 import { corsHeadersFor } from "../create-checkout/cors.ts";
@@ -92,72 +87,6 @@ function generateGuestToken(): string {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
-}
-
-// ─── pickup_time validation ───────────────────────────────────────────────────
-// Identical logic to the auth pipeline — kept inline to avoid a shared import
-// that would couple the guest function's dependency graph.
-//
-// Sentinel strings "asap" / "now" are rejected with 422. ASAP orders must
-// omit pickup_time entirely; sending a sentinel string is a frontend bug.
-
-const PICKUP_TIME_TOLERANCE_MS  =  5 * 60 * 1000;
-const PICKUP_TIME_MAX_FUTURE_MS = 24 * 60 * 60 * 1000;
-
-// Sentinel strings that originate in the UI state machine and must never be
-// treated as valid pickup times. Sending "asap" to the backend is always a
-// frontend bug — ASAP is represented by the ABSENCE of pickup_time.
-const PICKUP_TIME_SENTINEL_STRINGS = new Set(["asap", "now"]);
-
-function validatePickupTime(
-  raw: unknown,
-): { ok: true; value: string | null } | { ok: false; error: string } {
-  if (raw === null || raw === undefined || raw === "") {
-    return { ok: true, value: null };
-  }
-
-  if (typeof raw !== "string") {
-    return { ok: false, error: "pickup_time must be an ISO 8601 string or null." };
-  }
-
-  // Reject UI sentinel strings. ASAP orders must omit pickup_time entirely;
-  // sending a sentinel string here is always a frontend contract violation.
-  if (PICKUP_TIME_SENTINEL_STRINGS.has(raw.trim().toLowerCase())) {
-    return {
-      ok: false,
-      error:
-        'pickup_time must be an ISO 8601 timestamp. ' +
-        'For ASAP orders, omit the field entirely — do not send "asap" or "now".',
-    };
-  }
-
-  let parsed: Date;
-  try {
-    parsed = new Date(raw);
-  } catch {
-    return { ok: false, error: "pickup_time is not a valid date." };
-  }
-
-  if (!Number.isFinite(parsed.getTime())) {
-    return { ok: false, error: "pickup_time is not a valid date." };
-  }
-
-  const nowMs  = Date.now();
-  const diffMs = parsed.getTime() - nowMs;
-
-  if (diffMs < -PICKUP_TIME_TOLERANCE_MS) {
-    return { ok: false, error: "Pickup time cannot be in the past." };
-  }
-
-  if (diffMs > PICKUP_TIME_MAX_FUTURE_MS) {
-    return {
-      ok: false,
-      error: "Pickup time cannot be more than 24 hours in the future.",
-    };
-  }
-
-  const normalised = new Date(Math.round(parsed.getTime() / 1000) * 1000).toISOString();
-  return { ok: true, value: normalised };
 }
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
@@ -553,11 +482,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // ── Guest Stripe metadata ───────────────────────────────────────────────────
   // MUST NOT contain: user_id, customer_uid, uid, device_fingerprint,
   // customer_ip, promo_id, credit_id, any loyalty_* fields.
-  //
-  // pickup_time is written via conditional spread so the key is COMPLETELY
-  // ABSENT from metadata when the order is ASAP (pickupTime === null).
-  // Explicit null in Stripe.MetadataParam has implementation-defined
-  // serialization; key omission is unambiguous and safe.
   const sessionMetadata: Stripe.MetadataParam = {
     pending_cart_id: pendingCart.cartId,
     cart_ref: pendingCart.cartId,
@@ -574,11 +498,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     total_cents: String(snapshot.totalCents),
     idempotency_key: idempotencyKey,
     guest_token: guestToken,
-    // pickup_time: written only when non-null (ASAP = key absent from metadata).
-    // The webhook reads this key; a missing key is correctly treated as ASAP.
-    // Do NOT use `pickup_time: pickupTime ?? null` — explicit null in Stripe
-    // metadata has undefined serialization behavior during session creation.
-    ...(pickupTime ? { pickup_time: pickupTime } : {}),
+    ...pickupTimeToMetadata(pickupTime),
     ...(snapshot.appliedCampaignIds.length
       ? { applied_campaign_ids: snapshot.appliedCampaignIds.join(",") }
       : {}),
