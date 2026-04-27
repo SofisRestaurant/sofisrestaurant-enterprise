@@ -275,17 +275,6 @@ export const router = createBrowserRouter([
       },
 
       // ────────────────────────────────────────────────────────
-      // PASSWORD
-      // ────────────────────────────────────────────────────────
-      {
-        path: 'update-password',
-        lazy: async () => {
-          const m = await import('@/pages/UpdatePassword');
-          return { Component: m.default };
-        },
-      },
-
-      // ────────────────────────────────────────────────────────
       // LEGAL
       // ────────────────────────────────────────────────────────
       {
