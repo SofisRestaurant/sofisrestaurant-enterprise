@@ -1,75 +1,255 @@
-/* ── Tailwind v4 — @import "tailwindcss" already includes ALL utilities ──── */
-/* CRITICAL: Remove the duplicate @import "tailwindcss/utilities" below.      */
-/* In Tailwind v4 the duplicate breaks the cascade — Tailwind-generated       */
-/* utility classes (text-white, bg-zinc-900, from-zinc-900 etc) stop applying.*/
-/* This causes buttons to be invisible: transparent background, white-on-white */
-/* text. The fix is to use ONLY the single @import "tailwindcss" line.        */
+/* =============================================================================
+   SOFIS — app.css  ·  2026 Luxury Edition
+   Tailwind v4.2.4 entry point.
+
+   Load order:
+     1. Tailwind engine      — base reset, utilities, variants
+     2. Fonts                — @font-face, aliases
+     3. Tokens               — :root vars not covered by @theme
+     4. Animations           — @keyframes + animation utilities
+     5. Effects              — glass, glow, gradients, textures
+     6. Utilities            — layout containers, scroll, GPU hints
+     7. Components           — multi-element patterns
+     8. Typography           — global type hierarchy
+   ============================================================================= */
+
 @import "tailwindcss";
 
-/* ── Project-specific styles ─────────────────────────────────────────────── */
 @import "./fonts.css";
 @import "./tokens.css";
 @import "./animations.css";
 @import "./effects.css";
 @import "./utilities.css";
 @import "./components.css";
+@import "./typography.css";
 
-/* ── Custom utilities ─────────────────────────────────────────────────────── */
-@layer utilities {
-  .btn {
-    border-radius: 0.5rem;
-    padding: 0.5rem 1rem;
-    background-color: ButtonFace;
-    font-weight: 600;
-    text-align: center;
-    display: inline-block;
-    cursor: pointer;
-    transition: background-color 0.2s ease;
-  }
-
-  .btn:hover {
-    background-color: #f97316;
-  }
-
-  .card-shadow {
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-    border-radius: 0.5rem;
-  }
-}
-
+/* =============================================================================
+   THEME — 2026 Luxury Expansion
+   Every scalar design token. Tailwind v4 generates utility classes from this.
+   ============================================================================= */
 
 @theme {
 
-  /* ───── Button System ───── */
+  /* ── Typefaces ──────────────────────────────────────────────────────────── */
+  --font-display: 'SofiDisplay', 'Cormorant Garamond', Georgia, 'Times New Roman', serif;
+  --font-serif:   'Cormorant Garamond', Georgia, 'Times New Roman', serif;
+  --font-sans:    'SofiBody', 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --font-mono:    'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace;
+  --font-hand:    'SofiHand', cursive;
 
-  --btn-secondary-bg: #ffffff;
+  /* ── Gold / Accent — Richer warm spectrum ───────────────────────────────── */
+  --color-gold-50:  #fef9e8;
+  --color-gold-100: #fbf0c0;
+  --color-gold-200: #f5de84;
+  --color-gold-300: #ecc84a;
+  --color-gold-400: #d4af37;   /* canonical brand gold */
+  --color-gold-500: #b8961f;
+  --color-gold-600: #9a7a0e;
+  --color-gold-700: #7a5f08;
+  --color-gold-800: #5a4506;
+  --color-gold-900: #3a2d04;
+  --color-gold-950: #1d1602;
 
-  --btn-secondary-text: #1c1917;
+  /* ── Amber — warm sibling for interactive states ────────────────────────── */
+  --color-amber-100: #fef3c7;
+  --color-amber-200: #fde68a;
+  --color-amber-300: #fcd34d;
+  --color-amber-400: #fbbf24;
+  --color-amber-500: #f59e0b;
 
-  --btn-secondary-border: #e7e5e4;
+  /* ── Ember / Copper ─────────────────────────────────────────────────────── */
+  --color-ember-50:  #fdf4ef;
+  --color-ember-100: #f8e2d4;
+  --color-ember-200: #eebfa0;
+  --color-ember-300: #d9906a;
+  --color-ember-400: #c07040;
+  --color-ember-500: #a84520;
+  --color-ember-600: #8a3a18;
+  --color-ember-700: #6b2c10;
+  --color-ember-800: #4e1e0a;
+  --color-ember-900: #301005;
 
-  --btn-outline-border: #d6d3d1;
+  /* ── Crimson ────────────────────────────────────────────────────────────── */
+  --color-crimson-300: #dc6f52;
+  --color-crimson-400: #c45a2a;
+  --color-crimson-500: #a84520;
+  --color-crimson-600: #8c3418;
 
-  --btn-danger-bg: #dc2626;
+  /* ── Ink / Text — warm neutral ──────────────────────────────────────────── */
+  --color-ink-50:  #faf8f5;
+  --color-ink-100: #f0ebe4;
+  --color-ink-200: #ddd4c8;
+  --color-ink-300: #c8b8a8;
+  --color-ink-400: #a89888;
+  --color-ink-500: #8a7a6a;
+  --color-ink-600: #6a5a4e;
+  --color-ink-700: #4e3e34;
+  --color-ink-800: #2d2520;
+  --color-ink-900: #1c1a18;
 
-  --btn-danger-text: #ffffff;
+  /* ── Cream / Light surfaces ─────────────────────────────────────────────── */
+  --color-cream-50:  #fefdf9;
+  --color-cream-100: #faf6ef;
+  --color-cream-200: #f5ede0;
+  --color-cream-300: #ede0ce;
+  --color-cream-400: #e3d0b8;
+  --color-cream-500: #d4bfa0;
+  --color-cream-600: #c4a882;
 
-  --btn-glass-bg: rgba(255, 255, 255, 0.08);
+  /* ── Stone / Dark surfaces — warmer undertone ───────────────────────────── */
+  --color-stone-950: #0c0b09;
+  --color-stone-900: #1a1814;
+  --color-stone-850: #201d18;
+  --color-stone-800: #2a2620;
+  --color-stone-750: #332f28;
+  --color-stone-700: #3c3830;
+  --color-stone-600: #4e4840;
+  --color-stone-500: #625a50;
+  --color-stone-400: #7a7068;
 
-  --btn-glass-border: rgba(255, 255, 255, 0.12);
+  /* ── Zinc — neutral dark for components ────────────────────────────────── */
+  --color-zinc-950: #09090b;
+  --color-zinc-900: #18181b;
+  --color-zinc-800: #27272a;
+  --color-zinc-700: #3f3f46;
+  --color-zinc-600: #52525b;
+  --color-zinc-500: #71717a;
+  --color-zinc-400: #a1a1aa;
+  --color-zinc-300: #d4d4d8;
+  --color-zinc-200: #e4e4e7;
+  --color-zinc-100: #f4f4f5;
 
-  /* ───── Animation Easing ───── */
+  /* ── Semantic surfaces ──────────────────────────────────────────────────── */
+  --color-surface:       #ffffff;
+  --color-surface-warm:  #faf6ef;
+  --color-surface-dark:  #1a1814;
 
-  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  /* ── Status ─────────────────────────────────────────────────────────────── */
+  --color-success:     #1f5c1f;
+  --color-success-bg:  #f0f6f0;
+  --color-success-50:  #f0fdf4;
+  --color-success-300: #86efac;
+  --color-success-400: #4ade80;
+  --color-error:       #c0392b;
+  --color-error-bg:    #fdf2f2;
+  --color-error-300:   #fca5a5;
+  --color-warning:     #d4aa40;
+  --color-warning-bg:  #fffbeb;
 
-  --ease-luxury: cubic-bezier(0.16, 1, 0.3, 1);
+  /* ── Border radius ──────────────────────────────────────────────────────── */
+  --radius-xs:    0.25rem;
+  --radius-sm:    0.375rem;
+  --radius-md:    0.5rem;
+  --radius-lg:    0.75rem;
+  --radius-xl:    1rem;
+  --radius-2xl:   1.25rem;
+  --radius-3xl:   1.75rem;
+  --radius-4xl:   2.25rem;
+  --radius-pill:  9999px;
+  --radius-card:  1.25rem;
+  --radius-modal: 1.5rem;
+  --radius-badge: 9999px;
+  --radius-input: 0.625rem;
+  --radius-sheet: 1.75rem;  /* bottom sheet top corners */
 
-  /* ───── Brand Colors (if not already defined elsewhere) ───── */
+  /* ── Shadows — warmer, more dimensional ────────────────────────────────── */
+  --shadow-xs:       0 1px 2px rgb(20 14 4 / 0.06);
+  --shadow-sm:       0 2px 6px rgb(20 14 4 / 0.08), 0 1px 3px rgb(20 14 4 / 0.05);
+  --shadow-md:       0 4px 16px rgb(20 14 4 / 0.10);
+  --shadow-lg:       0 8px 32px rgb(20 14 4 / 0.14);
+  --shadow-xl:       0 16px 56px rgb(20 14 4 / 0.18);
+  --shadow-2xl:      0 28px 80px rgb(20 14 4 / 0.24);
+  --shadow-3xl:      0 40px 120px rgb(20 14 4 / 0.32);
+  --shadow-card-sm:  0 2px 12px rgb(20 14 4 / 0.07), 0 1px 3px rgb(20 14 4 / 0.04);
+  --shadow-card-lg:  0 12px 40px rgb(20 14 4 / 0.16), 0 4px 12px rgb(20 14 4 / 0.08);
+  --shadow-popover:  0 24px 48px rgb(20 14 4 / 0.16), 0 8px 16px rgb(20 14 4 / 0.08);
+  --shadow-modal:    0 32px 100px rgb(0 0 0 / 0.55), 0 8px 24px rgb(0 0 0 / 0.25);
+  --shadow-gold:     0 0 32px rgb(212 175 55 / 0.24), 0 4px 16px rgb(212 175 55 / 0.16);
+  --shadow-gold-lg:  0 0 64px rgb(212 175 55 / 0.30), 0 8px 32px rgb(212 175 55 / 0.20);
+  --shadow-gold-sm:  0 0 16px rgb(212 175 55 / 0.18);
+  --shadow-brand:    0 8px 24px rgb(169 104 64 / 0.28);
+  --shadow-brand-lg: 0 16px 56px rgb(169 104 64 / 0.38);
+  --shadow-inner:    inset 0 1px 4px rgb(0 0 0 / 0.12);
+  --shadow-inner-lg: inset 0 2px 12px rgb(0 0 0 / 0.20);
 
-  --color-gold-300: #e8c46a;
+  /* ── Easing — cinematic motion system ──────────────────────────────────── */
+  --ease-luxury:      cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out:         cubic-bezier(0.0, 0, 0.2, 1);
+  --ease-spring:      cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-spring-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-standard:    cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-in-out:      cubic-bezier(0.45, 0, 0.55, 1);
+  --ease-cinematic:   cubic-bezier(0.12, 0, 0.39, 0);
+  --ease-bounce:      cubic-bezier(0.68, -0.55, 0.27, 1.55);
 
-  --color-gold-400: #d4af37;
+  /* ── Duration ───────────────────────────────────────────────────────────── */
+  --duration-instant: 80ms;
+  --duration-fast:    140ms;
+  --duration-base:    220ms;
+  --duration-slow:    380ms;
+  --duration-enter:   520ms;
+  --duration-scene:   800ms;
+  --duration-epic:    1200ms;
 
-  --text-primary: #1c1917;
+  /* ── Typography scale — editorial ───────────────────────────────────────── */
+  --text-2xs:  0.625rem;
+  --text-xs:   0.75rem;
+  --text-sm:   0.875rem;
+  --text-base: 1rem;
+  --text-lg:   1.125rem;
+  --text-xl:   1.25rem;
+  --text-2xl:  1.5rem;
+  --text-3xl:  2rem;
+  --text-4xl:  2.5rem;
+  --text-5xl:  3.25rem;
+  --text-6xl:  4rem;
+  --text-7xl:  5rem;
+  --text-8xl:  6.5rem;
 
+  /* ── Letter spacing ─────────────────────────────────────────────────────── */
+  --tracking-tightest: -0.04em;
+  --tracking-tighter:  -0.03em;
+  --tracking-tight:    -0.02em;
+  --tracking-normal:   0em;
+  --tracking-wide:     0.04em;
+  --tracking-wider:    0.08em;
+  --tracking-label:    0.12em;
+  --tracking-caps:     0.18em;
+  --tracking-loose:    0.22em;
+  --tracking-ultra:    0.30em;
+
+  /* ── Line height ────────────────────────────────────────────────────────── */
+  --leading-none:     1;
+  --leading-tight:    1.2;
+  --leading-snug:     1.35;
+  --leading-base:     1.55;
+  --leading-relaxed:  1.72;
+  --leading-loose:    1.9;
+  --leading-editorial: 1.08;
+
+  /* ── Z-index scale ──────────────────────────────────────────────────────── */
+  --z-index-base:     0;
+  --z-index-raised:   10;
+  --z-index-overlay:  20;
+  --z-index-sticky:   30;
+  --z-index-drawer:   35;
+  --z-index-modal:    40;
+  --z-index-toast:    50;
+  --z-index-cursor:   60;
+  --z-index-absolute: 9999;
+
+  /* ── Space scale — generous luxury rhythm ───────────────────────────────── */
+  --space-1:   0.25rem;
+  --space-2:   0.5rem;
+  --space-3:   0.75rem;
+  --space-4:   1rem;
+  --space-5:   1.25rem;
+  --space-6:   1.5rem;
+  --space-8:   2rem;
+  --space-10:  2.5rem;
+  --space-12:  3rem;
+  --space-16:  4rem;
+  --space-20:  5rem;
+  --space-24:  6rem;
+  --space-32:  8rem;
 }

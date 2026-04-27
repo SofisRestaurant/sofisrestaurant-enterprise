@@ -1,27 +1,30 @@
 /* =============================================================================
-   SOFIS — fonts.css (PRODUCTION READY)
-   Fully self-hosted — SofiDisplay, SofiBody, SofiHand
+   SOFIS — fonts.css
+   Self-hosted typefaces: SofiDisplay, SofiBody (variable), SofiHand.
+
+   Font family aliases are declared here as :root vars so they are available
+   before app.css @theme is processed. The @theme --font-* tokens in app.css
+   mirror these values so Tailwind generates font-display, font-sans, etc.
+   utilities correctly.
    ============================================================================= */
 
 /* ── Display Face (SofiDisplay) ───────────────────────────────────────────── */
 
-/* Regular */
 @font-face {
   font-family: 'SofiDisplay';
   src: url('/fonts/display/SofiDisplay-Regular.woff2') format('woff2'),
-       url('/fonts/display/SofiDisplay-Regular.woff') format('woff');
-  font-weight: 400;
-  font-style: normal;
+       url('/fonts/display/SofiDisplay-Regular.woff')  format('woff');
+  font-weight:  400;
+  font-style:   normal;
   font-display: swap;
 }
 
-/* Bold */
 @font-face {
   font-family: 'SofiDisplay';
   src: url('/fonts/display/SofiDisplay-Bold.woff2') format('woff2'),
-       url('/fonts/display/SofiDisplay-Bold.woff') format('woff');
-  font-weight: 700;
-  font-style: normal;
+       url('/fonts/display/SofiDisplay-Bold.woff')  format('woff');
+  font-weight:  700;
+  font-style:   normal;
   font-display: swap;
 }
 
@@ -30,60 +33,44 @@
 @font-face {
   font-family: 'SofiBody';
   src: url('/fonts/body/SofiBody-Variable.woff2') format('woff2'),
-       url('/fonts/body/SofiBody-Variable.woff') format('woff');
-  font-weight: 100 900; /* full range */
-  font-style: normal;
+       url('/fonts/body/SofiBody-Variable.woff')  format('woff');
+  font-weight:  100 900;
+  font-style:   normal;
   font-display: swap;
 }
 
 /* ── Hand / Script Face (SofiHand) ────────────────────────────────────────── */
 
-/* Regular */
 @font-face {
   font-family: 'SofiHand';
   src: url('/fonts/hand/SofiHand-Regular.woff2') format('woff2'),
-       url('/fonts/hand/SofiHand-Regular.woff') format('woff');
-  font-weight: 400;
-  font-style: normal;
+       url('/fonts/hand/SofiHand-Regular.woff')  format('woff');
+  font-weight:  400;
+  font-style:   normal;
   font-display: swap;
 }
 
-/* Bold */
 @font-face {
   font-family: 'SofiHand';
   src: url('/fonts/hand/SofiHand-Bold.woff2') format('woff2'),
-       url('/fonts/hand/SofiHand-Bold.woff') format('woff');
-  font-weight: 700;
-  font-style: normal;
+       url('/fonts/hand/SofiHand-Bold.woff')  format('woff');
+  font-weight:  700;
+  font-style:   normal;
   font-display: swap;
 }
 
-/* ── Font Variable Aliases ────────────────────────────────────────────────── */
+/* ── Utility classes ─────────────────────────────────────────────────────── */
+/* These are CSS-class aliases; Tailwind generates font-display/sans/etc.    */
+/* from @theme --font-* tokens. These extras cover .font-body and .font-accent. */
 
-:root {
-  --font-display: 'SofiDisplay', Georgia, 'Times New Roman', serif;
-  --font-serif:   'Cormorant Garamond', Georgia, 'Times New Roman', serif;
-  --font-sans:    'SofiBody', -apple-system, BlinkMacSystemFont,
-                  'Segoe UI', Helvetica, Arial, sans-serif;
-  --font-mono:    'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace;
-  --font-hand:    'SofiHand', cursive;
-}
+.font-body   { font-family: var(--font-sans); }
+.font-accent { font-family: var(--font-display); font-style: italic; font-weight: 400; }
 
-/* ── Utility Classes ─────────────────────────────────────────────────────── */
+/* ── Global rendering quality ─────────────────────────────────────────────── */
 
-.font-display { font-family: var(--font-display); }
-.font-serif   { font-family: var(--font-serif); }
-.font-body    { font-family: var(--font-sans); }
-.font-mono    { font-family: var(--font-mono); }
-.font-hand    { font-family: var(--font-hand); }
-.font-accent  { font-family: var(--font-display); font-style: italic; font-weight: 400; }
-
-/* ── Global Typography Rendering ─────────────────────────────────────────── */
-
-body {
-  font-family: var(--font-sans);
-  -webkit-font-smoothing: antialiased;
+html {
+  -webkit-font-smoothing:  antialiased;
   -moz-osx-font-smoothing: grayscale;
-  text-rendering: optimizeLegibility;
-  font-feature-settings: 'kern' 1, 'liga' 1, 'calt' 1;
+  text-rendering:          optimizeLegibility;
+  font-feature-settings:   'kern' 1, 'liga' 1, 'calt' 1;
 }

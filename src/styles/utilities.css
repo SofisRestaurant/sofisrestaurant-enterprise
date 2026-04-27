@@ -1,23 +1,24 @@
 /* =============================================================================
    SOFIS — utilities.css
-   Structural utilities, layout helpers, scroll containers, and GPU hints.
-   
-   Rule: Only add here what Tailwind cannot express cleanly:
-   ✅ Multi-step state machines (cart add, etc.)
+   Structural utilities: layout containers, scroll containers, state machines,
+   accessibility helpers, truncation, dividers, GPU hints.
+
+   Rule: Only CSS that Tailwind cannot express cleanly belongs here:
+   ✅ Multi-step state machines (cart add animation)
    ✅ ::before / ::after pseudoelements with content
-   ✅ Scroll/overflow containers with vendor prefixes
-   ✅ Performance GPU hints that must apply globally
-   ✅ Complex selectors (parent-controls-child patterns)
-   
-   ❌ NOT for one-off color values — use Tailwind utilities
-   ❌ NOT for anything already in effects.css or components.css
+   ✅ Scroll / overflow containers with vendor prefixes
+   ✅ Performance GPU hints
+   ✅ Complex selectors (parent controls child)
+
+   ❌ NOT for one-off colors — use Tailwind utilities
+   ❌ NOT for effects (glass, glow) — those live in effects.css
+   ❌ NOT for component patterns — those live in components.css
    ============================================================================= */
 
 /* =============================================================================
    LAYOUT CONTAINERS
    ============================================================================= */
 
-/* ── Site-width container ─────────────────────────────────────────────────── */
 .container-site {
   width: 100%;
   max-width: 1280px;
@@ -40,23 +41,12 @@
 }
 
 /* ── Section spacing ─────────────────────────────────────────────────────── */
-.section-py {
-  padding-block: var(--space-section, 5rem);
-}
+.section-py    { padding-block: var(--space-section); }
+.section-py-sm { padding-block: var(--space-section-sm); }
+.section-py-lg { padding-block: var(--space-section-lg); }
+.section-py-xl { padding-block: var(--space-section-xl); }
 
-.section-py-sm {
-  padding-block: var(--space-section-sm, 4rem);
-}
-
-.section-py-lg {
-  padding-block: var(--space-section-lg, 7rem);
-}
-
-.section-py-xl {
-  padding-block: var(--space-section-xl, 10rem);
-}
-
-/* ── Section relative wrapper (for absolute positioned children) ─────────── */
+/* Relative wrapper for absolutely-positioned children */
 .section-wrap {
   position: relative;
   overflow: clip;
@@ -66,6 +56,7 @@
    SCROLL CONTAINERS
    ============================================================================= */
 
+/* Horizontal scroll — no visible scrollbar */
 .scroll-x {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
@@ -75,6 +66,7 @@
 
 .scroll-x::-webkit-scrollbar { display: none; }
 
+/* Vertical scroll — thin scrollbar */
 .scroll-y {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
@@ -82,7 +74,7 @@
   overscroll-behavior-y: contain;
 }
 
-/* Snap scrolling (image carousels, horizontal decks) */
+/* Snap scrolling — image carousels, horizontal decks */
 .scroll-snap-x {
   scroll-snap-type: x mandatory;
   overflow-x: auto;
@@ -90,8 +82,7 @@
   scrollbar-width: none;
 }
 
-.scroll-snap-x > * { scroll-snap-align: start; }
-
+.scroll-snap-x > *        { scroll-snap-align: start; }
 .scroll-snap-x::-webkit-scrollbar { display: none; }
 
 /* =============================================================================
@@ -99,7 +90,7 @@
    ============================================================================= */
 
 .card-zoom-target {
-  transition: transform var(--duration-scene, 800ms) var(--ease-luxury);
+  transition: transform var(--duration-scene) var(--ease-luxury);
   will-change: transform;
 }
 
@@ -107,13 +98,15 @@
 
 /* =============================================================================
    CART / ADD-TO-CART BUTTON STATE MACHINE
-   Parent class .btn-cart-added controls child visibility swap.
+   Parent class .btn-cart-added controls the label ↔ checkmark visibility swap.
+   Defined here (utilities) as it is a structural state machine.
+   The visual styles for the button itself live in components.css.
    ============================================================================= */
 
 .btn-cart-label {
   transition:
-    opacity   var(--duration-base, 200ms) var(--ease-standard),
-    transform var(--duration-base, 200ms) var(--ease-standard);
+    opacity   var(--duration-base) var(--ease-standard),
+    transform var(--duration-base) var(--ease-standard);
 }
 
 .btn-cart-check {
@@ -125,8 +118,8 @@
   opacity: 0;
   transform: scale(0.55);
   transition:
-    opacity   var(--duration-slow, 350ms) var(--ease-spring),
-    transform var(--duration-slow, 350ms) var(--ease-spring);
+    opacity   var(--duration-slow) var(--ease-spring),
+    transform var(--duration-slow) var(--ease-spring);
 }
 
 .btn-cart-added .btn-cart-label {
@@ -140,7 +133,7 @@
 }
 
 /* =============================================================================
-   SR-ONLY / ACCESSIBILITY
+   ACCESSIBILITY
    ============================================================================= */
 
 /* Visually hidden but accessible to screen readers */
@@ -156,7 +149,7 @@
   border-width: 0;
 }
 
-/* Reveal on focus (skip nav links) */
+/* Reveal on focus — skip-nav links */
 .sr-only:focus,
 .sr-only:focus-within {
   position: static;
@@ -198,16 +191,16 @@
    DIVIDERS
    ============================================================================= */
 
-/* Thin gold divider line */
+/* Gold gradient divider */
 .divider-gold {
   border: none;
   height: 1px;
   background: linear-gradient(
     to right,
     transparent,
-    var(--color-gold-400, #d4af37) 30%,
-    var(--color-gold-300, #e8c46a) 50%,
-    var(--color-gold-400, #d4af37) 70%,
+    var(--color-gold-400) 30%,
+    var(--color-gold-300) 50%,
+    var(--color-gold-400) 70%,
     transparent
   );
   opacity: 0.5;
@@ -217,13 +210,12 @@
 .divider-cream {
   border: none;
   height: 1px;
-  background: var(--color-cream-300, #ede0ce);
+  background: var(--color-cream-300);
 }
 
 /* =============================================================================
-   PERFORMANCE OPTIMIZATION
-   Explicit GPU promotion for elements that animate frequently.
-   Only applied to classes that definitely animate — avoids wasting GPU layers.
+   PERFORMANCE / GPU HINTS
+   Only applied to classes that animate frequently — avoids wasting GPU layers.
    ============================================================================= */
 
 .gpu {
@@ -232,7 +224,7 @@
   -webkit-font-smoothing: antialiased;
 }
 
-/* Elements that Framer Motion will animate — hint the browser early */
+/* Hint the browser early for Framer Motion animated elements */
 [data-motion-component] {
   transform: translateZ(0);
 }
@@ -245,8 +237,8 @@
   *,
   *::before,
   *::after {
-    animation:  none !important;
-    transition: none !important;
+    animation:   none !important;
+    transition:  none !important;
     will-change: auto !important;
   }
 }

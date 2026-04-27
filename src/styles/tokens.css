@@ -1,218 +1,74 @@
 /* =============================================================================
    SOFIS — tokens.css
-   Runtime CSS custom properties. Single source of truth for all design tokens.
+   Runtime CSS custom properties for composite values that cannot be expressed
+   as scalar Tailwind @theme tokens: multi-value gradients, glass definitions,
+   pre-composed transitions, and semantic aliases.
 
-   ── WHY :root AND NOT @theme ────────────────────────────────────────────────
-   Tailwind v4 only processes @theme blocks in the file that contains
-   `@import "tailwindcss"` (i.e. app.css). An @theme block in any @import-ed
-   child file is silently ignored by the Tailwind scanner, which means:
-     • Tailwind utility classes like `bg-gold-400` stop working.
-     • Worse: the duplicate @theme can cause PostCSS to emit an empty stylesheet,
-       breaking ALL styles in the entire app.
-
-   The correct split is:
-     tokens.css  → :root { }   (runtime CSS vars, available to all CSS + JS)
-     app.css     → @theme { }  (Tailwind build-time scan, duplicate of tokens)
-
-   Both blocks contain the same values. If you update a token, update both.
+   Scalar tokens (colors, fonts, radii, shadows, easings, durations, text sizes,
+   tracking, leading, z-index) live ONLY in app.css @theme — Tailwind v4 exposes
+   those as CSS custom properties automatically, so no duplication is needed here.
    ============================================================================= */
 
 :root {
 
-  /* ── Typefaces ─────────────────────────────────────────────────────────── */
-  --font-display: 'Playfair Display', 'SofiDisplay', Georgia, serif;
-  --font-serif:   'Cormorant Garamond', Georgia, serif;
-  --font-sans:    'DM Sans', 'SofiBody', -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-mono:    'SF Mono', 'Fira Code', Menlo, monospace;
+  /* ── Semantic aliases ───────────────────────────────────────────────────── */
+  /* These point to @theme tokens so they resolve at runtime. */
+  --color-accent:        var(--color-gold-400);
+  --color-accent-light:  var(--color-gold-300);
+  --color-accent-deep:   var(--color-gold-600);
+  --color-accent-pale:   var(--color-gold-50);
 
-  /* ── Gold / Accent ─────────────────────────────────────────────────────── */
-  --color-gold-50:   #fdf8e8;
-  --color-gold-100:  #f9efc4;
-  --color-gold-200:  #f2dc87;
-  --color-gold-300:  #e8c46a;
-  --color-gold-400:  #d4af37;
-  --color-gold-500:  #b8961f;
-  --color-gold-600:  #9a7a0e;
-  --color-gold-700:  #7a5f08;
-  --color-gold-800:  #5a4506;
-  --color-gold-900:  #3a2d04;
+  --color-primary:       var(--color-ember-500);
+  --color-primary-600:   var(--color-ember-600);
 
-  --color-accent:       var(--color-gold-400);
-  --color-accent-light: var(--color-gold-300);
-  --color-accent-deep:  var(--color-gold-600);
-  --color-accent-pale:  var(--color-gold-50);
+  --color-ink:           var(--color-ink-900);
+  --color-ink-soft:      var(--color-ink-500);
+  --color-ink-muted:     var(--color-ink-300);
 
-  /* ── Ember / Primary ───────────────────────────────────────────────────── */
-  --color-ember-50:  #fdf4ef;
-  --color-ember-100: #f8e2d4;
-  --color-ember-200: #eebfa0;
-  --color-ember-300: #d9906a;
-  --color-ember-400: #c07040;
-  --color-ember-500: #a96840;
-  --color-ember-600: #8a4f2e;
-  --color-ember-700: #6b3820;
-  --color-ember-800: #4e2414;
-  --color-ember-900: #32140a;
+  --color-cream:         var(--color-cream-100);
+  --color-cream-deep:    var(--color-cream-300);
+  --color-parchment:     var(--color-cream-400);
 
-  --color-primary:     var(--color-ember-500);
-  --color-primary-600: var(--color-ember-600);
+  --color-stone:         var(--color-stone-900);
+  --color-stone-mid:     var(--color-stone-800);
+  --color-stone-light:   var(--color-stone-700);
 
-  /* ── Crimson ───────────────────────────────────────────────────────────── */
-  --color-crimson-400: #c45a2a;
-  --color-crimson-500: #a84520;
-  --color-crimson-600: #8c3418;
+  --color-border:        var(--color-cream-200);
+  --color-border-mid:    var(--color-cream-400);
+  --color-border-dark:   rgb(255 255 255 / 0.10);
 
-  /* ── Ink / Text ─────────────────────────────────────────────────────────── */
-  --color-ink-50:  #faf8f5;
-  --color-ink-100: #f0ebe4;
-  --color-ink-200: #ddd4c8;
-  --color-ink-300: #c8b8a8;
-  --color-ink-400: #a89888;
-  --color-ink-500: #8a7a6a;
-  --color-ink-600: #6a5a4e;
-  --color-ink-700: #4e3e34;
-  --color-ink-800: #2d2520;
-  --color-ink-900: #1c1c1c;
+  /* ── Semantic radius aliases ────────────────────────────────────────────── */
+  --radius-card:         var(--radius-2xl);
+  --radius-btn:          var(--radius-pill);
+  --radius-input:        var(--radius-md);
+  --radius-badge:        var(--radius-pill);
 
-  --color-ink:       var(--color-ink-900);
-  --color-ink-soft:  var(--color-ink-500);
-  --color-ink-muted: var(--color-ink-300);
+  /* ── Semantic shadow aliases ────────────────────────────────────────────── */
+  --shadow-card-sm:      var(--shadow-md);
+  --shadow-card:         var(--shadow-lg);
+  --shadow-card-lg:      var(--shadow-xl);
 
-  /* ── Cream / Light Surfaces ─────────────────────────────────────────────── */
-  --color-cream-50:  #fefcf9;
-  --color-cream-100: #faf6ef;
-  --color-cream-200: #f5ede0;
-  --color-cream-300: #ede0ce;
-  --color-cream-400: #e3d0b8;
-  --color-cream-500: #d4bfa0;
+  /* ── Spacing scale (section-level, not Tailwind spacing) ────────────────── */
+  --space-section-xs:   3rem;
+  --space-section-sm:   4rem;
+  --space-section:      5rem;
+  --space-section-lg:   7rem;
+  --space-section-xl:   10rem;
 
-  --color-cream:      var(--color-cream-100);
-  --color-cream-deep: var(--color-cream-300);
-  --color-parchment:  var(--color-cream-400);
-  --color-surface:    #ffffff;
+  /* ── Pre-composed transitions ───────────────────────────────────────────── */
+  --transition-colors:
+    color            var(--duration-base) var(--ease-luxury),
+    background-color var(--duration-base) var(--ease-luxury),
+    border-color     var(--duration-base) var(--ease-luxury);
 
-  /* ── Stone / Dark Surfaces ──────────────────────────────────────────────── */
-  --color-stone-950: #0d0c0a;
-  --color-stone-900: #1c1915;
-  --color-stone-800: #2e2a24;
-  --color-stone-700: #3e3830;
-  --color-stone-600: #504840;
-  --color-stone-500: #625a50;
+  --transition-hover:
+    transform   var(--duration-slow) var(--ease-luxury),
+    box-shadow  var(--duration-slow) var(--ease-luxury);
 
-  --color-stone:       var(--color-stone-900);
-  --color-stone-mid:   var(--color-stone-800);
-  --color-stone-light: var(--color-stone-700);
+  --transition-opacity:
+    opacity var(--duration-base) var(--ease-out);
 
-  /* ── Border ─────────────────────────────────────────────────────────────── */
-  --color-border:      var(--color-cream-200);
-  --color-border-mid:  var(--color-cream-400);
-  --color-border-dark: rgb(255 255 255 / 0.10);
-
-  /* ── Status ─────────────────────────────────────────────────────────────── */
-  --color-success:    #1f5c1f;
-  --color-success-bg: #f2f6f2;
-  --color-error:      #c0392b;
-  --color-error-bg:   #fdf2f2;
-  --color-warning:    #d4aa40;
-
-  /* ── Border radius ──────────────────────────────────────────────────────── */
-  --radius-xs:    0.25rem;
-  --radius-sm:    0.375rem;
-  --radius-md:    0.5rem;
-  --radius-lg:    0.75rem;
-  --radius-xl:    1rem;
-  --radius-2xl:   1.25rem;
-  --radius-3xl:   1.75rem;
-  --radius-pill:  9999px;
-
-  --radius-card:  var(--radius-2xl);
-  --radius-btn:   var(--radius-pill);
-  --radius-input: var(--radius-md);
-  --radius-badge: var(--radius-pill);
-
-  /* ── Spacing scale ──────────────────────────────────────────────────────── */
-  --space-section-xs: 3rem;
-  --space-section-sm: 4rem;
-  --space-section:    5rem;
-  --space-section-lg: 7rem;
-  --space-section-xl: 10rem;
-
-  /* ── Shadows ────────────────────────────────────────────────────────────── */
-  --shadow-xs:       0 1px 2px rgb(26 18 9 / 0.05);
-  --shadow-sm:       0 2px 6px rgb(26 18 9 / 0.06), 0 1px 3px rgb(26 18 9 / 0.04);
-  --shadow-md:       0 4px 16px rgb(26 18 9 / 0.08);
-  --shadow-lg:       0 8px 32px rgb(26 18 9 / 0.12);
-  --shadow-xl:       0 16px 56px rgb(26 18 9 / 0.16);
-  --shadow-2xl:      0 28px 80px rgb(26 18 9 / 0.22);
-
-  --shadow-card-sm:  var(--shadow-md);
-  --shadow-card:     var(--shadow-lg);
-  --shadow-card-lg:  var(--shadow-xl);
-  --shadow-popover:  0 24px 48px rgb(26 18 9 / 0.14), 0 8px 16px rgb(26 18 9 / 0.08);
-
-  --shadow-gold:     0 0 32px rgb(212 175 55 / 0.22), 0 4px 16px rgb(212 175 55 / 0.14);
-  --shadow-gold-lg:  0 0 64px rgb(212 175 55 / 0.28), 0 8px 32px rgb(212 175 55 / 0.18);
-  --shadow-brand:    0 8px 24px rgb(169 104 64 / 0.25);
-  --shadow-brand-lg: 0 16px 56px rgb(169 104 64 / 0.35);
-
-  /* ── Easing ─────────────────────────────────────────────────────────────── */
-  --ease-luxury:    cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-out:       cubic-bezier(0.0, 0, 0.2, 1);
-  --ease-spring:    cubic-bezier(0.34, 1.56, 0.64, 1);
-  --ease-standard:  cubic-bezier(0.4, 0, 0.2, 1);
-  --ease-in-out:    cubic-bezier(0.45, 0, 0.55, 1);
-  --ease-cinematic: cubic-bezier(0.12, 0, 0.39, 0);
-
-  /* ── Duration ───────────────────────────────────────────────────────────── */
-  --duration-instant: 80ms;
-  --duration-fast:    140ms;
-  --duration-base:    200ms;
-  --duration-slow:    350ms;
-  --duration-enter:   500ms;
-  --duration-scene:   800ms;
-
-  /* ── Transitions (pre-composed) ─────────────────────────────────────────── */
-  --transition-colors: color var(--duration-base) var(--ease-luxury),
-                       background-color var(--duration-base) var(--ease-luxury),
-                       border-color var(--duration-base) var(--ease-luxury);
-  --transition-hover:  transform var(--duration-slow) var(--ease-luxury),
-                       box-shadow var(--duration-slow) var(--ease-luxury);
-  --transition-opacity: opacity var(--duration-base) var(--ease-out);
-
-  /* ── Typography scale ───────────────────────────────────────────────────── */
-  --text-2xs:  0.625rem;
-  --text-xs:   0.75rem;
-  --text-sm:   0.875rem;
-  --text-base: 1rem;
-  --text-lg:   1.125rem;
-  --text-xl:   1.25rem;
-  --text-2xl:  1.5rem;
-  --text-3xl:  2rem;
-  --text-4xl:  2.5rem;
-  --text-5xl:  3rem;
-  --text-6xl:  3.75rem;
-  --text-7xl:  4.5rem;
-
-  /* ── Letter spacing ─────────────────────────────────────────────────────── */
-  --tracking-tightest: -0.04em;
-  --tracking-tighter:  -0.03em;
-  --tracking-tight:    -0.02em;
-  --tracking-normal:   0em;
-  --tracking-wide:     0.04em;
-  --tracking-wider:    0.08em;
-  --tracking-label:    0.12em;
-  --tracking-caps:     0.18em;
-  --tracking-loose:    0.22em;
-
-  /* ── Line height ────────────────────────────────────────────────────────── */
-  --leading-none:    1;
-  --leading-tight:   1.2;
-  --leading-snug:    1.35;
-  --leading-base:    1.55;
-  --leading-relaxed: 1.75;
-  --leading-loose:   1.9;
-
-  /* ── Glass / Overlay ────────────────────────────────────────────────────── */
+  /* ── Glass / Frosted overlay ────────────────────────────────────────────── */
   --glass-bg:           rgb(255 255 255 / 0.06);
   --glass-bg-mid:       rgb(255 255 255 / 0.10);
   --glass-bg-strong:    rgb(255 255 255 / 0.14);
@@ -221,10 +77,10 @@
   --glass-blur:         14px;
   --glass-blur-heavy:   24px;
 
-  --glass-dark-bg:     rgb(28 25 21 / 0.65);
-  --glass-dark-border: rgb(28 25 21 / 0.12);
+  --glass-dark-bg:      rgb(28 25 21 / 0.65);
+  --glass-dark-border:  rgb(28 25 21 / 0.12);
 
-  /* ── Gradients (brand card placeholders) ────────────────────────────────── */
+  /* ── Multi-stop brand gradients ─────────────────────────────────────────── */
   --gradient-1: radial-gradient(ellipse at 40% 40%, #7A4020 0%, #3A1A08 55%, #1C0E04 100%);
   --gradient-2: radial-gradient(ellipse at 55% 38%, #C07830 0%, #7A3C0A 50%, #2E1404 100%);
   --gradient-3: radial-gradient(ellipse at 45% 48%, #6A5530 0%, #3E2E0E 50%, #1E1406 100%);
@@ -236,34 +92,27 @@
     radial-gradient(ellipse 90% 60% at 75% 15%, rgb(212 175 55 / 0.08) 0%, transparent 55%),
     radial-gradient(ellipse 60% 50% at 15% 85%, rgb(168 69 32 / 0.10) 0%, transparent 50%);
 
-  --gradient-section-fade-top:    linear-gradient(to bottom, rgb(250 246 239 / 1) 0%, transparent 100%);
-  --gradient-section-fade-bottom: linear-gradient(to top,   rgb(250 246 239 / 1) 0%, transparent 100%);
+  --gradient-section-fade-top:
+    linear-gradient(to bottom, rgb(250 246 239 / 1) 0%, transparent 100%);
+  --gradient-section-fade-bottom:
+    linear-gradient(to top, rgb(250 246 239 / 1) 0%, transparent 100%);
 
-  /* ── Z-index scale ──────────────────────────────────────────────────────── */
-  --z-base:    0;
-  --z-raised:  10;
-  --z-overlay: 20;
-  --z-sticky:  30;
-  --z-modal:   40;
-  --z-toast:   50;
-  --z-cursor:  60;
-}
-:root {
-  /* Button system */
-  --btn-primary-bg: var(--color-accent);
-  --btn-primary-text: #ffffff;
-  --btn-primary-hover: color-mix(in srgb, var(--color-accent) 85%, black);
+  /* ── Button system ──────────────────────────────────────────────────────── */
+  /* Composite values only — scalars are in @theme */
+  --btn-primary-bg:      var(--color-accent);
+  --btn-primary-text:    #ffffff;
+  --btn-primary-hover:   color-mix(in srgb, var(--color-accent) 85%, black);
 
-  --btn-secondary-bg: var(--color-cream);
-  --btn-secondary-text: var(--color-ink);
+  --btn-secondary-bg:    var(--color-cream);
+  --btn-secondary-text:  var(--color-ink);
   --btn-secondary-border: var(--color-border);
 
-  --btn-outline-text: var(--color-accent);
-  --btn-outline-border: var(--color-accent);
+  --btn-outline-text:    var(--color-accent);
+  --btn-outline-border:  var(--color-accent);
 
-  --btn-danger-bg: #dc2626;
-  --btn-danger-text: #ffffff;
+  --btn-danger-bg:       var(--color-error);
+  --btn-danger-text:     #ffffff;
 
-  --btn-glass-bg: rgba(255, 255, 255, 0.05);
-  --btn-glass-border: rgba(255, 255, 255, 0.12);
+  --btn-glass-bg:        rgb(255 255 255 / 0.05);
+  --btn-glass-border:    rgb(255 255 255 / 0.12);
 }

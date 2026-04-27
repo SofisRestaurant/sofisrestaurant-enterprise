@@ -1,20 +1,21 @@
 // =============================================================================
 // PATH: src/modules/menu/components/MenuItemModal.tsx
 // =============================================================================
-// MENU ITEM MODAL — Production (2026) — Luxury UX + Modifier Support
+// MENU ITEM MODAL — 2026 Luxury Edition
 // =============================================================================
-// This file is the modal shell: props → hooks → JSX.
-// All state, business logic, and utilities live in their own modules.
-//
-// Contracts preserved exactly:
-//   - preflight invoke + payload shape
-//   - modifier selection rules + pruning behavior
-//   - addItem payload shape
-//   - pricingHash composition
+// Visual overhaul:
+//   - Cinematic modal entry animation (desktop: scale+rise, mobile: sheet-up)
+//   - Richer glassmorphism header with warm-tinted surface
+//   - Editorial price display with server-confirmed badge
+//   - Redesigned modifier groups with tactile check indicators
+//   - Premium quantity stepper with animated counter
+//   - Polished sticky footer with total breakdown
+//   - Accessible colour contrast on all interactive states
+//   - All contracts and logic unchanged from source
 // =============================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, Info, Minus, Plus, Star, X } from 'lucide-react';
+import { Check, ChevronDown, Info, Minus, Plus, Star, X, AlertCircle, Flame } from 'lucide-react';
 import type { MenuItemPublic } from '@/domain/menu/menu.types';
 import { useCart } from '@/modules/cart/hooks/useCart';
 import { useScrollLock } from '@/lib/ui/useScrollLock';
@@ -47,12 +48,52 @@ interface Props {
   onClose: () => void;
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function TagPill({ label }: { label: string }) {
+  return (
+    <span className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-medium tracking-wide text-zinc-300">
+      {label}
+    </span>
+  );
+}
+
+function AlertStrip({
+  variant,
+  children,
+}: {
+  variant: 'warning' | 'error' | 'success' | 'info';
+  children: React.ReactNode;
+}) {
+  const styles = {
+    warning: 'border-amber-500/20 bg-amber-500/[0.07] text-amber-200',
+    error:   'border-red-500/20   bg-red-500/[0.07]   text-red-200',
+    success: 'border-green-500/20 bg-green-500/[0.07] text-green-200',
+    info:    'border-white/10     bg-white/[0.04]     text-zinc-300',
+  };
+
+  const icons = {
+    warning: <AlertCircle className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" aria-hidden="true" />,
+    error:   <AlertCircle className="h-4 w-4 shrink-0 text-red-400   mt-0.5" aria-hidden="true" />,
+    success: <Check        className="h-4 w-4 shrink-0 text-green-400 mt-0.5" aria-hidden="true" />,
+    info:    <Info         className="h-4 w-4 shrink-0 text-zinc-400  mt-0.5" aria-hidden="true" />,
+  };
+
+  return (
+    <div className={cx('mt-4 flex items-start gap-2.5 rounded-2xl border p-4 text-sm leading-relaxed', styles[variant])}>
+      {icons[variant]}
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
 export default function MenuItemModal({ item, onClose }: Props) {
   const { addItem } = useCart();
 
   const invalidItem = !isMenuItemPublic(item);
 
-  // Treat props as untrusted at runtime (shape drift safe)
   const rec = isRecord(item) ? (item as Record<string, unknown>) : {};
   const id = safeStr(rec.id, '', 128);
   const name = safeStr(rec.name, 'Menu item', 120);
@@ -73,7 +114,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
       Number.isFinite(rec.popularity_score) &&
       rec.popularity_score >= 80);
 
-  // ── Phase + notes (local to modal) ──────────────────────────────────────────
+  // ── Phase + notes ────────────────────────────────────────────────────────────
 
   type CartPhase = 'idle' | 'adding' | 'success';
   const [phase, setPhase] = useState<CartPhase>('idle');
@@ -87,13 +128,13 @@ export default function MenuItemModal({ item, onClose }: Props) {
   const addTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── Modal focus / keyboard refs ──────────────────────────────────────────────
+  // ── Modal refs ───────────────────────────────────────────────────────────────
 
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const lastFocusRef = useRef<HTMLElement | null>(null);
 
-  // ── Composed hooks ───────────────────────────────────────────────────────────
+  // ── Hooks ────────────────────────────────────────────────────────────────────
 
   const { safeQty, maxQty, setQty, clampToServerMax } = useMenuItemQty();
 
@@ -114,7 +155,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
     clearSelections,
   } = useMenuItemModifiers(id, onLiveStatus);
 
-  // ── Modal close ──────────────────────────────────────────────────────────────
+  // ── Close ────────────────────────────────────────────────────────────────────
 
   const close = useCallback(() => {
     unlockScroll(scrollToken);
@@ -126,9 +167,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
   useEffect(() => {
     lastFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    queueMicrotask(() => {
-      closeBtnRef.current?.focus();
-    });
+    queueMicrotask(() => closeBtnRef.current?.focus());
 
     return () => {
       unlockScroll(scrollToken);
@@ -154,19 +193,18 @@ export default function MenuItemModal({ item, onClose }: Props) {
       if (!dialog) return;
 
       const focusables = getFocusable(dialog);
-      if (focusables.length === 0) return;
+      if (!focusables.length) return;
 
-      const active = document.activeElement;
-      const idx = focusables.findIndex((x) => x === active);
-      const lastIdx = focusables.length - 1;
+      const idx = focusables.findIndex((x) => x === document.activeElement);
+      const last = focusables.length - 1;
 
       if (e.shiftKey) {
         if (idx <= 0) {
           e.preventDefault();
-          focusables[lastIdx]?.focus();
+          focusables[last]?.focus();
         }
       } else {
-        if (idx === -1 || idx >= lastIdx) {
+        if (idx === -1 || idx >= last) {
           e.preventDefault();
           focusables[0]?.focus();
         }
@@ -180,17 +218,15 @@ export default function MenuItemModal({ item, onClose }: Props) {
   // ── Cleanup ──────────────────────────────────────────────────────────────────
 
   useEffect(() => {
-    // Capture ref values at effect-run time so the cleanup closure sees the
-    // correct instance even if the ref changes before unmount.
     const abort = abortRef.current;
-    const debounceTmr = debounceTimer;
-    const addTmr = addTimer;
-    const successTmr = successTimer;
+    const d = debounceTimer;
+    const a = addTimer;
+    const s = successTimer;
     return () => {
       abort?.abort();
-      if (debounceTmr.current) clearTimeout(debounceTmr.current);
-      if (addTmr.current) clearTimeout(addTmr.current);
-      if (successTmr.current) clearTimeout(successTmr.current);
+      if (d.current) clearTimeout(d.current);
+      if (a.current) clearTimeout(a.current);
+      if (s.current) clearTimeout(s.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -200,9 +236,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
   useEffect(() => {
     if (!id) return;
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    debounceTimer.current = setTimeout(() => {
-      void runPreflight(safeQty);
-    }, 200);
+    debounceTimer.current = setTimeout(() => void runPreflight(safeQty), 200);
     return () => {
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
     };
@@ -267,7 +301,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
       .filter((g) => !isSelectionValidForGroup(g, selected[g.id] ?? []))
       .map((g) => g.name);
     if (!missing.length) return null;
-    return `Choose required options: ${missing.slice(0, 2).join(', ')}${missing.length > 2 ? '…' : ''}`;
+    return `Required: ${missing.slice(0, 2).join(', ')}${missing.length > 2 ? '…' : ''}`;
   }, [modifierGroups, selected]);
 
   // ── Add to cart ──────────────────────────────────────────────────────────────
@@ -285,34 +319,32 @@ export default function MenuItemModal({ item, onClose }: Props) {
 
     if (addTimer.current) clearTimeout(addTimer.current);
     addTimer.current = setTimeout(() => {
-const chosen: Array<{
-  id: string;
-  groupId: string;
-  name: string;
-  priceAdjustmentCents: number;
-}> = [];
+      const chosen: Array<{
+        id: string;
+        groupId: string;
+        name: string;
+        priceAdjustmentCents: number;
+      }> = [];
 
-for (const g of modifierGroups) {
-  for (const s of selected[g.id] ?? []) {
-    chosen.push({
-      id: s.id,
-      groupId: s.modifier_group_id, // ✅ map domain → cart
-      name: s.name,
-      priceAdjustmentCents: safeCents(s.price_adjustment, 0), // ✅ map domain → cart
-    });
-  }
-}
+      for (const g of modifierGroups) {
+        for (const s of selected[g.id] ?? []) {
+          chosen.push({
+            id: s.id,
+            groupId: s.modifier_group_id,
+            name: s.name,
+            priceAdjustmentCents: safeCents(s.price_adjustment, 0),
+          });
+        }
+      }
 
       const note = safeStr(notes, '', MAX_NOTES_LENGTH);
       const notesOrNull = note.length ? note : null;
-
-      // IMPORTANT: pricingHash composition must remain intact
       const pricingHash = `v2:preflight:${id}:${preflight.unit_price_cents}:mods:${canonicalizeSelectionsForHash(selected)}:qty:${safeQty}`;
 
       addItem({
         menuItemId: id,
         name,
-        unitPriceCents: preflight.unit_price_cents, // server confirmed
+        unitPriceCents: preflight.unit_price_cents,
         imageUrl: imageUrl ?? null,
         category: item.category,
         modifiers: chosen,
@@ -325,7 +357,7 @@ for (const g of modifierGroups) {
       setLiveStatus('Added!');
 
       if (successTimer.current) clearTimeout(successTimer.current);
-      successTimer.current = setTimeout(() => close(), 900);
+      successTimer.current = setTimeout(() => close(), 920);
     }, 180);
   }, [
     canAdd,
@@ -346,29 +378,36 @@ for (const g of modifierGroups) {
 
   // ── Derived labels ───────────────────────────────────────────────────────────
 
-  const headerPriceLabel = useMemo(() => {
-    if (preflightLoading) return 'checking…';
-    if (preflight?.ok === true) return 'server-confirmed';
-    return '—';
-  }, [preflightLoading, preflight]);
-
   const stickyTotalLabel = useMemo(() => fmtUsdFromCents(lineTotalCents), [lineTotalCents]);
   const basePriceLabel = useMemo(() => fmtUsdFromCents(unitPriceCents), [unitPriceCents]);
-
   const extrasLabel = useMemo(() => {
     if (modifiersCents <= 0) return null;
-    return `+ ${fmtUsdFromCents(modifiersCents)} options`;
+    return `+${fmtUsdFromCents(modifiersCents)} options`;
   }, [modifiersCents]);
 
   const unavailable = preflight?.ok === true && preflight.available === false;
+
+  const addBtnLabel = invalidItem
+    ? 'Unavailable'
+    : preflightLoading
+      ? 'Checking…'
+      : phase === 'adding'
+        ? 'Adding…'
+        : phase === 'success'
+          ? '✓ Added!'
+          : unavailable
+            ? 'Unavailable'
+            : !modifierRulesOk
+              ? 'Choose options'
+              : `Add to Order · ${stickyTotalLabel}`;
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
     <div className="fixed inset-0 z-50">
-      {/* Backdrop */}
+      {/* ── Backdrop ── */}
       <div
-        className="absolute inset-0 bg-black/60"
+        className="absolute inset-0 bg-black/70 backdrop-blur-sm animate-backdrop-in"
         aria-hidden="true"
         onMouseDown={(e) => {
           e.preventDefault();
@@ -376,16 +415,27 @@ for (const g of modifierGroups) {
         }}
       />
 
-      <div className="absolute inset-0 flex items-end justify-center p-3 sm:items-center">
+      {/* ── Centering wrapper ── */}
+      <div className="absolute inset-0 flex items-end justify-center p-0 sm:items-center sm:p-4">
+        {/* ── Dialog card ── */}
         <div
           ref={dialogRef}
           role="dialog"
           aria-modal="true"
-          aria-label={`${name} customization`}
+          aria-label={`${name} — customize and add to order`}
           className={cx(
-            'w-full max-w-2xl overflow-hidden rounded-2xl border border-white/10 bg-neutral-950 text-white shadow-2xl',
-            'max-h-[92vh]',
-            'flex flex-col min-h-0',
+            // Structure
+            'w-full sm:max-w-2xl flex flex-col min-h-0',
+            // Shape — full bottom sheet on mobile, rounded card on desktop
+            'rounded-t-[2rem] sm:rounded-3xl overflow-hidden',
+            // Surface
+            'bg-[#161410] border border-white/[0.07]',
+            // Shadow & depth
+            'shadow-[0_32px_100px_rgb(0_0_0/0.70),_0_8px_24px_rgb(0_0_0/0.40)]',
+            // Height
+            'max-h-[94vh] sm:max-h-[90vh]',
+            // Entry animation
+            'animate-sheet-in sm:animate-modal-in',
           )}
           onMouseDown={(e) => e.stopPropagation()}
         >
@@ -394,469 +444,539 @@ for (const g of modifierGroups) {
             {liveStatus}
           </div>
 
+          {/* ── Drag pill — mobile only ── */}
+          <div className="sm:hidden flex justify-center pt-3 pb-1 flex-shrink-0" aria-hidden="true">
+            <div className="h-1 w-10 rounded-full bg-white/20" />
+          </div>
+
           {/* ── Header ── */}
-          <div className="shrink-0 border-b border-white/10 bg-neutral-950/90 backdrop-blur supports-backdrop-filter:bg-neutral-950/70">
-            <div className="flex items-start justify-between gap-3 px-5 py-4">
-              <div className="min-w-0">
-                <p className="text-[10px] uppercase tracking-[0.22em] text-zinc-400">
-                  {categoryLabel}
-                </p>
-                <div className="mt-1 flex items-center gap-2">
-                  <h2 className="truncate text-xl font-semibold">{name}</h2>
-                  {isPopular ? (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-1 text-[10px] font-bold text-amber-200 ring-1 ring-amber-500/25">
-                      <Star className="h-3.5 w-3.5" aria-hidden="true" />
+          <header className="flex-shrink-0 border-b border-white/[0.07] bg-[#161410]/95 backdrop-blur-xl">
+            <div className="flex items-start justify-between gap-4 px-6 py-5">
+              <div className="min-w-0 flex-1">
+                {/* Eyebrow */}
+                <p className="modal-eyebrow">{categoryLabel}</p>
+
+                {/* Title + Popular badge */}
+                <div className="mt-1.5 flex flex-wrap items-center gap-2.5">
+                  <h2 className="text-[1.35rem] font-bold leading-tight tracking-tight text-white">
+                    {name}
+                  </h2>
+                  {isPopular && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-400/12 px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-300 ring-1 ring-amber-400/25 animate-scale-pop">
+                      <Star className="h-3 w-3" aria-hidden="true" />
                       Popular
                     </span>
-                  ) : null}
+                  )}
                 </div>
-                <p className="mt-1 text-xs text-zinc-400">
-                  <span className="font-semibold text-amber-300">{basePriceLabel}</span>{' '}
-                  <span className="text-[11px] text-zinc-500">• {headerPriceLabel}</span>
-                  {extrasLabel ? (
-                    <span className="ml-2 text-[11px] text-zinc-500">{extrasLabel}</span>
-                  ) : null}
-                </p>
+
+                {/* Price row */}
+                <div className="mt-2 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+                  {preflightLoading ? (
+                    <div className="h-5 w-20 skeleton-dark rounded-md" aria-hidden="true" />
+                  ) : preflight?.ok === true ? (
+                    <>
+                      <span className="text-xl font-bold tabular-nums text-amber-300/90">
+                        {basePriceLabel}
+                      </span>
+                      {extrasLabel && (
+                        <span className="text-xs text-zinc-500 tabular-nums">{extrasLabel}</span>
+                      )}
+                      <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-medium text-zinc-500">
+                        <span
+                          className="h-1.5 w-1.5 rounded-full bg-green-500/80"
+                          aria-hidden="true"
+                        />
+                        live price
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-sm text-zinc-600">—</span>
+                  )}
+                </div>
               </div>
 
+              {/* Close button */}
               <button
                 ref={closeBtnRef}
                 type="button"
                 onClick={close}
-                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25"
-                aria-label="Close modal"
+                className={cx(
+                  'flex-shrink-0 inline-flex h-10 w-10 items-center justify-center',
+                  'rounded-xl border border-white/10 bg-white/[0.05]',
+                  'text-zinc-400 transition-all duration-200',
+                  'hover:border-white/20 hover:bg-white/10 hover:text-white',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/30',
+                  'active:scale-90',
+                )}
+                aria-label="Close"
               >
-                <X className="h-5 w-5" aria-hidden="true" />
+                <X className="h-4.5 w-4.5" aria-hidden="true" />
               </button>
             </div>
-          </div>
+          </header>
 
           {/* ── Scrollable body ── */}
-          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 pb-6 [-webkit-overflow-scrolling:touch]">
-            {invalidItem ? (
-              <div className="pt-4">
-                <div
-                  className="w-full rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200 shadow-xl"
-                  aria-label="Item unavailable"
-                >
-                  This item can't be opened right now.
-                  <div className="mt-4 flex justify-end">
-                    <button
-                      type="button"
-                      onClick={close}
-                      className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 font-semibold text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25"
-                      aria-label="Close"
-                    >
-                      Close
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <>
-                {/* ── Item image + meta ── */}
-                <div className="pt-4">
-                  <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/5">
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain [-webkit-overflow-scrolling:touch]">
+            <div className="px-6 pb-8 pt-5 space-y-6">
+              {invalidItem ? (
+                <AlertStrip variant="error">
+                  <p className="font-semibold text-red-100">Item unavailable</p>
+                  <p className="mt-1 text-xs text-red-300/70">
+                    This item can't be opened right now. Please try again.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={close}
+                    className="mt-3 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-100 hover:bg-red-500/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500/30"
+                  >
+                    Close
+                  </button>
+                </AlertStrip>
+              ) : (
+                <>
+                  {/* ── Hero image ── */}
+                  <div className="relative overflow-hidden rounded-2xl border border-white/[0.07] bg-white/[0.03] aspect-[16/7]">
                     {imageUrl ? (
                       <img
                         src={imageUrl}
                         alt=""
-                        className="h-56 w-full object-cover"
+                        className="h-full w-full object-cover"
                         loading="lazy"
                         decoding="async"
                       />
                     ) : (
-                      <div className="flex h-56 w-full items-center justify-center bg-linear-to-br from-white/5 to-white/0">
+                      <div className="flex h-full w-full flex-col items-center justify-center gap-2">
+                        <div className="h-12 w-12 rounded-2xl bg-white/5 flex items-center justify-center">
+                          <Flame className="h-6 w-6 text-amber-400/40" aria-hidden="true" />
+                        </div>
                         <div className="text-center">
-                          <p className="text-sm font-semibold text-neutral-200">Sofi's Kitchen</p>
-                          <p className="mt-1 text-xs text-zinc-500">
-                            Fresh, real plates, made to order.
+                          <p className="text-sm font-semibold text-white/70">Sofi's Kitchen</p>
+                          <p className="mt-0.5 text-xs text-zinc-600">
+                            Fresh plates, made to order
                           </p>
                         </div>
                       </div>
                     )}
-                    <div className="pointer-events-none absolute inset-0 bg-linear-to-t from-neutral-950/70 via-neutral-950/10 to-transparent" />
+                    {/* Gradient overlay */}
+                    <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#161410]/60 via-transparent to-transparent" />
+                    {/* Subtle vignette */}
+                    <div className="pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-inset ring-white/[0.06]" />
                   </div>
 
-                  {description ? <p className="mt-4 text-sm text-zinc-300">{description}</p> : null}
+                  {/* ── Description & tags ── */}
+                  {(description || tags.length > 0) && (
+                    <div>
+                      {description && (
+                        <p className="text-sm leading-relaxed text-zinc-400">{description}</p>
+                      )}
+                      {tags.length > 0 && (
+                        <div className="mt-3 flex flex-wrap gap-1.5">
+                          {tags.slice(0, 10).map((t) => (
+                            <TagPill key={t} label={t} />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
-                  {tags.length ? (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {tags.slice(0, 10).map((t) => (
-                        <span
-                          key={t}
-                          className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-zinc-200"
+                  {/* ── Alerts ── */}
+                  {preflightError && <AlertStrip variant="error">{preflightError}</AlertStrip>}
+                  {isLowStock && preflight?.ok === true && preflight.stock_count != null && (
+                    <AlertStrip variant="warning">
+                      Only <strong>{preflight.stock_count}</strong> remaining — order soon.
+                    </AlertStrip>
+                  )}
+                  {unavailable && (
+                    <AlertStrip variant="error">This item is currently unavailable.</AlertStrip>
+                  )}
+                  {selectionPrunedWarning && (
+                    <AlertStrip variant="warning">{selectionPrunedWarning}</AlertStrip>
+                  )}
+                  {hasBlockedSelections && (
+                    <AlertStrip variant="error">
+                      Some selected options are no longer available. Please update your choices.
+                    </AlertStrip>
+                  )}
+
+                  {/* ── Modifier groups ── */}
+                  <section aria-label="Customization options">
+                    <div className="flex items-center justify-between gap-3 mb-4">
+                      <div>
+                        <p className="section-eyebrow-light">Customize your order</p>
+                        <p className="mt-1 text-[11px] text-zinc-600 leading-relaxed">
+                          Options validated server-side at checkout.
+                        </p>
+                      </div>
+                      {modifierGroups.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={clearSelections}
+                          className="btn btn-ghost-dark btn-sm shrink-0"
+                          aria-label="Clear all selections"
                         >
-                          {t}
-                        </span>
-                      ))}
+                          Clear all
+                        </button>
+                      )}
                     </div>
-                  ) : null}
-                </div>
 
-                {/* ── Alerts ── */}
-                {preflightError ? (
-                  <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
-                    {preflightError}
-                  </div>
-                ) : null}
-
-                {isLowStock && preflight?.ok === true && preflight.stock_count != null ? (
-                  <div className="mt-4 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-4 text-sm text-amber-200">
-                    Only {preflight.stock_count} left — order soon.
-                  </div>
-                ) : null}
-
-                {unavailable ? (
-                  <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
-                    This item is currently unavailable.
-                  </div>
-                ) : null}
-
-                {selectionPrunedWarning ? (
-                  <div className="mt-4 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-4 text-sm text-amber-200">
-                    {selectionPrunedWarning}
-                  </div>
-                ) : null}
-
-                {hasBlockedSelections ? (
-                  <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
-                    Some selected options are no longer available. Please update your choices.
-                  </div>
-                ) : null}
-
-                {/* ── Modifier groups ── */}
-                <div className="mt-6">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="section-eyebrow">Customize your order</p>
-                      <p className="text-xs input-label mt-1">
-                        Options are validated for availability and required picks before adding to
-                        cart.
-                      </p>
-                    </div>
-                    {modifierGroups.length ? (
-                      <button
-                        type="button"
-                        onClick={clearSelections}
-                        className="btn btn-ghost-dark btn-sm px-2 py-1 shrink-0"
-                        aria-label="Clear all selections"
-                      >
-                        Clear
-                      </button>
-                    ) : null}
-                  </div>
-
-                  {groupsLoading ? (
-                    <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
-                      <p className="text-sm text-zinc-300">Loading options…</p>
-                      <div className="mt-3 grid gap-2">
-                        {SKELETON_IDS.map((skeletonId) => (
+                    {groupsLoading ? (
+                      <div className="space-y-2.5">
+                        {SKELETON_IDS.map((id) => (
                           <div
-                            key={skeletonId}
-                            className="h-10 animate-pulse rounded-xl bg-white/5"
+                            key={id}
+                            className="h-16 skeleton-dark rounded-2xl"
                             aria-hidden="true"
                           />
                         ))}
                       </div>
-                    </div>
-                  ) : groupsError ? (
-                    <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-zinc-300">
-                      <div className="flex items-start gap-3">
-                        <span className="mt-0.5 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 ring-1 ring-white/10">
-                          <Info className="h-4 w-4 text-zinc-200" aria-hidden="true" />
-                        </span>
-                        <div className="min-w-0">
-                          <p className="font-semibold text-white">Options unavailable</p>
-                          <p className="mt-1 text-xs text-zinc-500">{groupsError}</p>
-                          <button
-                            type="button"
-                            onClick={() => void loadModifierGroups()}
-                            className="mt-3 rounded-lg bg-white/10 px-3 py-2 text-xs font-semibold text-white hover:bg-white/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25"
-                            aria-label="Retry loading options"
-                          >
-                            Retry
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ) : !modifierGroups.length ? (
-                    <div className="mt-4 rounded-2xl border border-white/10 bg-white/3 p-4 text-sm text-zinc-300">
-                      No customization options for this item.
-                    </div>
-                  ) : (
-                    <div className="mt-4 space-y-3">
-                      {modifierGroups.map((g) => {
-                        const sels = selected[g.id] ?? [];
-                        const expanded = Boolean(expandedGroups[g.id]);
-                        const valid = isSelectionValidForGroup(g, sels);
-                        const rangeLabel = groupSelectionRangeLabel(g);
-
-                        const selectedCount = sels.length;
-                        const max = g.max_selections ?? (g.type === 'radio' ? 1 : null);
-                        const min = g.min_selections ?? (g.required ? 1 : 0);
-
-                        const subline =
-                          g.type === 'radio'
-                            ? `${rangeLabel}${selectedCount ? ` • selected` : ''}`
-                            : `${rangeLabel}${
-                                max != null
-                                  ? ` • ${selectedCount}/${max}`
-                                  : selectedCount
-                                    ? ` • ${selectedCount} selected`
-                                    : ''
-                              }`;
-
-                        return (
-                          <div
-                            key={g.id}
-                            className={cx(
-                              'overflow-hidden rounded-2xl border bg-white/3',
-                              valid ? 'border-white/10' : 'border-amber-500/25',
-                            )}
-                          >
+                    ) : groupsError ? (
+                      <div className="rounded-2xl border border-white/[0.07] bg-white/[0.03] p-5">
+                        <div className="flex items-start gap-3.5">
+                          <div className="flex-shrink-0 h-9 w-9 rounded-xl bg-white/[0.04] border border-white/[0.07] flex items-center justify-center">
+                            <Info className="h-4 w-4 text-zinc-400" aria-hidden="true" />
+                          </div>
+                          <div>
+                            <p className="text-sm font-semibold text-white">Options unavailable</p>
+                            <p className="mt-1 text-xs text-zinc-500">{groupsError}</p>
                             <button
                               type="button"
-                              onClick={() => toggleGroupExpanded(g.id)}
-                              className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-white/3 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25"
-                              aria-expanded={expanded ? 'true' : 'false'}
-                              aria-label={`${g.name} options`}
+                              onClick={() => void loadModifierGroups()}
+                              className="mt-3 btn btn-ghost-dark btn-sm"
+                              aria-label="Retry loading options"
                             >
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <p className="truncate text-sm font-semibold text-white">
-                                    {g.name}
-                                  </p>
-                                  {g.required || min > 0 ? (
-                                    <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-200 ring-1 ring-amber-500/25">
-                                      Required
-                                    </span>
-                                  ) : (
-                                    <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-bold text-zinc-300 ring-1 ring-white/10">
-                                      Optional
-                                    </span>
-                                  )}
-                                </div>
-                                {g.description ? (
-                                  <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500">
-                                    {g.description}
-                                  </p>
-                                ) : (
-                                  <p className="mt-0.5 text-xs text-zinc-500">{subline}</p>
-                                )}
-                                {!valid ? (
-                                  <p className="mt-1 text-[11px] font-semibold text-amber-200">
-                                    {selectedCount < min
-                                      ? `Select at least ${min}`
-                                      : max != null
-                                        ? `Select up to ${max}`
-                                        : 'Selection required'}
-                                  </p>
-                                ) : null}
-                              </div>
-
-                              <div className="flex items-center gap-2">
-                                {selectedCount ? (
-                                  <span className="rounded-full bg-white/5 px-2 py-1 text-[11px] font-semibold text-zinc-200">
-                                    {selectedCount} selected
-                                  </span>
-                                ) : null}
-                                <ChevronDown
-                                  className={cx(
-                                    'h-5 w-5 text-zinc-400 transition',
-                                    expanded && 'rotate-180',
-                                  )}
-                                  aria-hidden="true"
-                                />
-                              </div>
+                              Retry
                             </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : modifierGroups.length === 0 ? (
+                      <div className="rounded-2xl border border-white/[0.06] bg-white/[0.025] px-5 py-4 text-sm text-zinc-500">
+                        No customization options for this item.
+                      </div>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {modifierGroups.map((g) => {
+                          const sels = selected[g.id] ?? [];
+                          const expanded = Boolean(expandedGroups[g.id]);
+                          const valid = isSelectionValidForGroup(g, sels);
+                          const rangeLabel = groupSelectionRangeLabel(g);
+                          const selectedCount = sels.length;
+                          const max = g.max_selections ?? (g.type === 'radio' ? 1 : null);
+                          const min = g.min_selections ?? (g.required ? 1 : 0);
+                          const isRequired = g.required || min > 0;
 
-                            {expanded ? (
-                              <div className="border-t border-white/10 px-4 py-3">
-                                <div className="grid gap-2">
-                                  {g.modifiers.map((m) => {
-                                    const on = sels.some((s) => s.id === m.id);
-                                    const disabled = !m.available;
+                          const subline =
+                            g.type === 'radio'
+                              ? `${rangeLabel}${selectedCount ? ' · selected' : ''}`
+                              : `${rangeLabel}${
+                                  max != null
+                                    ? ` · ${selectedCount}/${max}`
+                                    : selectedCount
+                                      ? ` · ${selectedCount} selected`
+                                      : ''
+                                }`;
 
-                                    return (
-                                      <button
-                                        key={m.id}
-                                        type="button"
-                                        disabled={disabled}
-                                        onClick={() => setSelectionForGroup(g, m)}
-                                        className={cx(
-                                          'flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left transition',
-                                          on
-                                            ? 'border-amber-500/30 bg-amber-500/10'
-                                            : 'border-white/10 bg-white/5 hover:bg-white/8',
-                                          disabled &&
-                                            'cursor-not-allowed opacity-50 hover:bg-white/5',
-                                        )}
-                                        aria-pressed={on ? 'true' : 'false'}
-                                        aria-label={`${m.name}${disabled ? ', unavailable' : ''}`}
-                                      >
-                                        <div className="min-w-0">
-                                          <p className="truncate text-sm font-semibold text-white">
-                                            {m.name}
-                                          </p>
-                                          <p className="mt-0.5 text-[11px] text-zinc-500">
-                                            {m.price_adjustment !== 0
-                                              ? `${m.price_adjustment > 0 ? '+' : ''}${fmtUsdFromCents(m.price_adjustment)}`
-                                              : 'No extra cost'}
-                                            {!m.available ? ' • Unavailable' : ''}
-                                          </p>
-                                        </div>
-                                        <div className="shrink-0">
-                                          {on ? (
-                                            <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/15 ring-1 ring-amber-500/25">
-                                              <Check
-                                                className="h-4 w-4 text-amber-200"
-                                                aria-hidden="true"
-                                              />
-                                            </span>
-                                          ) : (
-                                            <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-white/5 ring-1 ring-white/10">
-                                              <span
-                                                className="h-2 w-2 rounded-full bg-white/20"
-                                                aria-hidden="true"
-                                              />
-                                            </span>
-                                          )}
-                                        </div>
-                                      </button>
-                                    );
-                                  })}
+                          return (
+                            <div
+                              key={g.id}
+                              className={cx('modifier-group', !valid && 'modifier-group--invalid')}
+                            >
+                              {/* Group toggle */}
+                              <button
+                                type="button"
+                                onClick={() => toggleGroupExpanded(g.id)}
+                                className="modifier-group-toggle"
+                                aria-expanded={expanded}
+                                aria-label={`${g.name} options, ${isRequired ? 'required' : 'optional'}`}
+                              >
+                                <div className="min-w-0">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="text-sm font-semibold text-white truncate">
+                                      {g.name}
+                                    </span>
+                                    <span
+                                      className={
+                                        isRequired ? 'badge-required badge' : 'badge-optional badge'
+                                      }
+                                    >
+                                      {isRequired ? 'Required' : 'Optional'}
+                                    </span>
+                                  </div>
+                                  {g.description ? (
+                                    <p className="mt-0.5 text-xs text-zinc-500 line-clamp-2">
+                                      {g.description}
+                                    </p>
+                                  ) : (
+                                    <p className="mt-0.5 text-xs text-zinc-600">{subline}</p>
+                                  )}
+                                  {!valid && (
+                                    <p className="mt-1 text-[11px] font-semibold text-amber-300">
+                                      {selectedCount < min
+                                        ? `Select at least ${min}`
+                                        : max != null
+                                          ? `Max ${max} allowed`
+                                          : 'Selection required'}
+                                    </p>
+                                  )}
                                 </div>
 
-                                {maxSelectionHint ? (
-                                  <p className="mt-3 text-xs font-semibold text-amber-200">
-                                    {maxSelectionHint}
-                                  </p>
-                                ) : null}
-                              </div>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
+                                <div className="flex items-center gap-2 flex-shrink-0">
+                                  {selectedCount > 0 && (
+                                    <span className="badge badge-amber text-[10px] px-2 py-0.5">
+                                      {selectedCount}
+                                    </span>
+                                  )}
+                                  <ChevronDown
+                                    className={cx(
+                                      'h-4.5 w-4.5 text-zinc-500 transition-transform duration-300',
+                                      expanded && 'rotate-180',
+                                    )}
+                                    aria-hidden="true"
+                                  />
+                                </div>
+                              </button>
 
-                {/* ── Special instructions ── */}
-                <div className="mt-6">
-                  <p className="text-sm font-semibold text-white">Special instructions</p>
-                  <p className="mt-1 text-xs text-zinc-500">
-                    Allergy notes, "no onions", "extra crispy", etc.
-                  </p>
-                  <textarea
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    rows={3}
-                    maxLength={MAX_NOTES_LENGTH}
-                    className={cx(
-                      'mt-3 w-full resize-none rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white',
-                      'placeholder:text-zinc-500 outline-none',
-                      'focus-visible:ring-2 focus-visible:ring-amber-500/25 focus-visible:border-amber-500/30',
+                              {/* Modifier options */}
+                              {expanded && (
+                                <div className="border-t border-white/[0.06] px-4 py-3">
+                                  <div className="grid gap-2">
+                                    {g.modifiers.map((m) => {
+                                      const on = sels.some((s) => s.id === m.id);
+                                      const disabled = !m.available;
+
+                                      return (
+                                        <button
+                                          key={m.id}
+                                          type="button"
+                                          disabled={disabled}
+                                          onClick={() => setSelectionForGroup(g, m)}
+                                          className={cx(
+                                            'modifier-option',
+                                            on && 'modifier-option--selected',
+                                          )}
+                                          aria-pressed={on}
+                                          aria-label={`${m.name}${disabled ? ', unavailable' : ''}`}
+                                        >
+                                          <div className="min-w-0">
+                                            <p
+                                              className={cx(
+                                                'text-sm font-medium truncate',
+                                                on ? 'text-white' : 'text-zinc-200',
+                                              )}
+                                            >
+                                              {m.name}
+                                            </p>
+                                            <p className="mt-0.5 text-[11px] text-zinc-500">
+                                              {m.price_adjustment !== 0
+                                                ? `${m.price_adjustment > 0 ? '+' : ''}${fmtUsdFromCents(m.price_adjustment)}`
+                                                : 'No extra cost'}
+                                              {!m.available ? ' · Unavailable' : ''}
+                                            </p>
+                                          </div>
+
+                                          <div
+                                            className={cx(
+                                              'modifier-check flex-shrink-0',
+                                              on ? 'modifier-check--on' : 'modifier-check--off',
+                                            )}
+                                          >
+                                            {on && (
+                                              <Check
+                                                className="h-3.5 w-3.5 text-amber-300"
+                                                aria-hidden="true"
+                                              />
+                                            )}
+                                          </div>
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+
+                                  {maxSelectionHint && (
+                                    <p className="mt-3 text-xs font-semibold text-amber-300/80">
+                                      {maxSelectionHint}
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     )}
-                    placeholder="Add a note for the kitchen (optional)…"
-                    aria-label="Special instructions"
-                  />
-                  <p className="mt-1 text-[11px] text-zinc-500">
-                    {clampInt(notes.length, 0, 999)} / {MAX_NOTES_LENGTH}
-                  </p>
-                </div>
+                  </section>
 
-                {requiredHint ? (
-                  <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-200">
-                    {requiredHint}
-                  </div>
-                ) : null}
+                  {/* ── Special instructions ── */}
+                  <section aria-label="Special instructions" className="mt-6">
+                    {/* Header */}
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <p className="text-sm font-semibold tracking-tight text-white">
+                          Special instructions
+                        </p>
+                        <p className="mt-1 text-xs text-zinc-400 leading-relaxed">
+                          Allergy notes, dietary preferences, or cooking requests.
+                        </p>
+                      </div>
 
-                <div className="h-4" aria-hidden="true" />
-              </>
-            )}
+                      <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+                        Optional
+                      </span>
+                    </div>
+
+                    {/* Input */}
+                    <div className="mt-3 relative">
+                      <textarea
+                        value={notes}
+                        onChange={(e) => setNotes(e.target.value)}
+                        rows={3}
+                        maxLength={MAX_NOTES_LENGTH}
+                        placeholder='e.g. "No onions, extra sauce, crispy please…"'
+                        aria-label="Special instructions for the kitchen"
+                        className="
+        w-full resize-none rounded-xl
+        bg-white/[0.04] 
+        border border-white/10
+        px-4 py-3 text-sm text-white
+        placeholder:text-zinc-500
+        backdrop-blur
+        transition-all duration-200 ease-(--ease-standard)
+
+        focus:outline-none
+        focus:ring-2 focus:ring-(--color-gold-400)/40
+        focus:border-(--color-gold-400)/40
+        focus:bg-white/[0.06]
+
+        hover:border-white/20
+      "
+                      />
+
+                      {/* subtle glow (premium touch) */}
+                      <div className="pointer-events-none absolute inset-0 rounded-xl ring-1 ring-inset ring-white/5" />
+                    </div>
+
+                    {/* Footer */}
+                    <div className="mt-2 flex items-center justify-between">
+                      <span
+                        className={`
+        text-[11px] transition-colors
+        ${notes.length > MAX_NOTES_LENGTH * 0.8 ? 'text-amber-400' : 'text-zinc-500'}
+      `}
+                      >
+                        {notes.length > MAX_NOTES_LENGTH * 0.8 ? 'Getting long…' : 'Optional'}
+                      </span>
+
+                      <span className="text-[11px] text-zinc-500 tabular-nums">
+                        {clampInt(notes.length, 0, 999)}/{MAX_NOTES_LENGTH}
+                      </span>
+                    </div>
+                  </section>
+
+                  {/* Required options hint */}
+                  {requiredHint && (
+                    <AlertStrip variant="warning">
+                      <span className="font-semibold">Action required · </span>
+                      {requiredHint}
+                    </AlertStrip>
+                  )}
+                </>
+              )}
+            </div>
           </div>
 
           {/* ── Sticky footer ── */}
-          <div className="shrink-0 border-t border-white/10 bg-neutral-950/90 backdrop-blur supports-backdrop-filter:bg-neutral-950/70">
-            <div className="px-5 py-4">
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center rounded-2xl border border-white/10 bg-white/5 p-1">
-                    <button
-                      type="button"
-                      className="btn btn-ghost-dark btn-icon"
-                      onClick={() => setQty((q) => clampInt(q - 1, 1, maxQty))}
-                      disabled={safeQty <= 1 || preflightLoading || invalidItem}
-                      aria-label="Decrease quantity"
-                    >
-                      <Minus className="h-5 w-5" aria-hidden="true" />
-                    </button>
+          <footer className="flex-shrink-0 border-t border-white/[0.07] bg-[#161410]/96 backdrop-blur-xl">
+            <div className="px-6 py-5">
+              {/* Quantity + total row */}
+              <div className="flex items-center justify-between gap-4 mb-4">
+                {/* Qty stepper */}
+                <div className="qty-stepper">
+                  <div className="qty-divider" aria-hidden="true" />
 
-                    <div className="min-w-3rem text-center font-semibold tabular-nums">
-                      {safeQty}
-                    </div>
+                  <button
+                    type="button"
+                    className="qty-btn"
+                    onClick={() => setQty((q) => clampInt(q - 1, 1, maxQty))}
+                    disabled={safeQty <= 1 || preflightLoading || invalidItem}
+                    aria-label="Decrease quantity"
+                  >
+                    <Minus className="h-4 w-4" aria-hidden="true" />
+                  </button>
 
-                    <button
-                      type="button"
-                      className="btn btn-ghost-dark btn-icon"
-                      onClick={() => setQty((q) => clampInt(q + 1, 1, maxQty))}
-                      disabled={safeQty >= maxQty || preflightLoading || invalidItem}
-                      aria-label="Increase quantity"
-                    >
-                      <Plus className="h-5 w-5" aria-hidden="true" />
-                    </button>
-                  </div>
+                  <div className="qty-divider" aria-hidden="true" />
 
-                  <div className="min-w-0">
-                    <p className="text-xs text-zinc-400">Total</p>
-                    <p className="text-lg font-bold text-white truncate">{stickyTotalLabel}</p>
-                    <p className="text-[11px] text-zinc-500">
-                      {preflightLoading ? 'Checking…' : preflight?.ok === true ? '' : '—'}
-                    </p>
-                  </div>
+                  <span className="qty-value" aria-label={`Quantity: ${safeQty}`}>
+                    {safeQty}
+                  </span>
+
+                  <div className="qty-divider" aria-hidden="true" />
+
+                  <button
+                    type="button"
+                    className="qty-btn"
+                    onClick={() => setQty((q) => clampInt(q + 1, 1, maxQty))}
+                    disabled={safeQty >= maxQty || preflightLoading || invalidItem}
+                    aria-label="Increase quantity"
+                  >
+                    <Plus className="h-4 w-4" aria-hidden="true" />
+                  </button>
+
+                  <div className="qty-divider" aria-hidden="true" />
                 </div>
 
-                <button
-                  type="button"
-                  className={cx(
-                    'btn btn-primary h-12 rounded-2xl px-5 text-sm font-semibold transition',
-                    (!canAdd || phase !== 'idle' || invalidItem) &&
-                      'btn-ghost-dark cursor-not-allowed',
+                {/* Running total */}
+                <div className="text-right">
+                  <p className="text-[10px] uppercase tracking-widest text-zinc-600">Total</p>
+                  {preflightLoading ? (
+                    <div
+                      className="mt-1 h-6 w-20 skeleton-dark rounded-md ml-auto"
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <p className="price-total">{stickyTotalLabel}</p>
                   )}
-                  onClick={handleAddToCart}
-                  disabled={!canAdd || phase !== 'idle' || invalidItem}
-                  aria-disabled={!canAdd || phase !== 'idle' || invalidItem ? 'true' : 'false'}
-                  aria-label="Add to order"
-                >
-                  {invalidItem
-                    ? 'Unavailable'
-                    : preflightLoading
-                      ? 'Checking…'
-                      : phase === 'adding'
-                        ? 'Adding…'
-                        : phase === 'success'
-                          ? 'Added!'
-                          : unavailable
-                            ? 'Unavailable'
-                            : !modifierRulesOk
-                              ? 'Choose options'
-                              : 'Add to Order'}
-                </button>
+                </div>
               </div>
 
-              {!modifierRulesOk && !invalidItem ? (
-                <p className="mt-2 text-center text-[11px] font-semibold text-amber-200">
-                  Choose required options to continue.
-                </p>
-              ) : null}
+              {/* Add to order button */}
+              <button
+                type="button"
+                onClick={handleAddToCart}
+                disabled={!canAdd || phase !== 'idle' || invalidItem}
+                aria-disabled={!canAdd || phase !== 'idle' || invalidItem}
+                aria-label={addBtnLabel}
+                className={cx(
+                  'btn btn-lg w-full rounded-2xl font-semibold transition-all',
+                  phase === 'success'
+                    ? 'btn-success animate-success-pulse'
+                    : canAdd && phase === 'idle' && !invalidItem
+                      ? 'btn-primary'
+                      : 'btn-ghost-dark opacity-60 cursor-not-allowed',
+                )}
+              >
+                {phase === 'success' ? (
+                  <span className="flex items-center gap-2 animate-check-bounce">
+                    <Check className="h-4.5 w-4.5" aria-hidden="true" />
+                    Added to order!
+                  </span>
+                ) : (
+                  addBtnLabel
+                )}
+              </button>
 
-              <p className="mt-2 text-center text-[11px] text-zinc-500">
-                Final totals (tax, promos, credits) are enforced again at checkout by server +
-                Stripe.
+              {/* Required nudge */}
+              {!modifierRulesOk && !invalidItem && (
+                <p className="mt-2.5 text-center text-[11px] font-medium text-amber-300/70">
+                  Choose required options to continue
+                </p>
+              )}
+
+              {/* Trust line */}
+              <p className="mt-3 text-center text-[10px] text-zinc-700">
+                Final totals, tax & promos confirmed at checkout via Stripe.
               </p>
             </div>
-          </div>
+          </footer>
         </div>
       </div>
     </div>

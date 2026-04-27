@@ -1,13 +1,8 @@
 /* =============================================================================
-   SOFIS — components.css
-   Reusable component styles that are genuinely multi-element or require
-   ::before/::after pseudo-elements not expressible in JSX/Tailwind.
-   
-   Rule: Components here are minimal CSS layers.
-   The component's Tailwind classes handle most styling.
-   This file handles: pseudo-elements, multi-child relationships,
-   complex :focus-within, and non-Tailwind-expressible patterns.
-   
+   SOFIS — components.css  ·  2026 Luxury Edition
+   Reusable component patterns requiring ::before/::after pseudo-elements,
+   multi-child relationships, or non-Tailwind-expressible selectors.
+
    Component index:
    1.  Buttons
    2.  Navigation
@@ -19,11 +14,18 @@
    8.  Slide dots
    9.  Dividers & ornaments
    10. Loading / Skeleton states
+   11. Quantity stepper
+   12. Modifier selector
+   13. Price display
+   14. Alert / Feedback strips
    ============================================================================= */
 
 /* ── 1. BUTTONS ──────────────────────────────────────────────────────────── */
 
-/* Primary CTA — solid gold */
+/*
+  Base button — shared geometry, transitions, focus, active scale.
+  Variant classes handle color only.
+*/
 .btn {
   display: inline-flex;
   align-items: center;
@@ -32,17 +34,18 @@
   font-family: var(--font-sans);
   font-size: 0.78rem;
   font-weight: 500;
-  letter-spacing: var(--tracking-label, 0.12em);
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
   line-height: 1;
   white-space: nowrap;
-  border-radius: var(--radius-pill, 9999px);
-  padding: 0.875rem 1.75rem;
+  border-radius: var(--radius-pill);
+  padding: 0.9rem 1.875rem;
   border: 1px solid transparent;
   cursor: pointer;
   position: relative;
   overflow: hidden;
   outline: none;
+  isolation: isolate;
   transition:
     color            var(--duration-base) var(--ease-luxury),
     background-color var(--duration-base) var(--ease-luxury),
@@ -50,74 +53,143 @@
     box-shadow       var(--duration-slow) var(--ease-luxury),
     transform        var(--duration-fast) var(--ease-spring);
   -webkit-tap-highlight-color: transparent;
+  text-decoration: none;
 }
+
+/* Subtle inner sheen — removes on interaction */
+.btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    rgb(255 255 255 / 0.08) 0%,
+    transparent 50%
+  );
+  pointer-events: none;
+  border-radius: inherit;
+  transition: opacity var(--duration-base) var(--ease-out);
+}
+
+.btn:hover::before  { opacity: 0.5; }
+.btn:active::before { opacity: 0; }
 
 .btn:focus-visible {
-  outline: 2px solid var(--color-gold-400, #d4af37);
-  outline-offset: 3px;
+  outline: none;
+  box-shadow: var(--focus-ring), var(--shadow-gold-sm);
 }
 
-.btn:active { transform: scale(0.97); }
+.btn:active {
+  transform: scale(0.96);
+}
 
-/* Gold fill */
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ── Gold fill — primary CTA ──────────────────────────────────────────────── */
 .btn-primary {
-  background: var(--color-gold-400, #d4af37);
-  color: var(--color-stone-900, #1c1915);
-  border-color: var(--color-gold-400, #d4af37);
+  background: linear-gradient(
+    135deg,
+    var(--color-gold-400) 0%,
+    var(--color-gold-300) 50%,
+    var(--color-gold-400) 100%
+  );
+  background-size: 200% auto;
+  color: var(--color-stone-950);
+  border-color: var(--color-gold-400);
+  font-weight: 600;
 }
 
 .btn-primary:hover {
-  background: var(--color-gold-300, #e8c46a);
-  border-color: var(--color-gold-300, #e8c46a);
-  box-shadow: var(--shadow-gold, 0 0 32px rgb(212 175 55 / 0.22));
+  background-position: right center;
+  border-color: var(--color-gold-300);
+  box-shadow: var(--shadow-gold), 0 4px 16px rgb(212 175 55 / 0.20);
 }
 
-/* Ghost (outline) — on dark bg */
+/* ── Success state — after add to cart ────────────────────────────────────── */
+.btn-success {
+  background: linear-gradient(
+    135deg,
+    var(--color-success) 0%,
+    #267a26 100%
+  );
+  color: #ffffff;
+  border-color: transparent;
+  font-weight: 600;
+  animation: successPulse 0.7s var(--ease-out) forwards;
+}
+
+/* ── Ghost — on dark background ───────────────────────────────────────────── */
 .btn-ghost-dark {
-  background: transparent;
-  color: rgb(255 255 255 / 0.85);
-  border-color: rgb(255 255 255 / 0.28);
+  background: rgb(255 255 255 / 0.06);
+  color: rgb(255 255 255 / 0.82);
+  border-color: rgb(255 255 255 / 0.14);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .btn-ghost-dark:hover {
-  border-color: var(--color-gold-400, #d4af37);
-  color: var(--color-gold-300, #e8c46a);
+  background: rgb(255 255 255 / 0.10);
+  border-color: var(--color-gold-400);
+  color: var(--color-gold-300);
 }
 
-/* Ghost — on light bg */
+/* ── Ghost — on light background ─────────────────────────────────────────── */
 .btn-ghost-light {
   background: transparent;
-  color: var(--color-ink-900, #1c1c1c);
-  border-color: var(--color-ink-200, #ddd4c8);
+  color: var(--color-ink-900);
+  border-color: var(--color-ink-200);
 }
 
 .btn-ghost-light:hover {
-  border-color: var(--color-gold-400, #d4af37);
-  color: var(--color-gold-500, #b8961f);
+  border-color: var(--color-gold-400);
+  color: var(--color-gold-500);
+  background: rgb(212 175 55 / 0.04);
 }
 
-/* Text only link button */
+/* ── Danger / Destructive ─────────────────────────────────────────────────── */
+.btn-danger {
+  background: transparent;
+  color: var(--color-error);
+  border-color: rgb(192 57 43 / 0.28);
+}
+
+.btn-danger:hover {
+  background: rgb(192 57 43 / 0.08);
+  border-color: var(--color-error);
+}
+
+/* ── Text / link button ───────────────────────────────────────────────────── */
 .btn-text {
   background: transparent;
   border-color: transparent;
-  color: var(--color-ink-700, #4e3e34);
+  color: var(--color-ink-700);
   padding-inline: 0.25rem;
-  letter-spacing: var(--tracking-label, 0.12em);
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
 }
 
-.btn-text:hover { color: var(--color-gold-400, #d4af37); }
+.btn-text::before { display: none; }
+.btn-text:hover { color: var(--color-gold-400); }
 
-/* Size variants */
+/* ── Size variants ────────────────────────────────────────────────────────── */
 .btn-sm {
   font-size: 0.68rem;
   padding: 0.625rem 1.25rem;
-  letter-spacing: var(--tracking-caps, 0.18em);
+  letter-spacing: var(--tracking-caps);
 }
 
 .btn-lg {
-  font-size: 0.875rem;
-  padding: 1.125rem 2.25rem;
+  font-size: 0.9rem;
+  padding: 1.125rem 2.5rem;
+}
+
+.btn-xl {
+  font-size: 0.95rem;
+  padding: 1.375rem 3rem;
 }
 
 /* Icon-only pill */
@@ -125,40 +197,42 @@
   width: 2.75rem;
   height: 2.75rem;
   padding: 0;
-  border-radius: var(--radius-pill, 9999px);
+  border-radius: var(--radius-pill);
+}
+
+.btn-icon-sm {
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  border-radius: var(--radius-pill);
 }
 
 /* ── 2. NAVIGATION ───────────────────────────────────────────────────────── */
 
-/* Nav link — base */
 .nav-link {
   position: relative;
   font-family: var(--font-sans);
-  font-size: var(--text-xs, 0.75rem);
+  font-size: var(--text-xs);
   font-weight: 500;
-  letter-spacing: var(--tracking-label, 0.12em);
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
-  color: rgb(255 255 255 / 0.70);
+  color: rgb(255 255 255 / 0.65);
   transition: color var(--duration-base) var(--ease-luxury);
   text-decoration: none;
 }
 
-.nav-link:hover { color: rgb(255 255 255 / 1); }
+.nav-link:hover  { color: rgb(255 255 255 / 1); }
+.nav-link.active { color: var(--color-gold-300); }
 
-.nav-link.active {
-  color: var(--color-gold-300, #e8c46a);
-}
-
-/* Active underline accent */
 .nav-link::after {
   content: '';
   position: absolute;
-  bottom: -4px;
+  bottom: -5px;
   left: 0;
   width: 0;
   height: 1px;
-  background: var(--color-gold-400, #d4af37);
-  transition: width var(--duration-slow, 350ms) var(--ease-luxury);
+  background: linear-gradient(to right, var(--color-gold-300), var(--color-gold-400));
+  transition: width var(--duration-slow) var(--ease-luxury);
 }
 
 .nav-link:hover::after,
@@ -166,16 +240,16 @@
 
 /* ── 3. CARDS ────────────────────────────────────────────────────────────── */
 
-/* Base card */
 .card {
   position: relative;
-  border-radius: var(--radius-card, 1.25rem);
+  border-radius: var(--radius-card);
   overflow: hidden;
-  background: var(--color-surface, #ffffff);
+  background: var(--color-surface);
   box-shadow: var(--shadow-card-sm);
   transition:
-    transform   var(--duration-slow) var(--ease-luxury),
-    box-shadow  var(--duration-slow) var(--ease-luxury);
+    transform    var(--duration-slow) var(--ease-luxury),
+    box-shadow   var(--duration-slow) var(--ease-luxury),
+    border-color var(--duration-base) var(--ease-luxury);
 }
 
 .card:hover {
@@ -183,25 +257,23 @@
   box-shadow: var(--shadow-card-lg);
 }
 
-/* Card on dark background */
 .card-dark {
-  background: var(--color-stone-800, #2e2a24);
+  background: var(--color-stone-800);
   box-shadow: 0 4px 24px rgb(0 0 0 / 0.20);
   border: 1px solid rgb(255 255 255 / 0.05);
 }
 
 .card-dark:hover {
   box-shadow: 0 16px 48px rgb(0 0 0 / 0.35);
-  border-color: rgb(212 175 55 / 0.16);
+  border-color: rgb(212 175 55 / 0.18);
 }
 
-/* Glass card — for dark-bg feature panels */
 .card-glass {
-  background: var(--glass-bg, rgb(255 255 255 / 0.06));
-  border: 1px solid var(--glass-border-mid, rgb(255 255 255 / 0.16));
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border-mid);
   backdrop-filter: blur(14px) saturate(1.6);
   -webkit-backdrop-filter: blur(14px) saturate(1.6);
-  border-radius: var(--radius-card, 1.25rem);
+  border-radius: var(--radius-card);
   overflow: hidden;
   transition:
     border-color var(--duration-base) var(--ease-luxury),
@@ -209,8 +281,27 @@
 }
 
 .card-glass:hover {
-  border-color: rgb(212 175 55 / 0.22);
-  box-shadow: 0 0 32px rgb(212 175 55 / 0.10);
+  border-color: rgb(212 175 55 / 0.24);
+  box-shadow: 0 0 40px rgb(212 175 55 / 0.08);
+}
+
+/* Menu item card — opaque dark */
+.card-menu-item {
+  position: relative;
+  background: var(--color-stone-850, #201d18);
+  border: 1px solid rgb(255 255 255 / 0.07);
+  border-radius: var(--radius-2xl);
+  overflow: hidden;
+  transition:
+    transform    var(--duration-slow) var(--ease-luxury),
+    box-shadow   var(--duration-slow) var(--ease-luxury),
+    border-color var(--duration-base) var(--ease-luxury);
+}
+
+.card-menu-item:hover {
+  transform: translateY(-3px);
+  border-color: rgb(212 175 55 / 0.20);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.30), 0 0 24px rgb(212 175 55 / 0.06);
 }
 
 /* ── 4. FORM ELEMENTS ────────────────────────────────────────────────────── */
@@ -218,13 +309,13 @@
 .input {
   width: 100%;
   font-family: var(--font-sans);
-  font-size: var(--text-sm, 0.875rem);
+  font-size: var(--text-sm);
   font-weight: 400;
-  color: var(--color-ink-900, #1c1c1c);
-  background: var(--color-surface, #ffffff);
-  border: 1px solid var(--color-cream-400, #e3d0b8);
-  border-radius: var(--radius-input, 0.5rem);
-  padding: 0.75rem 1rem;
+  color: var(--color-ink-900);
+  background: var(--color-surface);
+  border: 1px solid var(--color-cream-400);
+  border-radius: var(--radius-input);
+  padding: 0.8125rem 1rem;
   outline: none;
   transition:
     border-color var(--duration-base) var(--ease-luxury),
@@ -233,59 +324,106 @@
   appearance: none;
 }
 
-.input::placeholder {
-  color: var(--color-ink-300, #c8b8a8);
-}
+.input::placeholder { color: var(--color-ink-300); }
 
 .input:focus {
-  border-color: var(--color-gold-400, #d4af37);
-  box-shadow: 0 0 0 3px rgb(212 175 55 / 0.12);
+  border-color: var(--color-gold-400);
+  box-shadow: var(--focus-ring);
 }
 
-.input:hover:not(:focus) {
-  border-color: var(--color-ink-300, #c8b8a8);
-}
+.input:hover:not(:focus) { border-color: var(--color-ink-300); }
 
-/* Input on dark background */
+/* Dark background input */
 .input-dark {
-  background: rgb(255 255 255 / 0.06);
-  border-color: rgb(255 255 255 / 0.14);
+  background: rgb(255 255 255 / 0.05);
+  border-color: rgb(255 255 255 / 0.10);
   color: rgb(255 255 255 / 0.90);
+  border-radius: var(--radius-xl);
+  padding: 0.875rem 1.125rem;
 }
 
-.input-dark::placeholder { color: rgb(255 255 255 / 0.30); }
+.input-dark::placeholder { color: rgb(255 255 255 / 0.28); }
 
 .input-dark:focus {
-  border-color: var(--color-gold-400, #d4af37);
-  box-shadow: 0 0 0 3px rgb(212 175 55 / 0.14);
+  border-color: rgb(212 175 55 / 0.50);
+  box-shadow: 0 0 0 3px rgb(212 175 55 / 0.12);
+  background: rgb(255 255 255 / 0.07);
+}
+
+.input-dark:hover:not(:focus) {
+  border-color: rgb(255 255 255 / 0.18);
+  background: rgb(255 255 255 / 0.06);
+}
+
+/* Textarea dark */
+.textarea-dark {
+  width: 100%;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: 400;
+  color: rgb(255 255 255 / 0.90);
+  background: rgb(255 255 255 / 0.04);
+  border: 1px solid rgb(255 255 255 / 0.09);
+  border-radius: var(--radius-xl);
+  padding: 0.875rem 1.125rem;
+  outline: none;
+  resize: none;
+  line-height: var(--leading-relaxed);
+  transition:
+    border-color var(--duration-base) var(--ease-luxury),
+    box-shadow   var(--duration-base) var(--ease-luxury),
+    background   var(--duration-base) var(--ease-luxury);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.textarea-dark::placeholder { color: rgb(255 255 255 / 0.22); }
+
+.textarea-dark:focus {
+  border-color: rgb(212 175 55 / 0.45);
+  box-shadow: 0 0 0 3px rgb(212 175 55 / 0.10);
+  background: rgb(255 255 255 / 0.06);
+}
+
+.textarea-dark:hover:not(:focus) {
+  border-color: rgb(255 255 255 / 0.16);
+  background: rgb(255 255 255 / 0.055);
 }
 
 /* Label */
 .input-label {
   display: block;
   font-family: var(--font-sans);
-  font-size: var(--text-2xs, 0.625rem);
+  font-size: var(--text-2xs);
   font-weight: 500;
-  letter-spacing: var(--tracking-caps, 0.18em);
+  letter-spacing: var(--tracking-caps);
   text-transform: uppercase;
-  color: var(--color-ink-500, #8a7a6a);
+  color: var(--color-ink-500);
   margin-bottom: 0.5rem;
 }
 
+.input-label-dark {
+  display: block;
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: rgb(255 255 255 / 0.38);
+  margin-bottom: 0.4375rem;
+}
+
 /* Error state */
-.input-error {
-  border-color: var(--color-error, #c0392b);
-}
+.input-error { border-color: var(--color-error) !important; }
+.input-error:focus { box-shadow: 0 0 0 3px rgb(192 57 43 / 0.12) !important; }
 
-.input-error:focus {
-  box-shadow: 0 0 0 3px rgb(192 57 43 / 0.12);
-}
-
-/* Error message */
 .input-error-msg {
-  font-size: var(--text-xs, 0.75rem);
-  color: var(--color-error, #c0392b);
-  margin-top: 0.375rem;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: var(--text-xs);
+  color: var(--color-error);
+  margin-top: 0.4rem;
 }
 
 /* ── 5. BADGES & PILLS ───────────────────────────────────────────────────── */
@@ -295,69 +433,110 @@
   align-items: center;
   gap: 0.375rem;
   font-family: var(--font-sans);
-  font-size: var(--text-2xs, 0.625rem);
-  font-weight: 500;
-  letter-spacing: var(--tracking-caps, 0.18em);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: var(--tracking-caps);
   text-transform: uppercase;
   line-height: 1;
   padding: 0.375rem 0.75rem;
-  border-radius: var(--radius-badge, 9999px);
+  border-radius: var(--radius-badge);
 }
 
 .badge-gold {
   background: rgb(212 175 55 / 0.12);
-  color: var(--color-gold-500, #b8961f);
+  color: var(--color-gold-300);
   border: 1px solid rgb(212 175 55 / 0.25);
 }
 
+.badge-gold-solid {
+  background: var(--color-gold-400);
+  color: var(--color-stone-950);
+  border: none;
+}
+
+.badge-amber {
+  background: rgb(251 191 36 / 0.15);
+  color: #fbbf24;
+  border: 1px solid rgb(251 191 36 / 0.25);
+}
+
 .badge-cream {
-  background: var(--color-cream-200, #f5ede0);
-  color: var(--color-ink-600, #6a5a4e);
+  background: var(--color-cream-200);
+  color: var(--color-ink-600);
 }
 
 .badge-dark {
-  background: rgb(255 255 255 / 0.08);
-  color: rgb(255 255 255 / 0.65);
-  border: 1px solid rgb(255 255 255 / 0.12);
+  background: rgb(255 255 255 / 0.07);
+  color: rgb(255 255 255 / 0.60);
+  border: 1px solid rgb(255 255 255 / 0.10);
+}
+
+.badge-success {
+  background: rgb(31 92 31 / 0.15);
+  color: #86efac;
+  border: 1px solid rgb(31 92 31 / 0.30);
+}
+
+.badge-error {
+  background: rgb(192 57 43 / 0.12);
+  color: #fca5a5;
+  border: 1px solid rgb(192 57 43 / 0.22);
+}
+
+.badge-required {
+  background: rgb(212 175 55 / 0.12);
+  color: #fcd34d;
+  border: 1px solid rgb(212 175 55 / 0.22);
+  font-size: 0.60rem;
+  padding: 0.28rem 0.625rem;
+}
+
+.badge-optional {
+  background: rgb(255 255 255 / 0.05);
+  color: rgb(255 255 255 / 0.45);
+  border: 1px solid rgb(255 255 255 / 0.09);
+  font-size: 0.60rem;
+  padding: 0.28rem 0.625rem;
 }
 
 /* ── 6. SECTION HEADERS ──────────────────────────────────────────────────── */
 
-/* Eyebrow label above section titles */
 .section-eyebrow {
   display: flex;
   align-items: center;
   gap: 0.75rem;
   font-family: var(--font-sans);
-  font-size: var(--text-2xs, 0.625rem);
-  font-weight: 500;
-  letter-spacing: var(--tracking-loose, 0.22em);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: var(--tracking-loose);
   text-transform: uppercase;
-  color: var(--color-gold-400, #d4af37);
+  color: var(--color-gold-400);
 }
 
-/* The decorative line before the eyebrow text */
 .section-eyebrow::before {
   content: '';
   display: block;
   width: 1.5rem;
   height: 1px;
-  background: var(--color-gold-400, #d4af37);
+  background: linear-gradient(to right, transparent, var(--color-gold-400));
   flex-shrink: 0;
 }
 
-/* Eyebrow on dark background */
-.section-eyebrow-light {
-  color: var(--color-gold-300, #e8c46a);
-}
+.section-eyebrow-light { color: var(--color-gold-300); }
+.section-eyebrow-light::before { background: linear-gradient(to right, transparent, var(--color-gold-300)); }
 
-.section-eyebrow-light::before {
-  background: var(--color-gold-300, #e8c46a);
+/* Modal-specific eyebrow — no left line */
+.modal-eyebrow {
+  font-family: var(--font-sans);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: var(--tracking-loose);
+  text-transform: uppercase;
+  color: rgb(255 255 255 / 0.35);
 }
 
 /* ── 7. MARQUEE STRIP ────────────────────────────────────────────────────── */
 
-/* Outer mask — fades edges of the scrolling strip */
 .marquee-wrap {
   position: relative;
   overflow: hidden;
@@ -369,65 +548,91 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 6rem;
+  width: 8rem;
   pointer-events: none;
   z-index: 2;
 }
 
 .marquee-wrap::before {
   left: 0;
-  background: linear-gradient(to right, var(--color-stone-900, #1c1915), transparent);
+  background: linear-gradient(to right, var(--color-stone-900), transparent);
 }
 
 .marquee-wrap::after {
   right: 0;
-  background: linear-gradient(to left, var(--color-stone-900, #1c1915), transparent);
+  background: linear-gradient(to left, var(--color-stone-900), transparent);
 }
 
-/* Cream-bg variant */
 .marquee-wrap-cream::before {
-  background: linear-gradient(to right, var(--color-cream-100, #faf6ef), transparent);
+  background: linear-gradient(to right, var(--color-cream-100), transparent);
 }
 
 .marquee-wrap-cream::after {
-  background: linear-gradient(to left, var(--color-cream-100, #faf6ef), transparent);
+  background: linear-gradient(to left, var(--color-cream-100), transparent);
 }
 
 /* ── 8. SLIDE DOTS ───────────────────────────────────────────────────────── */
 
-/* Container */
 .slide-dots {
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
 
-/* Individual dot button — dimensions set in JS (Framer Motion animate) */
 .slide-dot {
   height: 3px;
   border-radius: 9999px;
   cursor: pointer;
   border: none;
   padding: 0;
-  background: rgb(255 255 255 / 0.28);
-  transition: background-color 200ms ease;
+  background: rgb(255 255 255 / 0.22);
+  transition: background-color 200ms ease, width 200ms ease;
 }
 
 .slide-dot:focus-visible {
-  outline: 2px solid var(--color-gold-400, #d4af37);
+  outline: 2px solid var(--color-gold-400);
   outline-offset: 3px;
 }
 
 /* ── 9. DIVIDERS & ORNAMENTS ─────────────────────────────────────────────── */
 
-/* Centered decorative ornament between sections */
+/* Gold gradient divider */
+.divider-gold {
+  border: none;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--color-gold-400) 30%,
+    var(--color-gold-300) 50%,
+    var(--color-gold-400) 70%,
+    transparent
+  );
+  opacity: 0.45;
+}
+
+/* Hairline cream divider */
+.divider-cream {
+  border: none;
+  height: 1px;
+  background: var(--color-cream-300);
+}
+
+/* Dark hairline */
+.divider-dark {
+  border: none;
+  height: 1px;
+  background: rgb(255 255 255 / 0.08);
+}
+
+/* Decorative ornament — centered flanked by lines */
 .ornament {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 1rem;
-  color: var(--color-gold-400, #d4af37);
-  opacity: 0.55;
+  color: var(--color-gold-400);
+  opacity: 0.50;
 }
 
 .ornament::before,
@@ -435,25 +640,30 @@
   content: '';
   height: 1px;
   width: 3rem;
-  background: var(--color-gold-400, #d4af37);
+  background: linear-gradient(to right, transparent, var(--color-gold-400));
+}
+
+.ornament::after {
+  background: linear-gradient(to left, transparent, var(--color-gold-400));
 }
 
 /* ── 10. SKELETON / LOADING STATES ──────────────────────────────────────── */
 
 .skeleton {
-  border-radius: var(--radius-md, 0.5rem);
+  border-radius: var(--radius-md);
   background: linear-gradient(
     105deg,
-    var(--color-cream-200, #f5ede0) 0%,
-    var(--color-cream-100, #faf6ef) 40%,
-    var(--color-cream-200, #f5ede0) 60%,
-    var(--color-cream-100, #faf6ef) 100%
+    var(--color-cream-200) 0%,
+    var(--color-cream-100) 40%,
+    var(--color-cream-200) 60%,
+    var(--color-cream-100) 100%
   );
   background-size: 200% auto;
-  animation: shimmer 1.6s linear infinite;
+  animation: shimmer 1.8s linear infinite;
 }
 
 .skeleton-dark {
+  border-radius: var(--radius-md);
   background: linear-gradient(
     105deg,
     rgb(255 255 255 / 0.04) 0%,
@@ -462,26 +672,313 @@
     rgb(255 255 255 / 0.08) 100%
   );
   background-size: 200% auto;
-  animation: shimmer 1.6s linear infinite;
+  animation: shimmer 1.8s linear infinite;
 }
 
-/* ── Shimmer keyframes (shared by .skeleton, .skeleton-dark, .animate-shimmer) ── */
-
-@keyframes shimmer {
-  0%   { background-position: 200% center; }
-  100% { background-position: -200% center; }
-}
-
-/* Utility class — apply directly on an element that needs the shimmer sweep.
-   Used by MenuItemCard's image loading placeholder. */
-.animate-shimmer {
+/* Skeleton card placeholder */
+.skeleton-card {
+  border-radius: var(--radius-2xl);
   background: linear-gradient(
     105deg,
-    rgb(255 255 255 / 0.04) 0%,
-    rgb(255 255 255 / 0.10) 40%,
-    rgb(255 255 255 / 0.04) 60%,
-    rgb(255 255 255 / 0.10) 100%
+    rgb(255 255 255 / 0.03) 0%,
+    rgb(255 255 255 / 0.06) 40%,
+    rgb(255 255 255 / 0.03) 60%
   );
   background-size: 200% auto;
-  animation: shimmer 1.4s linear infinite;
+  animation: shimmer 2s linear infinite, skeletonBreath 3s ease-in-out infinite;
+  border: 1px solid rgb(255 255 255 / 0.05);
+}
+
+/* ── 11. QUANTITY STEPPER ─────────────────────────────────────────────────── */
+
+.qty-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  border-radius: var(--radius-xl);
+  border: 1px solid rgb(255 255 255 / 0.10);
+  background: rgb(255 255 255 / 0.04);
+  overflow: hidden;
+}
+
+.qty-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  color: rgb(255 255 255 / 0.70);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition:
+    color       var(--duration-base) var(--ease-luxury),
+    background  var(--duration-base) var(--ease-luxury);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.qty-btn:hover:not(:disabled) {
+  color: var(--color-gold-300);
+  background: rgb(212 175 55 / 0.08);
+}
+
+.qty-btn:active:not(:disabled) {
+  transform: scale(0.88);
+}
+
+.qty-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-light);
+}
+
+.qty-btn:disabled {
+  opacity: 0.28;
+  cursor: not-allowed;
+}
+
+.qty-value {
+  min-width: 2.25rem;
+  text-align: center;
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: rgb(255 255 255 / 0.95);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-tight);
+  user-select: none;
+}
+
+.qty-divider {
+  width: 1px;
+  height: 1.5rem;
+  background: rgb(255 255 255 / 0.10);
+  flex-shrink: 0;
+}
+
+/* ── 12. MODIFIER SELECTOR ─────────────────────────────────────────────────── */
+
+/* Group accordion */
+.modifier-group {
+  overflow: hidden;
+  border-radius: var(--radius-2xl);
+  border: 1px solid rgb(255 255 255 / 0.08);
+  background: rgb(255 255 255 / 0.025);
+  transition:
+    border-color var(--duration-base) var(--ease-luxury),
+    box-shadow   var(--duration-slow) var(--ease-luxury);
+}
+
+.modifier-group:has(:focus-visible) {
+  border-color: rgb(212 175 55 / 0.30);
+}
+
+.modifier-group--invalid {
+  border-color: rgb(212 175 55 / 0.28);
+  animation: attentionPulse 1.4s var(--ease-in-out) 2;
+}
+
+/* Group toggle button */
+.modifier-group-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem 1.125rem;
+  text-align: left;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  transition: background var(--duration-base) var(--ease-out);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.modifier-group-toggle:hover {
+  background: rgb(255 255 255 / 0.025);
+}
+
+.modifier-group-toggle:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px rgb(212 175 55 / 0.35);
+}
+
+/* Individual modifier option button */
+.modifier-option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-xl);
+  border: 1px solid rgb(255 255 255 / 0.08);
+  background: rgb(255 255 255 / 0.04);
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  transition:
+    border-color var(--duration-base) var(--ease-luxury),
+    background   var(--duration-base) var(--ease-luxury),
+    box-shadow   var(--duration-slow) var(--ease-luxury);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.modifier-option:hover:not(:disabled) {
+  background: rgb(255 255 255 / 0.07);
+  border-color: rgb(255 255 255 / 0.14);
+}
+
+.modifier-option:active:not(:disabled) {
+  transform: scale(0.99);
+}
+
+.modifier-option:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-light);
+}
+
+.modifier-option--selected {
+  border-color: rgb(212 175 55 / 0.32);
+  background: rgb(212 175 55 / 0.08);
+}
+
+.modifier-option--selected:hover:not(:disabled) {
+  background: rgb(212 175 55 / 0.12);
+  border-color: rgb(212 175 55 / 0.42);
+}
+
+.modifier-option:disabled {
+  opacity: 0.40;
+  cursor: not-allowed;
+}
+
+/* Modifier check indicator */
+.modifier-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.875rem;
+  height: 1.875rem;
+  border-radius: var(--radius-lg);
+  flex-shrink: 0;
+  transition:
+    background var(--duration-base) var(--ease-luxury),
+    border-color var(--duration-base) var(--ease-luxury);
+}
+
+.modifier-check--off {
+  border: 1.5px solid rgb(255 255 255 / 0.16);
+  background: rgb(255 255 255 / 0.04);
+}
+
+.modifier-check--on {
+  border: none;
+  background: rgb(212 175 55 / 0.18);
+  animation: checkBounce 0.4s var(--ease-spring) both;
+  box-shadow: 0 0 12px rgb(212 175 55 / 0.20);
+}
+
+/* ── 13. PRICE DISPLAY ─────────────────────────────────────────────────────── */
+
+.price-hero {
+  font-family: var(--font-display);
+  font-size: var(--text-3xl);
+  font-weight: 700;
+  letter-spacing: var(--tracking-tight);
+  color: rgb(255 255 255 / 0.96);
+  font-variant-numeric: tabular-nums;
+}
+
+.price-base {
+  font-family: var(--font-sans);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--color-gold-300);
+  font-variant-numeric: tabular-nums;
+}
+
+.price-modifier {
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: rgb(255 255 255 / 0.38);
+  font-variant-numeric: tabular-nums;
+}
+
+.price-total {
+  font-family: var(--font-sans);
+  font-size: var(--text-xl);
+  font-weight: 700;
+  color: rgb(255 255 255 / 0.96);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-tight);
+}
+
+/* ── 14. ALERT / FEEDBACK STRIPS ──────────────────────────────────────────── */
+
+.alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  border-radius: var(--radius-xl);
+  padding: 0.875rem 1rem;
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  line-height: var(--leading-base);
+}
+
+.alert-warning {
+  background: rgb(212 175 55 / 0.08);
+  border: 1px solid rgb(212 175 55 / 0.22);
+  color: #fcd34d;
+}
+
+.alert-error {
+  background: rgb(192 57 43 / 0.08);
+  border: 1px solid rgb(192 57 43 / 0.20);
+  color: #fca5a5;
+}
+
+.alert-success {
+  background: rgb(31 92 31 / 0.10);
+  border: 1px solid rgb(31 92 31 / 0.22);
+  color: #86efac;
+}
+
+.alert-info {
+  background: rgb(255 255 255 / 0.04);
+  border: 1px solid rgb(255 255 255 / 0.10);
+  color: rgb(255 255 255 / 0.60);
+}
+
+/* ── Cart add button state machine ─────────────────────────────────────────── */
+
+.btn-cart-label {
+  transition:
+    opacity   var(--duration-base) var(--ease-standard),
+    transform var(--duration-base) var(--ease-standard);
+}
+
+.btn-cart-check {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: scale(0.55);
+  transition:
+    opacity   var(--duration-slow) var(--ease-spring),
+    transform var(--duration-slow) var(--ease-spring);
+}
+
+.btn-cart-added .btn-cart-label {
+  opacity: 0;
+  transform: scale(0.55);
+}
+
+.btn-cart-added .btn-cart-check {
+  opacity: 1;
+  transform: scale(1);
 }
