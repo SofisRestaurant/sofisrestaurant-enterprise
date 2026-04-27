@@ -9,7 +9,6 @@
 /* ── Project-specific styles ─────────────────────────────────────────────── */
 @import "./fonts.css";
 @import "./tokens.css";
-@import "./globals.css";
 @import "./animations.css";
 @import "./effects.css";
 @import "./utilities.css";
@@ -36,4 +35,41 @@
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
     border-radius: 0.5rem;
   }
+}
+
+
+@theme {
+
+  /* ───── Button System ───── */
+
+  --btn-secondary-bg: #ffffff;
+
+  --btn-secondary-text: #1c1917;
+
+  --btn-secondary-border: #e7e5e4;
+
+  --btn-outline-border: #d6d3d1;
+
+  --btn-danger-bg: #dc2626;
+
+  --btn-danger-text: #ffffff;
+
+  --btn-glass-bg: rgba(255, 255, 255, 0.08);
+
+  --btn-glass-border: rgba(255, 255, 255, 0.12);
+
+  /* ───── Animation Easing ───── */
+
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+
+  --ease-luxury: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ───── Brand Colors (if not already defined elsewhere) ───── */
+
+  --color-gold-300: #e8c46a;
+
+  --color-gold-400: #d4af37;
+
+  --text-primary: #1c1917;
+
 }

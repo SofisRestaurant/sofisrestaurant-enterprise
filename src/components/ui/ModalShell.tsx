@@ -128,7 +128,7 @@ export function ModalShell({
         role="dialog"
         aria-modal="true"
         aria-label={label}
-        className="fixed inset-0 z-10000 flex items-center justify-center px-4 pointer-events-none"
+        className="fixed inset-0 z-10000 flex items-center justify-center px-4"
       >
         {/* ─────────────────────────────────────
             Card wrapper
