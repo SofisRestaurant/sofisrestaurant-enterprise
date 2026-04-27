@@ -441,7 +441,6 @@ export default function MenuItemModal({ item, onClose }: Props) {
           style={{ animation: 'sofi-modal-dialog 380ms cubic-bezier(0.16,1,0.3,1) both' }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-
           {/* ── Drag handle (mobile) ─────────────────────────────────────── */}
           <div className="flex shrink-0 justify-center pb-1 pt-3 sm:hidden" aria-hidden="true">
             <div className="h-[5px] w-12 rounded-full bg-white/20" />
@@ -517,14 +516,20 @@ export default function MenuItemModal({ item, onClose }: Props) {
           <div
             className={cx(
               'min-h-0 flex-1 overflow-y-auto overscroll-contain',
-              'px-5 pb-6 sm:px-6',
+              'px-5 sm:px-6',
               '[-webkit-overflow-scrolling:touch]',
               '[scrollbar-width:thin] [scrollbar-color:rgb(255_255_255/0.08)_transparent]',
             )}
+            style={{
+              paddingBottom: 'calc(140px + env(safe-area-inset-bottom))',
+            }}
           >
             {invalidItem ? (
               /* ── Error: invalid item ── */
-              <div className="mt-6 flex items-start gap-3 rounded-2xl border border-red-500/20 bg-red-500/[0.06] px-4 py-4" role="alert">
+              <div
+                className="mt-6 flex items-start gap-3 rounded-2xl border border-red-500/20 bg-red-500/[0.06] px-4 py-4"
+                role="alert"
+              >
                 <Info className="mt-0.5 h-5 w-5 shrink-0 text-red-400" aria-hidden="true" />
                 <div>
                   <p className="text-sm font-semibold text-red-200">
@@ -569,7 +574,9 @@ export default function MenuItemModal({ item, onClose }: Props) {
                     role="status"
                     style={{ animation: 'sofi-stagger-in 250ms ease both' }}
                   >
-                    <span className="text-lg leading-none" aria-hidden="true">⚡</span>
+                    <span className="text-lg leading-none" aria-hidden="true">
+                      ⚡
+                    </span>
                     <span>
                       Only{' '}
                       <strong className="font-bold text-amber-300">{preflight.stock_count}</strong>{' '}
@@ -579,23 +586,34 @@ export default function MenuItemModal({ item, onClose }: Props) {
                 ) : null}
 
                 {unavailable ? (
-                  <div className="mt-5 flex items-start gap-3 rounded-2xl border border-red-500/20 bg-red-500/[0.06] px-4 py-3.5 text-sm text-red-200" role="alert">
+                  <div
+                    className="mt-5 flex items-start gap-3 rounded-2xl border border-red-500/20 bg-red-500/[0.06] px-4 py-3.5 text-sm text-red-200"
+                    role="alert"
+                  >
                     <Info className="mt-0.5 h-4 w-4 shrink-0 text-red-400" aria-hidden="true" />
                     <span>This item is currently unavailable.</span>
                   </div>
                 ) : null}
 
                 {selectionPrunedWarning ? (
-                  <div className="mt-5 flex items-start gap-3 rounded-2xl border border-amber-500/15 bg-amber-500/[0.06] px-4 py-3.5 text-sm text-amber-200" role="status">
+                  <div
+                    className="mt-5 flex items-start gap-3 rounded-2xl border border-amber-500/15 bg-amber-500/[0.06] px-4 py-3.5 text-sm text-amber-200"
+                    role="status"
+                  >
                     <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" aria-hidden="true" />
                     <span>{selectionPrunedWarning}</span>
                   </div>
                 ) : null}
 
                 {hasBlockedSelections ? (
-                  <div className="mt-5 flex items-start gap-3 rounded-2xl border border-red-500/20 bg-red-500/[0.06] px-4 py-3.5 text-sm text-red-200" role="alert">
+                  <div
+                    className="mt-5 flex items-start gap-3 rounded-2xl border border-red-500/20 bg-red-500/[0.06] px-4 py-3.5 text-sm text-red-200"
+                    role="alert"
+                  >
                     <Info className="mt-0.5 h-4 w-4 shrink-0 text-red-400" aria-hidden="true" />
-                    <span>Some selected options are no longer available. Please update your choices.</span>
+                    <span>
+                      Some selected options are no longer available. Please update your choices.
+                    </span>
                   </div>
                 ) : null}
 
@@ -627,7 +645,11 @@ export default function MenuItemModal({ item, onClose }: Props) {
                   {groupsLoading ? (
                     <div className="mt-4 space-y-3">
                       {SKELETON_IDS.map((sid) => (
-                        <div key={sid} className="h-16 animate-pulse rounded-2xl bg-white/[0.03]" aria-hidden="true" />
+                        <div
+                          key={sid}
+                          className="h-16 animate-pulse rounded-2xl bg-white/[0.03]"
+                          aria-hidden="true"
+                        />
                       ))}
                     </div>
                   ) : groupsError ? (
@@ -734,7 +756,10 @@ export default function MenuItemModal({ item, onClose }: Props) {
 
                             {/* Group body */}
                             {expanded ? (
-                              <div id={`mod-body-${g.id}`} className="border-t border-white/[0.06] px-3 py-3">
+                              <div
+                                id={`mod-body-${g.id}`}
+                                className="border-t border-white/[0.06] px-3 py-3"
+                              >
                                 <div className="space-y-1.5">
                                   {g.modifiers.map((m) => {
                                     const on = sels.some((s) => s.id === m.id);
@@ -817,12 +842,28 @@ export default function MenuItemModal({ item, onClose }: Props) {
                     {/* Ring counter */}
                     <div className="relative h-8 w-8 shrink-0" aria-hidden="true">
                       <svg viewBox="0 0 32 32" className="absolute inset-0 -rotate-90">
-                        <circle cx="16" cy="16" r="13" fill="none" strokeWidth="2" className="stroke-white/[0.06]" strokeDasharray="100 100" />
                         <circle
-                          cx="16" cy="16" r="13" fill="none" strokeWidth="2"
+                          cx="16"
+                          cy="16"
+                          r="13"
+                          fill="none"
+                          strokeWidth="2"
+                          className="stroke-white/[0.06]"
+                          strokeDasharray="100 100"
+                        />
+                        <circle
+                          cx="16"
+                          cy="16"
+                          r="13"
+                          fill="none"
+                          strokeWidth="2"
                           className={cx(
                             'transition-all duration-200',
-                            counterFull ? 'stroke-red-400' : counterNear ? 'stroke-amber-400' : 'stroke-white/20',
+                            counterFull
+                              ? 'stroke-red-400'
+                              : counterNear
+                                ? 'stroke-amber-400'
+                                : 'stroke-white/20',
                           )}
                           strokeDasharray="100 100"
                           strokeDashoffset={counterDash}
@@ -830,10 +871,12 @@ export default function MenuItemModal({ item, onClose }: Props) {
                         />
                       </svg>
                       {counterNear ? (
-                        <span className={cx(
-                          'absolute inset-0 flex items-center justify-center text-[9px] font-bold tabular-nums',
-                          counterFull ? 'text-red-400' : 'text-amber-400',
-                        )}>
+                        <span
+                          className={cx(
+                            'absolute inset-0 flex items-center justify-center text-[9px] font-bold tabular-nums',
+                            counterFull ? 'text-red-400' : 'text-amber-400',
+                          )}
+                        >
                           {MAX_NOTES_LENGTH - noteLen}
                         </span>
                       ) : null}
@@ -862,14 +905,17 @@ export default function MenuItemModal({ item, onClose }: Props) {
 
                 {/* Required hint */}
                 {requiredHint ? (
-                  <div className="mt-5 flex items-start gap-3 rounded-2xl border border-amber-500/15 bg-amber-500/[0.06] px-4 py-3.5 text-sm text-amber-200" role="status">
+                  <div
+                    className="mt-5 flex items-start gap-3 rounded-2xl border border-amber-500/15 bg-amber-500/[0.06] px-4 py-3.5 text-sm text-amber-200"
+                    role="status"
+                  >
                     <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" aria-hidden="true" />
                     <span>{requiredHint}</span>
                   </div>
                 ) : null}
 
                 {/* Bottom clearance for sticky footer */}
-                <div className="h-4" aria-hidden="true" />
+                <div className="h-32" aria-hidden="true" />
               </>
             )}
           </div>
@@ -950,8 +996,8 @@ export default function MenuItemModal({ item, onClose }: Props) {
                   phase === 'success'
                     ? 'bg-emerald-500 text-white shadow-[0_4px_20px_rgb(16_185_129/0.35)]'
                     : canAdd && phase === 'idle'
-                      ? 'bg-gradient-to-r from-amber-500 to-amber-400 text-neutral-950 shadow-[0_4px_20px_rgb(245_158_11/0.3)] hover:shadow-[0_6px_28px_rgb(245_158_11/0.4)] active:scale-[0.97]'
-                      : 'bg-white/[0.06] text-zinc-500 cursor-not-allowed',
+                      ? 'bg-linear-to-r from-amber-500 to-amber-400 text-neutral-950 shadow-[0_4px_20px_rgb(245_158_11/0.3)] hover:shadow-[0_6px_28px_rgb(245_158_11/0.4)] active:scale-[0.97]'
+                      : 'bg-white/0.06 text-zinc-500 cursor-not-allowed',
                 )}
               >
                 {phase === 'success' ? (
@@ -982,7 +1028,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
               ) : null}
 
               {/* Legal */}
-              <p className="mt-2 text-center text-[10px] text-zinc-700">
+              <p className="mt-2 text-center text-10px text-zinc-700">
                 Final totals (tax, promos, credits) confirmed at checkout
               </p>
             </div>
