@@ -11,6 +11,9 @@
 //   - Drag handle indicator (mobile)
 //   - Smoother swipe physics (exponential drag dampening)
 // All behavioural contracts unchanged.
+//
+// Z-INDEX: backdrop z-[100], dialog z-[101].
+// Must sit above FloatingCartPill (z-40) and BottomNav (z-30).
 // =============================================================================
 
 import { useEffect, useRef, useCallback, type ReactNode } from 'react';
@@ -169,7 +172,7 @@ export function ModalShell({
       {/* ── Backdrop ── */}
       <div
         aria-hidden="true"
-        className="fixed inset-0 z-[9999] bg-black/65 animate-backdrop-in"
+        className="fixed inset-0 z-[100] bg-black/65 animate-backdrop-in"
         style={{
           backdropFilter: 'blur(10px) saturate(1.4)',
           WebkitBackdropFilter: 'blur(10px) saturate(1.4)',
@@ -186,8 +189,8 @@ export function ModalShell({
         aria-label={label}
         className={
           mobileSheet
-            ? 'fixed inset-0 z-[10000] flex items-end justify-center sm:items-center sm:px-4'
-            : 'fixed inset-0 z-[10000] flex items-center justify-center px-4'
+            ? 'fixed inset-0 z-[101] flex items-end justify-center sm:items-center sm:px-4'
+            : 'fixed inset-0 z-[101] flex items-center justify-center px-4'
         }
       >
         <span className="sr-only">Press Escape or swipe down to close</span>

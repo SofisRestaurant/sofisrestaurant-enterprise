@@ -5,11 +5,14 @@
 // Appears above BottomNav when the cart has items.
 // This persistent-CTA pattern increases cart→checkout conversion vs top-bar alone.
 // Hidden on checkout, admin, kitchen, auth flows.
+// Hidden when any modal is open to prevent z-index conflicts.
 // =============================================================================
 
+import { useContext } from 'react';
 import { useLocation } from 'react-router-dom';
-import { useCart }         from '@/modules/cart/hooks/useCart';
-import { useCartUiStore }  from '@/modules/cart/store/cartUi.store';
+import { useCart } from '@/modules/cart/hooks/useCart';
+import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
+import { ModalContext } from '@/components/ui/ModalContext';
 
 const HIDDEN_ON = ['/checkout', '/admin', '/kitchen', '/expo', '/auth', '/update-password'];
 
@@ -21,15 +24,19 @@ export function FloatingCartPill() {
   const { pathname } = useLocation();
   const { itemCount, items } = useCart();
   const openCart = useCartUiStore((s) => s.open);
+  const modalCtx = useContext(ModalContext);
 
   const hidden = HIDDEN_ON.some((p) => pathname === p || pathname.startsWith(`${p}/`));
-  const count  = itemCount ?? 0;
+  const count = itemCount ?? 0;
+  const modalIsOpen = Boolean(modalCtx?.activeModal);
 
-  if (hidden || count === 0) return null;
+  if (hidden || count === 0 || modalIsOpen) return null;
 
   const subtotalCents = (items ?? []).reduce((sum, item) => {
-    const v = typeof item.lineTotalCents === 'number' && Number.isFinite(item.lineTotalCents)
-      ? Math.max(0, Math.round(item.lineTotalCents)) : 0;
+    const v =
+      typeof item.lineTotalCents === 'number' && Number.isFinite(item.lineTotalCents)
+        ? Math.max(0, Math.round(item.lineTotalCents))
+        : 0;
     return sum + v;
   }, 0);
 
@@ -55,13 +62,21 @@ export function FloatingCartPill() {
           aria-label={`View cart — ${count} item${count !== 1 ? 's' : ''}, ${f(subtotalCents)}`}
         >
           {/* Gold shimmer top edge */}
-          <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-px"
-            style={{ background: 'linear-gradient(90deg,transparent,rgba(212,175,55,0.7),transparent)' }} />
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 top-0 h-px"
+            style={{
+              background: 'linear-gradient(90deg,transparent,rgba(212,175,55,0.7),transparent)',
+            }}
+          />
 
           {/* Left: count + label */}
           <div className="flex items-center gap-3">
-            <span className="flex h-7 w-7 items-center justify-center rounded-xl text-xs font-black"
-              style={{ background: '#d4af37', color: '#1c1915' }} aria-hidden="true">
+            <span
+              className="flex h-7 w-7 items-center justify-center rounded-xl text-xs font-black"
+              style={{ background: '#d4af37', color: '#1c1915' }}
+              aria-hidden="true"
+            >
               {count > 99 ? '99+' : count}
             </span>
             <span className="text-sm font-semibold text-white">View Order</span>
@@ -70,11 +85,19 @@ export function FloatingCartPill() {
           {/* Right: subtotal + chevron */}
           <div className="flex items-center gap-2">
             <span className="text-sm font-bold tabular-nums text-white">{f(subtotalCents)}</span>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-              stroke="rgba(255,255,255,0.6)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="rgba(255,255,255,0.6)"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
               aria-hidden="true"
-              className="transition-transform duration-200 group-hover:translate-x-0.5">
-              <path d="M9 18l6-6-6-6"/>
+              className="transition-transform duration-200 group-hover:translate-x-0.5"
+            >
+              <path d="M9 18l6-6-6-6" />
             </svg>
           </div>
         </button>

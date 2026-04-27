@@ -72,11 +72,11 @@ export default function ModalRenderer() {
 
   if (!ctx || !activeModal || !content) return null;
 
-  // MenuItemModal provides its own overlay
+  // MenuItemModal provides its own overlay at z-[100]
   if (isMenuItem) return content;
 
   return (
-    <div className="fixed inset-0 z-50" data-modal-root="true">
+    <div className="fixed inset-0 z-[100]" data-modal-root="true">
       <button
         type="button"
         aria-label="Close modal"
