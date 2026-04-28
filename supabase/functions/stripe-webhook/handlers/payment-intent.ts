@@ -1,3 +1,11 @@
+// supabase/functions/stripe-webhook/handlers/payment-intent.ts
+// =============================================================================
+// Phase 2 hardened:
+//   - checkEventIdempotency() is first; DB errors throw.
+//   - PaymentIntent events have no checkout session metadata — the metadata
+//     parser is NOT used here. Order lookup is via paymentIntentId only.
+// =============================================================================
+
 import type Stripe from "stripe";
 import {
   DB_ORD_CANCELED,
@@ -21,14 +29,21 @@ import {
   toJson,
 } from "../utils.ts";
 import type { DbClient } from "../types.ts";
+import { checkEventIdempotency } from "../shared/idempotency.ts";
 
 export async function handlePaymentIntentSucceeded(
-  db: DbClient,
-  event: Stripe.Event,
+  db:        DbClient,
+  event:     Stripe.Event,
   requestId: string,
 ): Promise<void> {
-  const paymentIntent = parsePaymentIntentEventPayload(event);
+  // ── 1. Idempotency guard ───────────────────────────────────────────────────
+  const idempotency = await checkEventIdempotency(db, event.id, event.type, requestId);
+  if (idempotency.alreadyProcessed) return;
+  if (idempotency.dbError) {
+    throw new Error(`webhook_idempotency_failed:${event.id} — ${idempotency.error}`);
+  }
 
+  const paymentIntent = parsePaymentIntentEventPayload(event);
   if (paymentIntent === null) {
     log("warn", "webhook_pi_succeeded_invalid_payload", {
       requestId,
@@ -38,7 +53,6 @@ export async function handlePaymentIntentSucceeded(
   }
 
   const order = await findOrderByPaymentIntentId(db, paymentIntent.id);
-
   if (order === null) {
     log("info", "webhook_pi_succeeded_no_order", {
       requestId,
@@ -52,8 +66,8 @@ export async function handlePaymentIntentSucceeded(
       .from("orders")
       .update({
         payment_status: DB_PMT_PAID,
-        status: DB_ORD_CONFIRMED,
-        updated_at: nowIso(),
+        status:         DB_ORD_CONFIRMED,
+        updated_at:     nowIso(),
       })
       .eq("id", order.id);
   }
@@ -69,8 +83,8 @@ export async function handlePaymentIntentSucceeded(
   if (order.customer_uid !== null) {
     await backfillLoyaltyIfMissing({
       db,
-      userId: order.customer_uid,
-      orderId: order.id,
+      userId:      order.customer_uid,
+      orderId:     order.id,
       amountCents: order.amount_total,
       requestId,
     });
@@ -78,19 +92,25 @@ export async function handlePaymentIntentSucceeded(
 
   log("info", "webhook_pi_succeeded", {
     requestId,
-    orderId: prefix(order.id),
+    orderId:         prefix(order.id),
     paymentIntentId: prefix(paymentIntent.id),
-    amountReceived: paymentIntent.amountReceived,
+    amountReceived:  paymentIntent.amountReceived,
   });
 }
 
 export async function handlePaymentIntentFailed(
-  db: DbClient,
-  event: Stripe.Event,
+  db:        DbClient,
+  event:     Stripe.Event,
   requestId: string,
 ): Promise<void> {
-  const paymentIntent = parsePaymentIntentEventPayload(event);
+  // ── 1. Idempotency guard ───────────────────────────────────────────────────
+  const idempotency = await checkEventIdempotency(db, event.id, event.type, requestId);
+  if (idempotency.alreadyProcessed) return;
+  if (idempotency.dbError) {
+    throw new Error(`webhook_idempotency_failed:${event.id} — ${idempotency.error}`);
+  }
 
+  const paymentIntent = parsePaymentIntentEventPayload(event);
   if (paymentIntent === null) {
     log("warn", "webhook_pi_failed_invalid_payload", {
       requestId,
@@ -100,7 +120,6 @@ export async function handlePaymentIntentFailed(
   }
 
   const order = await findOrderByPaymentIntentId(db, paymentIntent.id);
-
   if (order === null) {
     log("info", "webhook_pi_failed_no_order", {
       requestId,
@@ -112,17 +131,14 @@ export async function handlePaymentIntentFailed(
   if (shouldAllowFailureTransition(order)) {
     await db
       .from("orders")
-      .update({
-        payment_status: DB_PMT_FAILED,
-        updated_at: nowIso(),
-      })
+      .update({ payment_status: DB_PMT_FAILED, updated_at: nowIso() })
       .eq("id", order.id);
   }
 
-  const failureCode = paymentIntent.lastPaymentError?.code ?? null;
-  const declineCode = paymentIntent.lastPaymentError?.declineCode ?? null;
-  const failureMessage = paymentIntent.lastPaymentError?.message ?? null;
-  const failureType = paymentIntent.lastPaymentError?.type ?? null;
+  const failureCode    = paymentIntent.lastPaymentError?.code    ?? null;
+  const declineCode    = paymentIntent.lastPaymentError?.declineCode ?? null;
+  const failureMessage = paymentIntent.lastPaymentError?.message  ?? null;
+  const failureType    = paymentIntent.lastPaymentError?.type     ?? null;
 
   await Promise.all([
     emitOrderEvent(
@@ -132,12 +148,12 @@ export async function handlePaymentIntentFailed(
       "PAYMENT_FAILED",
       toJson({
         payment_intent_id: paymentIntent.id,
-        failure_code: failureCode,
-        decline_code: declineCode,
-        failure_type: failureType,
-        failure_message: failureMessage,
-        source: "stripe-webhook",
-        event_id: event.id,
+        failure_code:      failureCode,
+        decline_code:      declineCode,
+        failure_type:      failureType,
+        failure_message:   failureMessage,
+        source:            "stripe-webhook",
+        event_id:          event.id,
       }),
       requestId,
     ),
@@ -145,16 +161,14 @@ export async function handlePaymentIntentFailed(
       db,
       order.id,
       "payment_failed",
-      `Payment failed: ${
-        declineCode ?? failureCode ?? failureMessage ?? "unknown reason"
-      }.`,
+      `Payment failed: ${declineCode ?? failureCode ?? failureMessage ?? "unknown reason"}.`,
       requestId,
     ),
   ]);
 
   log("warn", "webhook_payment_failed", {
     requestId,
-    orderId: prefix(order.id),
+    orderId:         prefix(order.id),
     paymentIntentId: prefix(paymentIntent.id),
     failureCode,
     declineCode,
@@ -162,12 +176,18 @@ export async function handlePaymentIntentFailed(
 }
 
 export async function handlePaymentIntentCanceled(
-  db: DbClient,
-  event: Stripe.Event,
+  db:        DbClient,
+  event:     Stripe.Event,
   requestId: string,
 ): Promise<void> {
-  const paymentIntent = parsePaymentIntentEventPayload(event);
+  // ── 1. Idempotency guard ───────────────────────────────────────────────────
+  const idempotency = await checkEventIdempotency(db, event.id, event.type, requestId);
+  if (idempotency.alreadyProcessed) return;
+  if (idempotency.dbError) {
+    throw new Error(`webhook_idempotency_failed:${event.id} — ${idempotency.error}`);
+  }
 
+  const paymentIntent = parsePaymentIntentEventPayload(event);
   if (paymentIntent === null) {
     log("warn", "webhook_pi_canceled_invalid_payload", {
       requestId,
@@ -177,7 +197,6 @@ export async function handlePaymentIntentCanceled(
   }
 
   const order = await findOrderByPaymentIntentId(db, paymentIntent.id);
-
   if (order === null) {
     log("info", "webhook_pi_canceled_no_order", {
       requestId,
@@ -191,8 +210,8 @@ export async function handlePaymentIntentCanceled(
       .from("orders")
       .update({
         payment_status: DB_PMT_CANCELED,
-        status: DB_ORD_CANCELED,
-        updated_at: nowIso(),
+        status:         DB_ORD_CANCELED,
+        updated_at:     nowIso(),
       })
       .eq("id", order.id);
 
@@ -202,10 +221,10 @@ export async function handlePaymentIntentCanceled(
       order.customer_uid,
       "PAYMENT_CANCELED",
       toJson({
-        payment_intent_id: paymentIntent.id,
-        cancellation_reason: paymentIntent.cancellationReason,
-        source: "stripe-webhook",
-        event_id: event.id,
+        payment_intent_id:    paymentIntent.id,
+        cancellation_reason:  paymentIntent.cancellationReason,
+        source:               "stripe-webhook",
+        event_id:             event.id,
       }),
       requestId,
     );
@@ -213,8 +232,8 @@ export async function handlePaymentIntentCanceled(
 
   log("info", "webhook_pi_canceled", {
     requestId,
-    orderId: prefix(order.id),
+    orderId:         prefix(order.id),
     paymentIntentId: prefix(paymentIntent.id),
-    reason: paymentIntent.cancellationReason,
+    reason:          paymentIntent.cancellationReason,
   });
 }

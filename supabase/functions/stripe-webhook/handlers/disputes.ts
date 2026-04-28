@@ -1,3 +1,14 @@
+// supabase/functions/stripe-webhook/handlers/disputes.ts
+// =============================================================================
+// Phase 2 hardened:
+//   - checkEventIdempotency() is first in all three handlers.
+//   - DB errors throw so Stripe retries.
+//   - Dispute events carry no checkout session metadata. The metadata parser
+//     is NOT used here — order lookup is via paymentIntentId only.
+//     This is correct and intentional: disputes are state finalizers that
+//     don't need checkout context.
+// =============================================================================
+
 import type Stripe from "stripe";
 import { DB_ORD_CONFIRMED, DB_PMT_DISPUTED, DB_PMT_PAID } from "../env.ts";
 import { log, nowIso, prefix } from "../logging.ts";
@@ -14,14 +25,21 @@ import {
   toJson,
 } from "../utils.ts";
 import type { DbClient } from "../types.ts";
+import { checkEventIdempotency } from "../shared/idempotency.ts";
 
 export async function handleDisputeCreated(
-  db: DbClient,
-  event: Stripe.Event,
+  db:        DbClient,
+  event:     Stripe.Event,
   requestId: string,
 ): Promise<void> {
-  const dispute = parseDisputeEventPayload(event);
+  // ── 1. Idempotency guard ───────────────────────────────────────────────────
+  const idempotency = await checkEventIdempotency(db, event.id, event.type, requestId);
+  if (idempotency.alreadyProcessed) return;
+  if (idempotency.dbError) {
+    throw new Error(`webhook_idempotency_failed:${event.id} — ${idempotency.error}`);
+  }
 
+  const dispute = parseDisputeEventPayload(event);
   if (dispute === null) {
     log("warn", "webhook_dispute_created_invalid_payload", {
       requestId,
@@ -47,80 +65,62 @@ export async function handleDisputeCreated(
   let recentOrderEvents: Array<Record<string, unknown>> = [];
 
   if (order !== null) {
-    [paymentDetails, fulfillmentEvidence, recentOrderEvents] = await Promise
-      .all([
-        loadOrderPaymentDetails(db, order.id),
-        loadOrderFulfillmentEvidence(db, order.id),
-        loadLatestOrderEvents(db, order.id, 10),
-      ]);
+    [paymentDetails, fulfillmentEvidence, recentOrderEvents] = await Promise.all([
+      loadOrderPaymentDetails(db, order.id),
+      loadOrderFulfillmentEvidence(db, order.id),
+      loadLatestOrderEvents(db, order.id, 10),
+    ]);
   }
 
   const disputeSnapshot = toJson({
-    source: "stripe-webhook",
-    request_id: requestId,
-    event_id: event.id,
-    dispute_id: dispute.id,
-    dispute_amount: dispute.amount,
-    dispute_reason: dispute.reason,
-    dispute_status: dispute.status,
+    source:                      "stripe-webhook",
+    request_id:                  requestId,
+    event_id:                    event.id,
+    dispute_id:                  dispute.id,
+    dispute_amount:              dispute.amount,
+    dispute_reason:              dispute.reason,
+    dispute_status:              dispute.status,
     dispute_network_reason_code: dispute.networkReasonCode,
-    charge_id: dispute.chargeId,
-    payment_intent_id: dispute.paymentIntentId,
-    order_id: order?.id ?? null,
-    evidence_due_by: evidenceDueBy,
-    payment_details: paymentDetails === null ? null : toJson(paymentDetails),
-    fulfillment_evidence: fulfillmentEvidence === null
+    charge_id:                   dispute.chargeId,
+    payment_intent_id:           dispute.paymentIntentId,
+    order_id:                    order?.id ?? null,
+    evidence_due_by:             evidenceDueBy,
+    payment_details:             paymentDetails === null ? null : toJson(paymentDetails),
+    fulfillment_evidence:        fulfillmentEvidence === null ? null : toJson(fulfillmentEvidence),
+    recent_order_events:         recentOrderEvents.length > 0 ? toJson(recentOrderEvents) : null,
+    stripe_evidence_summary: dispute.evidenceSummary === null
       ? null
-      : toJson(fulfillmentEvidence),
-    recent_order_events: recentOrderEvents.length > 0
-      ? toJson(recentOrderEvents)
-      : null,
-    stripe_evidence_summary: dispute.evidenceSummary === null ? null : toJson({
-      has_customer_signature: dispute.evidenceSummary.hasCustomerSignature,
-      has_receipt: dispute.evidenceSummary.hasReceipt,
-      has_service_documentation:
-        dispute.evidenceSummary.hasServiceDocumentation,
-      has_shipping_documentation:
-        dispute.evidenceSummary.hasShippingDocumentation,
-      has_customer_communication:
-        dispute.evidenceSummary.hasCustomerCommunication,
-      uncategorized_text: dispute.evidenceSummary.uncategorizedText,
-    }),
+      : toJson({
+          has_customer_signature:    dispute.evidenceSummary.hasCustomerSignature,
+          has_receipt:               dispute.evidenceSummary.hasReceipt,
+          has_service_documentation: dispute.evidenceSummary.hasServiceDocumentation,
+          has_shipping_documentation:dispute.evidenceSummary.hasShippingDocumentation,
+          has_customer_communication:dispute.evidenceSummary.hasCustomerCommunication,
+          uncategorized_text:        dispute.evidenceSummary.uncategorizedText,
+        }),
   });
 
-  await logSecurityEvent(
-    db,
-    "stripe_dispute_created",
-    disputeSnapshot,
-    requestId,
-  );
+  await logSecurityEvent(db, "stripe_dispute_created", disputeSnapshot, requestId);
 
   if (order !== null) {
     const { error: statusError } = await db
       .from("orders")
-      .update({
-        payment_status: DB_PMT_DISPUTED,
-        updated_at: nowIso(),
-      })
+      .update({ payment_status: DB_PMT_DISPUTED, updated_at: nowIso() })
       .eq("id", order.id)
       .eq("payment_status", DB_PMT_PAID);
 
     if (statusError !== null) {
       log("warn", "webhook_dispute_status_update_failed", {
         requestId,
-        orderId: prefix(order.id),
+        orderId:   prefix(order.id),
         disputeId: prefix(dispute.id),
-        code: statusError.code ?? null,
+        code:      statusError.code ?? null,
       });
     }
 
     const evidenceAvailable: string[] = [];
-    if (paymentDetails !== null) {
-      evidenceAvailable.push("payment/device metadata");
-    }
-    if (fulfillmentEvidence !== null) {
-      evidenceAvailable.push("fulfillment evidence");
-    }
+    if (paymentDetails !== null)      evidenceAvailable.push("payment/device metadata");
+    if (fulfillmentEvidence !== null) evidenceAvailable.push("fulfillment evidence");
     if (recentOrderEvents.length > 0) {
       evidenceAvailable.push(`${recentOrderEvents.length} order events`);
     }
@@ -130,9 +130,7 @@ export async function handleDisputeCreated(
       : "No pre-collected evidence found — manual review required.";
 
     const notificationMessage =
-      `⚠️ Dispute of $${disputeAmountDollars} opened — reason: ${
-        dispute.reason ?? "unknown"
-      }. ` +
+      `⚠️ Dispute of $${disputeAmountDollars} opened — reason: ${dispute.reason ?? "unknown"}. ` +
       `Evidence due: ${evidenceDueDate}. ${evidenceSummaryText}`;
 
     await Promise.all([
@@ -142,17 +140,17 @@ export async function handleDisputeCreated(
         null,
         "DISPUTE_CREATED",
         toJson({
-          dispute_id: dispute.id,
-          dispute_amount: dispute.amount,
-          dispute_reason: dispute.reason,
-          dispute_status: dispute.status,
+          dispute_id:                  dispute.id,
+          dispute_amount:              dispute.amount,
+          dispute_reason:              dispute.reason,
+          dispute_status:              dispute.status,
           dispute_network_reason_code: dispute.networkReasonCode,
-          evidence_due_by: evidenceDueBy,
-          has_payment_details: paymentDetails !== null,
-          has_fulfillment_evidence: fulfillmentEvidence !== null,
-          recent_event_count: recentOrderEvents.length,
-          source: "stripe-webhook",
-          event_id: event.id,
+          evidence_due_by:             evidenceDueBy,
+          has_payment_details:         paymentDetails !== null,
+          has_fulfillment_evidence:    fulfillmentEvidence !== null,
+          recent_event_count:          recentOrderEvents.length,
+          source:                      "stripe-webhook",
+          event_id:                    event.id,
         }),
         requestId,
       ),
@@ -162,25 +160,31 @@ export async function handleDisputeCreated(
 
   log("warn", "webhook_dispute_created", {
     requestId,
-    disputeId: prefix(dispute.id),
-    orderId: prefix(order?.id ?? null),
-    reason: dispute.reason,
-    amount: dispute.amount,
-    paymentIntentId: prefix(dispute.paymentIntentId),
-    hasPaymentDetails: paymentDetails !== null,
+    disputeId:              prefix(dispute.id),
+    orderId:                prefix(order?.id ?? null),
+    reason:                 dispute.reason,
+    amount:                 dispute.amount,
+    paymentIntentId:        prefix(dispute.paymentIntentId),
+    hasPaymentDetails:      paymentDetails !== null,
     hasFulfillmentEvidence: fulfillmentEvidence !== null,
-    recentEventCount: recentOrderEvents.length,
+    recentEventCount:       recentOrderEvents.length,
     evidenceDueBy,
   });
 }
 
 export async function handleDisputeUpdated(
-  db: DbClient,
-  event: Stripe.Event,
+  db:        DbClient,
+  event:     Stripe.Event,
   requestId: string,
 ): Promise<void> {
-  const dispute = parseDisputeEventPayload(event);
+  // ── 1. Idempotency guard ───────────────────────────────────────────────────
+  const idempotency = await checkEventIdempotency(db, event.id, event.type, requestId);
+  if (idempotency.alreadyProcessed) return;
+  if (idempotency.dbError) {
+    throw new Error(`webhook_idempotency_failed:${event.id} — ${idempotency.error}`);
+  }
 
+  const dispute = parseDisputeEventPayload(event);
   if (dispute === null) {
     log("warn", "webhook_dispute_updated_invalid_payload", {
       requestId,
@@ -196,7 +200,7 @@ export async function handleDisputeUpdated(
   if (order === null) {
     log("info", "webhook_dispute_updated_no_order", {
       requestId,
-      disputeId: prefix(dispute.id),
+      disputeId:       prefix(dispute.id),
       paymentIntentId: prefix(dispute.paymentIntentId),
     });
     return;
@@ -208,11 +212,11 @@ export async function handleDisputeUpdated(
     null,
     "DISPUTE_UPDATED",
     toJson({
-      dispute_id: dispute.id,
+      dispute_id:     dispute.id,
       dispute_status: dispute.status,
       dispute_reason: dispute.reason,
-      source: "stripe-webhook",
-      event_id: event.id,
+      source:         "stripe-webhook",
+      event_id:       event.id,
     }),
     requestId,
   );
@@ -220,18 +224,24 @@ export async function handleDisputeUpdated(
   log("info", "webhook_dispute_updated", {
     requestId,
     disputeId: prefix(dispute.id),
-    orderId: prefix(order.id),
-    status: dispute.status,
+    orderId:   prefix(order.id),
+    status:    dispute.status,
   });
 }
 
 export async function handleDisputeClosed(
-  db: DbClient,
-  event: Stripe.Event,
+  db:        DbClient,
+  event:     Stripe.Event,
   requestId: string,
 ): Promise<void> {
-  const dispute = parseDisputeEventPayload(event);
+  // ── 1. Idempotency guard ───────────────────────────────────────────────────
+  const idempotency = await checkEventIdempotency(db, event.id, event.type, requestId);
+  if (idempotency.alreadyProcessed) return;
+  if (idempotency.dbError) {
+    throw new Error(`webhook_idempotency_failed:${event.id} — ${idempotency.error}`);
+  }
 
+  const dispute = parseDisputeEventPayload(event);
   if (dispute === null) {
     log("warn", "webhook_dispute_closed_invalid_payload", {
       requestId,
@@ -252,7 +262,7 @@ export async function handleDisputeClosed(
     return;
   }
 
-  const disputeWon = dispute.status === "won";
+  const disputeWon  = dispute.status === "won";
   const disputeLost = dispute.status === "lost";
 
   if (disputeWon && shouldRepairToPaid(order)) {
@@ -260,8 +270,8 @@ export async function handleDisputeClosed(
       .from("orders")
       .update({
         payment_status: DB_PMT_PAID,
-        status: DB_ORD_CONFIRMED,
-        updated_at: nowIso(),
+        status:         DB_ORD_CONFIRMED,
+        updated_at:     nowIso(),
       })
       .eq("id", order.id);
   }
@@ -280,29 +290,23 @@ export async function handleDisputeClosed(
       null,
       "DISPUTE_CLOSED",
       toJson({
-        dispute_id: dispute.id,
+        dispute_id:     dispute.id,
         dispute_status: dispute.status,
-        dispute_won: disputeWon,
-        dispute_lost: disputeLost,
-        source: "stripe-webhook",
-        event_id: event.id,
+        dispute_won:    disputeWon,
+        dispute_lost:   disputeLost,
+        source:         "stripe-webhook",
+        event_id:       event.id,
       }),
       requestId,
     ),
-    notify(
-      db,
-      order.id,
-      `dispute_${outcomeLabel}`,
-      notificationMessage,
-      requestId,
-    ),
+    notify(db, order.id, `dispute_${outcomeLabel}`, notificationMessage, requestId),
   ]);
 
   log(disputeLost ? "warn" : "info", "webhook_dispute_closed", {
     requestId,
-    disputeId: prefix(dispute.id),
-    orderId: prefix(order.id),
-    status: dispute.status,
+    disputeId:  prefix(dispute.id),
+    orderId:    prefix(order.id),
+    status:     dispute.status,
     disputeWon,
   });
 }

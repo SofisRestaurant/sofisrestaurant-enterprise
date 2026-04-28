@@ -1,26 +1,8 @@
 // supabase/functions/stripe-webhook/handlers/checkout-session-completed.ts
 // =============================================================================
-// Changes from prior version:
-//
-//   1. Identity variables are now typed as string | null (not string | undefined)
-//      to match createOrderFromSession's updated contract.
-//
-//   2. Auth-only side effects (loyalty backfill, promo redemption, credit
-//      marking, loyalty reserve finalization, ORDER_CONFIRMED_WEBHOOK event)
-//      are guarded by `if (userId !== null)`. They will no longer fire empty-
-//      string user IDs into the DB when a guest is checking out.
-//
-//   3. Kitchen notify and SMS run for BOTH auth and guest orders.
-//
-//   4. `notifyKitchen` receives `userId: userId ?? null` instead of `userId ?? ""`
-//      — if kitchen-notify.ts accepts string | null the call is clean; if it
-//      only accepts string the caller coalesces to "" for backward compat
-//      (that arg is logged only, not written to DB).
-//
-//   5. [NEW] Kitchen notify and SMS are SKIPPED when verification_status is
-//      'required'. The order is persisted and payment is recorded, but
-//      fulfillment is held until the customer completes OTP verification.
-//      The order lookup after creation reads verification_status from the DB.
+// Phase 2 hardened — all direct metadata access replaced by
+// parseCheckoutMetadata(). checkEventIdempotency() is the first statement;
+// DB errors cause a hard throw so Stripe retries the event.
 // =============================================================================
 
 import type Stripe from "stripe";
@@ -42,30 +24,41 @@ import { DB_ORD_CONFIRMED, DB_PMT_PAID } from "../env.ts";
 import { log, nowIso, prefix } from "../logging.ts";
 import {
   normalizeStripePaid,
-  parseCents,
   parseCheckoutSessionEventRef,
-  pickMeta,
   shouldRepairToPaid,
   toJson,
 } from "../utils.ts";
+import {
+  parseCheckoutMetadata,
+  type ParsedCheckoutMetadata,
+} from "../shared/metadata.ts";
+import { checkEventIdempotency } from "../shared/idempotency.ts";
 
 // ─── Loyalty finalization ─────────────────────────────────────────────────────
 // Auth-only. Never called when userId is null.
 
 async function finalizeLoyaltyReserve(args: {
   db:        DbClient;
-  session:   Stripe.Checkout.Session;
+  sessionId: string;
   userId:    string;
+  meta:      ParsedCheckoutMetadata;
   requestId: string;
 }): Promise<void> {
-  const { db, session, userId, requestId } = args;
+  const { db, sessionId, userId, meta, requestId } = args;
+  const {
+    loyaltyAccountId,
+    loyaltyPreSessionKey,
+    loyaltyReservedPoints,
+    loyaltyDiscountCents,
+  } = meta;
 
-  const loyaltyAccountId  = pickMeta(session.metadata, "loyalty_account_id");
-  const preSessionKey     = pickMeta(session.metadata, "loyalty_pre_session_key");
-  const loyaltyPoints     = parseCents(pickMeta(session.metadata, "loyalty_reserved_points"));
-  const loyaltyCents      = parseCents(pickMeta(session.metadata, "loyalty_discount_cents"));
-
-  if (!loyaltyAccountId || loyaltyPoints <= 0 || !preSessionKey) return;
+  if (
+    loyaltyAccountId === null ||
+    loyaltyPreSessionKey === null ||
+    (loyaltyReservedPoints ?? 0) <= 0
+  ) {
+    return;
+  }
 
   const { error: flipError } = await db
     .from("loyalty_ledger")
@@ -75,12 +68,12 @@ async function finalizeLoyaltyReserve(args: {
       balance_after:   0,
       entry_type:      "checkout_release",
       source:          "online_checkout",
-      idempotency_key: `release:${preSessionKey}`,
+      idempotency_key: `release:${loyaltyPreSessionKey}`,
       metadata: {
-        stripe_session_id: session.id,
+        stripe_session_id: sessionId,
         reason:            "payment_completed",
-        loyalty_points:    loyaltyPoints,
-        loyalty_cents:     loyaltyCents,
+        loyalty_points:    loyaltyReservedPoints,
+        loyalty_cents:     loyaltyDiscountCents,
         user_id:           userId,
       },
     });
@@ -88,7 +81,7 @@ async function finalizeLoyaltyReserve(args: {
   if (flipError) {
     log("warn", "webhook_loyalty_ledger_flip_failed", {
       requestId,
-      sessionId: prefix(session.id),
+      sessionId: prefix(sessionId),
       accountId: prefix(loyaltyAccountId),
       error:     flipError.message,
     });
@@ -101,9 +94,6 @@ async function finalizeLoyaltyReserve(args: {
 }
 
 // ─── Verification status helper ───────────────────────────────────────────────
-// Reads verification_status from the persisted order row.
-// Returns null if the column is absent or the query fails — caller treats
-// null as "not required" (fail-open) so no order is silently held forever.
 
 async function readVerificationStatus(
   db:        DbClient,
@@ -144,8 +134,20 @@ export async function handleCheckoutSessionCompleted(
   event:     Stripe.Event,
   requestId: string,
 ): Promise<void> {
-  const sessionRef = parseCheckoutSessionEventRef(event);
+  // ── 1. Idempotency guard — MUST be first ──────────────────────────────────
+  const idempotency = await checkEventIdempotency(
+    db,
+    event.id,
+    event.type,
+    requestId,
+  );
+  if (idempotency.alreadyProcessed) return;
+  if (idempotency.dbError) {
+    throw new Error(`webhook_idempotency_failed:${event.id} — ${idempotency.error}`);
+  }
 
+  // ── 2. Resolve session reference ──────────────────────────────────────────
+  const sessionRef = parseCheckoutSessionEventRef(event);
   if (!sessionRef) {
     log("warn", "webhook_session_missing_id", {
       requestId,
@@ -161,25 +163,30 @@ export async function handleCheckoutSessionCompleted(
 
   if (!normalizeStripePaid(session)) return;
 
-  // ── Identity resolution ───────────────────────────────────────────────────
-  // Exactly one of userId or guestToken must be present.
-  // null (not undefined) matches createOrderFromSession's contract.
-
-  const userId:     string | null = pickMeta(session.metadata, "user_id", "customer_uid", "uid") ?? null;
-  const guestToken: string | null = pickMeta(session.metadata, "guest_token") ?? null;
-
-  if (userId === null && guestToken === null) {
-    log("warn", "webhook_session_no_identity", {
+  // ── 3. Parse and validate all metadata in one place ───────────────────────
+  // No handler code below this point may access session.metadata directly.
+  const metaResult = parseCheckoutMetadata(session.metadata, requestId);
+  if (!metaResult.ok) {
+    log("warn", "webhook_checkout_metadata_invalid", {
       requestId,
       sessionId: prefix(session.id),
+      code:      metaResult.code,
+      message:   metaResult.message,
     });
+    // Hard return — do not process an event with unvalidated metadata.
+    // Stripe will not retry a 200 response; the event is effectively dropped.
+    // This is intentional: malformed metadata indicates a checkout bug, not
+    // a transient failure. Log and alert on this in prod.
     return;
   }
+  const meta = metaResult.value;
 
+  // Identity — sourced ONLY from ParsedCheckoutMetadata, never raw metadata.
+  const userId:     string | null = meta.userId;
+  const guestToken: string | null = meta.guestToken;
   const isGuest = userId === null;
 
-  // ── Find or create order ──────────────────────────────────────────────────
-
+  // ── 4. Find or create order ───────────────────────────────────────────────
   let order = await findOrderBySessionId(db, session.id);
   let wasNewOrder = false;
 
@@ -193,7 +200,6 @@ export async function handleCheckoutSessionCompleted(
     });
 
     if (!order) throw new Error(`webhook_order_create_failed:${session.id}`);
-
     wasNewOrder = true;
   } else if (shouldRepairToPaid(order)) {
     await db
@@ -209,13 +215,7 @@ export async function handleCheckoutSessionCompleted(
   const orderId    = order.id;
   const orderTotal = order.amount_total;
 
-  // ── [NEW] Read verification_status to gate fulfillment ────────────────────
-  // Only relevant for new orders — existing orders that we're seeing for the
-  // second time have already had their side effects run.
-  //
-  // Fail-open: if the read fails or returns null, we treat it as not_required
-  // and proceed normally. A payment must never be silently lost.
-
+  // ── 5. Read verification_status to gate fulfillment ───────────────────────
   let verificationRequired = false;
   if (wasNewOrder) {
     const verificationStatus = await readVerificationStatus(db, orderId, requestId);
@@ -224,22 +224,21 @@ export async function handleCheckoutSessionCompleted(
     if (verificationRequired) {
       log("info", "webhook_fulfillment_held_pending_verification", {
         requestId,
-        orderId:    prefix(orderId),
-        sessionId:  prefix(session.id),
+        orderId:   prefix(orderId),
+        sessionId: prefix(session.id),
         isGuest,
       });
     }
   }
 
-  // ── Side effects ──────────────────────────────────────────────────────────
+  // ── 6. Side effects ───────────────────────────────────────────────────────
   // Rules:
-  //   - upsertPaymentTransaction: runs for ALL orders (auth + guest)
-  //   - notifyKitchen:            runs ONLY when verification is not required
-  //   - sendOrderConfirmationSms: runs ONLY when verification is not required
-  //   - loyalty, promo, credit:   auth-only (guard with `userId !== null`)
+  //   upsertPaymentTransaction  → all orders (auth + guest)
+  //   new_order notify          → all new orders
+  //   loyalty / promo / credit  → auth-only (userId !== null)
+  //   notifyKitchen + SMS       → new orders where verification is not required
 
   const sideEffects: Promise<void>[] = [
-    // ── Always — payment must be recorded regardless of verification ────────
     upsertPaymentTransaction({ db, orderId, session, requestId }),
   ];
 
@@ -255,15 +254,11 @@ export async function handleCheckoutSessionCompleted(
     );
   }
 
-  // ── Auth-only side effects ─────────────────────────────────────────────────
-
+  // ── Auth-only ──────────────────────────────────────────────────────────────
   if (userId !== null) {
-    const promoId            = pickMeta(session.metadata, "promo_id") ?? undefined;
-    const creditId           = pickMeta(session.metadata, "credit_id") ?? undefined;
-    const subtotalCents      = parseCents(pickMeta(session.metadata, "subtotal_cents")) ?? orderTotal;
-    const promoDiscountCents = parseCents(pickMeta(session.metadata, "promo_discount_cents"));
-    const totalCents         =
-      typeof session.amount_total === "number" ? session.amount_total : orderTotal;
+    // subtotalCents: use validated metadata value; fall back to order total
+    // only as a last resort (should never happen if metadata is complete).
+    const subtotalCents = meta.subtotalCents ?? orderTotal;
 
     sideEffects.push(
       backfillLoyaltyIfMissing({
@@ -287,28 +282,34 @@ export async function handleCheckoutSessionCompleted(
         requestId,
       ),
 
-      finalizeLoyaltyReserve({ db, session, userId, requestId }),
+      finalizeLoyaltyReserve({
+        db,
+        sessionId: session.id,
+        userId,
+        meta,
+        requestId,
+      }),
     );
 
-    if (promoId) {
+    if (meta.promoId !== null) {
       sideEffects.push(
         recordPromoRedemptionIfMissing({
           db,
-          promotionId:     promoId,
+          promotionId:     meta.promoId,
           userId,
           sessionId:       session.id,
-          discountCents:   promoDiscountCents,
-          orderTotalCents: totalCents,
+          discountCents:   meta.promoDiscountCents ?? 0,
+          orderTotalCents: meta.totalCents ?? orderTotal,
           requestId,
         }),
       );
     }
 
-    if (creditId) {
+    if (meta.creditId !== null) {
       sideEffects.push(
         markCreditUsedIfPending({
           db,
-          creditId,
+          creditId:  meta.creditId,
           userId,
           sessionId: session.id,
           requestId,
@@ -335,18 +336,16 @@ export async function handleCheckoutSessionCompleted(
   }
 
   // ── Kitchen + SMS ─────────────────────────────────────────────────────────
-  // Skipped when verification_status = 'required'.
-  // The order is fully persisted and payment is recorded above — only the
-  // kitchen print and customer SMS are held. They will be triggered by the
-  // verify-phone flow once the customer completes OTP (future work).
-
   if (wasNewOrder && !verificationRequired) {
     sideEffects.push(
       notifyKitchen({
         db,
         orderId,
+        // notifyKitchen logs userId for observability only — not written to DB.
+        // Guest orders pass "" for backward compat with the existing function
+        // signature (which accepts string, not string | null).
         userId:          userId ?? "",
-        fulfillmentType: pickMeta(session.metadata, "order_type") ?? "pickup",
+        fulfillmentType: meta.orderType,
         amountTotal:     orderTotal,
         requestId,
       }),
@@ -359,12 +358,12 @@ export async function handleCheckoutSessionCompleted(
 
   log("info", "webhook_checkout_completed", {
     requestId,
-    orderId:               prefix(orderId),
-    sessionId:             prefix(session.id),
+    orderId:              prefix(orderId),
+    sessionId:            prefix(session.id),
     wasNewOrder,
     orderTotal,
     isGuest,
-    userId:                prefix(userId ?? "guest"),
+    userId:               prefix(userId ?? "guest"),
     verificationRequired,
   });
 }
