@@ -1,55 +1,13 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-
-  "cleanUrls": true,
-  "trailingSlash": false,
-
-  "rewrites": [
-    {
-      "source": "/((?!api/|assets/|favicon.ico|robots.txt|sitemap.xml|.*\\..*).*)",
-      "destination": "/index.html"
-    }
-  ],
-
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
   "headers": [
     {
       "source": "/index.html",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "no-cache, no-store, must-revalidate"
-        }
-      ]
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }]
     },
-
     {
       "source": "/assets/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=31536000, immutable"
-        }
-      ]
-    },
-
-    {
-      "source": "/(.*\\.(js|css|mjs|map))",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=31536000, immutable"
-        }
-      ]
-    },
-
-    {
-      "source": "/(.*\\.(png|jpg|jpeg|webp|svg|ico|gif|avif))",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=31536000, immutable"
-        }
-      ]
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
     }
   ]
 }
