@@ -21,6 +21,28 @@
 //
 //  - sessionId enforced via requireSessionId() on all remote sync paths.
 //  - sessionId never persisted (excluded from partialize).
+//
+// ABANDONED CART FIXES:
+//
+//   BUG 3 — email never written:
+//     flushSyncToSupabase() now reads supabase.auth.getUser() and writes
+//     email to abandoned_cart_sessions. The read is fire-and-forget inside
+//     the abandoned cart upsert, so it never blocks the main sync path.
+//     For guest sessions, email in abandoned_cart_sessions will remain null
+//     (guest email is on pending_carts.guest_email; growth.service.ts enriches
+//     it at read time).
+//
+//   BUG 4 — item_count not a DB column:
+//     item_count does NOT exist in abandoned_cart_sessions. We do NOT write it
+//     here. growth.service.ts derives item_count from pending_carts.items at
+//     fetch time. No schema change required.
+//
+//   BUG 5 — recovered never updated:
+//     clearSupabaseCart() now also updates abandoned_cart_sessions
+//     recovered = true for the same session id. This is called by
+//     OrderSuccess.tsx after a successful checkout, closing the recovery loop.
+//     The update is best-effort (non-fatal on error) so it never blocks cart
+//     clearing or order confirmation flow.
 // =============================================================================
 
 import { create } from 'zustand';
@@ -469,16 +491,45 @@ async function flushSyncToSupabase(
   const { error } = await supabase.from('pending_carts').upsert(payload, { onConflict: 'id' });
   if (error) console.error('[cart.store] pending_carts upsert failed:', error.message);
 
+  // ── Abandoned cart session upsert ─────────────────────────────────────────
+  // BUG 3 FIX: write email to abandoned_cart_sessions.
+  //   Read the authenticated user's email from the current session and include
+  //   it in the upsert. This is the only place we have the email without an
+  //   extra DB round-trip. For guest sessions (no auth), email stays null —
+  //   growth.service.ts enriches it from pending_carts.guest_email at read time.
+  //
+  // NOTE: item_count is NOT a column in abandoned_cart_sessions (confirmed by
+  //   live schema). We do NOT write it here. growth.service.ts derives it from
+  //   pending_carts.items at fetch time (BUG 4 handled there).
+  //
+  // recovered is always false here — it is set to true in clearSupabaseCart()
+  // when the order completes (BUG 5 fix below).
   fireAndForget(async () => {
+    // Read current user's email — non-blocking, fail-safe
+    let userEmail: string | null = null;
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      userEmail = user?.email ?? null;
+    } catch {
+      // Non-fatal: email will be null for this sync cycle
+    }
+
     const abandoned: AbandonedCartSessionInsert = {
-      id: sid, user_id: userId,
+      id:               sid,
+      user_id:          userId,
+      email:            userEmail,            // BUG 3 FIX: was missing
       cart_value_cents: totals.subtotalCents,
-      last_activity: nowIso(), recovered: false,
+      last_activity:    nowIso(),
+      recovered:        false,
     };
+
     const { error: aErr } = await supabase
       .from('abandoned_cart_sessions')
       .upsert(abandoned, { onConflict: 'id' });
-    if (aErr) console.warn('[cart.store] abandoned_cart_sessions upsert failed:', aErr.message);
+
+    if (aErr) {
+      console.warn('[cart.store] abandoned_cart_sessions upsert failed:', aErr.message);
+    }
   });
 }
 
@@ -660,12 +711,32 @@ export const useCartStore = create<CartStore>()(
         set(buildDerivedState(hydratedItems, promotion, credit));
       },
 
-      syncToSupabase:    (userId, sessionId) => { scheduleSyncToSupabase(userId, sessionId, get); },
+      syncToSupabase: (userId, sessionId) => { scheduleSyncToSupabase(userId, sessionId, get); },
+
       clearSupabaseCart: async (sessionId) => {
         const sid = safeSessionId(sessionId);
         if (!sid) return;
+
+        // Delete the pending cart row (existing behaviour)
         const { error } = await supabase.from('pending_carts').delete().eq('id', sid);
         if (error) console.warn('[cart.store] pending_carts delete failed:', error.message);
+
+        // BUG 5 FIX: mark the abandoned_cart_sessions row as recovered.
+        //   This is called by OrderSuccess.tsx after a successful order, so
+        //   the session id is the same uuid used throughout the cart lifetime.
+        //   Best-effort: if the row doesn't exist (guest who never synced) the
+        //   update silently affects 0 rows, which is correct.
+        fireAndForget(async () => {
+          const { error: recErr } = await supabase
+            .from('abandoned_cart_sessions')
+            .update({ recovered: true })
+            .eq('id', sid)
+            .eq('recovered', false); // only update if not already marked
+
+          if (recErr) {
+            console.warn('[cart.store] abandoned_cart_sessions recovery update failed:', recErr.message);
+          }
+        });
       },
     }),
 
@@ -719,4 +790,3 @@ export const selectItemByKey        = (key: string) => (s: CartStore) =>
   s.items.find((e) => cartItemKey(e.menuItemId, e.modifiers) === key) ?? null;
 export const selectItemsByCategory  = (cat: string) => (s: CartStore) =>
   s.items.filter((e) => e.category === cat);
-

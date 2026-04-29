@@ -76,7 +76,7 @@ export default function ModalRenderer() {
   if (isMenuItem) return content;
 
   return (
-    <div className="fixed inset-0 z-[100]" data-modal-root="true">
+    <div className="fixed inset-0 z-100" data-modal-root="true">
       <button
         type="button"
         aria-label="Close modal"

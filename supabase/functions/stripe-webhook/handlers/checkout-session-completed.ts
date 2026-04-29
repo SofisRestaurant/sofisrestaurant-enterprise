@@ -3,6 +3,31 @@
 // Phase 2 hardened — all direct metadata access replaced by
 // parseCheckoutMetadata(). checkEventIdempotency() is the first statement;
 // DB errors cause a hard throw so Stripe retries the event.
+//
+// CHANGE FROM PRIOR VERSION:
+//   Added markAbandonedCartRecovered() as a side effect in step 6.
+//
+//   WHY:
+//   cart.store.ts.clearSupabaseCart() marks abandoned_cart_sessions.recovered
+//   = true when the OrderSuccess page loads. But if the user closes the browser
+//   before OrderSuccess renders, that path never executes. The webhook is the
+//   authoritative source of truth for a completed payment — it is the correct
+//   place to close the recovery loop, not the client page.
+//
+//   The nightly cron job (cleanup-abandoned-checkouts.sql) also reconciles
+//   this as a batch safety net, but closing it in the webhook is more immediate
+//   and reduces cron backlog.
+//
+//   MATCHING LOGIC:
+//   abandoned_cart_sessions.id = pending_carts.id = the pending_cart_id from
+//   Stripe metadata. We use meta.pendingCartId (now correctly typed in
+//   shared/metadata.ts as string | null) to look up and update the row.
+//
+//   SAFETY:
+//   - Non-fatal: a failure here never rolls back the order or fails the webhook
+//   - Idempotent: .eq('recovered', false) guard prevents double-updates
+//   - Uses the same DbClient as all other side effects (service role)
+//   - Only fires on wasNewOrder to avoid redundant updates on webhook retries
 // =============================================================================
 
 import type Stripe from "stripe";
@@ -127,6 +152,78 @@ async function readVerificationStatus(
   }
 }
 
+// ─── Abandoned cart recovery ──────────────────────────────────────────────────
+//
+// Marks the matching abandoned_cart_sessions row as recovered when a checkout
+// completes successfully.
+//
+// MATCHING: abandoned_cart_sessions.id = pendingCartId (same session UUID used
+// throughout the cart lifecycle: cart.store.ts → pending_carts → Stripe metadata
+// → webhook → here).
+//
+// NON-FATAL: any error is logged as a warning and swallowed. A failure here
+// must never cause the webhook to return a non-2xx or throw — doing so would
+// trigger a Stripe retry, which could create a duplicate order.
+//
+// IDEMPOTENT: the .eq('recovered', false) guard ensures re-runs on webhook
+// retries produce no side effect after the first successful update.
+//
+// ONLY on wasNewOrder: webhook retries for an existing order should not
+// re-trigger this — the first run already set recovered = true.
+
+async function markAbandonedCartRecovered(args: {
+  db:            DbClient;
+  pendingCartId: string | null;
+  requestId:     string;
+  sessionId:     string;
+}): Promise<void> {
+  const { db, pendingCartId, requestId, sessionId } = args;
+
+  // pendingCartId is required to locate the abandoned_cart_sessions row.
+  // If the metadata did not carry it (e.g., older order without cart link),
+  // log and skip silently — never throw.
+  if (!pendingCartId || pendingCartId.trim().length === 0) {
+    log("warn", "webhook_abandoned_cart_recovery_no_cart_id", {
+      requestId,
+      sessionId: prefix(sessionId),
+    });
+    return;
+  }
+
+  try {
+    const { error } = await db
+      .from("abandoned_cart_sessions")
+      .update({ recovered: true })
+      .eq("id", pendingCartId)   // same UUID as pending_carts.id
+      .eq("recovered", false);   // idempotency guard: skip if already recovered
+
+    if (error) {
+      // Not fatal — the nightly cron handles any remaining un-recovered rows.
+      log("warn", "webhook_abandoned_cart_recovery_update_failed", {
+        requestId,
+        sessionId:     prefix(sessionId),
+        pendingCartId: prefix(pendingCartId),
+        error:         error.message,
+      });
+      return;
+    }
+
+    log("info", "webhook_abandoned_cart_recovered", {
+      requestId,
+      sessionId:     prefix(sessionId),
+      pendingCartId: prefix(pendingCartId),
+    });
+  } catch (err) {
+    // Swallow: never let analytics bookkeeping fail the webhook
+    log("warn", "webhook_abandoned_cart_recovery_crashed", {
+      requestId,
+      sessionId:     prefix(sessionId),
+      pendingCartId: prefix(pendingCartId),
+      error:         err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 export async function handleCheckoutSessionCompleted(
@@ -186,6 +283,12 @@ export async function handleCheckoutSessionCompleted(
   const guestToken: string | null = meta.guestToken;
   const isGuest = userId === null;
 
+  // pendingCartId — typed string | null in ParsedCheckoutMetadata (see metadata.ts).
+  // Resolved from all historical Stripe metadata aliases:
+  //   pending_cart_id → cart_ref → cart_id
+  // Used for abandoned cart recovery tracking in markAbandonedCartRecovered().
+  const pendingCartId: string | null = meta.pendingCartId;
+
   // ── 4. Find or create order ───────────────────────────────────────────────
   let order = await findOrderBySessionId(db, session.id);
   let wasNewOrder = false;
@@ -233,10 +336,11 @@ export async function handleCheckoutSessionCompleted(
 
   // ── 6. Side effects ───────────────────────────────────────────────────────
   // Rules:
-  //   upsertPaymentTransaction  → all orders (auth + guest)
-  //   new_order notify          → all new orders
-  //   loyalty / promo / credit  → auth-only (userId !== null)
-  //   notifyKitchen + SMS       → new orders where verification is not required
+  //   upsertPaymentTransaction     → all orders (auth + guest)
+  //   new_order notify             → all new orders
+  //   markAbandonedCartRecovered   → all new orders (closes recovery loop)
+  //   loyalty / promo / credit     → auth-only (userId !== null)
+  //   notifyKitchen + SMS          → new orders where verification is not required
 
   const sideEffects: Promise<void>[] = [
     upsertPaymentTransaction({ db, orderId, session, requestId }),
@@ -251,6 +355,17 @@ export async function handleCheckoutSessionCompleted(
         "New order confirmed via Stripe webhook.",
         requestId,
       ),
+    );
+
+    // Close the abandoned cart recovery loop for ALL new orders (auth + guest).
+    // Non-fatal, idempotent. See markAbandonedCartRecovered() for full contract.
+    sideEffects.push(
+      markAbandonedCartRecovered({
+        db,
+        pendingCartId,
+        requestId,
+        sessionId: session.id,
+      }),
     );
   }
 
@@ -365,5 +480,6 @@ export async function handleCheckoutSessionCompleted(
     isGuest,
     userId:               prefix(userId ?? "guest"),
     verificationRequired,
+    pendingCartId:        prefix(pendingCartId ?? "none"),
   });
 }

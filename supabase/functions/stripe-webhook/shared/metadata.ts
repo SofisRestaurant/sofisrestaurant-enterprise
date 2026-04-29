@@ -15,9 +15,21 @@
 //   - user_id is the ONLY canonical identity field. customer_uid and uid
 //     are legacy aliases resolved here and nowhere else downstream.
 //
+// CHANGE LOG (2026 hardening pass):
+//   - Added pendingCartId: string | null to ParsedCheckoutMetadata.
+//     This is the canonical cart UUID that links abandoned_cart_sessions,
+//     pending_carts, and the order. Resolved from all historical key aliases
+//     written by both checkout pipelines (auth + guest):
+//       pending_cart_id  ← canonical write key in buildSessionMetadata()
+//       cart_ref         ← alias written alongside pending_cart_id
+//       cart_id          ← alias written alongside pending_cart_id
+//     pendingCartId and cartId now expose the same resolved value under
+//     two names. cartId is preserved for backward compatibility with any
+//     existing handler code that reads it. New code should prefer pendingCartId.
+//
 // REQUIRED FIELDS (hard failure on absence):
 //   user_id (or legacy alias) OR guest_token — at least one identity
-//   cart_id (or alias)
+//   cart_id (or alias) → exposed as both cartId and pendingCartId
 //   request_id
 //   idempotency_key
 //   order_type
@@ -64,7 +76,26 @@ export type ParsedCheckoutMetadata = {
   guestToken: string | null;
 
   // ── Required tracing fields ────────────────────────────────────────────────
+
+  /**
+   * Canonical pending cart UUID.
+   * Resolved from all historical Stripe metadata key aliases in priority order:
+   *   pending_cart_id → cart_ref → cart_id
+   * This value links: abandoned_cart_sessions, pending_carts, and the order row.
+   * New code should read this field. cartId below is an identical alias kept
+   * for backward compatibility with existing handler callers.
+   */
+  pendingCartId: string | null;
+
+  /**
+   * Backward-compatible alias for pendingCartId.
+   * Resolved from the same set of key aliases.
+   * Prefer pendingCartId in new code. This field will not be removed until
+   * all callers have been migrated.
+   * @deprecated Use pendingCartId.
+   */
   cartId: string;
+
   requestId: string;
   idempotencyKey: string;
 
@@ -173,10 +204,24 @@ export function parseCheckoutMetadata(
     );
   }
 
-  // ── Required: cartId ───────────────────────────────────────────────────────
-  // Three aliases written by buildSessionMetadata() — accept all.
-  const cartId = pickStr(metadata, "cart_id", "cart_ref", "pending_cart_id");
-  if (cartId === null) {
+  // ── Required: pendingCartId / cartId ───────────────────────────────────────
+  // Resolve from all historical key aliases written by both checkout pipelines.
+  // Priority order matches the write order in buildSessionMetadata():
+  //   pending_cart_id  ← canonical key (create-checkout + create-checkout-guest)
+  //   cart_ref         ← alias written alongside pending_cart_id
+  //   cart_id          ← alias written alongside pending_cart_id
+  //
+  // Both pendingCartId and cartId on the result object receive the same resolved
+  // value. cartId is kept for backward compatibility; pendingCartId is the
+  // preferred field name for new handler code.
+  const resolvedCartId = pickStr(
+    metadata,
+    "pending_cart_id",
+    "cart_ref",
+    "cart_id",
+  );
+
+  if (resolvedCartId === null) {
     log("warn", "webhook_metadata_missing_cart_id", { requestId });
     return webhookFail("metadata_missing_cart_id", "Metadata is missing cart_id.");
   }
@@ -218,13 +263,13 @@ export function parseCheckoutMetadata(
   // ── Optional fields ────────────────────────────────────────────────────────
   const pickupTime = safeStr(metadata["pickup_time"]);
 
-  const subtotalCents       = safeInt(metadata["subtotal_cents"]);
-  const discountCents       = safeInt(metadata["discount_cents"]);
-  const promoDiscountCents  = safeInt(metadata["promo_discount_cents"]);
+  const subtotalCents         = safeInt(metadata["subtotal_cents"]);
+  const discountCents         = safeInt(metadata["discount_cents"]);
+  const promoDiscountCents    = safeInt(metadata["promo_discount_cents"]);
   const campaignDiscountCents = safeInt(metadata["campaign_discount_cents"]);
-  const creditCents         = safeInt(metadata["credit_cents"]);
-  const taxCents            = safeInt(metadata["tax_cents"]);
-  const totalCents          = safeInt(metadata["total_cents"]);
+  const creditCents           = safeInt(metadata["credit_cents"]);
+  const taxCents              = safeInt(metadata["tax_cents"]);
+  const totalCents            = safeInt(metadata["total_cents"]);
 
   const promoId  = safeStr(metadata["promo_id"]);
   const creditId = safeStr(metadata["credit_id"]);
@@ -242,8 +287,11 @@ export function parseCheckoutMetadata(
   const parsed: ParsedCheckoutMetadata = {
     userId,
     guestToken,
-    cartId,
-    requestId: parsedRequestId,
+    // pendingCartId is the canonical name; cartId is the backward-compat alias.
+    // Both carry the same resolved value so no caller needs to change yet.
+    pendingCartId: resolvedCartId,
+    cartId:        resolvedCartId,
+    requestId:     parsedRequestId,
     idempotencyKey,
     orderType,
     pickupTime,

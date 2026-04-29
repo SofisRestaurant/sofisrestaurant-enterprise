@@ -18,7 +18,6 @@ export default defineConfig(({ command, mode }) => {
           algorithm: 'brotliCompress',
           ext: '.br',
         }),
-
       !isDev &&
         viteCompression({
           algorithm: 'gzip',
@@ -54,30 +53,52 @@ export default defineConfig(({ command, mode }) => {
       target: 'esnext',
       outDir: 'dist',
       sourcemap: false,
-
-      // ✅ Use OXC properly (fixes warning)
       minify: 'oxc',
-
       cssCodeSplit: true,
       reportCompressedSize: false,
       chunkSizeWarningLimit: 800,
 
       rollupOptions: {
         output: {
+          /**
+           * manualChunks strategy
+           * ─────────────────────────────────────────────────────────────────
+           * IMPORTANT: Do NOT put admin page components into shared chunks.
+           * Each admin page should be its own chunk so that:
+           *   1. A stale hash for one page doesn't break others
+           *   2. Bundle analysis is per-page (easier to spot regressions)
+           *   3. The reload-on-stale-chunk strategy only triggers for the
+           *      specific page being navigated to, not the whole admin
+           *
+           * Vendor splitting is safe because vendor chunk contents change
+           * rarely (only on dep upgrades), and the HTML always references
+           * the correct hashed vendor chunk URLs.
+           */
           manualChunks(id) {
+            // ── Vendor splitting ──────────────────────────────────────────
             if (id.includes('node_modules')) {
+              if (id.includes('react-dom')) return 'react-dom'
               if (id.includes('react')) return 'react-vendor'
               if (id.includes('framer-motion')) return 'motion'
               if (id.includes('@tanstack')) return 'query'
               if (id.includes('lucide-react')) return 'icons'
               if (id.includes('stripe')) return 'payments'
+              if (id.includes('@supabase')) return 'supabase'
               return 'vendor'
             }
 
-            if (id.includes('Dashboard')) return 'dashboard'
+            // ── App feature splitting ─────────────────────────────────────
+            // Each named chunk here maps to one or more related files.
+            // Admin pages are NOT chunked here — they are split automatically
+            // by Vite's dynamic import boundaries in the router.
+            if (id.includes('/features/admin/ui')) return 'admin-ui'
+            if (id.includes('/features/admin/dashboard')) return 'dashboard'
             if (id.includes('LoyaltyScan')) return 'loyalty'
+            if (id.includes('/modules/menu')) return 'menu'
+            if (id.includes('/modules/checkout')) return 'checkout'
           },
 
+          // Stable filename pattern — hash is content-based (Rollup default)
           entryFileNames: 'assets/[name]-[hash].js',
           chunkFileNames: 'assets/[name]-[hash].js',
           assetFileNames: 'assets/[name]-[hash].[ext]',
@@ -96,7 +117,7 @@ export default defineConfig(({ command, mode }) => {
       ],
     },
 
-    // ✅ Keep esbuild ONLY for console stripping
+    // esbuild only used for console stripping in production
     esbuild: {
       drop: isDev ? [] : ['console', 'debugger'],
     },
