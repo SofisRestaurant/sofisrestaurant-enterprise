@@ -29,6 +29,9 @@ import { useCartSummary } from '@/domain/cart/use-cart-summary';
 import { cartItemKey } from '@/modules/cart/types/cart.types';
 import type { CartItem } from '@/modules/cart/types/cart.types';
 
+import { useAuth } from '@/features/auth/hooks/useAuth';
+import { getSupabaseSessionIdFromAccessToken } from '@/security/auth/sessionId';
+
 import { useCartDrawerDrag } from '@/modules/cart/gestures/useCartDrawerDrag';
 import { CartLineItem } from '@/modules/cart/components/CartLineItem';
 import { CartFooter } from '@/modules/cart/components/CartFooter';
@@ -311,7 +314,11 @@ export function CartDrawer() {
   const location = useLocation();
   const isOpen = useCartUiStore((s) => s.isOpen);
   const closeCart = useCartUiStore((s) => s.close);
-  const cart = useCart();
+const { user, session } = useAuth();
+const cart = useCart({
+  userId: user?.id ?? null,
+  sessionId: session ? getSupabaseSessionIdFromAccessToken(session.access_token) : null,
+});
   const clearFn = useCartStore((s) => s.clearCart);
   const { totals, flags } = useCartSummary();
   const [confirmClear, setConfirmClear] = useState(false);
