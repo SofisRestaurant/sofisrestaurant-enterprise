@@ -1,13 +1,18 @@
-import { createClient } from '@supabase/supabase-js';
+// PATH: supabase/functions/admin-gateway/lib/auth.ts
+// =============================================================================
+// MIGRATED: replaced inline createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+// with createAnonClient() from _shared/supabase.ts.
+// Function signature and behavior are identical — call sites unchanged.
+// =============================================================================
+
+import { createAnonClient } from '../../_shared/supabase.ts';
 
 export async function verifyAdmin(authHeader: string) {
-  const token = authHeader.replace('Bearer ', '');
+  const token = authHeader.replace('Bearer ', '').trim();
 
-  const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
-    global: {
-      headers: { Authorization: `Bearer ${token}` },
-    },
-  });
+  // MIGRATED: createAnonClient() reads SUPABASE_URL + SUPABASE_ANON_KEY
+  // from the shared env() helper — no inline Deno.env.get calls.
+  const supabase = createAnonClient(token);
 
   const {
     data: { user },

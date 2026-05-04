@@ -21,7 +21,7 @@
 //   npm run generate-images-ts -- --upload
 //     Upload + CDN: uploads every optimized image to its Supabase bucket,
 //     then writes CDN URLs (implies --cdn)
-//     Requires: VITE_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env
+//     Requires: VITE_SUPABASE_URL and SUPABASE_SECRET_KEY in .env
 //
 //   npm run generate-images-ts -- --upload --bucket-prefix sofis
 //     Uses sofis-hero-images, sofis-menu-images etc. as bucket names
@@ -36,9 +36,10 @@
 //
 // ── Required .env vars for --upload ────────────────────────────────────────
 //
-//   VITE_SUPABASE_URL          your project URL
-//   SUPABASE_SERVICE_ROLE_KEY  from Supabase dashboard → Settings → API
-//                              NEVER use the anon key for server-side uploads
+//   VITE_SUPABASE_URL    your project URL
+//   SUPABASE_SECRET_KEY  from Supabase dashboard → Settings → API
+//                        (previously called SUPABASE_SERVICE_ROLE_KEY)
+//                        NEVER use the anon key for server-side uploads
 //
 // =============================================================================
 
@@ -70,9 +71,24 @@ const SUPABASE_URL =
   process.env.SUPABASE_URL ??
   '';
 
-// Service role key is required for storage uploads — never the anon key.
-const SUPABASE_SERVICE_ROLE_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+// MIGRATED: reads SUPABASE_SECRET_KEY (modern name) with legacy fallback.
+// Resolution order mirrors supabaseAdmin.ts — no flag day required.
+// Remove the fallback once .env is updated to SUPABASE_SECRET_KEY.
+const SUPABASE_SECRET_KEY: string = (() => {
+  const modern = process.env.SUPABASE_SECRET_KEY?.trim();
+  if (modern) return modern;
+
+  const legacy = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (legacy) {
+    console.warn(
+      '[generate-images] SUPABASE_SERVICE_ROLE_KEY is deprecated. ' +
+      'Rename to SUPABASE_SECRET_KEY in your .env file.',
+    );
+    return legacy;
+  }
+
+  return ''; // empty — caught by the validation block in main()
+})();
 
 // ── Category config ───────────────────────────────────────────────────────────
 
@@ -179,7 +195,8 @@ async function uploadFile(
     const res  = await fetch(url, {
       method: 'POST',
       headers: {
-        Authorization:   `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        // MIGRATED: uses SUPABASE_SECRET_KEY instead of SUPABASE_SERVICE_ROLE_KEY
+        Authorization:   `Bearer ${SUPABASE_SECRET_KEY}`,
         'Content-Type':  mimeType,
         'Cache-Control': 'public, max-age=31536000, immutable',
         'x-upsert':      'true',  // overwrite on re-runs — safe
@@ -426,9 +443,12 @@ async function main(): Promise<void> {
       console.error('    Add it to .env and re-run.');
       process.exit(1);
     }
-    if (!SUPABASE_SERVICE_ROLE_KEY) {
-      console.error('\n❌  SUPABASE_SERVICE_ROLE_KEY is not set.');
+    // MIGRATED: validation now checks SUPABASE_SECRET_KEY (with legacy fallback
+    // already resolved above into the SUPABASE_SECRET_KEY variable)
+    if (!SUPABASE_SECRET_KEY) {
+      console.error('\n❌  SUPABASE_SECRET_KEY is not set.');
       console.error('    Find it: Supabase dashboard → Settings → API → service_role key');
+      console.error('    Rename SUPABASE_SERVICE_ROLE_KEY → SUPABASE_SECRET_KEY in your .env');
       console.error('    Never use the anon key for uploads — it lacks INSERT permissions.');
       process.exit(1);
     }

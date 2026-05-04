@@ -1,6 +1,0 @@
-{
-  "imports": {
-    "@supabase/supabase-js": "jsr:@supabase/supabase-js@^2.101.1",
-    "stripe": "https://esm.sh/stripe@20.3.1?target=deno"
-  }
-}

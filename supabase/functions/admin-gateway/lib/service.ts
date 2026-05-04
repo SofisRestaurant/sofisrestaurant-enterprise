@@ -1,6 +1,9 @@
-import { createClient } from '@supabase/supabase-js';
+// PATH: supabase/functions/admin-gateway/lib/service.ts
+// =============================================================================
+// MIGRATED: replaced direct createClient(SERVICE_ROLE_KEY) with supabaseAdmin()
+// Behavior: identical — privileged RLS-bypass client for admin-gateway actions.
+// =============================================================================
 
-export const service = createClient(
-  Deno.env.get('SUPABASE_URL')!,
-  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-);
+import { supabaseAdmin } from '../../_shared/supabaseAdmin.ts';
+
+export const service = supabaseAdmin();

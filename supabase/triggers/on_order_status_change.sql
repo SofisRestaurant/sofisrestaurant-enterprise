@@ -1,5 +1,25 @@
-CREATE EXTENSION IF NOT EXISTS pg_net WITH SCHEMA extensions;
+-- PATH: supabase/triggers/on_order_status_change.sql
+-- =============================================================================
+-- MIGRATED: replaced app.settings.service_role_key GUC with
+-- app.settings.internal_function_key. The send-sms function already validates
+-- x-internal-key (INTERNAL_FUNCTION_KEY) before any DB access — this is the
+-- correct internal service-to-service auth mechanism. The service role key must
+-- never be stored in database GUC settings or injected into HTTP headers from
+-- Postgres.
+--
+-- REQUIRED PREREQUISITE (run once in Supabase SQL editor or migration):
+--   ALTER DATABASE postgres
+--     SET "app.settings.internal_function_key" = '<your INTERNAL_FUNCTION_KEY value>';
+--
+-- Or via Supabase CLI:
+--   supabase secrets set INTERNAL_FUNCTION_KEY=<value>
+--   Then in a migration: SELECT set_config('app.settings.internal_function_key', current_setting('app.settings.internal_function_key'), false);
+--
+-- The app.settings.service_role_key GUC can be removed from your database
+-- config once this migration is applied and verified.
+-- =============================================================================
 
+CREATE EXTENSION IF NOT EXISTS pg_net WITH SCHEMA extensions;
 
 CREATE OR REPLACE FUNCTION notify_order_status_change()
 RETURNS TRIGGER
@@ -8,10 +28,10 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  v_sms_event   TEXT;
-  v_supabase_url TEXT;
-  v_service_key  TEXT;
-  v_payload      JSONB;
+  v_sms_event      TEXT;
+  v_supabase_url   TEXT;
+  v_internal_key   TEXT;  -- MIGRATED: was v_service_key (service_role_key)
+  v_payload        JSONB;
 BEGIN
 
   IF OLD.status IS NOT DISTINCT FROM NEW.status THEN
@@ -35,12 +55,13 @@ BEGIN
     RETURN NEW;
   END IF;
 
-
   BEGIN
     v_supabase_url := current_setting('app.settings.supabase_url');
-    v_service_key  := current_setting('app.settings.service_role_key');
+    -- MIGRATED: reads internal_function_key instead of service_role_key.
+    -- INTERNAL_FUNCTION_KEY is a shared secret for internal Edge Function calls
+    -- only — it does NOT bypass RLS or grant DB access if leaked.
+    v_internal_key := current_setting('app.settings.internal_function_key');
   EXCEPTION WHEN OTHERS THEN
-
     RAISE WARNING 'notify_order_status_change: app.settings not configured for order %', NEW.id;
     RETURN NEW;
   END;
@@ -59,7 +80,9 @@ BEGIN
     body    := v_payload::text,
     headers := jsonb_build_object(
       'Content-Type',  'application/json',
-      'Authorization', 'Bearer ' || v_service_key
+      -- MIGRATED: x-internal-key replaces Authorization: Bearer <service_role_key>.
+      -- send-sms validates this header before any DB access (see send-sms/index.ts §1).
+      'x-internal-key', v_internal_key
     )
   );
 

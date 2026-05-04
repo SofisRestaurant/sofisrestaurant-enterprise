@@ -1,4 +1,4 @@
-import { SupabaseClient } from '@supabase/supabase-js';
+import { SupabaseClient } from "@supabase/supabase-js";
 import type { ExistingEvidenceRow, JsonValue, OrderExistsRow } from './types.ts';
 
 const EVIDENCE_COLUMNS = [

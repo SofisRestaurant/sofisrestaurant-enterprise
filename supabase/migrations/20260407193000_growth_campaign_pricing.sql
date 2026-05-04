@@ -1,5 +1,5 @@
 -- ============================================================================
--- growth_campaign_pricing
+-- path: supabase/migrations/20260407193000_growth_campaign_pricing.sql
 -- ----------------------------------------------------------------------------
 -- Adds real pricing semantics to growth_campaigns and persists immutable
 -- pricing snapshots on pending_carts so checkout/finalize share one server
@@ -15,6 +15,7 @@
 -- ============================================================================
 
 alter table public.growth_campaigns
+  add column if not exists menu_item_id uuid null,
   add column if not exists deal_type text null,
   add column if not exists deal_price_cents integer null,
   add column if not exists discount_percent integer null,
@@ -138,22 +139,88 @@ begin
   end if;
 end $$;
 
-create index if not exists growth_campaigns_active_pricing_idx
-  on public.growth_campaigns (
-    active,
-    auto_apply,
-    menu_item_id,
-    applies_to_category,
-    applies_to_order_type,
-    priority desc,
-    pricing_priority desc,
-    weight desc,
-    starts_at desc,
-    ends_at asc,
-    updated_at desc,
-    id
+alter table public.growth_campaigns
+
+  add column if not exists priority integer not null default 0,
+
+  add column if not exists weight numeric not null default 1;
+
+do $$
+begin
+  -- starts_at / ends_at are introduced later in the replay chain.
+  -- Skip index creation during early migration replays until those
+  -- columns exist.
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'growth_campaigns'
+      and column_name = 'starts_at'
   )
-  where deal_type is not null;
+  and exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'growth_campaigns'
+      and column_name = 'ends_at'
+  ) then
+
+    create index if not exists growth_campaigns_active_pricing_idx
+      on public.growth_campaigns (
+        active,
+        auto_apply,
+        menu_item_id,
+        applies_to_category,
+        applies_to_order_type,
+        priority desc,
+        pricing_priority desc,
+        weight desc,
+        starts_at desc,
+        ends_at asc,
+        updated_at desc,
+        id
+      )
+      where deal_type is not null;
+
+  end if;
+end $$;
+
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'growth_campaigns'
+      and column_name = 'starts_at'
+  )
+  and exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'growth_campaigns'
+      and column_name = 'ends_at'
+  ) then
+
+    create index if not exists growth_campaigns_active_pricing_idx
+      on public.growth_campaigns (
+        active,
+        auto_apply,
+        menu_item_id,
+        applies_to_category,
+        applies_to_order_type,
+        priority desc,
+        pricing_priority desc,
+        weight desc,
+        starts_at desc,
+        ends_at asc,
+        updated_at desc,
+        id
+      )
+      where deal_type is not null;
+
+  end if;
+end $$;
 
 alter table public.pending_carts
   add column if not exists pricing_snapshot jsonb not null default '{}'::jsonb,

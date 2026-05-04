@@ -1,7 +1,8 @@
 {
   "version": "5",
   "specifiers": {
-    "npm:@supabase/supabase-js@^2.101.1": "2.103.0",
+    "npm:@supabase/supabase-js@2.103.0": "2.103.0",
+    "npm:@supabase/supabase-js@^2.103.0": "2.103.0",
     "npm:stripe@^22.0.1": "22.0.1"
   },
   "npm": {
@@ -17,8 +18,8 @@
         "tslib"
       ]
     },
-    "@supabase/phoenix@0.4.0": {
-      "integrity": "sha512-RHSx8bHS02xwfHdAbX5Lpbo6PXbgyf7lTaXTlwtFDPwOIw64NnVRwFAXGojHhjtVYI+PEPNSWwkL90f4agN3bw=="
+    "@supabase/phoenix@0.4.1": {
+      "integrity": "sha512-hWGJkDAfWUNY8k0C080u3sGNFd2ncl9erhKgP7hnGkgJWEfT5Pd/SXal4QmWXBECVlZrannMAc9sBaaRyWpiUA=="
     },
     "@supabase/postgrest-js@2.103.0": {
       "integrity": "sha512-rC3sRxYdPZymkp2CZR1MiNQgbOleD01bGsW8VxEKRR5nMkLZ1NgAS1QTQf78Wh30czFyk505ZYr9Od8/mWT2TA==",
@@ -83,7 +84,7 @@
   "workspace": {
     "dependencies": [
       "jsr:@std/http@^1.0.25",
-      "npm:@supabase/supabase-js@^2.101.1",
+      "npm:@supabase/supabase-js@2.103.0",
       "npm:stripe@^22.0.1"
     ]
   }

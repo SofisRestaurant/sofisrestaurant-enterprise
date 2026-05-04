@@ -5,9 +5,20 @@
 // - No session persistence / refresh in Edge runtime
 // - Safe bearer token extraction
 // =============================================================================
+//
+// MIGRATION NOTE (2026)
+//   createServiceClient() previously read SUPABASE_SERVICE_ROLE_KEY directly.
+//   It now delegates to supabaseAdmin() — the single authoritative source for
+//   privileged DB access. SUPABASE_SERVICE_ROLE_KEY is no longer read anywhere
+//   in this file.
+//
+//   All call sites that import createServiceClient() continue to work without
+//   changes — the function signature and return type are identical.
+// =============================================================================
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './database.types.ts';
+import { supabaseAdmin } from './supabaseAdmin.ts';
 
 export type DbClient = SupabaseClient<Database>;
 export type SvcClient = DbClient;
@@ -32,11 +43,13 @@ function mustEnv(name: string): string {
   return v.trim();
 }
 
+// MIGRATED: env() no longer reads SUPABASE_SERVICE_ROLE_KEY.
+// Only the two keys legitimately needed by the anon/public client
+// factories are resolved here.
 function env() {
   return {
-    SUPABASE_URL: mustEnv('SUPABASE_URL'),
+    SUPABASE_URL:      mustEnv('SUPABASE_URL'),
     SUPABASE_ANON_KEY: mustEnv('SUPABASE_ANON_KEY'),
-    SUPABASE_SERVICE_ROLE_KEY: mustEnv('SUPABASE_SERVICE_ROLE_KEY'),
   };
 }
 
@@ -72,16 +85,13 @@ export const _readBearerToken = readBearerToken;
  * Service role client:
  * - Bypasses RLS
  * - MUST NOT carry user Authorization header
+ *
+ * MIGRATED: no longer reads SUPABASE_SERVICE_ROLE_KEY directly.
+ * Delegates to supabaseAdmin() — the single authoritative privileged client.
+ * Signature preserved for backward compatibility with all existing callers.
  */
 export function createServiceClient(): SvcClient {
-  const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = env();
-
-  return createClient<Database>(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-    ...BASE_CLIENT_OPTIONS,
-    global: {
-      headers: mergeHeaders({ 'X-Edge-Role': 'service' }),
-    },
-  });
+  return supabaseAdmin() as SvcClient;
 }
 
 /**

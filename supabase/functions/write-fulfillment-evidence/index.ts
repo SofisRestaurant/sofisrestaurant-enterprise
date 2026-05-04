@@ -1,3 +1,17 @@
+// PATH: supabase/functions/write-fulfillment-evidence/index.ts
+// =============================================================================
+// MIGRATED: removed inline Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') reads.
+// createServiceClient() now delegates to supabaseAdmin() internally (via auth.ts).
+// createAnonClient() still receives url + anonKey — that path is unchanged.
+//
+// The env validation block is narrowed: only SUPABASE_URL and SUPABASE_ANON_KEY
+// are checked here. The service key is validated inside supabaseAdmin() itself,
+// which throws a structured error if missing.
+//
+// All business logic, auth checks, role guards, and evidence write logic are
+// byte-for-byte identical to the prior version.
+// =============================================================================
+
 import {
   createAnonClient,
   createServiceClient,
@@ -9,8 +23,8 @@ import {
   buildMarkOutForDeliveryUpsertRow,
   buildWriteUpsertRow,
 } from './builders.ts';
-import { MAX_BODY_BYTES } from './constants.ts';
-import { corsHeadersFor } from './cors.ts';
+import { MAX_BODY_BYTES }                              from './constants.ts';
+import { corsHeadersFor }                              from './cors.ts';
 import { getExistingEvidence, getOrderExists, upsertEvidenceRow } from './db.ts';
 import {
   isErrorResponseBody,
@@ -18,8 +32,8 @@ import {
   normalizeRole,
   shortId,
 } from './guards.ts';
-import { parsePayload } from './payload.ts';
-import { errorResponse, successResponse } from './responses.ts';
+import { parsePayload }                                from './payload.ts';
+import { errorResponse, successResponse }              from './responses.ts';
 
 interface ErrorWithCode {
   code?: string;
@@ -30,28 +44,21 @@ function isErrorWithCode(value: unknown): value is ErrorWithCode {
 }
 
 function getErrorCode(value: unknown): string {
-  if (!isErrorWithCode(value)) {
-    return 'unknown';
-  }
-
+  if (!isErrorWithCode(value)) return 'unknown';
   return typeof value.code === 'string' && value.code.trim().length > 0
     ? value.code
     : 'unknown';
 }
 
 Deno.serve(async (request: Request): Promise<Response> => {
-  const origin = request.headers.get('origin');
+  const origin      = request.headers.get('origin');
   const corsHeaders = corsHeadersFor(origin);
 
   if (request.method === 'OPTIONS') {
     if (corsHeaders === null) {
       return errorResponse(403, 'origin_forbidden', 'Origin is not allowed.', null);
     }
-
-    return new Response(null, {
-      status: 204,
-      headers: new Headers(corsHeaders),
-    });
+    return new Response(null, { status: 204, headers: new Headers(corsHeaders) });
   }
 
   if (corsHeaders === null) {
@@ -64,25 +71,14 @@ Deno.serve(async (request: Request): Promise<Response> => {
 
   const contentType = request.headers.get('content-type')?.toLowerCase() ?? '';
   if (!contentType.includes('application/json')) {
-    return errorResponse(
-      415,
-      'unsupported_media_type',
-      'Content-Type must be application/json.',
-      corsHeaders,
-    );
+    return errorResponse(415, 'unsupported_media_type', 'Content-Type must be application/json.', corsHeaders);
   }
 
   const contentLengthHeader = request.headers.get('content-length');
   if (contentLengthHeader !== null) {
     const contentLength = Number(contentLengthHeader);
-
     if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
-      return errorResponse(
-        413,
-        'payload_too_large',
-        'Request body exceeds size limit.',
-        corsHeaders,
-      );
+      return errorResponse(413, 'payload_too_large', 'Request body exceeds size limit.', corsHeaders);
     }
   }
 
@@ -93,16 +89,10 @@ Deno.serve(async (request: Request): Promise<Response> => {
   }
 
   if (new TextEncoder().encode(rawBody).byteLength > MAX_BODY_BYTES) {
-    return errorResponse(
-      413,
-      'payload_too_large',
-      'Request body exceeds size limit.',
-      corsHeaders,
-    );
+    return errorResponse(413, 'payload_too_large', 'Request body exceeds size limit.', corsHeaders);
   }
 
   let parsedJson: unknown;
-
   try {
     parsedJson = JSON.parse(rawBody) as unknown;
   } catch {
@@ -123,15 +113,14 @@ Deno.serve(async (request: Request): Promise<Response> => {
 
   const payload = parsedPayload;
 
-  const supabaseUrl = Deno.env.get('SUPABASE_URL')?.trim() ?? '';
+  // ── Env validation ────────────────────────────────────────────────────────
+  // MIGRATED: SUPABASE_SERVICE_ROLE_KEY check removed — supabaseAdmin() handles
+  // that internally and throws a structured error if the key is absent.
+  // Only the two keys consumed directly in this file are validated here.
+  const supabaseUrl     = Deno.env.get('SUPABASE_URL')?.trim() ?? '';
   const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')?.trim() ?? '';
-  const supabaseServiceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')?.trim() ?? '';
 
-  if (
-    supabaseUrl.length === 0 ||
-    supabaseAnonKey.length === 0 ||
-    supabaseServiceRoleKey.length === 0
-  ) {
+  if (supabaseUrl.length === 0 || supabaseAnonKey.length === 0) {
     return errorResponse(
       500,
       'server_misconfigured',
@@ -140,14 +129,17 @@ Deno.serve(async (request: Request): Promise<Response> => {
     );
   }
 
+  // ── Auth ──────────────────────────────────────────────────────────────────
   const jwt = getBearerToken(request.headers.get('authorization') ?? '');
 
   if (jwt === null) {
     return errorResponse(401, 'unauthorized', 'Missing bearer token.', corsHeaders);
   }
 
-  const anonClient = createAnonClient(supabaseUrl, supabaseAnonKey, jwt);
-  const serviceClient = createServiceClient(supabaseUrl, supabaseServiceRoleKey);
+  const anonClient    = createAnonClient(supabaseUrl, supabaseAnonKey, jwt);
+  // MIGRATED: createServiceClient() now calls supabaseAdmin() internally —
+  // no url/key args needed, but they are still accepted for compat.
+  const serviceClient = createServiceClient();
 
   const authUserId = await getAuthenticatedUser(anonClient, jwt);
 
@@ -156,55 +148,37 @@ Deno.serve(async (request: Request): Promise<Response> => {
   }
 
   if (payload.staffId !== undefined && payload.staffId !== authUserId) {
-    return errorResponse(
-      403,
-      'staff_mismatch',
-      'staffId does not match the authenticated user.',
-      corsHeaders,
-      'staffId',
-    );
+    return errorResponse(403, 'staff_mismatch', 'staffId does not match the authenticated user.', corsHeaders, 'staffId');
   }
 
   const profileResult = await getProfileRole(serviceClient, authUserId);
 
   if (profileResult.error !== null) {
     console.error('[write-fulfillment-evidence] profile lookup failed', {
-      code: getErrorCode(profileResult.error),
+      code:         getErrorCode(profileResult.error),
       userIdPrefix: shortId(authUserId),
     });
-
     return errorResponse(500, 'internal_error', 'Unable to validate user role.', corsHeaders);
   }
 
   if (profileResult.data === null) {
-    return errorResponse(
-      403,
-      'profile_not_found',
-      'No profile found for the authenticated user.',
-      corsHeaders,
-    );
+    return errorResponse(403, 'profile_not_found', 'No profile found for the authenticated user.', corsHeaders);
   }
 
   const role = normalizeRole(profileResult.data.role);
 
   if (role !== 'admin' && role !== 'staff') {
-    return errorResponse(
-      403,
-      'forbidden',
-      'Only admin or staff can write fulfillment evidence.',
-      corsHeaders,
-    );
+    return errorResponse(403, 'forbidden', 'Only admin or staff can write fulfillment evidence.', corsHeaders);
   }
 
   const orderResult = await getOrderExists(serviceClient, payload.orderId);
 
   if (orderResult.error !== null) {
     console.error('[write-fulfillment-evidence] order lookup failed', {
-      code: getErrorCode(orderResult.error),
+      code:          getErrorCode(orderResult.error),
       orderIdPrefix: shortId(payload.orderId),
-      userIdPrefix: shortId(authUserId),
+      userIdPrefix:  shortId(authUserId),
     });
-
     return errorResponse(500, 'internal_error', 'Unable to verify order.', corsHeaders);
   }
 
@@ -216,52 +190,33 @@ Deno.serve(async (request: Request): Promise<Response> => {
 
   if (existingResult.error !== null) {
     console.error('[write-fulfillment-evidence] evidence lookup failed', {
-      code: getErrorCode(existingResult.error),
+      code:          getErrorCode(existingResult.error),
       orderIdPrefix: shortId(payload.orderId),
-      userIdPrefix: shortId(authUserId),
+      userIdPrefix:  shortId(authUserId),
     });
-
-    return errorResponse(
-      500,
-      'internal_error',
-      'Unable to load existing evidence.',
-      corsHeaders,
-    );
+    return errorResponse(500, 'internal_error', 'Unable to load existing evidence.', corsHeaders);
   }
 
   const now = new Date().toISOString();
 
   const row = isMarkOutForDeliveryPayload(payload)
-    ? buildMarkOutForDeliveryUpsertRow(
-        payload.orderId,
-        authUserId,
-        existingResult.data,
-        now,
-      )
+    ? buildMarkOutForDeliveryUpsertRow(payload.orderId, authUserId, existingResult.data, now)
     : buildWriteUpsertRow(payload, authUserId, existingResult.data, now);
 
   const writeResult = await upsertEvidenceRow(serviceClient, row);
 
   if (writeResult.error !== null || writeResult.data === null) {
     console.error('[write-fulfillment-evidence] upsert failed', {
-      code: getErrorCode(writeResult.error),
+      code:          getErrorCode(writeResult.error),
       orderIdPrefix: shortId(payload.orderId),
-      userIdPrefix: shortId(authUserId),
+      userIdPrefix:  shortId(authUserId),
     });
-
-    return errorResponse(
-      500,
-      'evidence_write_failed',
-      'Failed to write fulfillment evidence.',
-      corsHeaders,
-    );
+    return errorResponse(500, 'evidence_write_failed', 'Failed to write fulfillment evidence.', corsHeaders);
   }
 
   return successResponse(
     200,
-    isMarkOutForDeliveryPayload(payload)
-      ? 'out_for_delivery_marked'
-      : 'evidence_written',
+    isMarkOutForDeliveryPayload(payload) ? 'out_for_delivery_marked' : 'evidence_written',
     writeResult.data.order_id,
     corsHeaders,
   );

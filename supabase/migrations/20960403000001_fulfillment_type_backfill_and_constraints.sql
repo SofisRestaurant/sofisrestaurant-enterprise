@@ -1,14 +1,47 @@
-
+-- ── Step 0: Ensure column exists (safe on live DB, required on fresh replay) ─
+-- fulfillment_type was dropped in 20260218160304 and never explicitly re-added
+-- in the migration chain. ADD COLUMN IF NOT EXISTS is safe on both paths:
+--   fresh replay  → column added here, backfill below sets values
+--   live DB reset → column already exists, IF NOT EXISTS is a no-op
+ALTER TABLE public.orders
+  ADD COLUMN IF NOT EXISTS fulfillment_type TEXT DEFAULT 'pickup';
+  
 BEGIN;
 
 
-UPDATE public.orders
-SET fulfillment_type = CASE
-  WHEN fulfillment_type IS NOT NULL THEN fulfillment_type
+do $$
 
-  ELSE 'pickup'
-END
-WHERE fulfillment_type IS NULL;
+begin
+
+  if exists (
+
+    select 1
+
+    from information_schema.columns
+
+    where table_schema = 'public'
+
+      and table_name = 'orders'
+
+      and column_name = 'fulfillment_type'
+
+  ) then
+
+    UPDATE public.orders
+
+    SET fulfillment_type = CASE
+
+      WHEN fulfillment_type IS NOT NULL THEN fulfillment_type
+
+      ELSE 'pickup'
+
+    END
+
+    WHERE fulfillment_type IS NULL;
+
+  end if;
+
+end $$;
 
 
 DO $$

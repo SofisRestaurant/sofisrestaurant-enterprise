@@ -1,4 +1,4 @@
-// supabase/functions/admin-metrics/index.ts
+// PATH: supabase/functions/admin-metrics/index.ts
 // ============================================================================
 // ADMIN METRICS — Enterprise / Production Hardened (2026)
 // ----------------------------------------------------------------------------
@@ -28,9 +28,11 @@ function mustEnv(key: string): string {
   return value.trim();
 }
 
+// MIGRATED: removed mustEnv('SUPABASE_SERVICE_ROLE_KEY') and mustEnv('SUPABASE_ANON_KEY').
+// createServiceClient() → supabaseAdmin() resolves SUPABASE_SECRET_KEY internally
+// (with SUPABASE_SERVICE_ROLE_KEY fallback) and throws a structured error on first
+// invocation if missing. SUPABASE_ANON_KEY is not used by this function at all.
 mustEnv('SUPABASE_URL');
-mustEnv('SUPABASE_SERVICE_ROLE_KEY');
-mustEnv('SUPABASE_ANON_KEY');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
@@ -208,8 +210,6 @@ function readNumber(value: unknown): number | null {
 
   return null;
 }
-
-
 
 function readStringFromKeys(record: UnknownRecord, keys: readonly string[]): string | null {
   for (const key of keys) {
