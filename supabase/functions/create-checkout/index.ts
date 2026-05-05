@@ -1274,16 +1274,33 @@ function buildSessionMetadata(
     ...(body.loyalty_redemption_id
       ? { loyalty_redemption_id: body.loyalty_redemption_id }
       : {}),
-    ...(loyalty.applied
-      ? {
-        loyalty_account_id: loyalty.accountId,
-        loyalty_reserved_points: String(loyalty.reservedPoints),
-        loyalty_discount_cents: String(loyalty.discountCents),
-        // preSessionKey was computed once in the main handler and passed through —
-        // never recomputed at this stage.
-        loyalty_pre_session_key: preSessionKey,
-      }
-      : {}),
+...(loyalty.applied
+
+  ? {
+
+    loyalty_account_id:      loyalty.accountId,
+
+    loyalty_reserved_points: String(loyalty.reservedPoints),
+
+    loyalty_discount_cents:  String(loyalty.discountCents),
+
+    // preSessionKey was computed once in the main handler and passed through —
+
+    // never recomputed at this stage.
+
+    loyalty_pre_session_key: preSessionKey,
+
+  }
+
+  // Earn-only path: authenticated user has a loyalty account
+
+  // but is not redeeming points during checkout.
+
+  : body.loyalty_account_id
+
+  ? { loyalty_account_id: body.loyalty_account_id }
+
+  : {}),
   };
 }
 

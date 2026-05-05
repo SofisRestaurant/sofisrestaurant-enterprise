@@ -32,6 +32,7 @@ import { supabase } from '@/lib/supabase/supabaseClient';
 import { computeLineTotalCents, cartItemKey } from '@/modules/cart/types/cart.types';
 import type { CartItem } from '@/modules/cart/types/cart.types';
 import { formatCents } from '@/modules/cart/utils/cart.utils';
+import { X } from 'lucide-react';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -973,6 +974,15 @@ export default function CheckoutPage() {
       alive = false;
     };
   }, [isAuthenticated]);
+  
+  useEffect(() => {
+    if (!loyaltyAccountId) return;
+
+    setLoyaltyIntent((prev) => ({
+      ...prev,
+      loyaltyAccountId,
+    }));
+  }, [loyaltyAccountId]);
 
   useEffect(() => {
     if (!selectedCredit) safeLocalRemove(STORAGE.CREDIT);

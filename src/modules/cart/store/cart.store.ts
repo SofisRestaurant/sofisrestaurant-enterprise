@@ -457,6 +457,13 @@ function scheduleSyncToSupabase(
   if (syncTimer !== null) clearTimeout(syncTimer);
   syncTimer = setTimeout(() => { void flushSyncToSupabase(userId, sid, getState); }, SYNC_DEBOUNCE);
 }
+async function computePricingHash(snapshot: Json): Promise<string> {
+  const encoded = new TextEncoder().encode(JSON.stringify(snapshot));
+  const buffer  = await crypto.subtle.digest('SHA-256', encoded);
+  return Array.from(new Uint8Array(buffer))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
 
 async function flushSyncToSupabase(
   userId: string,
@@ -474,19 +481,30 @@ async function flushSyncToSupabase(
     return;
   }
 
-  const currency = coerceCurrencyCode(DEFAULT_CURRENCY);
-  const payload: PendingCartInsert = {
-    id: sid, user_id: userId, currency,
-    items:            serializeCartItems(items),
-    pricing_snapshot: buildPricingSnapshot(items, promotion, credit, totals, currency),
-    subtotal_cents:   totals.subtotalCents,
-    discount_cents:   totals.discountCents,
-    tax_cents:        totals.taxCents,
-    total_cents:      totals.totalCents,
-    promo_id:         promotion?.id ?? null,
-    credit_id:        credit?.id ?? null,
-    expires_at:       new Date(Date.now() + PENDING_CART_TTL_MS).toISOString(),
-  };
+const currency            = coerceCurrencyCode(DEFAULT_CURRENCY);
+const pricingSnapshotJson = buildPricingSnapshot(items, promotion, credit, totals, currency);
+const pricingHashStr      = await computePricingHash(pricingSnapshotJson);
+
+const payload: PendingCartInsert = {
+  id: sid,
+  user_id: userId,
+  currency,
+
+  items: serializeCartItems(items),
+
+  pricing_snapshot: pricingSnapshotJson,
+  pricing_hash: pricingHashStr,
+
+  subtotal_cents: totals.subtotalCents,
+  discount_cents: totals.discountCents,
+  tax_cents: totals.taxCents,
+  total_cents: totals.totalCents,
+
+  promo_id: promotion?.id ?? null,
+  credit_id: credit?.id ?? null,
+
+  expires_at: new Date(Date.now() + PENDING_CART_TTL_MS).toISOString(),
+};
 
   const { error } = await supabase.from('pending_carts').upsert(payload, { onConflict: 'id' });
   if (error) console.error('[cart.store] pending_carts upsert failed:', error.message);

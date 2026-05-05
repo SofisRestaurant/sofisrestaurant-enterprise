@@ -183,14 +183,24 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
           creditId:     trimOrUndefined(args.creditId),
           pickupSchedule,
 
+          // loyaltyAccountId is always forwarded when present so earn-only
+          // checkouts propagate it through Stripe metadata into
+          // orders.loyalty_account_id. The previous triple-AND condition
+          // short-circuited on applyPoints=false and silently dropped it,
+          // breaking the earn linkage on every non-redemption checkout.
+          //
+          // Redeem fields (points, reward ID, redemption ID) are only included
+          // when the user has explicitly opted in (applyPoints=true, points>0).
+          ...(args.loyalty?.loyaltyAccountId
+            ? { loyaltyAccountId: args.loyalty.loyaltyAccountId }
+            : {}),
           ...(args.loyalty?.applyPoints &&
               args.loyalty.pointsToRedeem &&
               args.loyalty.loyaltyAccountId
             ? {
-                loyaltyRedeemPoints:  args.loyalty.pointsToRedeem,
-                loyaltyAccountId:     args.loyalty.loyaltyAccountId,
-                loyaltyRewardId:      args.loyalty.loyaltyRewardId,
-                loyaltyRedemptionId:  args.loyalty.loyaltyRedemptionId,
+                loyaltyRedeemPoints: args.loyalty.pointsToRedeem,
+                loyaltyRewardId:     args.loyalty.loyaltyRewardId,
+                loyaltyRedemptionId: args.loyalty.loyaltyRedemptionId,
               }
             : {}),
 
