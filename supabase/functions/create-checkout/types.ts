@@ -1,4 +1,4 @@
-//path: supabase/functions/create-checkout/types.ts
+// supabase/functions/create-checkout/types.ts
 import { createServiceClient } from "../_shared/supabase.ts";
 import type { Database, Json } from "../_shared/database.types.ts";
 import type { OrderType } from "../_shared/pricing.ts";
@@ -21,7 +21,7 @@ export type PendingCartInsert =
     // Guest checkout columns (added by migration 001_guest_checkout.sql)
     guest_email?: string | null;
     guest_token?: string | null;
-    pickup_time?: string | null; 
+    pickup_time?: string | null;
   };
 
 export type PendingCartUpdate =
@@ -139,6 +139,13 @@ export type RequestBody = {
   loyalty_reward_id: string | null;
   loyalty_redemption_id: string | null;
   loyalty_account_id: string | null;
+  // ── Pre-checkout risk gate fields (added 2026-05) ────────────────────────
+  // challenge_token: issued by verify-phone after successful OTP; supplied on
+  //   checkout retry. Absent on the initial request.
+  challenge_token?: string | null;
+  // guest_email: forwarded from GuestCheckoutInput for identity key derivation
+  //   and guest-email velocity checking in the risk gate.
+  guest_email?: string | null;
 };
 
 export type RateLimitResult = {
@@ -166,34 +173,36 @@ export type ReusablePendingCartRow = {
 };
 
 export type ErrorCode =
-  | "origin_not_allowed"
-  | "method_not_allowed"
+  | "auth_not_permitted"
   | "authorization_required"
-  | "invalid_token"
-  | "unsupported_content_type"
-  | "empty_body"
-  | "body_too_large"
   | "body_read_failed"
+  | "body_too_large"
+  | "checkout_blocked"        // ← added: pre-checkout risk gate hard block
+  | "credit_invalid"
+  | "discount_conflict"
+  | "empty_body"
+  | "internal_error"
   | "invalid_json"
-  | "validation_failed"
-  | "service_unavailable"
-  | "rate_limited"
+  | "invalid_token"
+  | "line_items_failed"
+  | "loyalty_cooldown"
+  | "loyalty_daily_limit"
+  | "loyalty_order_limit"
+  | "loyalty_reserve_conflict"
+  | "method_not_allowed"
+  | "origin_not_allowed"
+  | "otp_required"            // ← added: pre-checkout risk gate OTP challenge
+  | "pending_cart_persist_failed"
   | "pricing_failed"
   | "pricing_hash_failed"
   | "pricing_integrity_failed"
   | "promo_invalid"
-  | "credit_invalid"
-  | "pending_cart_persist_failed"
-  | "line_items_failed"
-  | "stripe_session_failed"
-  | "discount_conflict"
-  | "loyalty_reserve_conflict"
-  | "loyalty_daily_limit"
-  | "loyalty_order_limit"
-  | "loyalty_cooldown"
+  | "rate_limited"
   | "recent_order_exists"
-  | "internal_error"
-  | "auth_not_permitted";
+  | "service_unavailable"
+  | "stripe_session_failed"
+  | "unsupported_content_type"
+  | "validation_failed";
 
 export type SuccessCode =
   | "checkout_session_created"

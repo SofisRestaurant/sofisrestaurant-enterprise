@@ -15,17 +15,15 @@
 //   - user_id is the ONLY canonical identity field. customer_uid and uid
 //     are legacy aliases resolved here and nowhere else downstream.
 //
-// CHANGE LOG (2026 hardening pass):
-//   - Added pendingCartId: string | null to ParsedCheckoutMetadata.
-//     This is the canonical cart UUID that links abandoned_cart_sessions,
-//     pending_carts, and the order. Resolved from all historical key aliases
-//     written by both checkout pipelines (auth + guest):
-//       pending_cart_id  ← canonical write key in buildSessionMetadata()
-//       cart_ref         ← alias written alongside pending_cart_id
-//       cart_id          ← alias written alongside pending_cart_id
-//     pendingCartId and cartId now expose the same resolved value under
-//     two names. cartId is preserved for backward compatibility with any
-//     existing handler code that reads it. New code should prefer pendingCartId.
+// CHANGE LOG:
+//   2026-05 hardening pass:
+//     Added pendingCartId to ParsedCheckoutMetadata (canonical cart UUID).
+//     cartId preserved as backward-compat alias.
+//
+//   2026-05 pre-checkout risk gate:
+//     Added extractPreCheckoutRisk() and hasPreCheckoutRisk().
+//     These are used by order-creation.ts to bypass evaluateOrderRisk() for
+//     sessions processed by the pre-checkout gate. See order-creation.ts P3.
 //
 // REQUIRED FIELDS (hard failure on absence):
 //   user_id (or legacy alias) OR guest_token — at least one identity
@@ -64,34 +62,98 @@ function isOrderType(value: string): value is OrderType {
   return VALID_ORDER_TYPES.has(value);
 }
 
+// ─── Pre-checkout risk result ─────────────────────────────────────────────────
+//
+// Written into Stripe session metadata by create-checkout/risk-gate.ts after
+// the pre-checkout gate passes. The three keys are:
+//   pre_checkout_risk_score   — numeric 0–100
+//   pre_checkout_risk_level   — 'low' | 'medium' | 'high' | 'critical'
+//   pre_checkout_verif_status — 'not_required' | 'verified'
+//
+// When present, order-creation.ts uses these values directly and does NOT
+// call evaluateOrderRisk(). This prevents the post-payment re-scoring that
+// was overriding the pre-checkout allow decision for low-risk guest orders.
+
+export interface PreCheckoutRiskMeta {
+  riskScore:          number;
+  riskLevel:          string;
+  verificationStatus: string;
+}
+
+/**
+ * Extracts pre-checkout risk fields from Stripe session metadata.
+ *
+ * Returns null when:
+ *   - metadata is absent
+ *   - any of the three fields is absent or empty (partial write = untrusted)
+ *   - riskScore is not a finite integer in [0, 100]
+ *
+ * A null return means the session predates the pre-checkout gate or the
+ * gate was bypassed — fall back to evaluateOrderRisk() in that case.
+ */
+export function extractPreCheckoutRisk(
+  metadata: Stripe.Metadata | null | undefined,
+): PreCheckoutRiskMeta | null {
+  if (!metadata) return null;
+
+  const rawScore  = metadata["pre_checkout_risk_score"];
+  const rawLevel  = metadata["pre_checkout_risk_level"];
+  const rawStatus = metadata["pre_checkout_verif_status"];
+
+  // All three must be non-empty. A partially written session is treated as
+  // legacy — safer to re-evaluate than to use an incomplete risk decision.
+  if (
+    rawScore  == null || rawScore  === "" ||
+    rawLevel  == null || rawLevel  === "" ||
+    rawStatus == null || rawStatus === ""
+  ) {
+    return null;
+  }
+
+  const riskScore = parseInt(rawScore, 10);
+  if (!Number.isFinite(riskScore) || riskScore < 0 || riskScore > 100) {
+    return null;
+  }
+
+  return {
+    riskScore,
+    riskLevel:          rawLevel,
+    verificationStatus: rawStatus,
+  };
+}
+
+/**
+ * Type guard — true when the session was processed by the pre-checkout gate.
+ * Equivalent to `extractPreCheckoutRisk(metadata) !== null` but avoids
+ * allocating the result object when the caller only needs the boolean.
+ */
+export function hasPreCheckoutRisk(
+  metadata: Stripe.Metadata | null | undefined,
+): boolean {
+  if (!metadata) return false;
+  return (
+    metadata["pre_checkout_risk_score"]  != null && metadata["pre_checkout_risk_score"]  !== "" &&
+    metadata["pre_checkout_risk_level"]  != null && metadata["pre_checkout_risk_level"]  !== "" &&
+    metadata["pre_checkout_verif_status"] != null && metadata["pre_checkout_verif_status"] !== ""
+  );
+}
+
 // ─── Parsed metadata shape ────────────────────────────────────────────────────
-// Mirrors EXACTLY the fields written by buildSessionMetadata() in
-// create-checkout/index.ts. New fields added there must be added here.
 
 export type ParsedCheckoutMetadata = {
   // ── Identity ───────────────────────────────────────────────────────────────
-  // userId: null  = guest checkout (no authenticated user)
-  // Exactly one of userId / guestToken will be non-null.
   userId: string | null;
   guestToken: string | null;
 
   // ── Required tracing fields ────────────────────────────────────────────────
-
   /**
    * Canonical pending cart UUID.
-   * Resolved from all historical Stripe metadata key aliases in priority order:
-   *   pending_cart_id → cart_ref → cart_id
-   * This value links: abandoned_cart_sessions, pending_carts, and the order row.
-   * New code should read this field. cartId below is an identical alias kept
-   * for backward compatibility with existing handler callers.
+   * Resolved from: pending_cart_id → cart_ref → cart_id (priority order).
    */
   pendingCartId: string | null;
 
   /**
    * Backward-compatible alias for pendingCartId.
-   * Resolved from the same set of key aliases.
-   * Prefer pendingCartId in new code. This field will not be removed until
-   * all callers have been migrated.
    * @deprecated Use pendingCartId.
    */
   cartId: string;
@@ -128,10 +190,6 @@ export type ParsedCheckoutMetadata = {
 
 // ─── Internal safe coercions ──────────────────────────────────────────────────
 
-/**
- * Returns null when the string is absent, empty after trim, or not a finite
- * integer. Never returns NaN or Infinity.
- */
 function safeInt(value: string | null | undefined): number | null {
   if (value === null || value === undefined) return null;
   const trimmed = value.trim();
@@ -140,20 +198,12 @@ function safeInt(value: string | null | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/**
- * Returns null when the string is absent or empty after trimming.
- * Never returns an empty string downstream.
- */
 function safeStr(value: string | null | undefined): string | null {
   if (value === null || value === undefined) return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
 }
 
-/**
- * Walks a list of candidate keys and returns the first non-null safeStr result.
- * Used for fields that have legacy aliases in the metadata schema.
- */
 function pickStr(meta: Stripe.Metadata, ...keys: string[]): string | null {
   for (const key of keys) {
     const v = safeStr(meta[key]);
@@ -164,36 +214,16 @@ function pickStr(meta: Stripe.Metadata, ...keys: string[]): string | null {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-/**
- * Parse and strictly validate all checkout session metadata.
- *
- * This is the ONLY permitted entry point for session.metadata in handler code.
- * Never read session.metadata properties directly in a handler.
- *
- * Returns WebhookFail when:
- *   - metadata is null/absent
- *   - both userId and guestToken are absent (no identity)
- *   - any required field (cartId, requestId, idempotencyKey, orderType) is
- *     absent or invalid
- *
- * Returns WebhookOk<ParsedCheckoutMetadata> on success. All optional fields
- * that are absent are null (never undefined).
- */
 export function parseCheckoutMetadata(
   metadata: Stripe.Metadata | null | undefined,
   requestId: string,
 ): WebhookResult<ParsedCheckoutMetadata> {
-  // ── Presence check ─────────────────────────────────────────────────────────
   if (metadata === null || metadata === undefined || typeof metadata !== "object") {
     log("warn", "webhook_metadata_missing", { requestId });
     return webhookFail("metadata_missing", "Session metadata is absent.");
   }
 
-  // ── Identity ───────────────────────────────────────────────────────────────
-  // user_id is canonical. customer_uid / uid are legacy aliases written by
-  // create-checkout/index.ts for backward compat. Resolve once here; never
-  // access these raw keys downstream.
-  const userId = pickStr(metadata, "user_id", "customer_uid", "uid");
+  const userId     = pickStr(metadata, "user_id", "customer_uid", "uid");
   const guestToken = safeStr(metadata["guest_token"]);
 
   if (userId === null && guestToken === null) {
@@ -204,16 +234,6 @@ export function parseCheckoutMetadata(
     );
   }
 
-  // ── Required: pendingCartId / cartId ───────────────────────────────────────
-  // Resolve from all historical key aliases written by both checkout pipelines.
-  // Priority order matches the write order in buildSessionMetadata():
-  //   pending_cart_id  ← canonical key (create-checkout + create-checkout-guest)
-  //   cart_ref         ← alias written alongside pending_cart_id
-  //   cart_id          ← alias written alongside pending_cart_id
-  //
-  // Both pendingCartId and cartId on the result object receive the same resolved
-  // value. cartId is kept for backward compatibility; pendingCartId is the
-  // preferred field name for new handler code.
   const resolvedCartId = pickStr(
     metadata,
     "pending_cart_id",
@@ -226,7 +246,6 @@ export function parseCheckoutMetadata(
     return webhookFail("metadata_missing_cart_id", "Metadata is missing cart_id.");
   }
 
-  // ── Required: requestId ────────────────────────────────────────────────────
   const parsedRequestId = safeStr(metadata["request_id"]);
   if (parsedRequestId === null) {
     log("warn", "webhook_metadata_missing_request_id", { requestId });
@@ -236,7 +255,6 @@ export function parseCheckoutMetadata(
     );
   }
 
-  // ── Required: idempotencyKey ───────────────────────────────────────────────
   const idempotencyKey = safeStr(metadata["idempotency_key"]);
   if (idempotencyKey === null) {
     log("warn", "webhook_metadata_missing_idempotency_key", { requestId });
@@ -246,7 +264,6 @@ export function parseCheckoutMetadata(
     );
   }
 
-  // ── Required: orderType (enum-validated) ───────────────────────────────────
   const rawOrderType = safeStr(metadata["order_type"]);
   if (rawOrderType === null || !isOrderType(rawOrderType)) {
     log("warn", "webhook_metadata_invalid_order_type", {
@@ -260,9 +277,7 @@ export function parseCheckoutMetadata(
   }
   const orderType: OrderType = rawOrderType;
 
-  // ── Optional fields ────────────────────────────────────────────────────────
-  const pickupTime = safeStr(metadata["pickup_time"]);
-
+  const pickupTime            = safeStr(metadata["pickup_time"]);
   const subtotalCents         = safeInt(metadata["subtotal_cents"]);
   const discountCents         = safeInt(metadata["discount_cents"]);
   const promoDiscountCents    = safeInt(metadata["promo_discount_cents"]);
@@ -270,9 +285,8 @@ export function parseCheckoutMetadata(
   const creditCents           = safeInt(metadata["credit_cents"]);
   const taxCents              = safeInt(metadata["tax_cents"]);
   const totalCents            = safeInt(metadata["total_cents"]);
-
-  const promoId  = safeStr(metadata["promo_id"]);
-  const creditId = safeStr(metadata["credit_id"]);
+  const promoId               = safeStr(metadata["promo_id"]);
+  const creditId              = safeStr(metadata["credit_id"]);
 
   const rawCampaignIds = safeStr(metadata["applied_campaign_ids"]);
   const appliedCampaignIds: string[] = rawCampaignIds
@@ -287,8 +301,6 @@ export function parseCheckoutMetadata(
   const parsed: ParsedCheckoutMetadata = {
     userId,
     guestToken,
-    // pendingCartId is the canonical name; cartId is the backward-compat alias.
-    // Both carry the same resolved value so no caller needs to change yet.
     pendingCartId: resolvedCartId,
     cartId:        resolvedCartId,
     requestId:     parsedRequestId,
