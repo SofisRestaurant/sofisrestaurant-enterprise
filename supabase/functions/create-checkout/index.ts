@@ -89,6 +89,8 @@ import type {
   RequestBody,
 } from "./types.ts";
 import { validatePromo } from "./promos.ts";
+import { enforcePreCheckoutRisk } from "./risk-gate.ts";
+import type { RiskGateOutcome } from "./risk-gate.ts";
 
 // ─── Result type ──────────────────────────────────────────────────────────────
 //
@@ -140,6 +142,44 @@ function toResponse(
     f.code,
     f.message,
     { ...corsHeaders, ...(f.extraHeaders ?? {}) },
+  );
+}
+
+// ─── Risk gate response ───────────────────────────────────────────────────────
+//
+// Handles the otp_required case specially: returns nonce + expiresAt as
+// top-level JSON fields so the frontend can read them without parsing the
+// message string. All other failure codes go through the standard toResponse.
+
+function toRiskGateResponse(
+  requestId: string,
+  outcome: Extract<RiskGateOutcome, { passed: false }>,
+  corsHeaders: Record<string, string>,
+): Response {
+  if (outcome.code === "otp_required" && outcome.otpPayload) {
+    return new Response(
+      JSON.stringify({
+        ok:        false,
+        code:      "otp_required",
+        message:   outcome.message,
+        nonce:     outcome.otpPayload.nonce,
+        expiresAt: outcome.otpPayload.expiresAt,
+        requestId,
+      }),
+      {
+        status: outcome.httpStatus,
+        headers: {
+          ...BASE_HEADERS,
+          ...corsHeaders,
+          "Content-Type": "application/json",
+        },
+      },
+    );
+  }
+  return toResponse(
+    requestId,
+    failure(outcome.httpStatus, outcome.code, outcome.message),
+    corsHeaders,
   );
 }
 
@@ -222,6 +262,18 @@ interface PricingContext {
 interface CartContext {
   cartId: string;
   idempotencyKey: string;
+}
+
+// ─── Risk gate payload ────────────────────────────────────────────────────────
+//
+// Carries the pre-checkout risk decision from enforcePreCheckoutRisk() through
+// createStripeSession() into Stripe metadata. The webhook reads these three
+// fields to avoid re-scoring post-payment.
+
+interface RiskGatePayload {
+  riskScore:          number;
+  riskLevel:          string;
+  verificationStatus: string;
 }
 
 const LOYALTY_REDEEM_COOLDOWN_MINUTES = 30;
@@ -1127,6 +1179,7 @@ async function createStripeSession(
   cart: CartContext,
   loyalty: LoyaltyOutcome,
   preSessionKey: string,
+  riskGate: RiskGatePayload,
 ): Promise<Result<Stripe.Checkout.Session>> {
   // buildStripeLineItemsFromPricing throws PricingValidationError when line
   // items do not reconcile to the snapshot total. Catch it here so the caller
@@ -1156,6 +1209,7 @@ async function createStripeSession(
     cart,
     loyalty,
     preSessionKey,
+    riskGate,
   );
 
   let session: Stripe.Checkout.Session;
@@ -1222,6 +1276,7 @@ function buildSessionMetadata(
   cart: CartContext,
   loyalty: LoyaltyOutcome,
   preSessionKey: string,
+  riskGate: RiskGatePayload,
 ): Stripe.MetadataParam {
   const { snapshot } = pricing;
   const { body, pickupTime } = parsed;
@@ -1301,6 +1356,11 @@ function buildSessionMetadata(
   ? { loyalty_account_id: body.loyalty_account_id }
 
   : {}),
+    // Pre-checkout risk gate result — read by the webhook to set order risk
+    // fields without re-running evaluateOrderRisk() post-payment.
+    pre_checkout_risk_score:   String(riskGate.riskScore),
+    pre_checkout_risk_level:   riskGate.riskLevel,
+    pre_checkout_verif_status: riskGate.verificationStatus,
   };
 }
 
@@ -1490,6 +1550,32 @@ Deno.serve(async (req: Request): Promise<Response> => {
     requestId,
   });
 
+  // ── Stage: Pre-checkout risk gate ──────────────────────────────────────────
+  // Position: after buildPricing (needs totalCents for scoring) and before
+  // persistPendingCart (no irreversible DB writes may exist on rejection).
+  // Trusted auth users (≥3 paid orders, ≥7 days old) bypass with score=0.
+  const riskOutcome = await enforcePreCheckoutRisk({
+    db,
+    userId,
+    isGuest:           false,       // create-checkout is auth-only
+    requestIp:         ctx.requestIp,
+    deviceFingerprint: ctx.deviceFingerprint,
+    guestEmail:        parsed.body.guest_email ?? null,
+    orderTotalCents:   pricing.snapshot.totalCents,
+    challengeToken:    parsed.body.challenge_token ?? undefined,
+    requestId,
+  });
+
+  if (!riskOutcome.passed) {
+    return toRiskGateResponse(requestId, riskOutcome, corsHeaders);
+  }
+
+  // Carry the pre-checkout risk decision forward into session metadata.
+  // The webhook reads these three fields to avoid re-scoring post-payment.
+  const preCheckoutRiskScore:   number = riskOutcome.riskScore;
+  const preCheckoutRiskLevel:   string = riskOutcome.riskLevel;
+  const preCheckoutVerifStatus: string = riskOutcome.verificationStatus;
+
   // ── Stage: Resolve discounts ───────────────────────────────────────────────
   const discountsResult = await resolveDiscounts(
     db,
@@ -1645,6 +1731,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
     cart,
     loyalty,
     preSessionKey,
+    {
+      riskScore:          preCheckoutRiskScore,
+      riskLevel:          preCheckoutRiskLevel,
+      verificationStatus: preCheckoutVerifStatus,
+    },
   );
 
   if (!stripeResult.ok) {

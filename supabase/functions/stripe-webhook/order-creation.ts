@@ -33,6 +33,15 @@
 //        NULL means ASAP. Only populated for pickup order_type.
 //        Extraction is defensive — a malformed value is logged and dropped
 //        rather than failing the order. A paid order must never be lost.
+//
+//   8. [NEW] Pre-checkout risk gate bypass.
+//        When session metadata contains pre_checkout_risk_* fields written
+//        by create-checkout/risk-gate.ts, those values are used directly
+//        and safeEvaluateOrderRisk() is NOT called. This prevents the
+//        post-payment re-scoring that was setting verification_status=required
+//        for low-risk guest orders that the pre-checkout gate had already
+//        allowed. Legacy sessions without these metadata fields continue
+//        using the fallback safeEvaluateOrderRisk() path unchanged.
 // =============================================================================
 
 import type Stripe from "stripe";
@@ -64,6 +73,8 @@ import {
   deriveVerificationStatus,
   type OrderRiskResult,
 } from "../_shared/order-risk.ts";
+
+import { extractPreCheckoutRisk } from "./shared/metadata.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -515,28 +526,76 @@ export async function createOrderFromSession(args: {
     });
   }
 
-  // ── Risk evaluation (after pricing, before insert) ─────────────────────────
-  const risk = safeEvaluateOrderRisk({
-    chargedCents:  pricing.chargedCents,
-    isGuest,
-    customerPhone: session.customer_details?.phone ?? null,
-    requestId,
-  });
+  // ── Risk resolution ─────────────────────────────────────────────────────────
+  // When the pre-checkout gate evaluated this session, its decision is stored
+  // in Stripe metadata as pre_checkout_risk_* fields and must be used directly.
+  // Re-running safeEvaluateOrderRisk() would overwrite a pre-checkout allow
+  // with a post-payment 'required' because guest + no phone always scores ≥ 60
+  // in the legacy order-risk model.
+  //
+  // Legacy sessions (created before the pre-checkout gate deployed on 2026-05-05)
+  // will not have these fields — those orders fall back to safeEvaluateOrderRisk()
+  // unchanged.
+  const preCheckoutRisk = extractPreCheckoutRisk(session.metadata);
 
-  const verificationStatus = risk !== null
-    ? deriveVerificationStatus(risk)
-    : 'not_required';
+  let risk: OrderRiskResult | null;
+  let verificationStatus: string;
+  let finalRiskScore: number | null;
+  let finalRiskLevel: string | null;
 
-  if (risk !== null) {
-    log("info", "webhook_order_risk_evaluated", {
+  if (preCheckoutRisk !== null) {
+    // Pre-checkout gate decision is authoritative — do not re-score.
+    risk               = null;
+    verificationStatus = preCheckoutRisk.verificationStatus;
+    finalRiskScore     = preCheckoutRisk.riskScore;
+    finalRiskLevel     = preCheckoutRisk.riskLevel;
+
+    console.log('[WEBHOOK_PRECHECKOUT_RISK_FOUND]', {
       requestId,
-      sessionId:            prefix(session.id),
-      riskScore:            risk.score,
-      riskLevel:            risk.level,
-      requiresVerification: risk.requiresVerification,
-      isGuest,
-      chargedCents:         pricing.chargedCents,
+      sessionId:          session.id.slice(0, 8),
+      riskScore:          finalRiskScore,
+      riskLevel:          finalRiskLevel,
+      verificationStatus,
     });
+
+    log("info", "webhook_using_precheckout_risk", {
+      requestId,
+      sessionId:          prefix(session.id),
+      riskScore:          finalRiskScore,
+      riskLevel:          finalRiskLevel,
+      verificationStatus,
+      isGuest,
+    });
+  } else {
+    // Legacy path: session predates the pre-checkout gate or gate was bypassed.
+    risk = safeEvaluateOrderRisk({
+      chargedCents:  pricing.chargedCents,
+      isGuest,
+      customerPhone: session.customer_details?.phone ?? null,
+      requestId,
+    });
+    verificationStatus = risk !== null ? deriveVerificationStatus(risk) : 'not_required';
+    finalRiskScore     = risk?.score ?? null;
+    finalRiskLevel     = risk?.level ?? null;
+
+    console.log('[WEBHOOK_FALLBACK_RISK_EVALUATION]', {
+      requestId,
+      sessionId:  session.id.slice(0, 8),
+      riskScore:  finalRiskScore,
+      reason:     'no pre_checkout_risk_* fields in session metadata',
+    });
+
+    if (risk !== null) {
+      log("info", "webhook_order_risk_evaluated", {
+        requestId,
+        sessionId:            prefix(session.id),
+        riskScore:            risk.score,
+        riskLevel:            risk.level,
+        requiresVerification: risk.requiresVerification,
+        isGuest,
+        chargedCents:         pricing.chargedCents,
+      });
+    }
   }
 
   const metadata = buildOrderMetadata({
@@ -587,8 +646,8 @@ export async function createOrderFromSession(args: {
     metadata,
     notes:                     snapshotString(snapshot, "orderNotes"),
     pickup_time:               pickupTime,   // ← NULL = ASAP, ISO string = scheduled
-    risk_score:                risk?.score          ?? null,
-    risk_level:                risk?.level          ?? null,
+    risk_score:                finalRiskScore,
+    risk_level:                finalRiskLevel,
     verification_status:       verificationStatus,
   } as OrderInsert & {
     fulfillment_type:    string;
@@ -619,8 +678,8 @@ export async function createOrderFromSession(args: {
       taxCents:         pricing.taxCents,
       deliveryFeeCents: pricing.deliveryFeeCents,
       chargedCents:     pricing.chargedCents,
-      riskScore:        risk?.score ?? null,
-      riskLevel:        risk?.level ?? null,
+      riskScore:        finalRiskScore,
+      riskLevel:        finalRiskLevel,
     });
     return null;
   }
@@ -639,8 +698,8 @@ export async function createOrderFromSession(args: {
       isGuest,
       consumedNow,
       pickupTime:           pickupTime ?? "asap",
-      riskScore:            risk?.score          ?? null,
-      riskLevel:            risk?.level          ?? null,
+      riskScore:            finalRiskScore,
+      riskLevel:            finalRiskLevel,
       verificationStatus,
     });
 
@@ -650,6 +709,15 @@ export async function createOrderFromSession(args: {
       snapshot,
       pricingHash,
       requestId,
+    });
+
+    console.log('[ORDER_RISK_FIELDS_PERSISTED]', {
+      requestId,
+      orderId:             inserted.id.slice(0, 8),
+      riskScore:           finalRiskScore,
+      riskLevel:           finalRiskLevel,
+      verificationStatus,
+      usedPreCheckoutRisk: preCheckoutRisk !== null,
     });
 
     return inserted;
