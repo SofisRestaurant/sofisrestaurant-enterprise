@@ -25,6 +25,12 @@
 //   Written to Stripe metadata via pickupTimeToMetadata() — key is ABSENT
 //   (not null) for ASAP orders. The webhook reads it and writes to orders.
 //   NULL / absent = ASAP.
+//
+// Pre-checkout risk gate:
+//   enforcePreCheckoutRisk() runs after pricing is resolved and before any
+//   irreversible write (persistGuestPendingCart). On allow, three
+//   pre_checkout_risk_* fields are written into Stripe metadata so the webhook
+//   can persist them without re-running the post-payment scoring model.
 // =============================================================================
 
 import Stripe from "stripe";
@@ -68,6 +74,8 @@ import { buildGuestIdempotencyKey } from "../create-checkout/security.ts";
 import { getStripe } from "../create-checkout/stripe-client.ts";
 import type { DbClient } from "../create-checkout/types.ts";
 import { STRIPE_CANCEL_URL, STRIPE_SUCCESS_URL } from "../_shared/checkout-urls.ts";
+import { enforcePreCheckoutRisk } from "../create-checkout/risk-gate.ts";
+import type { RiskGateOutcome } from "../create-checkout/risk-gate.ts";
 
 // ─── Local sha256Hex ──────────────────────────────────────────────────────────
 
@@ -87,6 +95,46 @@ function generateGuestToken(): string {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+// ─── Risk gate response ───────────────────────────────────────────────────────
+//
+// Handles otp_required separately: returns nonce + expiresAt as top-level
+// JSON fields so the frontend can read them without parsing the message string.
+// All other failure codes go through errorResponse unchanged.
+
+function toRiskGateResponse(
+  requestId: string,
+  outcome: Extract<RiskGateOutcome, { passed: false }>,
+  corsHeaders: Record<string, string>,
+): Response {
+  if (outcome.code === "otp_required" && outcome.otpPayload) {
+    return new Response(
+      JSON.stringify({
+        ok:        false,
+        code:      "otp_required",
+        message:   outcome.message,
+        nonce:     outcome.otpPayload.nonce,
+        expiresAt: outcome.otpPayload.expiresAt,
+        requestId,
+      }),
+      {
+        status: outcome.httpStatus,
+        headers: {
+          ...BASE_HEADERS,
+          ...corsHeaders,
+          "Content-Type": "application/json",
+        },
+      },
+    );
+  }
+  return errorResponse(
+    requestId,
+    outcome.httpStatus,
+    outcome.code,
+    outcome.message,
+    corsHeaders,
+  );
 }
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
@@ -191,6 +239,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   const body: GuestRequestBody = validated.value;
+
+  // Read challenge_token from the raw parsed body — not typed in GuestRequestBody
+  // but present on OTP retry requests after a risk gate challenge.
+  const challengeToken: string | undefined =
+    typeof (parsedBody as Record<string, unknown>).challenge_token === "string"
+      ? (parsedBody as Record<string, unknown>).challenge_token as string
+      : undefined;
 
   // ── pickup_time validation ─────────────────────────────────────────────────
 const pickupTimeResult = validatePickupTime(body.pickup_time ?? null);
@@ -387,6 +442,36 @@ const pickupTimeResult = validatePickupTime(body.pickup_time ?? null);
     );
   }
 
+  // ── Stage: Pre-checkout risk gate ───────────────────────────────────────────
+  // Position: after pricing (needs totalCents) and idempotency key, and before
+  // persistGuestPendingCart (no irreversible DB writes may exist on rejection).
+  // On allow: three pre_checkout_risk_* variables are set and written into
+  // Stripe metadata so the webhook does not re-run the post-payment scoring model.
+  // guestToken is passed as userId — it is never queried against orders (isGuest:
+  // true skips the paid-order-count DB query) and appears in logs as the
+  // stable per-request guest identifier.
+  const deviceFingerprint = req.headers.get("x-device-fingerprint") ?? null;
+
+  const riskOutcome = await enforcePreCheckoutRisk({
+    db,
+    userId:            guestToken,
+    isGuest:           true,
+    requestIp,
+    deviceFingerprint,
+    guestEmail:        body.guest_email ?? null,
+    orderTotalCents:   snapshot.totalCents,
+    challengeToken,
+    requestId,
+  });
+
+  if (!riskOutcome.passed) {
+    return toRiskGateResponse(requestId, riskOutcome, corsHeaders);
+  }
+
+  const preCheckoutRiskScore:   number = riskOutcome.riskScore;
+  const preCheckoutRiskLevel:   string = riskOutcome.riskLevel;
+  const preCheckoutVerifStatus: string = riskOutcome.verificationStatus;
+
   // ── Session reuse check ─────────────────────────────────────────────────────
   const reusableSession = await findReusableGuestSession({
     db,
@@ -500,6 +585,11 @@ const pickupTimeResult = validatePickupTime(body.pickup_time ?? null);
     ...(snapshot.appliedCampaignIds.length
       ? { applied_campaign_ids: snapshot.appliedCampaignIds.join(",") }
       : {}),
+    // Pre-checkout risk gate result — read by the webhook to persist risk fields
+    // without re-running evaluateOrderRisk() post-payment.
+    pre_checkout_risk_score:   String(preCheckoutRiskScore),
+    pre_checkout_risk_level:   preCheckoutRiskLevel,
+    pre_checkout_verif_status: preCheckoutVerifStatus,
   };
 
   // ── Create Stripe session ───────────────────────────────────────────────────
