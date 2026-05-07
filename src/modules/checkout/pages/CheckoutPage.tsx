@@ -1,5 +1,47 @@
 // src/modules/checkout/pages/CheckoutPage.tsx
-// ============================================================================
+// =============================================================================
+// CHANGES FROM PRIOR VERSION:
+//
+//   [1] useCheckoutRouter lifted to CheckoutPage.
+//
+//       Previous: CheckoutButton owned useCheckoutRouter internally.
+//       CheckoutPage had no access to guestPhase or otpChallenge state.
+//       Result: CheckoutChallengeModal could never be mounted.
+//
+//       Fix: CheckoutPage calls useCheckoutRouter() and derives all phase-
+//       dependent UI from it. CheckoutButton receives three control props.
+//
+//   [2] CheckoutChallengeModal integrated inline in Section 6.
+//
+//       Mounted when guestPhase.tag ∈ { 'otp_required' | 'retrying' }.
+//       key={otpChallenge.nonce} forces remount when backend issues a fresh
+//       challenge (expired or consumed token), resetting modal to phone step.
+//
+//   [3] handleCheckout is the single checkout trigger.
+//
+//       Calls router.checkout(args) — not redirectToCheckout.
+//       On success:       window.location.assign(result.url)
+//       On otp_required:  guestPhase transitions, modal appears
+//       On blocked:       guestPhase transitions, blocked UI appears
+//       On promo_invalid: inline promo error set, form stays open
+//       On other errors:  router.error surfaces below the button
+//
+//   [4] Review Order button is unmounted (not disabled) during challenge
+//       and blocked states. There is no path for a second checkout() call
+//       while a challenge is active.
+//
+//   [5] Duplicate redirect prevention:
+//       window.location.assign fires exactly once per checkout cycle —
+//       in handleCheckout on success, or inside router.retryWithToken on
+//       retry success. These two call sites are mutually exclusive: the
+//       button is unmounted when the challenge is active.
+//
+// Security invariants preserved:
+//   - No Stripe URL before verification (button is unmounted during challenge)
+//   - challenge_token lives only in CheckoutChallengeModal state and router memory
+//   - guest_token continuity preserved via sessionStorage (unchanged)
+//   - pendingInputRef in useGuestCheckout preserves cart across OTP cycle
+// =============================================================================
 import {
   useEffect,
   useMemo,
@@ -13,6 +55,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 
 import CheckoutButton from '@/modules/checkout/components/CheckoutButton';
+import { CheckoutChallengeModal } from '@/modules/checkout/components/CheckoutChallengeModal';
 import { PhoneVerification } from '@/modules/checkout/components/PhoneVerification';
 import {
   RewardsRedeem,
@@ -20,6 +63,7 @@ import {
 } from '@/modules/checkout/components/RewardsRedeem';
 import { useCart } from '@/modules/cart/hooks/useCart';
 import { useAuth } from '@/features/auth/hooks/useAuth';
+import { useCheckoutRouter } from '@/modules/checkout/hooks/useCheckoutRouter';
 import {
   getAvailableCredits,
   getLoyaltyProfile,
@@ -28,11 +72,16 @@ import {
   type LoyaltyProfile,
   type LoyaltyPreview,
 } from '@/modules/checkout/api/checkout.api';
+import {
+  isCheckoutSuccess,
+  isOtpRequired,
+  isCheckoutBlocked,
+} from '@/modules/checkout/types/checkout.types';
 import { supabase } from '@/lib/supabase/supabaseClient';
 import { computeLineTotalCents, cartItemKey } from '@/modules/cart/types/cart.types';
 import type { CartItem } from '@/modules/cart/types/cart.types';
 import { formatCents } from '@/modules/cart/utils/cart.utils';
-import { X } from 'lucide-react';
+import { ShieldOff, X } from 'lucide-react';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -152,27 +201,17 @@ async function getLoyaltyAccount(): Promise<{
 // Pickup time slots
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Minimum prep time before the first available slot.
-const PICKUP_MIN_PREP_MS = 10 * 60 * 1000; // 10 min
-// Slot interval.
-const PICKUP_SLOT_INTERVAL_MS = 15 * 60 * 1000; // 15 min
-// How many slots to show (10 × 15 min = 2.5 hours ahead).
+const PICKUP_MIN_PREP_MS = 10 * 60 * 1000;
+const PICKUP_SLOT_INTERVAL_MS = 15 * 60 * 1000;
 const PICKUP_SLOT_COUNT = 10;
 
 type PickupSlot = { label: string; value: string };
 
-/**
- * Generates upcoming pickup time slots starting at least PICKUP_MIN_PREP_MS
- * from now, rounded up to the next PICKUP_SLOT_INTERVAL_MS boundary.
- * Returns an array of { label: "12:30 PM", value: "<ISO string>" }.
- */
 function generatePickupSlots(): PickupSlot[] {
   const earliest = new Date(Date.now() + PICKUP_MIN_PREP_MS);
-  // Round up to the next interval boundary.
   const base = new Date(
     Math.ceil(earliest.getTime() / PICKUP_SLOT_INTERVAL_MS) * PICKUP_SLOT_INTERVAL_MS,
   );
-
   const slots: PickupSlot[] = [];
   for (let i = 0; i < PICKUP_SLOT_COUNT; i++) {
     const slot = new Date(base.getTime() + i * PICKUP_SLOT_INTERVAL_MS);
@@ -185,22 +224,16 @@ function generatePickupSlots(): PickupSlot[] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PickupTimeSelector sub-component
+// PickupTimeSelector
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Renders an "ASAP" button followed by time slots.
- * value = null  → ASAP (default).
- * value = ISO string → specific slot.
- */
 function PickupTimeSelector({
   value,
   onChange,
 }: {
-  value:    string | null;
+  value: string | null;
   onChange: (v: string | null) => void;
 }) {
-  // Regenerate slots only once per render (they shift by < 1 slot per minute).
   const slots = useMemo(() => generatePickupSlots(), []);
 
   return (
@@ -209,7 +242,6 @@ function PickupTimeSelector({
         Pickup time
       </label>
       <div className="flex flex-wrap gap-2">
-        {/* ASAP — always first */}
         <button
           type="button"
           onClick={() => onChange(null)}
@@ -223,8 +255,6 @@ function PickupTimeSelector({
         >
           ASAP
         </button>
-
-        {/* Time slots */}
         {slots.map((slot) => (
           <button
             key={slot.value}
@@ -242,14 +272,13 @@ function PickupTimeSelector({
           </button>
         ))}
       </div>
-
       {value !== null && (
         <p className="mt-2 text-xs text-(--color-ink-400)">
           Scheduled for{' '}
           <span className="font-semibold text-(--color-ink-700)">
             {new Date(value).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
-          </span>
-          {' '}—{' '}
+          </span>{' '}
+          —{' '}
           <button
             type="button"
             onClick={() => onChange(null)}
@@ -330,6 +359,42 @@ function SectionHeader({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// BlockedOrderCard — terminal state, no retry
+// ─────────────────────────────────────────────────────────────────────────────
+
+function BlockedOrderCard({ onReset }: { onReset: () => void }) {
+  return (
+    <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-4">
+      <div className="flex items-start gap-3">
+        <ShieldOff className="h-5 w-5 shrink-0 text-red-500 mt-0.5" strokeWidth={1.75} />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-red-800">Order could not be processed</p>
+          <p className="mt-1 text-xs text-red-600">
+            This order was flagged by our security system. If you believe this is an
+            error, please{' '}
+            <a
+              href="mailto:sofisrestaurante@gmail.com"
+              className="underline font-medium hover:text-red-800"
+            >
+              contact support
+            </a>
+            .
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onReset}
+          className="shrink-0 text-red-400 hover:text-red-700 transition-colors"
+          aria-label="Dismiss"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GuestContactStrip
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -369,7 +434,6 @@ function GuestContactStrip({
         />
         <p className="mt-1 text-[11px] text-(--color-ink-300)">Receipt sent here after payment.</p>
       </div>
-
       <div className="flex items-center justify-between rounded-xl border border-(--color-cream-300) bg-(--color-cream-50) px-4 py-3">
         <div>
           <p className="text-sm font-medium text-(--color-ink-800)">Text me when ready</p>
@@ -395,7 +459,6 @@ function GuestContactStrip({
           />
         </button>
       </div>
-
       <AnimatePresence>
         {smsOptIn && (
           <motion.div
@@ -449,7 +512,6 @@ function AuthContactStrip({ email, name }: { email: string; name: string | null 
 
 function LoyaltyEarnBanner({ preview }: { preview: LoyaltyPreview }) {
   if (preview.pointsToEarn <= 0) return null;
-
   return (
     <motion.div
       initial={{ opacity: 0, y: -6 }}
@@ -659,7 +721,6 @@ function CreditsSection({
       </div>
     );
   }
-
   if (creditsError) {
     return (
       <div className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
@@ -674,7 +735,6 @@ function CreditsSection({
       </div>
     );
   }
-
   if (credits.length === 0) return null;
 
   return (
@@ -740,7 +800,6 @@ function CreditsSection({
 function GuestPostCheckoutNudge({ email }: { email: string }) {
   const [dismissed, setDismissed] = useState(false);
   if (dismissed || !email) return null;
-
   return (
     <AnimatePresence>
       <motion.div
@@ -791,8 +850,24 @@ export default function CheckoutPage() {
   const navigate = useNavigate();
   const { items } = useCart();
   const { user, isAuthenticated } = useAuth();
-
   const isGuest = !isAuthenticated;
+
+  // ── [1] Router lifted here — single instance owns all checkout phase state ──
+  const {
+    checkout,
+    reset,
+    otpChallenge,
+    retryWithToken,
+    guestPhase,
+    isLoading,
+    error: routerError,
+  } = useCheckoutRouter();
+
+  // Derived phase booleans — drive conditional rendering in Section 6.
+  // showChallenge: modal is visible, button is unmounted.
+  // showBlocked:   terminal state, support message shown, no retry.
+  const showChallenge = guestPhase.tag === 'otp_required' || guestPhase.tag === 'retrying';
+  const showBlocked = guestPhase.tag === 'blocked';
 
   const hasItems = Array.isArray(items) && items.length > 0;
   const subtotalCents = useMemo(() => {
@@ -823,16 +898,11 @@ export default function CheckoutPage() {
     };
   });
 
-  // ── Pickup time — null = ASAP, ISO string = scheduled ─────────────────────
-  // Reset to null whenever orderType changes away from 'pickup'.
   const [pickupTime, setPickupTime] = useState<string | null>(null);
 
   useEffect(() => {
-    if (orderDetails.orderType !== 'pickup') {
-      setPickupTime(null);
-    }
+    if (orderDetails.orderType !== 'pickup') setPickupTime(null);
   }, [orderDetails.orderType]);
-
   useEffect(() => {
     safeLocalSet(STORAGE.ORDER_TYPE, orderDetails.orderType);
   }, [orderDetails.orderType]);
@@ -974,20 +1044,77 @@ export default function CheckoutPage() {
       alive = false;
     };
   }, [isAuthenticated]);
-  
+
   useEffect(() => {
     if (!loyaltyAccountId) return;
-
-    setLoyaltyIntent((prev) => ({
-      ...prev,
-      loyaltyAccountId,
-    }));
+    setLoyaltyIntent((prev) => ({ ...prev, loyaltyAccountId }));
   }, [loyaltyAccountId]);
 
   useEffect(() => {
     if (!selectedCredit) safeLocalRemove(STORAGE.CREDIT);
     else safeLocalSet(STORAGE.CREDIT, selectedCredit);
   }, [selectedCredit]);
+
+  // ── [2] handleCheckout — single checkout trigger ───────────────────────────
+  //
+  // Calls router.checkout() (not redirectToCheckout) so we control the result
+  // handling explicitly. window.location.assign fires here on success.
+  // otp_required and blocked are handled by phase state driving the UI.
+  //
+  // promo_invalid is handled inline so the promo section shows the error
+  // immediately without requiring the user to scroll down to a toast.
+  //
+  // Deps: checkout is stable (useCallback in router). Other deps are local state.
+  const handleCheckout = useCallback(async () => {
+    const result = await checkout({
+      guestEmail: guestEmail || undefined,
+      orderType: orderDetails.orderType,
+      notes: orderDetails.notes || null,
+      // Only send pickupTime for pickup orders; null → ASAP (key omitted by router)
+      pickupTime:
+        orderDetails.orderType === 'pickup' && pickupTime != null ? pickupTime : undefined,
+      // Auth-only fields — router ignores these on the guest path
+      promoCode: promo.applied ? promo.code : undefined,
+      creditId: isGuest ? undefined : (selectedCredit ?? undefined),
+      loyalty: loyaltyIntent,
+    });
+
+    if (isCheckoutSuccess(result)) {
+      // Terminal success: redirect to Stripe. window.location.assign fires exactly
+      // once here. The retry path fires it inside router.retryWithToken.
+      // These two sites are mutually exclusive (button unmounted during challenge).
+      window.location.assign(result.url);
+      return;
+    }
+
+    // otp_required: guestPhase → 'otp_required', showChallenge → true.
+    // CheckoutChallengeModal mounts below, button unmounts. No action needed here.
+
+    // blocked: guestPhase → 'blocked', showBlocked → true.
+    // BlockedOrderCard renders below. No action needed here.
+
+    // Promo-specific errors: surface inline in the promo section.
+    if (!isOtpRequired(result) && !isCheckoutBlocked(result)) {
+      if (result.code === 'promo_invalid' || result.code === 'promo_not_found') {
+        setPromo((prev) => ({
+          ...prev,
+          applied: false,
+          error: result.error || 'Invalid promo code.',
+        }));
+      }
+    }
+    // All other errors: router.error is set, displayed below the button.
+  }, [
+    checkout,
+    guestEmail,
+    orderDetails,
+    pickupTime,
+    promo.applied,
+    promo.code,
+    selectedCredit,
+    loyaltyIntent,
+    isGuest,
+  ]);
 
   // ── Copy summary ───────────────────────────────────────────────────────────
   const copySummary = useCallback(async () => {
@@ -1133,7 +1260,6 @@ export default function CheckoutPage() {
                 </div>
               </div>
 
-              {/* ── Pickup time — only shown for pickup orders ─────────────── */}
               <AnimatePresence>
                 {orderDetails.orderType === 'pickup' && (
                   <motion.div
@@ -1182,7 +1308,6 @@ export default function CheckoutPage() {
                 </div>
               </div>
 
-              {/* Quick actions */}
               <div className="flex flex-wrap gap-2 pt-1">
                 <button
                   type="button"
@@ -1220,7 +1345,6 @@ export default function CheckoutPage() {
               <>
                 <SectionHeader title="Your info" />
                 <AuthContactStrip email={user?.email ?? ''} name={user?.name ?? null} />
-
                 {!verifiedPhone && !phoneSkipped && (
                   <div className="border-t border-(--color-cream-200) px-5 py-4">
                     <PhoneVerification
@@ -1268,19 +1392,16 @@ export default function CheckoutPage() {
           {!isGuest && (
             <SectionCard index={4}>
               {loyaltyPreview && <LoyaltyEarnBanner preview={loyaltyPreview} />}
-
               <SectionHeader
                 title="Rewards & Credits"
                 subtitle="Applied by the server — final balance confirmed at payment"
               />
-
               <div className="space-y-4 px-5 py-4">
                 {recentlyRedeemed && (
                   <p className="rounded-xl border border-(--color-gold-200) bg-(--color-gold-50) px-3 py-2.5 text-xs text-(--color-gold-700)">
                     ✨ You recently redeemed points. Your balance reflects that.
                   </p>
                 )}
-
                 {loyaltyBalance > 0 && loyaltyAccountId && (
                   <RewardsRedeem
                     balance={loyaltyBalance}
@@ -1289,7 +1410,6 @@ export default function CheckoutPage() {
                     onChange={setLoyaltyIntent}
                   />
                 )}
-
                 <CreditsSection
                   credits={credits}
                   creditsLoading={creditsLoading}
@@ -1304,28 +1424,96 @@ export default function CheckoutPage() {
             </SectionCard>
           )}
 
-          {/* ═══════════ SECTION 6: PAYMENT CTA ══════════════════════════════ */}
+          {/* ═══════════ SECTION 6: PAYMENT CTA ══════════════════════════════
+            *
+            * This section has three mutually exclusive states:
+            *
+            *   Normal (idle / initiating):
+            *     CheckoutButton visible, OTP modal absent.
+            *
+            *   Challenge (otp_required / retrying):
+            *     CheckoutChallengeModal visible, CheckoutButton unmounted.
+            *     key={otpChallenge.nonce} forces modal remount when backend
+            *     issues a fresh challenge (expired / consumed token), resetting
+            *     the modal to the phone step.
+            *
+            *   Blocked:
+            *     BlockedOrderCard visible, both button and modal absent.
+            *     Terminal — no retry path. User must contact support.
+            *
+            * Duplicate redirect prevention:
+            *   window.location.assign is called in handleCheckout (normal success)
+            *   or inside router.retryWithToken (post-OTP success). The button is
+            *   unmounted during retrying, making these sites mutually exclusive.
+            ══════════════════════════════════════════════════════════════════ */}
           <SectionCard
             index={isGuest ? 4 : 5}
             className="border-(--color-ember-200) bg-linear-to-b from-white to-(--color-cream-50)"
           >
             <div className="px-5 py-5 space-y-3">
-              <CheckoutButton
-                promoCode={promo.applied ? promo.code : undefined}
-                creditId={selectedCredit ?? undefined}
-                orderType={orderDetails.orderType}
-                notes={orderDetails.notes || null}
-                loyalty={loyaltyIntent}
-                guestEmail={guestEmail || undefined}
-                // pickupTime is only sent for pickup orders; cleared automatically
-                // when orderType changes. null = ASAP (omitted by the hook).
-                pickupTime={
-                  orderDetails.orderType === 'pickup' && pickupTime != null ? pickupTime : undefined
-                }
-                onPromoError={(msg: string) =>
-                  setPromo((prev) => ({ ...prev, error: msg, applied: false }))
-                }
-              />
+              {/* ── OTP challenge: inline, replaces button ────────────────── */}
+              <AnimatePresence>
+                {showChallenge && otpChallenge && (
+                  <motion.div
+                    key="otp-challenge"
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+                  >
+                    <CheckoutChallengeModal
+                      // key forces remount when nonce changes (fresh challenge).
+                      // This resets the modal to the phone entry step without
+                      // the parent managing any internal modal state.
+                      key={otpChallenge.nonce}
+                      nonce={otpChallenge.nonce}
+                      expiresAt={otpChallenge.expiresAt}
+                      // For guest OTP, userId is null — identity key falls back
+                      // to guestEmail in buildCheckoutIdentityKey.
+                      userId={isAuthenticated && user?.id ? user.id : null}
+                      guestEmail={guestEmail || null}
+                      onToken={(token) => void retryWithToken(token)}
+                      // On expiry: reset to idle so user can re-submit.
+                      // The phase becomes 'idle', showChallenge → false,
+                      // the button reappears. Next tap triggers a fresh challenge.
+                      onExpired={() => reset()}
+                    />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* ── Blocked: terminal state ───────────────────────────────── */}
+              <AnimatePresence>
+                {showBlocked && (
+                  <motion.div
+                    key="blocked"
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <BlockedOrderCard onReset={reset} />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* ── Normal checkout button ────────────────────────────────── */}
+              {/* Unmounted (not disabled) during challenge and blocked.
+                  This prevents any double-submission path.               */}
+              {!showChallenge && !showBlocked && (
+                <CheckoutButton
+                  onCheckout={handleCheckout}
+                  isLoading={isLoading}
+                  disabled={!hasItems}
+                />
+              )}
+
+              {/* ── Router error (non-challenge, non-blocked failures) ─────── */}
+              {routerError && !showChallenge && !showBlocked && (
+                <p className="text-sm text-center font-medium text-(--color-error)" role="alert">
+                  {routerError}
+                </p>
+              )}
 
               <p className="text-center text-[11px] text-(--color-ink-300)">
                 🔒 Secure payment via Stripe — card details never stored on our servers
@@ -1341,7 +1529,7 @@ export default function CheckoutPage() {
           )}
 
           {/* Help */}
-          <motion.div custom={isGuest ? 6 : 6} variants={fadeUp} initial="hidden" animate="visible">
+          <motion.div custom={6} variants={fadeUp} initial="hidden" animate="visible">
             <div className="px-1 py-2 text-center">
               <p className="text-xs text-(--color-ink-400)">
                 Need help?{' '}
