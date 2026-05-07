@@ -3,31 +3,49 @@
 // CHECKOUT ROUTER — the single routing layer (auth vs guest)
 // =============================================================================
 //
-// Import rules (critical — wrong imports here caused the TS2322 brand errors):
+// CHANGES FROM PRIOR VERSION:
 //
+//   [1] otpChallenge: { nonce, expiresAt } | null
+//       Exposed from guestHook.otpChallenge. Non-null exactly when the guest
+//       phase is 'otp_required'. CheckoutPage uses this to conditionally render
+//       CheckoutChallengeModal.
+//
+//   [2] retryWithToken(challengeToken: string) => Promise<void>
+//       Calls guestHook.retryWithChallengeToken, then redirects on success.
+//       Phase changes are handled inside guestHook — parent re-renders
+//       accordingly. This is the only call site that should trigger the
+//       window.location.assign on a successful OTP retry.
+//
+//   [3] guestPhase: GuestCheckoutPhase
+//       Exposed so CheckoutPage can branch on blocked vs error vs idle
+//       without knowing the internal hook shape. Prefer this over reading
+//       error/code strings for conditional rendering of terminal states.
+//
+//   [4] errorCode now populated from the actual guest phase error code.
+//       Previously hardcoded to null, making it unusable.
+//
+//   [5] canRetry now false for checkout_blocked (terminal) and for
+//       non-recoverable errors. Previously Boolean(error) — always true.
+//
+//   [6] redirectToCheckout no longer throws on otp_required or blocked.
+//       It returns silently — the phase change causes the parent to re-render
+//       and show the appropriate UI. Throwing on otp_required prevented any
+//       call site using redirectToCheckout from ever seeing a challenge.
+//
+// Import rules (unchanged):
 //   ✅ ASAP_PICKUP, scheduledPickup, PickupSchedule
 //        → from '@/domain/adapters/pickup-schedule.adapter'
-//          OR from '@/domain/order/pickup-schedule'
-//        (both resolve to the same IsoTimestamp brand from
-//         @/domain/value-objects/pickup-time)
-//
-//   ❌ NEVER import from '@/modules/shared/domain/pickup'
-//        That file is deleted. It contained a SECOND unique symbol brand for
-//        IsoTimestamp, which made ScheduledPickup structurally incompatible
-//        with the ScheduledPickup from the new domain layers — hence TS2322.
-//
-// All types in this file now resolve to the same brand declarations in
-// src/domain/value-objects/pickup-time.ts. No duplicate symbols exist.
+//   ❌ NEVER import from '@/modules/shared/domain/pickup' (deleted)
 // =============================================================================
 
 import { useCallback, useMemo, useState } from 'react';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useAuthCheckout }  from '@/modules/checkout/hooks/useAuthCheckout';
-import { useGuestCheckout } from '@/modules/checkout/hooks/useGuestCheckout';
+import {
+  useGuestCheckout,
+  type GuestCheckoutPhase,
+} from '@/modules/checkout/hooks/useGuestCheckout';
 
-// ─── Pickup constructors — from adapter (single source of truth) ──────────────
-// Using the adapter path ensures the PickupSchedule and IsoTimestamp types here
-// share the exact same unique symbol brands as those in checkout.types.ts.
 import {
   ASAP_PICKUP,
   scheduledPickup,
@@ -46,15 +64,9 @@ import type {
 export type CheckoutRouterArgs = {
   customer_uid?: string;
   guestEmail?: string;
-  /**
-   * Preferred: typed PickupSchedule from domain constructors.
-   * Use ASAP_PICKUP for immediate orders.
-   * Use scheduledPickup(isoString) for scheduled orders.
-   */
   pickupSchedule?: PickupSchedule;
   /**
-   * @deprecated Use pickupSchedule. Accepted for backward compatibility with
-   * call sites that pass a raw ISO string (e.g. from PickupTimeSelector state).
+   * @deprecated Use pickupSchedule. Accepted for backward compat.
    * "asap", "now", empty, and unparseable values → ASAP_PICKUP silently.
    */
   pickupTime?: string;
@@ -71,7 +83,6 @@ export type CheckoutRouterArgs = {
     loyaltyRedemptionId?: string;
   };
   clientIntegrityHash?: string;
-  // successUrl / cancelUrl intentionally absent — server controls them.
 };
 
 export type CheckoutRouterReturn = {
@@ -80,12 +91,27 @@ export type CheckoutRouterReturn = {
   reset:              () => void;
   isLoading:          boolean;
   error:              string | null;
-  errorCode:          string | null;
-  canRetry:           boolean;
+  errorCode:          string | null;   // populated — was always null before
+  canRetry:           boolean;         // false for terminal states
   retryAfter:         number;
-  mode:               'auth' | 'guest' | 'disabled';
-  canCheckout:        boolean;
-  isAuthenticated:    boolean;
+
+  // OTP challenge — non-null when guest phase === 'otp_required'.
+  // Pass nonce/expiresAt to CheckoutChallengeModal as props.
+  // Use key={otpChallenge.nonce} on the modal to force remount on fresh challenge.
+  otpChallenge: { nonce: string; expiresAt: string } | null;
+
+  // Initiates checkout retry after OTP verification succeeds.
+  // Handles the window.location.assign internally on success.
+  // On fresh otp_required (expired token): otpChallenge updates, modal remounts.
+  // On error: guestPhase transitions to 'error', parent shows error UI.
+  retryWithToken: (challengeToken: string) => Promise<void>;
+
+  // Full phase state — use for conditional rendering of blocked/error UI.
+  guestPhase:      GuestCheckoutPhase;
+
+  mode:            'auth' | 'guest' | 'disabled';
+  canCheckout:     boolean;
+  isAuthenticated: boolean;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -106,38 +132,17 @@ function trimOrUndefined(v: unknown): string | undefined {
   return t.length > 0 ? t : undefined;
 }
 
-/**
- * Resolves a PickupSchedule from CheckoutRouterArgs.
- *
- * Priority:
- *   1. args.pickupSchedule — typed, used directly.
- *   2. args.pickupTime — legacy string, normalised here.
- *      Sentinel strings / unparseable values → ASAP_PICKUP (no throw).
- *      Valid ISO string → scheduledPickup(iso).
- *
- * After this function returns, all downstream code works with PickupSchedule.
- * No raw pickup string ever passes the router boundary.
- */
 function resolvePickupSchedule(args: CheckoutRouterArgs): PickupSchedule {
-  if (args.pickupSchedule != null) {
-    return args.pickupSchedule;
-  }
+  if (args.pickupSchedule != null) return args.pickupSchedule;
 
   const raw = args.pickupTime;
-  if (!raw || typeof raw !== 'string' || raw.trim().length === 0) {
-    return ASAP_PICKUP;
-  }
+  if (!raw || typeof raw !== 'string' || raw.trim().length === 0) return ASAP_PICKUP;
 
   const lower = raw.trim().toLowerCase();
-  if (lower === 'asap' || lower === 'now') {
-    return ASAP_PICKUP;
-  }
+  if (lower === 'asap' || lower === 'now') return ASAP_PICKUP;
 
-  try {
-    return scheduledPickup(raw.trim());
-  } catch {
-    return ASAP_PICKUP;
-  }
+  try   { return scheduledPickup(raw.trim()); }
+  catch { return ASAP_PICKUP; }
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
@@ -182,15 +187,6 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
           promoId:      trimOrUndefined(args.promoId),
           creditId:     trimOrUndefined(args.creditId),
           pickupSchedule,
-
-          // loyaltyAccountId is always forwarded when present so earn-only
-          // checkouts propagate it through Stripe metadata into
-          // orders.loyalty_account_id. The previous triple-AND condition
-          // short-circuited on applyPoints=false and silently dropped it,
-          // breaking the earn linkage on every non-redemption checkout.
-          //
-          // Redeem fields (points, reward ID, redemption ID) are only included
-          // when the user has explicitly opted in (applyPoints=true, points>0).
           ...(args.loyalty?.loyaltyAccountId
             ? { loyaltyAccountId: args.loyalty.loyaltyAccountId }
             : {}),
@@ -203,10 +199,8 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
                 loyaltyRedemptionId: args.loyalty.loyaltyRedemptionId,
               }
             : {}),
-
           clientIntegrityHash: trimOrUndefined(args.clientIntegrityHash),
         };
-
         return initiateAuthCheckout(input);
       }
 
@@ -231,6 +225,14 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
   const redirectToCheckout = useCallback(
     async (args: CheckoutRouterArgs): Promise<void> => {
       const result = await checkout(args);
+
+      // otp_required: phase is now 'otp_required' in guestHook, otpChallenge
+      // is non-null. Parent re-renders and shows CheckoutChallengeModal.
+      // Do not throw — throwing would prevent the modal from ever rendering.
+      if (!result.ok && (result.code === 'otp_required' || result.code === 'checkout_blocked')) {
+        return;
+      }
+
       if (!result.ok) throw new Error(result.error ?? 'Checkout failed');
       if (!result.url) throw new Error('Checkout failed: missing session URL.');
       window.location.assign(result.url);
@@ -238,14 +240,54 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
     [checkout],
   );
 
+  // ── OTP retry ──────────────────────────────────────────────────────────────
+  //
+  // Called by CheckoutPage when CheckoutChallengeModal emits onToken.
+  // Delegates to guestHook.retryWithChallengeToken which:
+  //   - Dispatches RETRY (phase → retrying, modal stays visible with spinner)
+  //   - Re-calls create-checkout-guest with challenge_token
+  //   - On success: dispatches RESET, returns { ok: true, url }
+  //   - On fresh otp_required: dispatches OTP_REQUIRED with new nonce
+  //   - On error: dispatches ERROR (phase → error, parent unmounts modal)
+  //
+  // window.location.assign is called here, not in guestHook, to keep the
+  // navigation concern in the router layer.
+
+  const retryWithToken = useCallback(
+    async (challengeToken: string): Promise<void> => {
+      const result = await guestHook.retryWithChallengeToken(challengeToken);
+      if (result.ok && result.url) {
+        window.location.assign(result.url);
+      }
+      // All other cases: phase change in guestHook drives parent re-render.
+    },
+    [guestHook.retryWithChallengeToken],
+  );
+
+  // ── Derived state ──────────────────────────────────────────────────────────
+
   const activeError     = isAuthenticated ? authError     : guestError;
   const activeIsLoading = isAuthenticated ? authIsLoading : guestIsLoading;
 
   const error     = routerError ?? activeError;
   const isLoading = activeIsLoading;
 
-  const errorCode: string | null = null;
-  const canRetry   = Boolean(error);
+  // errorCode: derived from guestHook phase for guest path.
+  // Auth errors are not currently typed at the hook boundary.
+  const errorCode: string | null = (() => {
+    if (isAuthenticated) return null;
+    const p = guestHook.phase;
+    if (p.tag === 'error')   return p.code;
+    if (p.tag === 'blocked') return 'checkout_blocked';
+    return null;
+  })();
+
+  // canRetry: false for terminal states (blocked, non-recoverable error).
+  // Prevents showing "Try again" buttons that cannot succeed.
+  const canRetry = Boolean(error) &&
+    guestHook.phase.tag !== 'blocked' &&
+    !(guestHook.phase.tag === 'error' && !guestHook.phase.recoverable);
+
   const retryAfter = 0;
 
   const canCheckout = useMemo(() => {
@@ -265,6 +307,9 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
     errorCode,
     canRetry,
     retryAfter,
+    otpChallenge:    guestHook.otpChallenge,
+    retryWithToken,
+    guestPhase:      guestHook.phase,
     mode,
     canCheckout,
     isAuthenticated,
