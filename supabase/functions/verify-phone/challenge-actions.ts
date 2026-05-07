@@ -2,29 +2,37 @@
 // =============================================================================
 // Challenge token issuance for the pre-checkout OTP gate.
 //
-// This module handles the 'issue_challenge_token' action in verify-phone.
-// It is completely isolated from the existing 'send' and 'check' actions in
-// verify-phone/index.ts — those handlers are unchanged.
+// CHANGE IN THIS VERSION:
+//
+//   [FIX] IssueChallengeResult success branch now uses snake_case key
+//         `challenge_token` (was camelCase `challengeToken`).
+//
+//         The frontend contract in challengeClient.ts reads:
+//           return { ok: true, challengeToken: data.challenge_token };
+//         The backend was returning:
+//           return { ok: true, challengeToken }
+//         causing data.challenge_token to be undefined. The retry body then
+//         omitted the challenge_token field entirely, producing an infinite
+//         challenge loop with no user-visible error.
+//
+//         Fix: change both the IssueChallengeResult type and the return
+//         statement to use `challenge_token`. This is the only change.
+//
+// All other logic — OTP verification, HMAC signing, DB insertion, TTL,
+// identity key validation — is unchanged.
 //
 // Flow:
-//   1. Verify OTP code via Twilio Verify (identical to the 'check' action)
-//   2. Derive the identity key from the supplied identity context
-//   3. Sign nonce:identityKey with CHECKOUT_CHALLENGE_SECRET
-//   4. Insert checkout_challenges row (nonce + identity binding + TTL)
-//   5. Return challenge_token to client
-//
-// The challenge_token returned here is sent by the client as
-// `challenge_token` in the retry POST to /create-checkout.
+//   1. Verify OTP code via Twilio Verify
+//   2. Sign nonce:identityKey with CHECKOUT_CHALLENGE_SECRET
+//   3. Insert checkout_challenges row (nonce + identity binding + TTL)
+//   4. Return challenge_token to client
 //
 // ENV VARIABLES REQUIRED:
 //   CHECKOUT_CHALLENGE_SECRET — must match create-checkout/challenge-token.ts
-//   TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_VERIFY_SERVICE_SID (existing)
-//
-// Imported by:
-//   verify-phone/index.ts
+//   TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_VERIFY_SERVICE_SID
 // =============================================================================
 
-import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { signHmac }            from '../_shared/crypto.ts';
 import {
   checkVerifyOtp,
@@ -41,8 +49,11 @@ export interface IssueChallengeTokenArgs {
   log:       (outcome: string, action: string, detail: Record<string, unknown>) => void;
 }
 
+// [FIX] snake_case `challenge_token` matches the frontend wire contract.
+// challengeClient.ts reads: data.challenge_token
+// index.ts serialises: { ok: true, challenge_token: result.challenge_token }
 export type IssueChallengeResult =
-  | { ok: true;  challengeToken: string }
+  | { ok: true;  challenge_token: string }
   | { ok: false; httpStatus: number; error: string; valid?: boolean };
 
 const CHALLENGE_TTL_MS = 10 * 60 * 1000; // 10 minutes
@@ -56,7 +67,7 @@ export async function issueChallengeToken(
 
   // ── Validate inputs ────────────────────────────────────────────────────────
 
-  const rawPhone = typeof body.phone === 'string' ? body.phone : '';
+  const rawPhone   = typeof body.phone === 'string' ? body.phone : '';
   const normalized = normalizePhone(rawPhone);
   if (!normalized) {
     return { ok: false, httpStatus: 400, error: 'Invalid phone number.' };
@@ -76,11 +87,10 @@ export async function issueChallengeToken(
     return { ok: false, httpStatus: 400, error: 'nonce is required (min 8 characters).' };
   }
 
-  // identity_key is SHA-256(userId) or SHA-256(guestEmail), pre-computed by
-  // the client using buildCheckoutIdentityKey() from challenge-client.ts.
-  // We do NOT compute it server-side here because we don't have the raw
-  // userId/email — we only have the hashed form. The hash is validated during
-  // challenge verification in create-checkout/challenge-token.ts.
+  // identity_key is SHA-256(userId) or SHA-256(guestEmail), pre-computed client-side
+  // by buildCheckoutIdentityKey() in challengeClient.ts. The raw value is never sent
+  // to the server. The hash is re-derived server-side during challenge verification
+  // in create-checkout/challenge-token.ts and compared for identity binding.
   const identityKey = typeof body.identity_key === 'string'
     ? body.identity_key.trim()
     : '';
@@ -93,7 +103,6 @@ export async function issueChallengeToken(
   }
 
   // ── Verify OTP via Twilio ──────────────────────────────────────────────────
-  // Identical verification path to the existing 'check' action.
 
   const otpResult = await checkVerifyOtp({ env: twilioEnv, to: normalized, code });
 
@@ -125,9 +134,9 @@ export async function issueChallengeToken(
     return { ok: false, httpStatus: 503, error: 'Service misconfigured. Please try again.' };
   }
 
-  const signature   = await signHmac(`${nonce}:${identityKey}`, secret);
+  const signature      = await signHmac(`${nonce}:${identityKey}`, secret);
   const challengeToken = `${nonce}:${signature}`;
-  const expiresAt   = new Date(Date.now() + CHALLENGE_TTL_MS).toISOString();
+  const expiresAt      = new Date(Date.now() + CHALLENGE_TTL_MS).toISOString();
 
   const { error: insertError } = await db
     .from('checkout_challenges')
@@ -139,9 +148,8 @@ export async function issueChallengeToken(
     });
 
   if (insertError) {
-    // Most likely cause: duplicate nonce (client sent the same nonce twice).
-    // Return a service error — the client should retry with a fresh nonce
-    // by restarting the challenge flow.
+    // Most likely: duplicate nonce (client double-submitted). The client should
+    // restart the challenge flow to obtain a fresh nonce.
     log('db_error', 'issue_challenge_token', {
       detail:       'checkout_challenges insert failed',
       error:        insertError.message,
@@ -160,5 +168,7 @@ export async function issueChallengeToken(
     expires_at:   expiresAt,
   });
 
-  return { ok: true, challengeToken };
+  // [FIX] Use snake_case key to match the frontend wire contract.
+  // challengeClient.ts: return { ok: true, challengeToken: data.challenge_token }
+  return { ok: true, challenge_token: challengeToken };
 }

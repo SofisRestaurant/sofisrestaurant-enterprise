@@ -1,20 +1,31 @@
 // PATH: supabase/functions/verify-phone/index.ts
 // =============================================================================
-// MIGRATED: replaced createClient(SUPABASE_URL, SERVICE_ROLE_KEY) with
-// supabaseAdmin() from shared module. Called once per invocation, inside
-// the handler, not at module load time.
+// CHANGES IN THIS VERSION:
 //
-// All business logic, ownership checks, idempotency guards, and OTP flow
-// are byte-for-byte identical to the prior version.
+//   [FIX] Dispatch issue_challenge_token action to challenge-actions.ts.
 //
+//         Previously the function only handled 'send' and 'check' actions.
+//         Every call with action: 'issue_challenge_token' fell through to
+//         the final "Unknown action" 400 response. challenge-actions.ts was
+//         implemented but never wired in, making challenge token issuance
+//         impossible.
+//
+//         Fix: import issueChallengeToken from challenge-actions.ts and add
+//         a dispatch block. Response uses snake_case challenge_token key to
+//         match the frontend contract in challengeClient.ts.
+//
+// All existing 'send' and 'check' logic is unchanged.
 // Prior security fixes preserved:
 //   [FIX 1] Ownership check runs before idempotency guard.
 //   [FIX 2] Idempotency guard uses !== 'required' (not an allowlist).
 // =============================================================================
 
-import { supabaseAdmin }                                                       from '../_shared/supabaseAdmin.ts';
-import { getTwilioEnv, sendVerifyOtp, checkVerifyOtp, normalizePhone }         from '../_shared/twilio.ts';
-import { corsHeaders }                                                          from '../_shared/cors.ts';
+import { supabaseAdmin }                                                from '../_shared/supabaseAdmin.ts';
+import { getTwilioEnv, sendVerifyOtp, checkVerifyOtp, normalizePhone } from '../_shared/twilio.ts';
+import { corsHeaders }                                                  from '../_shared/cors.ts';
+import {
+  issueChallengeToken as handleIssueChallengeToken,
+} from './challenge-actions.ts';
 
 const UUID_RE           = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_SEND_ATTEMPTS = 3;
@@ -67,9 +78,7 @@ Deno.serve(async (req: Request) => {
   catch { return jsonResponse(req, { ok: false, error: 'Invalid JSON' }, 400); }
 
   const twilioEnv = getTwilioEnv();
-
-  // DB CLIENT — migrated from inline createClient to supabaseAdmin()
-  const db = supabaseAdmin();
+  const db        = supabaseAdmin();
 
   // ── SEND OTP ────────────────────────────────────────────────────────────
 
@@ -131,8 +140,6 @@ Deno.serve(async (req: Request) => {
       return jsonResponse(req, { ok: true, valid: false, error: 'Incorrect code. Please try again.' });
     }
 
-    // ── OTP is valid — update order if an order_id was provided ───────────
-
     if (orderId) {
       const { data: orderRow, error: fetchError } = await db
         .from('orders')
@@ -149,7 +156,7 @@ Deno.serve(async (req: Request) => {
         return jsonResponse(req, { ok: true, valid: true });
       }
 
-      // ── [FIX 1] Ownership check runs FIRST — preserved unchanged ──────
+      // [FIX 1] Ownership check runs FIRST.
       const phoneOwned  = phonesMatch(normalized, orderRow.customer_phone);
       const guestOwned  = guestToken !== null && guestToken === orderRow.guest_token;
       const ownershipOk = phoneOwned || guestOwned;
@@ -164,7 +171,7 @@ Deno.serve(async (req: Request) => {
         return jsonResponse(req, { ok: true, valid: true });
       }
 
-      // ── [FIX 2] Idempotency guard — preserved unchanged ───────────────
+      // [FIX 2] Idempotency guard.
       if (orderRow.verification_status !== 'required') {
         structuredLog('skipped', 'check', {
           detail:              'no_write_needed',
@@ -174,7 +181,6 @@ Deno.serve(async (req: Request) => {
         return jsonResponse(req, { ok: true, valid: true });
       }
 
-      // ── Write verification fields — unchanged ─────────────────────────
       const now = new Date().toISOString();
       const { error: updateError } = await db
         .from('orders')
@@ -201,6 +207,36 @@ Deno.serve(async (req: Request) => {
     }
 
     return jsonResponse(req, { ok: true, valid: true });
+  }
+
+  // ── ISSUE CHALLENGE TOKEN ────────────────────────────────────────────────
+  //
+  // [FIX] This block was missing. challenge-actions.ts was implemented but
+  // never dispatched. Every call with action: 'issue_challenge_token' fell
+  // through to the "Unknown action" 400 response below.
+  //
+  // Response key is snake_case `challenge_token` to match the frontend
+  // contract in challengeClient.ts (data.challenge_token).
+
+  if (body.action === 'issue_challenge_token') {
+    const result = await handleIssueChallengeToken({
+      body,
+      db,
+      twilioEnv,
+      log: structuredLog,
+    });
+
+    if (!result.ok) {
+      const responseBody: Record<string, unknown> = { ok: false, error: result.error };
+      // Propagate valid: false so the frontend can distinguish wrong-code
+      // errors (show "Incorrect code") from service errors (show generic message).
+      if ('valid' in result && result.valid === false) {
+        responseBody['valid'] = false;
+      }
+      return jsonResponse(req, responseBody, result.httpStatus);
+    }
+
+    return jsonResponse(req, { ok: true, challenge_token: result.challenge_token });
   }
 
   return jsonResponse(req, { ok: false, error: `Unknown action: ${body.action}` }, 400);

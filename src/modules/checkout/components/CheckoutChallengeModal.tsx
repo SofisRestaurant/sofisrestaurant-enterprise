@@ -13,30 +13,29 @@
 //   - key={nonce} forces remount when backend issues a fresh challenge
 //     (expired or consumed token on retry) — resets internal step to 'phone'
 //
-// CHANGES FROM PRIOR VERSION:
+// CHANGES IN THIS VERSION:
 //
-//   [1] isMountedRef guard added to all async callbacks.
-//       Prevents state updates on unmounted component (e.g. user navigates
-//       back while OTP verification is in flight).
+//   [1] handleOtpChange auto-submit: `loading` guard added to the 80ms
+//       setTimeout. If the user paste-fills 6 digits and clears within 80ms,
+//       two handleVerify calls could queue. The loading guard ensures only
+//       the first fires; loading becomes true immediately inside handleVerify,
+//       blocking the second.
 //
-//   [2] 600ms setTimeout before onToken removed.
-//       onToken is now called immediately when token issuance succeeds.
-//       The 'done' step visual feedback remains — it's visible while the
-//       parent's retryWithToken is in flight. The delay was a UX conceit
-//       that introduced a race condition with no benefit: the spinner in
-//       the done step already communicates "processing".
+//   [2] guestEmail prop semantics: the parent (CheckoutPage) now passes a
+//       frozen email captured at OTP challenge start rather than the live
+//       form state. This prevents identity key drift if the user edits the
+//       email field while the modal is open. The prop type is unchanged.
 //
-//   [3] Consequence of [2]: the parent controls when the modal unmounts.
-//       If retryWithToken succeeds, window.location.assign fires and the
-//       page leaves. If it fails, the parent's phase becomes 'error' and
-//       it unmounts the modal, showing its own error UI. The modal itself
-//       has no recovery concern beyond calling onToken once.
+// Prior changes (unchanged):
+//   - isMountedRef guard on all async callbacks
+//   - onToken called immediately (no 600ms delay)
+//   - Parent controls modal unmounting, not an internal timer
 //
 // Props:
 //   nonce       — from OtpChallengePayload; single-use, 10-min TTL
 //   expiresAt   — ISO string, challenge TTL (drives countdown display)
 //   userId      — null for guests (only auth users have a non-null userId)
-//   guestEmail  — used for identity key derivation on the guest path
+//   guestEmail  — frozen at challenge start; used for identity key derivation
 //   onToken     — called immediately when OTP succeeds; parent retries checkout
 //   onExpired   — called when challenge TTL expires; parent re-initiates checkout
 // =============================================================================
@@ -105,11 +104,11 @@ export function CheckoutChallengeModal({
   const otpRef = useRef<HTMLInputElement>(null);
   const cooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const expiryRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // isMountedRef: guards all async callbacks against state updates on unmounted
-  // component. The parent unmounts this component on phase → 'error' or 'blocked',
-  // which can race with in-flight fetch calls (sendOtp, issueChallengeToken).
   const isMountedRef = useRef(true);
+
+  // Guard all async callbacks against state updates on unmounted component.
+  // Parent unmounts on phase → 'error' or 'blocked', which can race with
+  // in-flight fetch calls (sendOtp, issueChallengeToken).
   useEffect(
     () => () => {
       isMountedRef.current = false;
@@ -118,9 +117,6 @@ export function CheckoutChallengeModal({
   );
 
   // ── Challenge TTL countdown ─────────────────────────────────────────────
-  //
-  // Calls onExpired() when TTL reaches zero. Parent re-initiates checkout
-  // to get a fresh nonce — this component remounts via key={nonce}.
   useEffect(() => {
     const expiry = new Date(expiresAt).getTime();
 
@@ -218,14 +214,9 @@ export function CheckoutChallengeModal({
 
   // ── Verify OTP + issue challenge token ────────────────────────────────────
   //
-  // CHANGED: onToken is called immediately on success (no 600ms delay).
-  //
-  // Rationale: the delay was aesthetic but introduced a real race condition —
-  // if this component unmounts during the delay (back-navigation, parent
-  // phase change), onToken fires on a stale closure. The 'done' step with
-  // its spinner provides sufficient visual feedback while the parent's
-  // retryWithToken is in flight. The parent controls modal unmounting,
-  // not a timer inside this component.
+  // onToken is called immediately on success (no artificial delay).
+  // The 'done' step spinner communicates "processing" while the parent's
+  // retryWithToken is in flight. The parent controls modal unmounting.
   const handleVerify = useCallback(
     async (code: string) => {
       setError(null);
@@ -235,6 +226,10 @@ export function CheckoutChallengeModal({
       }
       setLoading(true);
       try {
+        // guestEmail is frozen by the parent at OTP challenge start, preventing
+        // identity key drift if the user edits the email field while the modal
+        // is open. Both client and server independently apply toLowerCase().trim()
+        // before hashing, so the hash matches the value used at checkout time.
         const identityKey = await buildCheckoutIdentityKey(userId, guestEmail);
         if (!isMountedRef.current) return;
 
@@ -262,11 +257,10 @@ export function CheckoutChallengeModal({
           return;
         }
 
-        // Transition to done step immediately, then notify parent.
-        // The parent's retryWithToken call is now in flight.
+        // Transition to done step, then hand the token to the parent.
         // The spinner in the done step communicates "processing" until:
-        //   - Success: window.location.assign fires (page leaves)
-        //   - Error: parent phase → 'error', parent unmounts this component
+        //   - Success: window.location.assign navigates away
+        //   - Error: parent phase → 'error', modal unmounts
         //   - Fresh otp_required: key={nonce} causes remount → phone step
         setStep('done');
         onToken(result.challengeToken);
@@ -288,12 +282,14 @@ export function CheckoutChallengeModal({
       if (digits.length === 6) {
         // 80ms defers submission until the final digit renders in the input,
         // preventing the race where both auto-submit and button click fire.
+        // [FIX 1] `!loading` guard: prevents a second call queuing if the
+        // user paste-fills and clears within the 80ms window.
         setTimeout(() => {
-          if (isMountedRef.current) void handleVerify(digits);
+          if (isMountedRef.current && !loading) void handleVerify(digits);
         }, 80);
       }
     },
-    [handleVerify],
+    [handleVerify, loading],
   );
 
   const handlePhoneKeyDown = useCallback(

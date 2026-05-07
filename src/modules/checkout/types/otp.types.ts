@@ -2,6 +2,23 @@
 // =============================================================================
 // Types for the pre-checkout OTP challenge flow.
 //
+// CHANGE IN THIS VERSION:
+//
+//   [FIX] IssueChallengeTokenResponse success variant removes `valid: true`.
+//
+//         The backend (challenge-actions.ts) never includes `valid` in its
+//         success response — it returns { ok: true, challenge_token: string }.
+//         Declaring `valid: true` in the TypeScript type created a false
+//         expectation that callers could check `data.valid` to confirm success,
+//         and it conflicted with the `valid: false` failure variant causing
+//         TypeScript to require `valid` be present in the success branch even
+//         though the wire payload never includes it.
+//
+//         Fix: remove `valid: true` from the success variant. Callers
+//         discriminate on `data.ok` only, which is both correct and sufficient.
+//
+// All other types are unchanged.
+//
 // These types are shared between:
 //   • CheckoutChallengeModal.tsx  (UI component)
 //   • challengeClient.ts         (API transport)
@@ -33,11 +50,15 @@ export interface IssueChallengeTokenRequest {
 }
 
 // ─── Challenge response ───────────────────────────────────────────────────────
+//
+// Discriminate on `ok`. The `valid: false` variant is a first-class error
+// specifically for wrong OTP codes — the modal shows "Incorrect code" rather
+// than a generic error message. All other failures use the third variant.
 
 export type IssueChallengeTokenResponse =
-  | { ok: true;  valid: true;  challenge_token: string }
-  | { ok: false; valid: false; error: string }           // incorrect OTP code
-  | { ok: false;               error: string };          // other error
+  | { ok: true;  challenge_token: string }        // OTP correct, token issued
+  | { ok: false; valid: false; error: string }    // OTP code incorrect
+  | { ok: false; error: string };                 // service/validation error
 
 // ─── OTP send / check (existing types, mirrored here for modal use) ───────────
 
@@ -47,15 +68,15 @@ export interface SendOtpRequest {
 }
 
 export interface SendOtpResponse {
-  ok:              boolean;
+  ok:               boolean;
   normalizedPhone?: string;
-  error?:          string;
+  error?:           string;
 }
 
 export interface CheckOtpRequest {
-  action:   'check';
-  phone:    string;
-  code:     string;
+  action:    'check';
+  phone:     string;
+  code:      string;
   order_id?: string | null;
 }
 
@@ -71,7 +92,7 @@ export type ChallengeStep = 'phone' | 'otp' | 'done';
 
 export interface ChallengeModalState {
   step:           ChallengeStep;
-  canonicalPhone: string;      // E.164 from backend after send
+  canonicalPhone: string;       // E.164 from backend after send
   otpInput:       string;
   phoneInput:     string;
   loading:        boolean;

@@ -2,39 +2,30 @@
 // =============================================================================
 // CHANGES FROM PRIOR VERSION:
 //
-//   [1] useCheckoutRouter lifted to CheckoutPage.
+//   [1] useCheckoutRouter lifted to CheckoutPage. (unchanged)
 //
-//       Previous: CheckoutButton owned useCheckoutRouter internally.
-//       CheckoutPage had no access to guestPhase or otpChallenge state.
-//       Result: CheckoutChallengeModal could never be mounted.
+//   [2] CheckoutChallengeModal integrated inline in Section 6. (unchanged)
 //
-//       Fix: CheckoutPage calls useCheckoutRouter() and derives all phase-
-//       dependent UI from it. CheckoutButton receives three control props.
+//   [3] handleCheckout is the single checkout trigger. (unchanged)
 //
-//   [2] CheckoutChallengeModal integrated inline in Section 6.
+//   [4] Review Order button is unmounted during challenge and blocked. (unchanged)
 //
-//       Mounted when guestPhase.tag ∈ { 'otp_required' | 'retrying' }.
-//       key={otpChallenge.nonce} forces remount when backend issues a fresh
-//       challenge (expired or consumed token), resetting modal to phone step.
+//   [5] Duplicate redirect prevention. (unchanged)
 //
-//   [3] handleCheckout is the single checkout trigger.
+//   [FIX] challengeEmail: frozen identity email for OTP binding.
 //
-//       Calls router.checkout(args) — not redirectToCheckout.
-//       On success:       window.location.assign(result.url)
-//       On otp_required:  guestPhase transitions, modal appears
-//       On blocked:       guestPhase transitions, blocked UI appears
-//       On promo_invalid: inline promo error set, form stays open
-//       On other errors:  router.error surfaces below the button
+//         The modal derives identityKey = SHA256(guestEmail) to bind the
+//         challenge token to this specific user. If the modal received the
+//         live `guestEmail` state and the user edited the email field while
+//         the modal was open, the identity hash sent to verify-phone would
+//         diverge from the hash used at checkout time (which captured the
+//         email from pendingInputRef at initiateGuestCheckout). The backend
+//         would then return identity_mismatch on the retry.
 //
-//   [4] Review Order button is unmounted (not disabled) during challenge
-//       and blocked states. There is no path for a second checkout() call
-//       while a challenge is active.
-//
-//   [5] Duplicate redirect prevention:
-//       window.location.assign fires exactly once per checkout cycle —
-//       in handleCheckout on success, or inside router.retryWithToken on
-//       retry success. These two call sites are mutually exclusive: the
-//       button is unmounted when the challenge is active.
+//         Fix: capture `guestEmail` into `challengeEmail` when the phase
+//         enters 'otp_required'. Pass `challengeEmail` to the modal instead
+//         of the live `guestEmail`. Clear on phase → 'idle' so a subsequent
+//         checkout attempt with a new email starts clean.
 //
 // Security invariants preserved:
 //   - No Stripe URL before verification (button is unmounted during challenge)
@@ -852,7 +843,6 @@ export default function CheckoutPage() {
   const { user, isAuthenticated } = useAuth();
   const isGuest = !isAuthenticated;
 
-  // ── [1] Router lifted here — single instance owns all checkout phase state ──
   const {
     checkout,
     reset,
@@ -863,9 +853,6 @@ export default function CheckoutPage() {
     error: routerError,
   } = useCheckoutRouter();
 
-  // Derived phase booleans — drive conditional rendering in Section 6.
-  // showChallenge: modal is visible, button is unmounted.
-  // showBlocked:   terminal state, support message shown, no retry.
   const showChallenge = guestPhase.tag === 'otp_required' || guestPhase.tag === 'retrying';
   const showBlocked = guestPhase.tag === 'blocked';
 
@@ -948,6 +935,30 @@ export default function CheckoutPage() {
   const [guestEmail, setGuestEmail] = useState('');
   const [guestPhone, setGuestPhone] = useState('');
   const [smsOptIn, setSmsOptIn] = useState(false);
+
+  // [FIX] Frozen identity email for OTP token binding.
+  //
+  // Captured when the phase enters 'otp_required'. Passed to the modal instead
+  // of the live guestEmail state so that editing the email field while the
+  // modal is open does not cause an identity mismatch on the retry call.
+  //
+  // Both client (buildCheckoutIdentityKey) and server (buildIdentityKey) apply
+  // toLowerCase().trim() before hashing, so the captured value must match
+  // the email in pendingInputRef.current (set by initiateGuestCheckout, which
+  // normalises via `args.guestEmail!.trim().toLowerCase()`).
+  //
+  // Cleared on phase → 'idle' so a subsequent attempt with a different email
+  // starts clean.
+  const [challengeEmail, setChallengeEmail] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (guestPhase.tag === 'otp_required' && challengeEmail === null) {
+      setChallengeEmail(guestEmail.trim().toLowerCase() || null);
+    }
+    if (guestPhase.tag === 'idle') {
+      setChallengeEmail(null);
+    }
+  }, [guestPhase.tag, guestEmail, challengeEmail]);
 
   // ── Auth: credits ──────────────────────────────────────────────────────────
   const [credits, setCredits] = useState<UserCredit[]>([]);
@@ -1055,45 +1066,24 @@ export default function CheckoutPage() {
     else safeLocalSet(STORAGE.CREDIT, selectedCredit);
   }, [selectedCredit]);
 
-  // ── [2] handleCheckout — single checkout trigger ───────────────────────────
-  //
-  // Calls router.checkout() (not redirectToCheckout) so we control the result
-  // handling explicitly. window.location.assign fires here on success.
-  // otp_required and blocked are handled by phase state driving the UI.
-  //
-  // promo_invalid is handled inline so the promo section shows the error
-  // immediately without requiring the user to scroll down to a toast.
-  //
-  // Deps: checkout is stable (useCallback in router). Other deps are local state.
+  // ── handleCheckout — single checkout trigger ───────────────────────────────
   const handleCheckout = useCallback(async () => {
     const result = await checkout({
       guestEmail: guestEmail || undefined,
       orderType: orderDetails.orderType,
       notes: orderDetails.notes || null,
-      // Only send pickupTime for pickup orders; null → ASAP (key omitted by router)
       pickupTime:
         orderDetails.orderType === 'pickup' && pickupTime != null ? pickupTime : undefined,
-      // Auth-only fields — router ignores these on the guest path
       promoCode: promo.applied ? promo.code : undefined,
       creditId: isGuest ? undefined : (selectedCredit ?? undefined),
       loyalty: loyaltyIntent,
     });
 
     if (isCheckoutSuccess(result)) {
-      // Terminal success: redirect to Stripe. window.location.assign fires exactly
-      // once here. The retry path fires it inside router.retryWithToken.
-      // These two sites are mutually exclusive (button unmounted during challenge).
       window.location.assign(result.url);
       return;
     }
 
-    // otp_required: guestPhase → 'otp_required', showChallenge → true.
-    // CheckoutChallengeModal mounts below, button unmounts. No action needed here.
-
-    // blocked: guestPhase → 'blocked', showBlocked → true.
-    // BlockedOrderCard renders below. No action needed here.
-
-    // Promo-specific errors: surface inline in the promo section.
     if (!isOtpRequired(result) && !isCheckoutBlocked(result)) {
       if (result.code === 'promo_invalid' || result.code === 'promo_not_found') {
         setPromo((prev) => ({
@@ -1103,7 +1093,6 @@ export default function CheckoutPage() {
         }));
       }
     }
-    // All other errors: router.error is set, displayed below the button.
   }, [
     checkout,
     guestEmail,
@@ -1148,7 +1137,6 @@ export default function CheckoutPage() {
 
   return (
     <main className="relative mx-auto w-full max-w-2xl px-4 py-8 sm:py-12">
-      {/* ── Header ── */}
       <motion.header
         initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -1173,7 +1161,6 @@ export default function CheckoutPage() {
         )}
       </motion.header>
 
-      {/* ── Empty cart ── */}
       {!hasItems ? (
         <SectionCard index={0}>
           <div className="p-10 text-center">
@@ -1194,7 +1181,7 @@ export default function CheckoutPage() {
         </SectionCard>
       ) : (
         <div className="space-y-3">
-          {/* ═══════════ SECTION 1: ORDER REVIEW ════════════════════════════ */}
+          {/* SECTION 1: ORDER REVIEW */}
           <SectionCard index={0}>
             <SectionHeader
               title="Order Summary"
@@ -1216,11 +1203,10 @@ export default function CheckoutPage() {
             />
           </SectionCard>
 
-          {/* ═══════════ SECTION 2: ORDER TYPE + NOTES + PICKUP TIME ════════ */}
+          {/* SECTION 2: ORDER TYPE + NOTES + PICKUP TIME */}
           <SectionCard index={1}>
             <SectionHeader title="Order details" />
             <div className="space-y-5 px-5 py-5">
-              {/* Order type */}
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wide text-(--color-ink-400) mb-1.5">
                   Order type
@@ -1277,7 +1263,6 @@ export default function CheckoutPage() {
                 )}
               </AnimatePresence>
 
-              {/* Kitchen notes */}
               <div>
                 <label
                   htmlFor="checkout-notes"
@@ -1327,7 +1312,7 @@ export default function CheckoutPage() {
             </div>
           </SectionCard>
 
-          {/* ═══════════ SECTION 3: CONTACT ═════════════════════════════════ */}
+          {/* SECTION 3: CONTACT */}
           <SectionCard index={2}>
             {isGuest ? (
               <>
@@ -1376,7 +1361,7 @@ export default function CheckoutPage() {
             )}
           </SectionCard>
 
-          {/* ═══════════ SECTION 4: PROMO ════════════════════════════════════ */}
+          {/* SECTION 4: PROMO */}
           <SectionCard index={3}>
             <SectionHeader title="Promo Code" subtitle="Verified by the server at checkout" />
             <PromoSection
@@ -1388,7 +1373,7 @@ export default function CheckoutPage() {
             />
           </SectionCard>
 
-          {/* ═══════════ SECTION 5: REWARDS (AUTH ONLY) ══════════════════════ */}
+          {/* SECTION 5: REWARDS (AUTH ONLY) */}
           {!isGuest && (
             <SectionCard index={4}>
               {loyaltyPreview && <LoyaltyEarnBanner preview={loyaltyPreview} />}
@@ -1424,34 +1409,28 @@ export default function CheckoutPage() {
             </SectionCard>
           )}
 
-          {/* ═══════════ SECTION 6: PAYMENT CTA ══════════════════════════════
-            *
-            * This section has three mutually exclusive states:
-            *
-            *   Normal (idle / initiating):
-            *     CheckoutButton visible, OTP modal absent.
-            *
-            *   Challenge (otp_required / retrying):
-            *     CheckoutChallengeModal visible, CheckoutButton unmounted.
-            *     key={otpChallenge.nonce} forces modal remount when backend
-            *     issues a fresh challenge (expired / consumed token), resetting
-            *     the modal to the phone step.
-            *
-            *   Blocked:
-            *     BlockedOrderCard visible, both button and modal absent.
-            *     Terminal — no retry path. User must contact support.
-            *
-            * Duplicate redirect prevention:
-            *   window.location.assign is called in handleCheckout (normal success)
-            *   or inside router.retryWithToken (post-OTP success). The button is
-            *   unmounted during retrying, making these sites mutually exclusive.
-            ══════════════════════════════════════════════════════════════════ */}
+          {/* SECTION 6: PAYMENT CTA
+           *
+           * Three mutually exclusive states:
+           *
+           *   Normal (idle / initiating):
+           *     CheckoutButton visible, OTP modal absent.
+           *
+           *   Challenge (otp_required / retrying):
+           *     CheckoutChallengeModal visible, CheckoutButton unmounted.
+           *     Modal receives `challengeEmail` — frozen at OTP trigger —
+           *     not the live `guestEmail` form state.
+           *     key={otpChallenge.nonce} forces remount on fresh challenge.
+           *
+           *   Blocked:
+           *     BlockedOrderCard visible, both button and modal absent.
+           */}
           <SectionCard
             index={isGuest ? 4 : 5}
             className="border-(--color-ember-200) bg-linear-to-b from-white to-(--color-cream-50)"
           >
             <div className="px-5 py-5 space-y-3">
-              {/* ── OTP challenge: inline, replaces button ────────────────── */}
+              {/* OTP challenge */}
               <AnimatePresence>
                 {showChallenge && otpChallenge && (
                   <motion.div
@@ -1462,27 +1441,22 @@ export default function CheckoutPage() {
                     transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
                   >
                     <CheckoutChallengeModal
-                      // key forces remount when nonce changes (fresh challenge).
-                      // This resets the modal to the phone entry step without
-                      // the parent managing any internal modal state.
                       key={otpChallenge.nonce}
                       nonce={otpChallenge.nonce}
                       expiresAt={otpChallenge.expiresAt}
-                      // For guest OTP, userId is null — identity key falls back
-                      // to guestEmail in buildCheckoutIdentityKey.
                       userId={isAuthenticated && user?.id ? user.id : null}
-                      guestEmail={guestEmail || null}
+                      // [FIX] Pass the frozen email captured at OTP challenge start,
+                      // not the live form state. Prevents identity hash divergence
+                      // if the user edits the email field while the modal is open.
+                      guestEmail={challengeEmail}
                       onToken={(token) => void retryWithToken(token)}
-                      // On expiry: reset to idle so user can re-submit.
-                      // The phase becomes 'idle', showChallenge → false,
-                      // the button reappears. Next tap triggers a fresh challenge.
                       onExpired={() => reset()}
                     />
                   </motion.div>
                 )}
               </AnimatePresence>
 
-              {/* ── Blocked: terminal state ───────────────────────────────── */}
+              {/* Blocked */}
               <AnimatePresence>
                 {showBlocked && (
                   <motion.div
@@ -1497,9 +1471,7 @@ export default function CheckoutPage() {
                 )}
               </AnimatePresence>
 
-              {/* ── Normal checkout button ────────────────────────────────── */}
-              {/* Unmounted (not disabled) during challenge and blocked.
-                  This prevents any double-submission path.               */}
+              {/* Normal checkout button — unmounted during challenge and blocked */}
               {!showChallenge && !showBlocked && (
                 <CheckoutButton
                   onCheckout={handleCheckout}
@@ -1508,7 +1480,6 @@ export default function CheckoutPage() {
                 />
               )}
 
-              {/* ── Router error (non-challenge, non-blocked failures) ─────── */}
               {routerError && !showChallenge && !showBlocked && (
                 <p className="text-sm text-center font-medium text-(--color-error)" role="alert">
                   {routerError}
@@ -1521,14 +1492,13 @@ export default function CheckoutPage() {
             </div>
           </SectionCard>
 
-          {/* ═══════════ GUEST: POST-CTA NUDGE ═══════════════════════════════ */}
+          {/* GUEST: POST-CTA NUDGE */}
           {isGuest && (
             <motion.div custom={5} variants={fadeUp} initial="hidden" animate="visible">
               <GuestPostCheckoutNudge email={guestEmail} />
             </motion.div>
           )}
 
-          {/* Help */}
           <motion.div custom={6} variants={fadeUp} initial="hidden" animate="visible">
             <div className="px-1 py-2 text-center">
               <p className="text-xs text-(--color-ink-400)">

@@ -5,36 +5,29 @@
 //
 // CHANGES IN THIS VERSION:
 //
-//   [1] TS2531 fix — data null narrowing in fetchGuestCheckout.
+//   [1] lastOtpChallengeRef preserves { nonce, expiresAt } during retrying.
 //
-//       data is typed Record<string, unknown> | null. After the previous
-//       `if (!url) { return error; }` guard, TypeScript did not narrow data
-//       to non-null. The correlation between url being falsy (null) and data
-//       being null is expressed through separate variable derivations:
+//       otpChallenge was derived as:
+//         phase.tag === 'otp_required' ? { nonce, expiresAt } : null
 //
-//         const url = typeof data?.['url'] === 'string' ? data['url'] : null;
+//       When onToken fires, retryWithChallengeToken dispatches RETRY, moving
+//       phase to 'retrying'. otpChallenge became null. In CheckoutPage, the
+//       modal mount condition is `showChallenge && otpChallenge`. During
+//       'retrying', showChallenge is true (button stays unmounted) but
+//       otpChallenge is null — the modal unmounts. The section goes blank for
+//       the duration of the retry network call.
 //
-//       TypeScript's control flow analysis does not bridge two separate
-//       variables derived from a common null source. data remained
-//       Record<string, unknown> | null after the url check, so every
-//       subsequent data['sessionId'] access was TS2531.
+//       Fix: store the last issued challenge in lastOtpChallengeRef. Derive
+//       otpChallenge as non-null for both 'otp_required' and 'retrying'.
+//       Clear the ref on RESET (successful checkout) so it doesn't leak into
+//       a subsequent unrelated checkout attempt.
 //
-//       Fix: extend the guard to explicitly include data:
-//
-//         if (!url || data === null) { return error; }
-//
-//       After this line, TypeScript knows both that url: string and that
-//       data: Record<string, unknown>. All subsequent property accesses
-//       on data are safe.
-//
-//       Why this is semantically correct: if data is null, url is null
-//       (since url = data?.['url'] and ?. evaluates to undefined on null,
-//       typeof undefined !== 'string', so url = null). Adding data === null
-//       to the guard is therefore logically equivalent at runtime — it
-//       surfaces the implicit correlation explicitly for the type checker.
+//   [2] TS2531 fix — data null narrowing in fetchGuestCheckout.
+//       Extended the URL guard: `if (!url || data === null)` so TypeScript
+//       narrows data to non-null for subsequent property accesses.
 //
 // All other logic, security boundaries, and phase machine behavior
-// are unchanged from the prior version.
+// are unchanged.
 // =============================================================================
 
 import { useReducer, useCallback, useRef } from 'react';
@@ -179,9 +172,6 @@ function buildGuestRequestBody(
 }
 
 // ─── Endpoint invocation ──────────────────────────────────────────────────────
-//
-// FIX [1] — TS2531 is resolved by extending the URL guard to include data.
-// See file-level comment for full explanation.
 
 async function fetchGuestCheckout(
   body: Record<string, unknown>,
@@ -190,12 +180,10 @@ async function fetchGuestCheckout(
   const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
   if (!supabaseUrl || typeof supabaseUrl !== 'string' || supabaseUrl.length === 0) {
-    console.error('[useGuestCheckout] VITE_SUPABASE_URL is missing');
     return { kind: 'error', message: 'Checkout is not configured. Please contact support.', code: 'config_error' };
   }
 
   if (!anonKey || typeof anonKey !== 'string' || anonKey.length === 0) {
-    console.error('[useGuestCheckout] VITE_SUPABASE_ANON_KEY is missing');
     return { kind: 'error', message: 'Checkout is not configured. Please contact support.', code: 'config_error' };
   }
 
@@ -249,7 +237,6 @@ async function fetchGuestCheckout(
   }
 
   // ── Success ───────────────────────────────────────────────────────────────
-  // Unwrap envelope: server sends { data: { url, ... } } or flat { url, ... }.
   const envelope = isRecord(json) ? json : null;
   const data: Record<string, unknown> | null = envelope !== null
     ? (isRecord(envelope['data']) ? envelope['data'] : envelope)
@@ -257,24 +244,13 @@ async function fetchGuestCheckout(
 
   const url = typeof data?.['url'] === 'string' ? data['url'] : null;
 
-  // FIX [1]: `|| data === null` added.
-  //
-  // Previous: `if (!url) { return error; }`
-  // TypeScript did not narrow `data` to non-null after this guard because
-  // the null state of `data` and the null state of `url` are expressed through
-  // two separate variable bindings. Control flow analysis does not bridge them.
-  //
-  // After this extended guard, TypeScript narrows data from
-  // `Record<string, unknown> | null` to `Record<string, unknown>`, making
-  // all subsequent data[key] accesses TS2531-free.
-  //
-  // Runtime semantics are identical: if data is null, data?.['url'] is
-  // undefined, url is null, and the guard fires regardless.
+  // `|| data === null` added: TypeScript does not bridge the null correlation
+  // between `data` and `url` across separate variable bindings. This guard
+  // narrows data to Record<string, unknown> for all accesses below.
   if (!url || data === null) {
     return { kind: 'error', message: 'Invalid checkout response: missing URL.', code: 'invalid_response' };
   }
 
-  // data: Record<string, unknown> — all accesses below are safe.
   return {
     kind:        'success',
     url,
@@ -290,14 +266,21 @@ async function fetchGuestCheckout(
 export function useGuestCheckout(): UseGuestCheckoutReturn {
   const [phase, dispatch] = useReducer(phaseReducer, IDLE);
 
-  const pendingInputRef = useRef<GuestCheckoutInput | null>(null);
-  const cartItems       = useCartStore((s) => s.items);
+  const pendingInputRef     = useRef<GuestCheckoutInput | null>(null);
+  const cartItems           = useCartStore((s) => s.items);
+
+  // [FIX 1] lastOtpChallengeRef: retains the last { nonce, expiresAt } so
+  // otpChallenge remains non-null during the 'retrying' phase. Without this,
+  // phase → 'retrying' sets otpChallenge to null and the modal unmounts
+  // mid-flight, leaving the section blank until the network call resolves.
+  const lastOtpChallengeRef = useRef<{ nonce: string; expiresAt: string } | null>(null);
 
   const handleRawResponse = useCallback(
     (raw: RawCheckoutResponse): CheckoutResult => {
       switch (raw.kind) {
         case 'success': {
           if (raw.guestToken) storeGuestToken(raw.guestToken);
+          lastOtpChallengeRef.current = null;  // [FIX 1] clear on successful checkout
           dispatch({ type: 'RESET' });
           const r: CheckoutResultSuccess = {
             ok:          true,
@@ -310,6 +293,9 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
         }
 
         case 'otp_required': {
+          // [FIX 1] Persist before dispatch so the ref is populated when
+          // the 'retrying' phase renders and needs otpChallenge non-null.
+          lastOtpChallengeRef.current = { nonce: raw.nonce, expiresAt: raw.expiresAt };
           dispatch({ type: 'OTP_REQUIRED', nonce: raw.nonce, expiresAt: raw.expiresAt });
           const r: CheckoutResultOtpRequired = {
             ok:        false,
@@ -360,7 +346,6 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
       for (const field of FORBIDDEN_FIELDS) {
         if (Object.prototype.hasOwnProperty.call(body, field)) {
           const msg = `BUG: forbidden field '${field}' in guest checkout request`;
-          console.error(msg);
           dispatch({ type: 'ERROR', message: msg, code: 'forbidden_field', recoverable: false });
           const r: CheckoutResultFailure = { ok: false, error: msg, code: 'forbidden_field' };
           return r;
@@ -391,6 +376,8 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
       }
 
       dispatch({ type: 'RETRY' });
+      // lastOtpChallengeRef.current is still set from the prior OTP_REQUIRED
+      // dispatch, so otpChallenge remains non-null during this network call.
 
       const body = buildGuestRequestBody(
         cartItems,
@@ -411,13 +398,24 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
     [cartItems, handleRawResponse],
   );
 
-  const clearError = useCallback(() => dispatch({ type: 'RESET' }), []);
+  const clearError = useCallback(() => {
+    lastOtpChallengeRef.current = null;
+    dispatch({ type: 'RESET' });
+  }, []);
 
-  const isLoading    = phase.tag === 'initiating' || phase.tag === 'retrying';
-  const error        = phase.tag === 'error' ? phase.message : null;
-  const otpChallenge = phase.tag === 'otp_required'
-    ? { nonce: phase.nonce, expiresAt: phase.expiresAt }
-    : null;
+  const isLoading = phase.tag === 'initiating' || phase.tag === 'retrying';
+  const error     = phase.tag === 'error' ? phase.message : null;
+
+  // [FIX 1] Preserve otpChallenge across the 'retrying' transition.
+  // During 'retrying', the ref holds the challenge from the prior 'otp_required'
+  // phase, keeping the modal mounted and visible while the retry is in flight.
+  // Returns null for all other phases (idle, initiating, blocked, error).
+  const otpChallenge: { nonce: string; expiresAt: string } | null =
+    phase.tag === 'otp_required'
+      ? { nonce: phase.nonce, expiresAt: phase.expiresAt }
+      : phase.tag === 'retrying'
+        ? lastOtpChallengeRef.current
+        : null;
 
   return {
     phase,
