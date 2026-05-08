@@ -42,6 +42,15 @@
 //        for low-risk guest orders that the pre-checkout gate had already
 //        allowed. Legacy sessions without these metadata fields continue
 //        using the fallback safeEvaluateOrderRisk() path unchanged.
+//
+//   9. [FIX] Guest orders on the legacy fallback path now default to
+//        verification_status='not_required' regardless of legacy scorer output.
+//        The legacy scorer (guest + no phone + medium order) scores ≥ 60 →
+//        'required', which triggered a post-payment OTP gate that cannot be
+//        enforced after Stripe has already charged the card. Auth users on
+//        the legacy path are unchanged — they continue using
+//        deriveVerificationStatus(risk). risk_score and risk_level are still
+//        computed and persisted for analytics on all paths.
 // =============================================================================
 
 import type Stripe from "stripe";
@@ -78,29 +87,13 @@ import { extractPreCheckoutRisk } from "./shared/metadata.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-// Minimum expected order value in cents. Orders below this are unusual and
-// logged as a warning for monitoring. They are never rejected here — that
-// enforcement belongs in create-checkout before the Stripe session is created.
 const MIN_EXPECTED_ORDER_CENTS = 15_00; // $15.00
 
 const VALID_ORDER_TYPES = new Set<OrderType>(['pickup', 'delivery', 'dine_in'] as const);
 
-// Maximum seconds in the future a pickup_time may be scheduled.
-// 24 hours is generous — tighten if the business only accepts same-day orders.
 const MAX_PICKUP_TIME_FUTURE_MS = 24 * 60 * 60 * 1000;
 
 // ─── pickup_time parser ───────────────────────────────────────────────────────
-//
-// Reads pickup_time from Stripe session metadata and converts it to an ISO
-// 8601 string suitable for the TIMESTAMPTZ column in orders.
-//
-// Defensive contract:
-//   - A missing or empty value returns null (ASAP order).
-//   - A malformed ISO string returns null and logs a warning.
-//   - A value too far in the past or future is accepted with a warning log
-//     (the order has already been paid — never drop it).
-//
-// The function never throws.
 
 function parsePickupTimeFromMetadata(
   metadata: Stripe.Metadata | null | undefined,
@@ -110,7 +103,7 @@ function parsePickupTimeFromMetadata(
   const raw = pickMeta(metadata, "pickup_time");
 
   if (!raw || raw.trim().length === 0) {
-    return null; // ASAP — normal case
+    return null;
   }
 
   let parsed: Date;
@@ -140,7 +133,6 @@ function parsePickupTimeFromMetadata(
   const diffMs = parsed.getTime() - nowMs;
 
   if (diffMs < -60 * 60 * 1000) {
-    // More than 1 hour in the past — suspicious but still store it; do not drop the order.
     log("warn", "webhook_pickup_time_in_past", {
       requestId,
       sessionId: prefix(sessionId),
@@ -489,10 +481,6 @@ export async function createOrderFromSession(args: {
     loyaltyDiscountCents,
   } = state;
 
-  // ── pickup_time extraction ───────────────────────────────────────────────
-  // Read from Stripe session metadata. The create-checkout pipelines write it
-  // as a string key "pickup_time" when the user selects a scheduled time.
-  // NULL = ASAP (the common case). parsePickupTimeFromMetadata never throws.
   const pickupTime = parsePickupTimeFromMetadata(
     session.metadata,
     requestId,
@@ -516,7 +504,6 @@ export async function createOrderFromSession(args: {
     snapshot, currency, loyaltyDiscountCents, stripeAmountTotal,
   );
 
-  // ── Low-amount observability warning ──────────────────────────────────────
   if (pricing.chargedCents < MIN_EXPECTED_ORDER_CENTS) {
     log("warn", "webhook_order_below_minimum", {
       requestId,
@@ -527,15 +514,6 @@ export async function createOrderFromSession(args: {
   }
 
   // ── Risk resolution ─────────────────────────────────────────────────────────
-  // When the pre-checkout gate evaluated this session, its decision is stored
-  // in Stripe metadata as pre_checkout_risk_* fields and must be used directly.
-  // Re-running safeEvaluateOrderRisk() would overwrite a pre-checkout allow
-  // with a post-payment 'required' because guest + no phone always scores ≥ 60
-  // in the legacy order-risk model.
-  //
-  // Legacy sessions (created before the pre-checkout gate deployed on 2026-05-05)
-  // will not have these fields — those orders fall back to safeEvaluateOrderRisk()
-  // unchanged.
   const preCheckoutRisk = extractPreCheckoutRisk(session.metadata);
 
   let risk: OrderRiskResult | null;
@@ -574,7 +552,16 @@ export async function createOrderFromSession(args: {
       customerPhone: session.customer_details?.phone ?? null,
       requestId,
     });
-    verificationStatus = risk !== null ? deriveVerificationStatus(risk) : 'not_required';
+
+    // ── FIX: Guest orders on the legacy path default to 'not_required'. ────
+    // The legacy scorer produces verification_status='required' for guest +
+    // no phone + medium order (score ≥ 60). This was triggering a post-payment
+    // OTP gate on the success page after Stripe had already charged the card —
+    // a gate that cannot be meaningfully enforced at that point. Auth users
+    // continue using deriveVerificationStatus() unchanged.
+    // risk_score and risk_level are still computed and persisted for analytics.
+    verificationStatus = (!isGuest && risk !== null) ? deriveVerificationStatus(risk) : 'not_required';
+
     finalRiskScore     = risk?.score ?? null;
     finalRiskLevel     = risk?.level ?? null;
 
@@ -645,7 +632,7 @@ export async function createOrderFromSession(args: {
     cart_items:                cart.items,
     metadata,
     notes:                     snapshotString(snapshot, "orderNotes"),
-    pickup_time:               pickupTime,   // ← NULL = ASAP, ISO string = scheduled
+    pickup_time:               pickupTime,
     risk_score:                finalRiskScore,
     risk_level:                finalRiskLevel,
     verification_status:       verificationStatus,

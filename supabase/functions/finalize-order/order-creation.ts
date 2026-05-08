@@ -1,6 +1,17 @@
 // =============================================================================
 // supabase/functions/finalize-order/order-creation.ts
 // =============================================================================
+//
+// [FIX] insertOrReadFinalOrder now sets verification_status, risk_score, and
+//       risk_level on every insert. These fields were previously absent,
+//       creating schema divergence vs webhook-created orders (nulls in columns
+//       that the rest of the system assumes are populated). finalize-order is
+//       auth-only, so verification_status is always 'not_required' — the
+//       authenticated user has already proven session ownership. risk_score and
+//       risk_level are null because no pre-checkout data is available at
+//       reconciliation time. Schema: verification_status TEXT NOT NULL DEFAULT
+//       'not_required', risk_score INTEGER NULL, risk_level TEXT NULL.
+// =============================================================================
 
 import Stripe from 'stripe';
 import type { DbClient, PendingCartRecord, PendingCartUpdate, OrderInsert, ExistingOrderRow } from './types.ts';
@@ -100,7 +111,7 @@ export async function insertOrReadFinalOrder(args: {
   const totalDiscountCents =
     snapshot.campaignDiscountCents + snapshot.promoDiscountCents + snapshot.creditCents;
 
-  const orderInsert: OrderInsert = {
+  const orderInsert = {
     stripe_session_id: sessionId,
     stripe_payment_intent_id: paymentIntentId,
     order_type: DB_ORDER_TYPE_FOOD,
@@ -129,6 +140,18 @@ export async function insertOrReadFinalOrder(args: {
     amount_received_cents: snapshot.totalCents,
     refunded_amount_cents: 0,
     // DO NOT include net_amount_cents — generated column
+    // ── FIX: risk + verification fields ─────────────────────────────────
+    // finalize-order is auth-only: the authenticated user has already proven
+    // ownership, so no post-payment OTP gate is appropriate.
+    // risk_score/risk_level are null — no pre-checkout scoring data is
+    // available at reconciliation time.
+    verification_status: 'not_required',
+    risk_score: null,
+    risk_level: null,
+  } as OrderInsert & {
+    verification_status: string;
+    risk_score: number | null;
+    risk_level: string | null;
   };
 
   const { data: insertedOrder, error: insertError } = await db

@@ -27,6 +27,22 @@
 //   1. resp.order['verification_status'] uses readString() — safe type guard.
 //   2. clearCart() deferred until verification is resolved.
 //   3. Stray };, inside .on() callback removed — was causing all TS errors.
+//
+// [FIX 2026-05-08] Polling optimisation + last-resort reconciliation:
+//   1. getJwtIfAuthed() is now resolved ONCE before the first poll and cached
+//      in jwtRef. Each poll cycle previously awaited a fresh 2.5 s deadline —
+//      especially wasteful for guests who never have a Supabase session.
+//   2. On a fatal-auth error, the token is refreshed once before giving up.
+//      This handles the JWT restoration race on Stripe redirect (Supabase
+//      session rehydrates 200–800 ms after page mount).
+//   3. After POLL_MAX_ATTEMPTS, a last-resort reconcile() step runs:
+//      - Waits 5 s, then tries one final get-order-for-success lookup.
+//      - If still unresolved AND user is authenticated, calls finalize-order
+//        as a one-shot fallback (auth-only; guests are excluded by design).
+//      - If finalize-order creates the order, normal polling resumes.
+//      - Otherwise, existing timeout state is shown.
+//      The webhook remains the primary authority; finalize-order is a
+//      safety net only, not the main path.
 // ============================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -498,7 +514,7 @@ function StickyNextSteps({
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2">
           <a
-            href="mailto:sofisrestaurante@gmail.com"
+            href="mailto:sofisrestaurant2022@gmail.com"
             className="rounded-lg bg-white/8 px-3 py-2 text-center text-xs font-semibold text-white transition hover:bg-white/12"
           >
             Email us
@@ -576,6 +592,10 @@ export default function OrderSuccess() {
   const loyaltyStartedForOrderRef = useRef<string | null>(null);
   const pollTimerRef = useRef<TimeoutHandle | null>(null);
   const loyaltyTimerRef = useRef<TimeoutHandle | null>(null);
+  // Cached JWT — resolved once before the first poll to avoid the 2.5 s
+  // per-cycle getJwtIfAuthed() wait. Guests always exhaust the full deadline;
+  // auth users on Stripe redirect may not have their session restored yet.
+  const jwtRef = useRef<string | null>(null);
 
   const stopTimer = useCallback((ref: { current: TimeoutHandle | null }) => {
     if (ref.current !== null) {
@@ -658,6 +678,10 @@ export default function OrderSuccess() {
 
     let cancelled = false;
     let attempts = 0;
+    // Guard: refresh the cached JWT at most once per polling lifecycle to
+    // prevent an infinite retry loop on a genuine auth failure.
+    let authRetried = false;
+
     const stopPoll = () => stopTimer(pollTimerRef);
 
     const schedulePoll = () => {
@@ -667,12 +691,101 @@ export default function OrderSuccess() {
       }, POLL_INTERVAL_MS);
     };
 
+    // ── Last-resort reconciliation ──────────────────────────────────────
+    // Called once after POLL_MAX_ATTEMPTS without finding an order.
+    //
+    // 1. Waits 5 s (allows a slow webhook a final window to land).
+    // 2. Performs one final get-order-for-success lookup.
+    // 3. If still unresolved AND user is authenticated, calls finalize-order
+    //    as a one-shot fallback. Guests are excluded by design — that endpoint
+    //    requires a JWT and owner === user.id, so it structurally cannot
+    //    serve a guest checkout.
+    // 4. If finalize-order creates the order, resumes normal polling.
+    // 5. Otherwise, transitions to the existing timeout state.
+    //
+    // The webhook remains the canonical authority. This is a safety net only.
+    const reconcile = async () => {
+      await new Promise<void>((resolve) => {
+        pollTimerRef.current = setTimeout(resolve, 5_000);
+      });
+      if (cancelled) return;
+
+      // Re-resolve token in case it became available during the 5 s wait.
+      const latestToken = await getJwtIfAuthed();
+      if (latestToken) jwtRef.current = latestToken;
+
+      const finalHeaders: Record<string, string> = { 'x-request-id': crypto.randomUUID() };
+      if (jwtRef.current) finalHeaders.Authorization = `Bearer ${jwtRef.current}`;
+      const finalBody: Record<string, unknown> = { session_id: sessionId };
+      const gt = readGuestToken();
+      if (gt) finalBody.guest_token = gt;
+
+      // One final order lookup.
+      try {
+        const finalResp = await invokeEdge<GetOrderResp>('get-order-for-success', finalBody, {
+          headers: finalHeaders,
+        });
+        if (!cancelled && finalResp?.order) {
+          const orderRow = finalResp.order as unknown as Parameters<typeof mapOrderRowToDomain>[0];
+          const mapped = mapOrderRowToDomain(orderRow);
+          setOrder((current) => (current?.id === mapped.id ? current : mapped));
+          setLiveStatus(mapped.status);
+          const verStatus = readString(finalResp.order['verification_status']);
+          const needsVerification = verStatus === 'required';
+          setVerificationRequired(needsVerification);
+          setPageState('found');
+          if (!needsVerification) clearCart();
+          if (loyaltyStartedForOrderRef.current !== mapped.id) {
+            loyaltyStartedForOrderRef.current = mapped.id;
+            void fetchLoyaltyWithRetry(mapped.id);
+          }
+          return;
+        }
+      } catch {
+        // Fall through to finalize-order attempt.
+      }
+
+      // Auth-only finalize-order fallback.
+      if (!cancelled && jwtRef.current) {
+        try {
+          type FinalizeResp = { ok?: boolean; order_id?: string };
+          const finalizeResp = await invokeEdge<FinalizeResp>(
+            'finalize-order',
+            { session_id: sessionId },
+            {
+              headers: {
+                Authorization: `Bearer ${jwtRef.current}`,
+                'x-request-id': crypto.randomUUID(),
+              },
+            },
+          );
+          if (!cancelled && finalizeResp?.order_id) {
+            // Order created — resume normal polling to read it back.
+            attempts = 0;
+            schedulePoll();
+            return;
+          }
+        } catch {
+          // finalize-order failed — fall through to timeout state.
+        }
+      }
+
+      if (!cancelled) {
+        setPageState('timeout');
+      }
+    };
+
     const run = async () => {
       if (cancelled) return;
       attempts += 1;
       setAttempt(attempts);
 
-      const [token, guestToken] = [await getJwtIfAuthed(), readGuestToken()];
+      // Use the pre-resolved cached token. Avoids the 2.5 s per-cycle cost
+      // of calling getJwtIfAuthed() inside each poll — especially wasteful
+      // for guests who never have a Supabase session and always exhaust the
+      // full deadline.
+      const token = jwtRef.current;
+      const guestToken = readGuestToken();
 
       const headers: Record<string, string> = {
         'x-request-id': crypto.randomUUID(),
@@ -689,8 +802,8 @@ export default function OrderSuccess() {
 
         if (resp?.pending === true || !resp?.order) {
           if (attempts >= POLL_MAX_ATTEMPTS) {
-            setPageState('timeout');
             stopPoll();
+            void reconcile();
           } else {
             schedulePoll();
           }
@@ -732,6 +845,19 @@ export default function OrderSuccess() {
           message.includes('forbidden');
 
         if (isFatalAuth) {
+          // Attempt a one-time token refresh before treating the failure as
+          // permanent. This covers the JWT restoration race on Stripe redirect
+          // where Supabase session rehydrates 200–800 ms after page mount.
+          if (!authRetried) {
+            authRetried = true;
+            const refreshed = await getJwtIfAuthed();
+            if (refreshed) {
+              jwtRef.current = refreshed;
+              attempts -= 1; // replay this attempt with the fresh token
+              schedulePoll();
+              return;
+            }
+          }
           setPageState('error');
           stopPoll();
           return;
@@ -746,7 +872,15 @@ export default function OrderSuccess() {
       }
     };
 
-    void run();
+    // Resolve JWT once before the first poll starts. Paying the 2.5 s cost
+    // once (not per cycle) eliminates the per-poll dead wait. For guests this
+    // always returns null immediately after the deadline; for auth users on
+    // Stripe redirect it waits for Supabase to rehydrate the session from
+    // storage (typically 200–800 ms, well within the 2.5 s window).
+    void (async () => {
+      jwtRef.current = await getJwtIfAuthed();
+      if (!cancelled) void run();
+    })();
 
     return () => {
       cancelled = true;
