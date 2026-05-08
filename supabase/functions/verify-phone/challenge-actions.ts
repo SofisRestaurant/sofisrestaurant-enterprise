@@ -1,35 +1,36 @@
 // supabase/functions/verify-phone/challenge-actions.ts
 // =============================================================================
-// Challenge token issuance for the pre-checkout OTP gate.
+// CHANGES IN THIS VERSION:
 //
-// CHANGE IN THIS VERSION:
+//   [FIX 1] TwilioEnv → VerifyEnv.
 //
-//   [FIX] IssueChallengeResult success branch now uses snake_case key
-//         `challenge_token` (was camelCase `challengeToken`).
+//         The arg type was TwilioEnv (which requires fromNumber). This module
+//         only calls checkVerifyOtp(), which uses the Verify API and does not
+//         need fromNumber. Changed to VerifyEnv so the function compiles with
+//         the narrower env loaded by getVerifyEnv() in the parent handler.
 //
-//         The frontend contract in challengeClient.ts reads:
-//           return { ok: true, challengeToken: data.challenge_token };
-//         The backend was returning:
-//           return { ok: true, challengeToken }
-//         causing data.challenge_token to be undefined. The retry body then
-//         omitted the challenge_token field entirely, producing an infinite
-//         challenge loop with no user-visible error.
+//   [FIX 2] Idempotent insert — safe under retry and double-click.
 //
-//         Fix: change both the IssueChallengeResult type and the return
-//         statement to use `challenge_token`. This is the only change.
+//         The previous implementation did a blind INSERT INTO checkout_challenges.
+//         If a network timeout caused the client to retry, the second insert hit
+//         the UNIQUE constraint on (nonce), returning 500 "Unable to issue checkout
+//         token." The client had no token even though one was already issued.
 //
-// All other logic — OTP verification, HMAC signing, DB insertion, TTL,
-// identity key validation — is unchanged.
+//         Fix: before inserting, check for an existing non-consumed, non-expired
+//         row with the same nonce AND matching identity_key. If found, reconstruct
+//         the challenge token (nonce + HMAC recomputed from stored data) and
+//         return it. This makes token issuance safe under any retry pattern.
 //
-// Flow:
-//   1. Verify OTP code via Twilio Verify
-//   2. Sign nonce:identityKey with CHECKOUT_CHALLENGE_SECRET
-//   3. Insert checkout_challenges row (nonce + identity binding + TTL)
-//   4. Return challenge_token to client
+//         Security: the identity_key check prevents a different caller from
+//         reclaiming a nonce that was issued to a different user. If nonce exists
+//         but identity_key doesn't match, reject (400 nonce already in use).
 //
-// ENV VARIABLES REQUIRED:
-//   CHECKOUT_CHALLENGE_SECRET — must match create-checkout/challenge-token.ts
-//   TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_VERIFY_SERVICE_SID
+//   [FIX 3] snake_case return key — preserved from prior session.
+//
+//         Returns { ok: true, challenge_token } (snake_case) to match the
+//         frontend contract: data.challenge_token in challengeClient.ts.
+//
+// All other logic (OTP verification, HMAC signing, TTL) is unchanged.
 // =============================================================================
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -37,7 +38,7 @@ import { signHmac }            from '../_shared/crypto.ts';
 import {
   checkVerifyOtp,
   normalizePhone,
-  type TwilioEnv,
+  type VerifyEnv,          // [FIX 1] VerifyEnv, not TwilioEnv
 } from '../_shared/twilio.ts';
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -45,18 +46,44 @@ import {
 export interface IssueChallengeTokenArgs {
   body:      Record<string, unknown>;
   db:        SupabaseClient;
-  twilioEnv: TwilioEnv;
+  twilioEnv: VerifyEnv;    // [FIX 1]
   log:       (outcome: string, action: string, detail: Record<string, unknown>) => void;
 }
 
-// [FIX] snake_case `challenge_token` matches the frontend wire contract.
-// challengeClient.ts reads: data.challenge_token
-// index.ts serialises: { ok: true, challenge_token: result.challenge_token }
 export type IssueChallengeResult =
   | { ok: true;  challenge_token: string }
   | { ok: false; httpStatus: number; error: string; valid?: boolean };
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+
 const CHALLENGE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+// ─── Typed DB accessor (checkout_challenges not yet in generated types) ───────
+//
+// Remove this block and use db.from('checkout_challenges') directly once
+// `supabase gen types typescript` is run after migration 20260505000000.
+
+interface CheckoutChallengeRow {
+  nonce:        string;
+  identity_key: string;
+  expires_at:   string;
+  consumed_at:  string | null;
+}
+
+interface ChallengeQueryBuilder extends
+  PromiseLike<{ data: unknown; error: { message: string } | null }>
+{
+  select(cols: string): ChallengeQueryBuilder;
+  insert(values: Record<string, unknown>): ChallengeQueryBuilder;
+  eq(col: string, val: unknown): ChallengeQueryBuilder;
+  is(col: string, val: null): ChallengeQueryBuilder;
+  gt(col: string, val: unknown): ChallengeQueryBuilder;
+  maybeSingle(): ChallengeQueryBuilder;
+}
+
+function fromChallenges(db: SupabaseClient): ChallengeQueryBuilder {
+  return (db as unknown as { from(t: string): ChallengeQueryBuilder }).from('checkout_challenges');
+}
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
@@ -87,10 +114,6 @@ export async function issueChallengeToken(
     return { ok: false, httpStatus: 400, error: 'nonce is required (min 8 characters).' };
   }
 
-  // identity_key is SHA-256(userId) or SHA-256(guestEmail), pre-computed client-side
-  // by buildCheckoutIdentityKey() in challengeClient.ts. The raw value is never sent
-  // to the server. The hash is re-derived server-side during challenge verification
-  // in create-checkout/challenge-token.ts and compared for identity binding.
   const identityKey = typeof body.identity_key === 'string'
     ? body.identity_key.trim()
     : '';
@@ -100,6 +123,66 @@ export async function issueChallengeToken(
       httpStatus: 400,
       error:      'identity_key is required (SHA-256 hex, 64 chars).',
     };
+  }
+
+  // ── Secret — load before Twilio call so misconfigured deployments fail fast ─
+
+  const secret = Deno.env.get('CHECKOUT_CHALLENGE_SECRET');
+  if (!secret || secret.length < 32) {
+    log('error', 'issue_challenge_token', { detail: 'CHECKOUT_CHALLENGE_SECRET not set or too short' });
+    return { ok: false, httpStatus: 503, error: 'Service misconfigured. Please try again.' };
+  }
+
+  // ── [FIX 2] Idempotency check ──────────────────────────────────────────────
+  //
+  // Look for a non-consumed, non-expired row with this nonce. This covers:
+  //   - Client retry after network timeout (first request succeeded, response lost)
+  //   - Double-click / duplicate form submission
+  //
+  // If found and identity_key matches: reconstruct and return the same token.
+  // If found and identity_key mismatches: reject (security — different caller).
+  // If not found: proceed to OTP verification and insert.
+
+  const now = new Date().toISOString();
+
+  const { data: existingRaw, error: selectError } = (await fromChallenges(db)
+    .select('nonce, identity_key, expires_at, consumed_at')
+    .eq('nonce', nonce)
+    .is('consumed_at', null)
+    .gt('expires_at', now)
+    .maybeSingle()) as {
+      data:  CheckoutChallengeRow | null;
+      error: { message: string } | null;
+    };
+
+  if (selectError) {
+    log('db_warn', 'issue_challenge_token', {
+      detail:       'idempotency_select_failed',
+      error:        selectError.message,
+      nonce:        nonce.slice(0, 8),
+      phone_suffix: normalized.slice(-4),
+    });
+    // Treat select failure as "not found" — fall through to OTP + insert.
+  }
+
+  if (existingRaw !== null && !selectError) {
+    if (existingRaw.identity_key !== identityKey) {
+      log('warn', 'issue_challenge_token', {
+        detail:       'nonce_identity_mismatch_on_replay',
+        nonce:        nonce.slice(0, 8),
+        phone_suffix: normalized.slice(-4),
+      });
+      return { ok: false, httpStatus: 400, error: 'nonce already in use.' };
+    }
+
+    // Same nonce + same identity = idempotent return.
+    // OTP was already verified when this row was created; no need to re-verify.
+    const sig = await signHmac(`${nonce}:${identityKey}`, secret);
+    log('idempotent_return', 'issue_challenge_token', {
+      nonce:        nonce.slice(0, 8),
+      phone_suffix: normalized.slice(-4),
+    });
+    return { ok: true, challenge_token: `${nonce}:${sig}` };
   }
 
   // ── Verify OTP via Twilio ──────────────────────────────────────────────────
@@ -115,9 +198,7 @@ export async function issueChallengeToken(
   }
 
   if (!otpResult.valid) {
-    log('invalid_otp', 'issue_challenge_token', {
-      phone_suffix: normalized.slice(-4),
-    });
+    log('invalid_otp', 'issue_challenge_token', { phone_suffix: normalized.slice(-4) });
     return {
       ok:         false,
       valid:      false,
@@ -126,30 +207,33 @@ export async function issueChallengeToken(
     };
   }
 
-  // ── Sign and persist challenge token ───────────────────────────────────────
-
-  const secret = Deno.env.get('CHECKOUT_CHALLENGE_SECRET');
-  if (!secret || secret.length < 32) {
-    log('error', 'issue_challenge_token', { detail: 'CHECKOUT_CHALLENGE_SECRET not set' });
-    return { ok: false, httpStatus: 503, error: 'Service misconfigured. Please try again.' };
-  }
+  // ── Sign and persist ───────────────────────────────────────────────────────
 
   const signature      = await signHmac(`${nonce}:${identityKey}`, secret);
   const challengeToken = `${nonce}:${signature}`;
   const expiresAt      = new Date(Date.now() + CHALLENGE_TTL_MS).toISOString();
 
-  const { error: insertError } = await db
-    .from('checkout_challenges')
+  const { error: insertError } = await fromChallenges(db)
     .insert({
       nonce,
       phone_e164:   otpResult.normalizedPhone ?? normalized,
       identity_key: identityKey,
       expires_at:   expiresAt,
-    });
+    }) as { error: { message: string } | null };
 
   if (insertError) {
-    // Most likely: duplicate nonce (client double-submitted). The client should
-    // restart the challenge flow to obtain a fresh nonce.
+    // Unique constraint on nonce fired between the SELECT and INSERT (race window).
+    // Another concurrent request completed the insert. Reconstruct the token and
+    // return it — the OTP was valid so the caller deserves the token.
+    if (insertError.message?.includes('unique') || insertError.message?.includes('duplicate')) {
+      log('race_idempotent', 'issue_challenge_token', {
+        detail:       'concurrent_insert_won_reconstructing_token',
+        nonce:        nonce.slice(0, 8),
+        phone_suffix: normalized.slice(-4),
+      });
+      return { ok: true, challenge_token: challengeToken };
+    }
+
     log('db_error', 'issue_challenge_token', {
       detail:       'checkout_challenges insert failed',
       error:        insertError.message,
@@ -168,7 +252,5 @@ export async function issueChallengeToken(
     expires_at:   expiresAt,
   });
 
-  // [FIX] Use snake_case key to match the frontend wire contract.
-  // challengeClient.ts: return { ok: true, challengeToken: data.challenge_token }
   return { ok: true, challenge_token: challengeToken };
 }
