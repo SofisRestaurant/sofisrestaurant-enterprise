@@ -28,6 +28,29 @@
 //   - Idempotent: .eq('recovered', false) guard prevents double-updates
 //   - Uses the same DbClient as all other side effects (service role)
 //   - Only fires on wasNewOrder to avoid redundant updates on webhook retries
+//
+// [FIX 2026-05-10] Idempotency claim released on handler failure.
+//
+//   PROBLEM:
+//   checkEventIdempotency() inserts into stripe_webhook_events at the start of
+//   the handler. If the handler subsequently throws (e.g., order insert fails
+//   with constraint 23514), that row stays written. Stripe's next retry then
+//   finds the row and returns { alreadyProcessed: true }, silently skipping
+//   the event — permanently losing the order.
+//
+//   FIX:
+//   The handler body (steps 2–6) is wrapped in try/catch. On any throw,
+//   releaseIdempotencyClaim() deletes the row before re-throwing, so Stripe's
+//   retry can take a fresh claim and reprocess the event.
+//
+//   SAFETY:
+//   - createOrderFromSession has a 23505 guard: if a prior partial run created
+//     the order before throwing, the retry finds it via findOrderBySessionId
+//     and does not create a duplicate.
+//   - All side effects (notify, loyalty, promo, credit, kitchen, SMS) are
+//     individually idempotent — safe to re-run on retry.
+//   - releaseIdempotencyClaim swallows its own errors: if the delete fails,
+//     behavior degrades to the old (stuck) state, never to silent data loss.
 // =============================================================================
 
 import type Stripe from "stripe";
@@ -57,7 +80,10 @@ import {
   parseCheckoutMetadata,
   type ParsedCheckoutMetadata,
 } from "../shared/metadata.ts";
-import { checkEventIdempotency } from "../shared/idempotency.ts";
+import {
+  checkEventIdempotency,
+  releaseIdempotencyClaim,
+} from "../shared/idempotency.ts";
 
 // ─── Loyalty finalization ─────────────────────────────────────────────────────
 // Auth-only. Never called when userId is null.
@@ -153,23 +179,6 @@ async function readVerificationStatus(
 }
 
 // ─── Abandoned cart recovery ──────────────────────────────────────────────────
-//
-// Marks the matching abandoned_cart_sessions row as recovered when a checkout
-// completes successfully.
-//
-// MATCHING: abandoned_cart_sessions.id = pendingCartId (same session UUID used
-// throughout the cart lifecycle: cart.store.ts → pending_carts → Stripe metadata
-// → webhook → here).
-//
-// NON-FATAL: any error is logged as a warning and swallowed. A failure here
-// must never cause the webhook to return a non-2xx or throw — doing so would
-// trigger a Stripe retry, which could create a duplicate order.
-//
-// IDEMPOTENT: the .eq('recovered', false) guard ensures re-runs on webhook
-// retries produce no side effect after the first successful update.
-//
-// ONLY on wasNewOrder: webhook retries for an existing order should not
-// re-trigger this — the first run already set recovered = true.
 
 async function markAbandonedCartRecovered(args: {
   db:            DbClient;
@@ -179,9 +188,6 @@ async function markAbandonedCartRecovered(args: {
 }): Promise<void> {
   const { db, pendingCartId, requestId, sessionId } = args;
 
-  // pendingCartId is required to locate the abandoned_cart_sessions row.
-  // If the metadata did not carry it (e.g., older order without cart link),
-  // log and skip silently — never throw.
   if (!pendingCartId || pendingCartId.trim().length === 0) {
     log("warn", "webhook_abandoned_cart_recovery_no_cart_id", {
       requestId,
@@ -194,11 +200,10 @@ async function markAbandonedCartRecovered(args: {
     const { error } = await db
       .from("abandoned_cart_sessions")
       .update({ recovered: true })
-      .eq("id", pendingCartId)   // same UUID as pending_carts.id
-      .eq("recovered", false);   // idempotency guard: skip if already recovered
+      .eq("id", pendingCartId)
+      .eq("recovered", false);
 
     if (error) {
-      // Not fatal — the nightly cron handles any remaining un-recovered rows.
       log("warn", "webhook_abandoned_cart_recovery_update_failed", {
         requestId,
         sessionId:     prefix(sessionId),
@@ -214,7 +219,6 @@ async function markAbandonedCartRecovered(args: {
       pendingCartId: prefix(pendingCartId),
     });
   } catch (err) {
-    // Swallow: never let analytics bookkeeping fail the webhook
     log("warn", "webhook_abandoned_cart_recovery_crashed", {
       requestId,
       sessionId:     prefix(sessionId),
@@ -243,6 +247,12 @@ export async function handleCheckoutSessionCompleted(
     throw new Error(`webhook_idempotency_failed:${event.id} — ${idempotency.error}`);
   }
 
+  // ── Steps 2–6 wrapped in try/catch ────────────────────────────────────────
+  // If anything throws after the idempotency claim is taken, we release the
+  // claim before re-throwing so Stripe's retry can reprocess the event.
+  // See module header for full safety analysis.
+  try {
+
   // ── 2. Resolve session reference ──────────────────────────────────────────
   const sessionRef = parseCheckoutSessionEventRef(event);
   if (!sessionRef) {
@@ -261,7 +271,6 @@ export async function handleCheckoutSessionCompleted(
   if (!normalizeStripePaid(session)) return;
 
   // ── 3. Parse and validate all metadata in one place ───────────────────────
-  // No handler code below this point may access session.metadata directly.
   const metaResult = parseCheckoutMetadata(session.metadata, requestId);
   if (!metaResult.ok) {
     log("warn", "webhook_checkout_metadata_invalid", {
@@ -270,23 +279,14 @@ export async function handleCheckoutSessionCompleted(
       code:      metaResult.code,
       message:   metaResult.message,
     });
-    // Hard return — do not process an event with unvalidated metadata.
-    // Stripe will not retry a 200 response; the event is effectively dropped.
-    // This is intentional: malformed metadata indicates a checkout bug, not
-    // a transient failure. Log and alert on this in prod.
     return;
   }
   const meta = metaResult.value;
 
-  // Identity — sourced ONLY from ParsedCheckoutMetadata, never raw metadata.
   const userId:     string | null = meta.userId;
   const guestToken: string | null = meta.guestToken;
   const isGuest = userId === null;
 
-  // pendingCartId — typed string | null in ParsedCheckoutMetadata (see metadata.ts).
-  // Resolved from all historical Stripe metadata aliases:
-  //   pending_cart_id → cart_ref → cart_id
-  // Used for abandoned cart recovery tracking in markAbandonedCartRecovered().
   const pendingCartId: string | null = meta.pendingCartId;
 
   // ── 4. Find or create order ───────────────────────────────────────────────
@@ -335,13 +335,6 @@ export async function handleCheckoutSessionCompleted(
   }
 
   // ── 6. Side effects ───────────────────────────────────────────────────────
-  // Rules:
-  //   upsertPaymentTransaction     → all orders (auth + guest)
-  //   new_order notify             → all new orders
-  //   markAbandonedCartRecovered   → all new orders (closes recovery loop)
-  //   loyalty / promo / credit     → auth-only (userId !== null)
-  //   notifyKitchen + SMS          → new orders where verification is not required
-
   const sideEffects: Promise<void>[] = [
     upsertPaymentTransaction({ db, orderId, session, requestId }),
   ];
@@ -357,8 +350,6 @@ export async function handleCheckoutSessionCompleted(
       ),
     );
 
-    // Close the abandoned cart recovery loop for ALL new orders (auth + guest).
-    // Non-fatal, idempotent. See markAbandonedCartRecovered() for full contract.
     sideEffects.push(
       markAbandonedCartRecovered({
         db,
@@ -369,10 +360,7 @@ export async function handleCheckoutSessionCompleted(
     );
   }
 
-  // ── Auth-only ──────────────────────────────────────────────────────────────
   if (userId !== null) {
-    // subtotalCents: use validated metadata value; fall back to order total
-    // only as a last resort (should never happen if metadata is complete).
     const subtotalCents = meta.subtotalCents ?? orderTotal;
 
     sideEffects.push(
@@ -450,15 +438,11 @@ export async function handleCheckoutSessionCompleted(
     }
   }
 
-  // ── Kitchen + SMS ─────────────────────────────────────────────────────────
   if (wasNewOrder && !verificationRequired) {
     sideEffects.push(
       notifyKitchen({
         db,
         orderId,
-        // notifyKitchen logs userId for observability only — not written to DB.
-        // Guest orders pass "" for backward compat with the existing function
-        // signature (which accepts string, not string | null).
         userId:          userId ?? "",
         fulfillmentType: meta.orderType,
         amountTotal:     orderTotal,
@@ -482,4 +466,11 @@ export async function handleCheckoutSessionCompleted(
     verificationRequired,
     pendingCartId:        prefix(pendingCartId ?? "none"),
   });
+
+  } catch (err) {
+    // Release the idempotency claim so Stripe's retry can reprocess.
+    // Re-throw so Stripe receives a non-2xx and schedules the retry.
+    await releaseIdempotencyClaim(db, event.id, requestId);
+    throw err;
+  }
 }

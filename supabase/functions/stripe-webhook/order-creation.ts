@@ -51,12 +51,43 @@
 //        the legacy path are unchanged — they continue using
 //        deriveVerificationStatus(risk). risk_score and risk_level are still
 //        computed and persisted for analytics on all paths.
+//
+//  10. [FIX 2026-05-08] ALL users on the legacy fallback path now default to
+//        verification_status='not_required'.
+//
+//        The prior fix (change 9) applied only to guests. The same failure
+//        existed for auth users: when create-checkout (auth) does not write
+//        pre_checkout_risk_* fields to the Stripe session metadata,
+//        extractPreCheckoutRisk() returns null, the legacy scorer runs, and
+//        deriveVerificationStatus(risk) can return 'required' for medium-to-high
+//        risk auth orders — even if the customer already completed phone
+//        verification before initiating the Stripe redirect.
+//
+//        Post-payment verification cannot be meaningfully enforced regardless of
+//        user identity: Stripe has already charged the card. The pre-checkout
+//        gate (enforcePreCheckoutRisk in create-checkout / create-checkout-guest,
+//        whose outcome is written into pre_checkout_risk_* Stripe metadata) is
+//        the correct and only valid enforcement point. The primary path
+//        (preCheckoutRisk !== null) is unaffected — it still uses the exact
+//        gate decision for all sessions that carry the metadata fields.
+//
+//        risk_score and risk_level continue to be computed and persisted on the
+//        legacy path for analytics and monitoring. Only verification_status is
+//        changed: it is now unconditionally 'not_required' on the legacy path.
+//
+//  11. [FIX 2026-05-10] verified_at written alongside verification_status.
+//        Migration 20260508000000_harden_otp_challenge_tables.sql added
+//        constraint orders_verified_at_completeness:
+//          CHECK (verification_status <> 'verified' OR verified_at IS NOT NULL)
+//        The INSERT was not setting verified_at, causing every verified order
+//        to fail with Postgres error 23514. Fix: set verified_at = nowIso()
+//        when verificationStatus === 'verified', null otherwise.
 // =============================================================================
 
 import type Stripe from "stripe";
 
 import { DB_ORD_CONFIRMED, DB_PMT_PAID } from "./env.ts";
-import { log, prefix } from "./logging.ts";
+import { log, nowIso, prefix } from "./logging.ts";
 import { findOrderBySessionId } from "./order-queries.ts";
 import { prepareAuthoritativeCartState } from "./pending-cart.ts";
 import { STRIPE_API_VERSION } from "./stripe-client.ts";
@@ -545,7 +576,24 @@ export async function createOrderFromSession(args: {
       isGuest,
     });
   } else {
-    // Legacy path: session predates the pre-checkout gate or gate was bypassed.
+    // Legacy path: session predates the pre-checkout gate or the auth checkout
+    // has not yet been updated to write pre_checkout_risk_* metadata.
+    //
+    // risk_score and risk_level are still computed and persisted for analytics.
+    //
+    // [FIX 2026-05-08] verification_status is unconditionally 'not_required'
+    // for ALL users on this path (extending the prior guest-only fix).
+    //
+    // Rationale: deriveVerificationStatus(risk) can return 'required' for
+    // medium-to-high risk auth orders, triggering a post-payment OTP gate on
+    // the success page — even when the customer already completed phone
+    // verification before initiating the Stripe redirect. Post-payment
+    // verification cannot be meaningfully enforced for any user identity:
+    // Stripe has already charged the card. The pre-checkout gate
+    // (enforcePreCheckoutRisk, whose outcome is written into
+    // pre_checkout_risk_* Stripe metadata) is the correct enforcement point.
+    // Sessions that carry that metadata use the primary path above and are
+    // unaffected by this change.
     risk = safeEvaluateOrderRisk({
       chargedCents:  pricing.chargedCents,
       isGuest,
@@ -553,34 +601,29 @@ export async function createOrderFromSession(args: {
       requestId,
     });
 
-    // ── FIX: Guest orders on the legacy path default to 'not_required'. ────
-    // The legacy scorer produces verification_status='required' for guest +
-    // no phone + medium order (score ≥ 60). This was triggering a post-payment
-    // OTP gate on the success page after Stripe had already charged the card —
-    // a gate that cannot be meaningfully enforced at that point. Auth users
-    // continue using deriveVerificationStatus() unchanged.
-    // risk_score and risk_level are still computed and persisted for analytics.
-    verificationStatus = (!isGuest && risk !== null) ? deriveVerificationStatus(risk) : 'not_required';
+    verificationStatus = 'not_required';
 
-    finalRiskScore     = risk?.score ?? null;
-    finalRiskLevel     = risk?.level ?? null;
+    finalRiskScore = risk?.score ?? null;
+    finalRiskLevel = risk?.level ?? null;
 
     console.log('[WEBHOOK_FALLBACK_RISK_EVALUATION]', {
       requestId,
-      sessionId:  session.id.slice(0, 8),
-      riskScore:  finalRiskScore,
-      reason:     'no pre_checkout_risk_* fields in session metadata',
+      sessionId:         session.id.slice(0, 8),
+      riskScore:         finalRiskScore,
+      verificationStatus,
+      reason:            'no pre_checkout_risk_* fields in session metadata',
     });
 
     if (risk !== null) {
       log("info", "webhook_order_risk_evaluated", {
         requestId,
-        sessionId:            prefix(session.id),
-        riskScore:            risk.score,
-        riskLevel:            risk.level,
-        requiresVerification: risk.requiresVerification,
+        sessionId:                  prefix(session.id),
+        riskScore:                  risk.score,
+        riskLevel:                  risk.level,
+        requiresVerification:       risk.requiresVerification,
         isGuest,
-        chargedCents:         pricing.chargedCents,
+        chargedCents:               pricing.chargedCents,
+        verificationStatusOverride: 'not_required',
       });
     }
   }
@@ -636,6 +679,11 @@ export async function createOrderFromSession(args: {
     risk_score:                finalRiskScore,
     risk_level:                finalRiskLevel,
     verification_status:       verificationStatus,
+    // Required by constraint orders_verified_at_completeness:
+    //   CHECK (verification_status <> 'verified' OR verified_at IS NOT NULL)
+    // Set to the current timestamp when the pre-checkout gate marked the session
+    // as verified. NULL for all other statuses ('not_required', 'required').
+    verified_at: verificationStatus === 'verified' ? nowIso() : null,
   } as OrderInsert & {
     fulfillment_type:    string;
     guest_token:         string | null;
@@ -644,6 +692,7 @@ export async function createOrderFromSession(args: {
     risk_score:          number | null;
     risk_level:          string | null;
     verification_status: string;
+    verified_at:         string | null;
   };
 
   const { data: inserted, error: insertError } = await db

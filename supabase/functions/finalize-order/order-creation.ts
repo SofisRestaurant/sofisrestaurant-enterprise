@@ -2,15 +2,19 @@
 // supabase/functions/finalize-order/order-creation.ts
 // =============================================================================
 //
-// [FIX] insertOrReadFinalOrder now sets verification_status, risk_score, and
-//       risk_level on every insert. These fields were previously absent,
-//       creating schema divergence vs webhook-created orders (nulls in columns
-//       that the rest of the system assumes are populated). finalize-order is
-//       auth-only, so verification_status is always 'not_required' — the
-//       authenticated user has already proven session ownership. risk_score and
-//       risk_level are null because no pre-checkout data is available at
-//       reconciliation time. Schema: verification_status TEXT NOT NULL DEFAULT
-//       'not_required', risk_score INTEGER NULL, risk_level TEXT NULL.
+// [FIX] insertOrReadFinalOrder now sets verification_status, risk_score,
+//       risk_level, and verified_at on every insert.
+//
+//       verification_status, risk_score, risk_level: previously absent,
+//       creating schema divergence vs webhook-created orders. finalize-order
+//       is auth-only so verification_status is always 'not_required'.
+//
+//       verified_at: required by the orders_verified_at_completeness constraint
+//       added in 20260508000000_harden_otp_challenge_tables.sql:
+//         CHECK (verification_status <> 'verified' OR verified_at IS NOT NULL)
+//       finalize-order always writes verification_status='not_required', so
+//       verified_at is always null here — but it must be present explicitly
+//       to satisfy any future constraint changes and for schema consistency.
 // =============================================================================
 
 import Stripe from 'stripe';
@@ -140,18 +144,20 @@ export async function insertOrReadFinalOrder(args: {
     amount_received_cents: snapshot.totalCents,
     refunded_amount_cents: 0,
     // DO NOT include net_amount_cents — generated column
-    // ── FIX: risk + verification fields ─────────────────────────────────
     // finalize-order is auth-only: the authenticated user has already proven
     // ownership, so no post-payment OTP gate is appropriate.
-    // risk_score/risk_level are null — no pre-checkout scoring data is
-    // available at reconciliation time.
     verification_status: 'not_required',
     risk_score: null,
     risk_level: null,
+    // verified_at must be null when verification_status is not 'verified'.
+    // Explicit null satisfies orders_verified_at_completeness and prevents
+    // any future constraint tightening from silently rejecting this insert.
+    verified_at: null,
   } as OrderInsert & {
     verification_status: string;
     risk_score: number | null;
     risk_level: string | null;
+    verified_at: string | null;
   };
 
   const { data: insertedOrder, error: insertError } = await db
