@@ -18,16 +18,6 @@
 //
 // UI, animations, and realtime subscription are untouched from prior version.
 //
-// [NEW 2026-04-20] Verification gate:
-//   If the order's verification_status is 'required', the success view is
-//   replaced with the PhoneVerification component. Once the customer
-//   completes OTP, the gate lifts and the normal success view is shown.
-//
-// [FIX 2026-04-20]
-//   1. resp.order['verification_status'] uses readString() — safe type guard.
-//   2. clearCart() deferred until verification is resolved.
-//   3. Stray };, inside .on() callback removed — was causing all TS errors.
-//
 // [FIX 2026-05-08] Polling optimisation + last-resort reconciliation:
 //   1. getJwtIfAuthed() is now resolved ONCE before the first poll and cached
 //      in jwtRef. Each poll cycle previously awaited a fresh 2.5 s deadline —
@@ -43,6 +33,12 @@
 //      - Otherwise, existing timeout state is shown.
 //      The webhook remains the primary authority; finalize-order is a
 //      safety net only, not the main path.
+//
+// [FIX 2026-05-10] Post-payment verification gate removed:
+//   Phone verification belongs only before payment during checkout.
+//   After a successful order lookup the page always shows the success view.
+//   clearGuestToken() is called after the order is found so the session
+//   storage entry is cleaned up without any risk of leaking the token.
 // ============================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -56,7 +52,6 @@ import { useCartStore } from '@/modules/cart/store/cart.store';
 import { mapOrderRowToDomain } from '@/modules/orders/mappers';
 import type { Order, OrderStatus } from '@/domain/orders/order.types';
 import { LOYALTY_TIERS, asTier } from '@/domain/loyalty/tiers';
-import { PhoneVerification } from '@/modules/checkout/components/PhoneVerification';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -201,6 +196,14 @@ function readGuestToken(): string | null {
     return typeof v === 'string' && v.trim().length > 0 ? v.trim() : null;
   } catch {
     return null;
+  }
+}
+
+function clearGuestToken(): void {
+  try {
+    sessionStorage.removeItem(GUEST_TOKEN_STORAGE_KEY);
+  } catch {
+    // Ignore storage failures. The order has already been confirmed.
   }
 }
 
@@ -388,7 +391,7 @@ function LoyaltyResultCard({
           <span className="font-bold text-neutral-200">{fmt(displayBalance)} pts</span>
         </div>
         {matchLabel ? (
-          <div className="pt-1 text-[10px] text-neutral-500">
+          <div className="pt-1 text-10px text-neutral-500">
             {meta?.usedHeuristic ? `⚠ ${matchLabel}` : `✓ ${matchLabel}`}
           </div>
         ) : null}
@@ -431,7 +434,7 @@ function StickyNextSteps({
 
   return (
     <div className="space-y-2">
-      <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-neutral-500">
+      <p className="text-10px font-bold uppercase tracking-[0.2em] text-neutral-500">
         Next visit perks
       </p>
 
@@ -585,10 +588,6 @@ export default function OrderSuccess() {
   const [loyaltyMeta, setLoyaltyMeta] = useState<LoyaltyForOrderMeta | undefined>(undefined);
   const [loyaltyAttempt, setLoyaltyAttempt] = useState(0);
 
-  // Verification gate: true when order.verification_status === 'required'
-  // and the customer has not yet completed OTP.
-  const [verificationRequired, setVerificationRequired] = useState(false);
-
   const loyaltyStartedForOrderRef = useRef<string | null>(null);
   const pollTimerRef = useRef<TimeoutHandle | null>(null);
   const loyaltyTimerRef = useRef<TimeoutHandle | null>(null);
@@ -730,11 +729,9 @@ export default function OrderSuccess() {
           const mapped = mapOrderRowToDomain(orderRow);
           setOrder((current) => (current?.id === mapped.id ? current : mapped));
           setLiveStatus(mapped.status);
-          const verStatus = readString(finalResp.order['verification_status']);
-          const needsVerification = verStatus === 'required';
-          setVerificationRequired(needsVerification);
           setPageState('found');
-          if (!needsVerification) clearCart();
+          clearCart();
+          clearGuestToken();
           if (loyaltyStartedForOrderRef.current !== mapped.id) {
             loyaltyStartedForOrderRef.current = mapped.id;
             void fetchLoyaltyWithRetry(mapped.id);
@@ -787,6 +784,12 @@ export default function OrderSuccess() {
       const token = jwtRef.current;
       const guestToken = readGuestToken();
 
+      if (!token && !guestToken) {
+        setPageState('error');
+        stopPoll();
+        return;
+      }
+
       const headers: Record<string, string> = {
         'x-request-id': crypto.randomUUID(),
       };
@@ -814,19 +817,9 @@ export default function OrderSuccess() {
         const mapped = mapOrderRowToDomain(orderRow);
         setOrder((current) => (current?.id === mapped.id ? current : mapped));
         setLiveStatus(mapped.status);
-
-        // Use readString() — safe access on unknown-typed DB row.
-        const verStatus = readString(resp.order['verification_status']);
-        const needsVerification = verStatus === 'required';
-        setVerificationRequired(needsVerification);
-
         setPageState('found');
-
-        // Defer clearCart() until verification is resolved so an abandoned
-        // OTP flow does not leave the user with an empty cart.
-        if (!needsVerification) {
-          clearCart();
-        }
+        clearCart();
+        clearGuestToken();
 
         if (loyaltyStartedForOrderRef.current !== mapped.id) {
           loyaltyStartedForOrderRef.current = mapped.id;
@@ -842,8 +835,14 @@ export default function OrderSuccess() {
           message.includes('401') ||
           message.includes('403') ||
           message.includes('unauthorized') ||
-          message.includes('forbidden');
-
+          message.includes('forbidden') ||
+          message.includes('guest_token_required') ||
+          message.includes('guest token') ||
+          message.includes('token required') ||
+          message.includes('authentication required') ||
+          message.includes('invalid token') ||
+          message.includes('non-2xx') ||
+          message.includes('edge function returned');
         if (isFatalAuth) {
           // Attempt a one-time token refresh before treating the failure as
           // permanent. This covers the JWT restoration race on Stripe redirect
@@ -897,19 +896,11 @@ export default function OrderSuccess() {
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'orders', filter: `id=eq.${order.id}` },
-        // ↓ FIX: removed stray };, that was here — it split the arrow function
-        //   body, causing TypeScript to read everything after it as top-level
-        //   statements outside the component, making every variable undefined.
         (payload) => {
           const nextRecord = isRecord(payload) && isRecord(payload.new) ? payload.new : null;
           const nextStatus = nextRecord?.status;
           if (isOrderStatus(nextStatus)) {
             setLiveStatus(nextStatus);
-          }
-          const nextVerification = readString(nextRecord?.verification_status);
-          if (nextVerification === 'verified') {
-            setVerificationRequired(false);
-            clearCart();
           }
           const nextOrderNumber = readNumber(nextRecord?.order_number);
           if (nextOrderNumber !== null || isRecord(nextRecord)) {
@@ -928,16 +919,7 @@ export default function OrderSuccess() {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [order?.id, clearCart]);
-
-  // Lift the gate after successful OTP and clear the cart.
-  const handleVerified = useCallback(
-    (_phone: string) => {
-      setVerificationRequired(false);
-      clearCart();
-    },
-    [clearCart],
-  );
+  }, [order?.id]);
 
   const serviceType = useMemo(() => (order ? safeServiceTypeFromOrder(order) : null), [order]);
 
@@ -960,21 +942,8 @@ export default function OrderSuccess() {
               {pageState === 'timeout' ? <TimeoutState /> : null}
               {pageState === 'error' ? <ErrorState /> : null}
 
-              {/* Verification gate */}
-              {pageState === 'found' && order && verificationRequired ? (
-                <div className="space-y-4">
-                  <div className="text-center">
-                    <p className="text-base font-semibold text-white">One more step</p>
-                    <p className="mt-1 text-sm text-neutral-400">
-                      Please verify your phone number to confirm your order.
-                    </p>
-                  </div>
-                  <PhoneVerification orderId={order.id} onVerified={handleVerified} />
-                </div>
-              ) : null}
-
               {/* Success view */}
-              {pageState === 'found' && order && liveStatus && !verificationRequired ? (
+              {pageState === 'found' && order && liveStatus ? (
                 <motion.div
                   className="space-y-5 [--entry-y:18px] md:[--entry-y:32px]"
                   variants={containerVariants}
@@ -1053,7 +1022,7 @@ export default function OrderSuccess() {
                             exit={{ opacity: 0, y: -8 }}
                             transition={{ type: 'spring', stiffness: 320, damping: 26 }}
                           >
-                            <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.2em] text-neutral-500">
+                            <p className="mb-3 text-10px font-bold uppercase tracking-[0.2em] text-neutral-500">
                               Loyalty Rewards
                             </p>
                             <LoyaltyResultCard
@@ -1159,7 +1128,7 @@ export default function OrderSuccess() {
 
                     <button
                       onClick={() => navigate('/menu')}
-                      className="w-full text-[10px] text-neutral-600 underline underline-offset-2 hover:text-neutral-400"
+                      className="w-full text-10px text-neutral-600 underline underline-offset-2 hover:text-neutral-400"
                       type="button"
                     >
                       Continue browsing
@@ -1173,7 +1142,7 @@ export default function OrderSuccess() {
 
                   {/* ── Ref footer ── */}
                   <motion.p
-                    className="text-center font-mono text-[10px] text-neutral-700"
+                    className="text-center font-mono text-10px text-neutral-700"
                     variants={itemVariants}
                   >
                     Ref {order.id.slice(0, 8).toUpperCase()}
@@ -1183,7 +1152,7 @@ export default function OrderSuccess() {
             </div>
           </div>
 
-          {pageState === 'found' && !verificationRequired ? (
+          {pageState === 'found' ? (
             <p className="mt-4 text-center text-xs text-neutral-700">
               A confirmation has been sent to your email.
             </p>
