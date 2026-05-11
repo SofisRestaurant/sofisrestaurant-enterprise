@@ -2,43 +2,21 @@
 // ============================================================================
 // ORDER SUCCESS — dual-pipeline (auth + guest)
 // ============================================================================
-// Data fetch rewrite (2026-04-18):
+// [FIX 2026-05-10 PATCH 2] clearGuestToken() removed from the success path.
 //
-//   BEFORE: The page made two auth-only calls that broke for guests:
-//     1. supabase.from('orders').select() — 401 via RLS without a JWT
-//     2. finalize-order edge function — 401 via stripe_owner_mismatch
+//   BEFORE: clearGuestToken() was called immediately after setPageState('found')
+//   in both run() and reconcile(). React batches state updates, so by the time
+//   the component re-rendered and showed the "Track My Order" button, the token
+//   was already gone from sessionStorage. Clicking the button landed the guest
+//   on /order-status/:id with no credential → 401 "Access denied".
 //
-//   AFTER: Single unified call to `get-order-for-success` which:
-//     - For auth orders: validates Bearer JWT matches order.customer_uid
-//     - For guest orders: validates guest_token from sessionStorage
-//     - Returns { pending: true } while the Stripe webhook finishes persisting
+//   AFTER: The token is intentionally left in sessionStorage. sessionStorage is
+//   scoped to the browser tab and cleared automatically when the tab closes.
+//   The token cannot be used to access any order other than the one it was
+//   issued for. OrderStatus.tsx will clear it when the order reaches a terminal
+//   status (DELIVERED / CANCELLED) during polling.
 //
-// The Stripe webhook remains the single source of truth for order persistence.
-// This page only READS. Loyalty fetch stays auth-only (unchanged).
-//
-// UI, animations, and realtime subscription are untouched from prior version.
-//
-// [FIX 2026-05-08] Polling optimisation + last-resort reconciliation:
-//   1. getJwtIfAuthed() is now resolved ONCE before the first poll and cached
-//      in jwtRef. Each poll cycle previously awaited a fresh 2.5 s deadline —
-//      especially wasteful for guests who never have a Supabase session.
-//   2. On a fatal-auth error, the token is refreshed once before giving up.
-//      This handles the JWT restoration race on Stripe redirect (Supabase
-//      session rehydrates 200–800 ms after page mount).
-//   3. After POLL_MAX_ATTEMPTS, a last-resort reconcile() step runs:
-//      - Waits 5 s, then tries one final get-order-for-success lookup.
-//      - If still unresolved AND user is authenticated, calls finalize-order
-//        as a one-shot fallback (auth-only; guests are excluded by design).
-//      - If finalize-order creates the order, normal polling resumes.
-//      - Otherwise, existing timeout state is shown.
-//      The webhook remains the primary authority; finalize-order is a
-//      safety net only, not the main path.
-//
-// [FIX 2026-05-10] Post-payment verification gate removed:
-//   Phone verification belongs only before payment during checkout.
-//   After a successful order lookup the page always shows the success view.
-//   clearGuestToken() is called after the order is found so the session
-//   storage entry is cleaned up without any risk of leaking the token.
+// All other logic is unchanged from the prior version.
 // ============================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -199,13 +177,20 @@ function readGuestToken(): string | null {
   }
 }
 
+// clearGuestToken is retained for potential future use (e.g. explicit logout),
+// but is intentionally NOT called on the success path. The token must survive
+// so the guest can click "Track My Order" in the same session. sessionStorage
+// clears automatically when the tab closes. OrderStatus.tsx clears it when
+// the order reaches a terminal status during polling.
 function clearGuestToken(): void {
   try {
     sessionStorage.removeItem(GUEST_TOKEN_STORAGE_KEY);
   } catch {
-    // Ignore storage failures. The order has already been confirmed.
+    // Ignore storage failures.
   }
 }
+// Suppress unused-variable lint — the function is kept intentionally.
+void clearGuestToken;
 
 // ---------------------------------------------------------------------------
 // Animation variants
@@ -591,9 +576,6 @@ export default function OrderSuccess() {
   const loyaltyStartedForOrderRef = useRef<string | null>(null);
   const pollTimerRef = useRef<TimeoutHandle | null>(null);
   const loyaltyTimerRef = useRef<TimeoutHandle | null>(null);
-  // Cached JWT — resolved once before the first poll to avoid the 2.5 s
-  // per-cycle getJwtIfAuthed() wait. Guests always exhaust the full deadline;
-  // auth users on Stripe redirect may not have their session restored yet.
   const jwtRef = useRef<string | null>(null);
 
   const stopTimer = useCallback((ref: { current: TimeoutHandle | null }) => {
@@ -677,8 +659,6 @@ export default function OrderSuccess() {
 
     let cancelled = false;
     let attempts = 0;
-    // Guard: refresh the cached JWT at most once per polling lifecycle to
-    // prevent an infinite retry loop on a genuine auth failure.
     let authRetried = false;
 
     const stopPoll = () => stopTimer(pollTimerRef);
@@ -690,26 +670,12 @@ export default function OrderSuccess() {
       }, POLL_INTERVAL_MS);
     };
 
-    // ── Last-resort reconciliation ──────────────────────────────────────
-    // Called once after POLL_MAX_ATTEMPTS without finding an order.
-    //
-    // 1. Waits 5 s (allows a slow webhook a final window to land).
-    // 2. Performs one final get-order-for-success lookup.
-    // 3. If still unresolved AND user is authenticated, calls finalize-order
-    //    as a one-shot fallback. Guests are excluded by design — that endpoint
-    //    requires a JWT and owner === user.id, so it structurally cannot
-    //    serve a guest checkout.
-    // 4. If finalize-order creates the order, resumes normal polling.
-    // 5. Otherwise, transitions to the existing timeout state.
-    //
-    // The webhook remains the canonical authority. This is a safety net only.
     const reconcile = async () => {
       await new Promise<void>((resolve) => {
         pollTimerRef.current = setTimeout(resolve, 5_000);
       });
       if (cancelled) return;
 
-      // Re-resolve token in case it became available during the 5 s wait.
       const latestToken = await getJwtIfAuthed();
       if (latestToken) jwtRef.current = latestToken;
 
@@ -719,7 +685,6 @@ export default function OrderSuccess() {
       const gt = readGuestToken();
       if (gt) finalBody.guest_token = gt;
 
-      // One final order lookup.
       try {
         const finalResp = await invokeEdge<GetOrderResp>('get-order-for-success', finalBody, {
           headers: finalHeaders,
@@ -731,7 +696,8 @@ export default function OrderSuccess() {
           setLiveStatus(mapped.status);
           setPageState('found');
           clearCart();
-          clearGuestToken();
+          // NOTE: clearGuestToken() intentionally omitted — guest must be
+          // able to use the token on the /order-status page in the same session.
           if (loyaltyStartedForOrderRef.current !== mapped.id) {
             loyaltyStartedForOrderRef.current = mapped.id;
             void fetchLoyaltyWithRetry(mapped.id);
@@ -742,7 +708,6 @@ export default function OrderSuccess() {
         // Fall through to finalize-order attempt.
       }
 
-      // Auth-only finalize-order fallback.
       if (!cancelled && jwtRef.current) {
         try {
           type FinalizeResp = { ok?: boolean; order_id?: string };
@@ -757,7 +722,6 @@ export default function OrderSuccess() {
             },
           );
           if (!cancelled && finalizeResp?.order_id) {
-            // Order created — resume normal polling to read it back.
             attempts = 0;
             schedulePoll();
             return;
@@ -777,10 +741,6 @@ export default function OrderSuccess() {
       attempts += 1;
       setAttempt(attempts);
 
-      // Use the pre-resolved cached token. Avoids the 2.5 s per-cycle cost
-      // of calling getJwtIfAuthed() inside each poll — especially wasteful
-      // for guests who never have a Supabase session and always exhaust the
-      // full deadline.
       const token = jwtRef.current;
       const guestToken = readGuestToken();
 
@@ -819,7 +779,8 @@ export default function OrderSuccess() {
         setLiveStatus(mapped.status);
         setPageState('found');
         clearCart();
-        clearGuestToken();
+        // NOTE: clearGuestToken() intentionally omitted — guest must be
+        // able to use the token on the /order-status page in the same session.
 
         if (loyaltyStartedForOrderRef.current !== mapped.id) {
           loyaltyStartedForOrderRef.current = mapped.id;
@@ -844,15 +805,12 @@ export default function OrderSuccess() {
           message.includes('non-2xx') ||
           message.includes('edge function returned');
         if (isFatalAuth) {
-          // Attempt a one-time token refresh before treating the failure as
-          // permanent. This covers the JWT restoration race on Stripe redirect
-          // where Supabase session rehydrates 200–800 ms after page mount.
           if (!authRetried) {
             authRetried = true;
             const refreshed = await getJwtIfAuthed();
             if (refreshed) {
               jwtRef.current = refreshed;
-              attempts -= 1; // replay this attempt with the fresh token
+              attempts -= 1;
               schedulePoll();
               return;
             }
@@ -871,11 +829,6 @@ export default function OrderSuccess() {
       }
     };
 
-    // Resolve JWT once before the first poll starts. Paying the 2.5 s cost
-    // once (not per cycle) eliminates the per-poll dead wait. For guests this
-    // always returns null immediately after the deadline; for auth users on
-    // Stripe redirect it waits for Supabase to rehydrate the session from
-    // storage (typically 200–800 ms, well within the 2.5 s window).
     void (async () => {
       jwtRef.current = await getJwtIfAuthed();
       if (!cancelled) void run();
