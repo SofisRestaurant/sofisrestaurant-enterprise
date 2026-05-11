@@ -393,6 +393,39 @@ export type Database = {
         }
         Relationships: []
       }
+      checkout_challenges: {
+        Row: {
+          attempt_count: number
+          consumed_at: string | null
+          expires_at: string
+          id: string
+          identity_key: string
+          issued_at: string
+          nonce: string
+          phone_e164: string
+        }
+        Insert: {
+          attempt_count?: number
+          consumed_at?: string | null
+          expires_at: string
+          id?: string
+          identity_key: string
+          issued_at?: string
+          nonce: string
+          phone_e164: string
+        }
+        Update: {
+          attempt_count?: number
+          consumed_at?: string | null
+          expires_at?: string
+          id?: string
+          identity_key?: string
+          issued_at?: string
+          nonce?: string
+          phone_e164?: string
+        }
+        Relationships: []
+      }
       checkout_rate_limits: {
         Row: {
           attempts: number
@@ -419,6 +452,39 @@ export type Database = {
           id?: string
           ip?: string | null
           last_attempt_at?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      checkout_risk_events: {
+        Row: {
+          created_at: string
+          device_fingerprint: string | null
+          guest_email: string | null
+          id: number
+          request_ip: string | null
+          risk_action: string | null
+          risk_score: number | null
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          device_fingerprint?: string | null
+          guest_email?: string | null
+          id?: never
+          request_ip?: string | null
+          risk_action?: string | null
+          risk_score?: number | null
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          device_fingerprint?: string | null
+          guest_email?: string | null
+          id?: never
+          request_ip?: string | null
+          risk_action?: string | null
+          risk_score?: number | null
           user_id?: string | null
         }
         Relationships: []
@@ -860,6 +926,39 @@ export type Database = {
           status?: string | null
           updated_at?: string | null
           weight?: number | null
+        }
+        Relationships: []
+      }
+      guest_order_recovery_codes: {
+        Row: {
+          attempt_count: number
+          code_hash: string
+          consumed_at: string | null
+          contact_hash: string
+          created_at: string
+          expires_at: string
+          id: string
+          order_id: string
+        }
+        Insert: {
+          attempt_count?: number
+          code_hash: string
+          consumed_at?: string | null
+          contact_hash: string
+          created_at?: string
+          expires_at: string
+          id?: string
+          order_id: string
+        }
+        Update: {
+          attempt_count?: number
+          code_hash?: string
+          consumed_at?: string | null
+          contact_hash?: string
+          created_at?: string
+          expires_at?: string
+          id?: string
+          order_id?: string
         }
         Relationships: []
       }
@@ -3053,6 +3152,24 @@ export type Database = {
           created_at?: string | null
           id?: string
           type?: string
+        }
+        Relationships: []
+      }
+      stripe_webhook_events: {
+        Row: {
+          event_id: string
+          event_type: string
+          processed_at: string
+        }
+        Insert: {
+          event_id: string
+          event_type: string
+          processed_at?: string
+        }
+        Update: {
+          event_id?: string
+          event_type?: string
+          processed_at?: string
         }
         Relationships: []
       }
