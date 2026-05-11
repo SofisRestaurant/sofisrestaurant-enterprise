@@ -337,10 +337,16 @@ export const router = createBrowserRouter([
       // STRIPE RESULTS
       // ──────────────────────────────────────────────────────────
       {
-        path: 'order-status/:orderId',
-        lazy: lazyRoute(() => import('@/modules/orders/pages/OrderStatus')),
+        path: 'order-success',
+
+        lazy: lazyRoute(() => import('@/modules/orders/pages/OrderSuccess')),
       },
 
+      {
+        path: 'order-status/:orderId',
+
+        lazy: lazyRoute(() => import('@/modules/orders/pages/OrderStatus')),
+      },
       // ──────────────────────────────────────────────────────────
       // GUEST ORDER RECOVERY
       // Public — no auth required. Guest enters order number +
