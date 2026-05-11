@@ -53,7 +53,7 @@ interface TrackableOrder {
   amount_shipping: number;
   fulfillment_type: string | null;
   pickup_time: string | null;
-  estimated_ready_time: string | null;
+  estimated_ready_time?: string | null; // column absent in current schema — omitted from DB select
   customer_name: string | null;
   cart_items: readonly OrderCartItem[] | null;
   notes: string | null;
