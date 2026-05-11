@@ -9,23 +9,20 @@
 //   Guest users         → checkout_guest_token read from sessionStorage,
 //                         sent in POST body only, never in URLs or logs.
 //                         Polling replaces Realtime (10-second interval).
+//   Recovered guests    → guest_order_recovery_token read from sessionStorage,
+//                         sent in POST body only, never in URLs or logs.
 //   Server validates ownership before returning any order data.
 //   Only safe tracking fields are returned (no Stripe IDs, risk data, etc.)
 // ============================================================================
 
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft, Package, Clock, CheckCircle2, ChefHat, AlertCircle } from 'lucide-react';
-import {
-  motion,
-  AnimatePresence,
-  MotionConfig,
-  LayoutGroup,
-} from 'framer-motion';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { AlertCircle, ArrowLeft, CheckCircle2, ChefHat, Clock, Package } from 'lucide-react';
+import { AnimatePresence, LayoutGroup, MotionConfig, motion } from 'framer-motion';
 
-import { supabase } from '@/lib/supabase/supabaseClient';
-import { invokeEdge, InvokeEdgeError } from '@/lib/supabase/invoke';
 import { useAuthState } from '@/features/auth/hooks/useAuthState';
+import { invokeEdge, InvokeEdgeError } from '@/lib/supabase/invoke';
+import { supabase } from '@/lib/supabase/supabaseClient';
 import { OrderStatus as OrderStatusEnum, PaymentStatus } from '@/domain/orders/order.types';
 import type { OrderCartItem } from '@/domain/orders/order.types';
 
@@ -37,8 +34,8 @@ type LoadState = 'loading' | 'found' | 'not-found' | 'unauthorized' | 'error';
 
 /**
  * Safe subset of order fields returned by the get-order-status Edge Function.
- * This type intentionally excludes sensitive fields (Stripe IDs, risk scores,
- * verification data, guest_token, customer_uid, admin metadata, etc.).
+ * This type intentionally excludes sensitive fields such as Stripe IDs,
+ * risk scores, verification data, guest_token, customer_uid, and admin metadata.
  */
 interface TrackableOrder {
   id: string;
@@ -53,7 +50,7 @@ interface TrackableOrder {
   amount_shipping: number;
   fulfillment_type: string | null;
   pickup_time: string | null;
-  estimated_ready_time?: string | null; // column absent in current schema — omitted from DB select
+  estimated_ready_time?: string | null;
   customer_name: string | null;
   cart_items: readonly OrderCartItem[] | null;
   notes: string | null;
@@ -112,13 +109,14 @@ const STATUS_STEPS: StatusStep[] = [
   },
 ];
 
-/** Statuses that represent a terminal state — stop polling once reached. */
 const TERMINAL_STATUSES = new Set<OrderStatusEnum>([
   OrderStatusEnum.DELIVERED,
   OrderStatusEnum.CANCELLED,
 ]);
 
 const GUEST_POLL_INTERVAL_MS = 10_000;
+const CHECKOUT_GUEST_TOKEN_STORAGE_KEY = 'checkout_guest_token';
+const RECOVERY_TOKEN_STORAGE_KEY = 'guest_order_recovery_token';
 
 // ============================================================================
 // PURE HELPERS
@@ -147,57 +145,85 @@ function formatDate(timestamp: string): string {
 function buildCartItemIdentity(item: OrderCartItem): string {
   const idPart =
     typeof item.id === 'string' && item.id.trim().length > 0 ? item.id.trim() : 'no-id';
+
   const namePart = typeof item.name === 'string' ? item.name.trim().toLowerCase() : 'unknown-item';
   const quantityPart = String(item.quantity ?? 1);
   const pricePart = item.price == null ? 'na' : String(item.price);
+
   const notesPart =
     typeof item.notes === 'string' && item.notes.trim().length > 0
       ? item.notes.trim().toLowerCase()
       : 'na';
+
   return [idPart, namePart, quantityPart, pricePart, notesPart].join(':');
 }
 
 function buildCartItemViews(items: readonly OrderCartItem[]): CartItemView[] {
   const counts = new Map<string, number>();
   const views: CartItemView[] = [];
+
   for (const item of items) {
     const identity = buildCartItemIdentity(item);
     const seen = counts.get(identity) ?? 0;
+
     counts.set(identity, seen + 1);
     views.push({ key: `${identity}:dup-${seen + 1}`, item });
   }
+
   return views;
 }
 
-/**
- * Read the guest token from sessionStorage.
- * Returns null if absent, empty, or sessionStorage is unavailable.
- * Never throws.
- */
-function readGuestToken(): string | null {
+function readSessionToken(key: string): string | null {
   try {
-    const value = sessionStorage.getItem('checkout_guest_token');
+    const value = sessionStorage.getItem(key);
     return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
   } catch {
     return null;
   }
 }
 
-/**
- * Remove the guest token once the order is terminal. Called only from the
- * polling effect — never from OrderSuccess, which must leave the token intact
- * so the guest can reach this page in the same session.
- */
-function clearGuestToken(): void {
+function removeSessionToken(key: string): void {
   try {
-    sessionStorage.removeItem('checkout_guest_token');
+    sessionStorage.removeItem(key);
   } catch {
-    // Ignore — sessionStorage unavailable in some sandboxed contexts.
+    // Ignore — sessionStorage may be unavailable in some sandboxed contexts.
   }
 }
 
+/**
+ * Original same-session guest checkout token.
+ * Sent in POST body only. Never placed in URLs or logs.
+ */
+function readGuestToken(): string | null {
+  return readSessionToken(CHECKOUT_GUEST_TOKEN_STORAGE_KEY);
+}
+
+/**
+ * Recovery token issued by verify-guest-order-access.
+ * Sent in POST body only. Never placed in URLs or logs.
+ */
+function readRecoveryToken(): string | null {
+  return readSessionToken(RECOVERY_TOKEN_STORAGE_KEY);
+}
+
+/**
+ * Remove the same-session guest token once the order is terminal.
+ * This must not be called from OrderSuccess because guests need the token
+ * to reach this page immediately after checkout.
+ */
+function clearGuestToken(): void {
+  removeSessionToken(CHECKOUT_GUEST_TOKEN_STORAGE_KEY);
+}
+
+/**
+ * Remove the recovered guest tracking token once the order is terminal.
+ */
+function clearRecoveryToken(): void {
+  removeSessionToken(RECOVERY_TOKEN_STORAGE_KEY);
+}
+
 // ============================================================================
-// ANIMATION VARIANTS (unchanged from original)
+// ANIMATION VARIANTS
 // ============================================================================
 
 const containerVariants = {
@@ -208,7 +234,8 @@ const containerVariants = {
 const sectionVariants = {
   hidden: { opacity: 0, y: 'var(--entry-y, 16px)' },
   visible: {
-    opacity: 1, y: 0,
+    opacity: 1,
+    y: 0,
     transition: { type: 'spring' as const, stiffness: 320, damping: 26 },
   },
 };
@@ -230,7 +257,9 @@ const stepNodeVariants = {
 const badgeVariants = {
   enter: { opacity: 0, y: 10, scale: 0.94 },
   center: {
-    opacity: 1, y: 0, scale: 1,
+    opacity: 1,
+    y: 0,
+    scale: 1,
     transition: { type: 'spring' as const, stiffness: 400, damping: 28 },
   },
   exit: { opacity: 0, y: -8, scale: 0.96, transition: { duration: 0.15 } },
@@ -239,7 +268,8 @@ const badgeVariants = {
 const cartItemVariants = {
   hidden: { opacity: 0, x: -12 },
   visible: {
-    opacity: 1, x: 0,
+    opacity: 1,
+    x: 0,
     transition: { type: 'spring' as const, stiffness: 300, damping: 24 },
   },
 };
@@ -267,34 +297,22 @@ export default function OrderStatusPage() {
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [order, setOrder] = useState<TrackableOrder | null>(null);
 
-  // Stable ref so the polling interval can call loadOrder without a stale closure
-  // but without re-creating the interval on every render.
   const loadOrderRef = useRef<(() => Promise<void>) | null>(null);
 
-  // ── Core fetch ─────────────────────────────────────────────────────────────
-  /**
-   * Calls the get-order-status Edge Function with the appropriate credential:
-   *   - Auth users: invokeEdge attaches Bearer automatically via getSession().
-   *   - Guests: guest_token is read from sessionStorage and sent in body.
-   *
-   * The server validates ownership and returns only safe tracking fields.
-   * An order_id alone is never sufficient to retrieve order details.
-   */
   const loadOrder = useCallback(async (): Promise<void> => {
     if (!orderId) {
       setLoadState('not-found');
       return;
     }
 
-    // Read guest credential if present — null for authenticated users.
     const guestToken = readGuestToken();
+    const recoveryToken = readRecoveryToken();
 
     try {
       const response = await invokeEdge<{ order: TrackableOrder | null }>('get-order-status', {
         order_id: orderId,
-        // Only include guest_token when it exists; omitting the key for
-        // auth users keeps the request body clean.
         ...(guestToken !== null ? { guest_token: guestToken } : {}),
+        ...(recoveryToken !== null ? { guest_recovery_token: recoveryToken } : {}),
       });
 
       if (!response.order) {
@@ -310,53 +328,42 @@ export default function OrderStatusPage() {
           setLoadState('unauthorized');
           return;
         }
+
         if (err.status === 404) {
           setLoadState('not-found');
           return;
         }
       }
+
       console.error('[OrderStatus] Failed to load order:', err);
       setLoadState('error');
     }
   }, [orderId]);
 
-  // Keep the ref current so the polling closure is never stale.
   loadOrderRef.current = loadOrder;
 
-  // ── Initial load ───────────────────────────────────────────────────────────
   useEffect(() => {
     let mounted = true;
+
     const run = async (): Promise<void> => {
-      if (mounted) await loadOrder();
+      if (mounted) {
+        await loadOrder();
+      }
     };
+
     void run();
+
     return () => {
       mounted = false;
     };
   }, [loadOrder]);
 
-  // ── Live updates ───────────────────────────────────────────────────────────
-  /**
-   * Authenticated users: Supabase Realtime postgres_changes subscription.
-   *   - The supabase client sends the user's JWT, so RLS applies.
-   *   - We only update the safe status fields we received from the edge
-   *     function; we do NOT spread the raw realtime payload (which would
-   *     bypass the field allowlist).
-   *
-   * Guest users: 10-second polling via the edge function.
-   *   - Realtime channels cannot be authorized for guests without exposing
-   *     the guest_token as a channel parameter — which would put it in
-   *     Supabase's telemetry/logs. Polling through the edge function is
-   *     the safe alternative.
-   *   - Polling stops automatically when the order reaches a terminal status.
-   */
   useEffect(() => {
     if (!order?.id) return;
 
     const isGuest = !user;
 
     if (!isGuest) {
-      // ── Authenticated: Realtime ──────────────────────────────────────────
       const channel = supabase
         .channel(`order-status-${order.id}`)
         .on(
@@ -369,18 +376,19 @@ export default function OrderStatusPage() {
           },
           (payload: { new: Partial<TrackableOrder> }) => {
             if (!payload?.new || typeof payload.new !== 'object') return;
+
             const update = payload.new;
-            // Only apply the fields present in TrackableOrder — never
-            // spread the full payload row which may contain sensitive data.
+
             setOrder((prev) => {
               if (!prev) return prev;
+
               return {
                 ...prev,
-                ...(update.status !== undefined && { status: update.status }),
-                ...(update.estimated_ready_time !== undefined && {
-                  estimated_ready_time: update.estimated_ready_time,
-                }),
-                ...(update.updated_at !== undefined && { updated_at: update.updated_at }),
+                ...(update.status !== undefined ? { status: update.status } : {}),
+                ...(update.estimated_ready_time !== undefined
+                  ? { estimated_ready_time: update.estimated_ready_time }
+                  : {}),
+                ...(update.updated_at !== undefined ? { updated_at: update.updated_at } : {}),
               };
             });
           },
@@ -390,29 +398,26 @@ export default function OrderStatusPage() {
       return () => {
         void supabase.removeChannel(channel);
       };
-    } else {
-      // ── Guest: Polling ───────────────────────────────────────────────────
-      // Skip polling if already in a terminal state. Also clear the token —
-      // it is no longer needed and should not linger beyond order completion.
-      if (TERMINAL_STATUSES.has(order.status)) {
-        clearGuestToken();
-        return;
-      }
-
-      const intervalId = setInterval(() => {
-        void loadOrderRef.current?.();
-      }, GUEST_POLL_INTERVAL_MS);
-
-      return () => {
-        clearInterval(intervalId);
-      };
     }
-  }, [order?.id, order?.status, user]);
 
-  // ── Derived values ─────────────────────────────────────────────────────────
+    if (TERMINAL_STATUSES.has(order.status)) {
+      clearGuestToken();
+      clearRecoveryToken();
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      void loadOrderRef.current?.();
+    }, GUEST_POLL_INTERVAL_MS);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [order?.id, order?.status, user]);
 
   const getCurrentStepIndex = useCallback((): number => {
     if (!order) return 0;
+
     const index = STATUS_STEPS.findIndex((step) => step.key === order.status);
     return index === -1 ? 0 : index;
   }, [order]);
@@ -434,7 +439,6 @@ export default function OrderStatusPage() {
     [order],
   );
 
-  // ── Loading ──────────────────────────────────────────────────────────────
   if (loadState === 'loading') {
     return (
       <div className="min-h-screen bg-neutral-50 px-4 py-12">
@@ -454,7 +458,6 @@ export default function OrderStatusPage() {
     );
   }
 
-  // ── Error states ─────────────────────────────────────────────────────────
   if (loadState === 'not-found') {
     return (
       <ErrorState
@@ -466,17 +469,21 @@ export default function OrderStatusPage() {
       />
     );
   }
+
   if (loadState === 'unauthorized') {
     return (
       <ErrorState
         icon={<AlertCircle className="h-12 w-12 text-red-500" />}
         title="Access denied"
-        message="You don't have permission to view this order. If you placed this order as a guest, please use the same browser session."
+        message="You don't have permission to view this order. If you placed this order as a guest and no longer have the original tracking page open, you can recover access below."
         actionLabel="View Your Orders"
         actionPath="/account/orders"
+        secondaryLabel="Find My Order"
+        secondaryPath="/find-order"
       />
     );
   }
+
   if (loadState === 'error') {
     return (
       <ErrorState
@@ -490,9 +497,9 @@ export default function OrderStatusPage() {
       />
     );
   }
+
   if (!order) return null;
 
-  // ── Found ─────────────────────────────────────────────────────────────────
   return (
     <MotionConfig reducedMotion="user" transition={{ type: 'spring', stiffness: 300, damping: 26 }}>
       <div className="min-h-screen bg-neutral-50 px-4 py-8">
@@ -503,7 +510,6 @@ export default function OrderStatusPage() {
             initial="hidden"
             animate="visible"
           >
-            {/* ── Header ──────────────────────────────────────────────────── */}
             <motion.div
               className="border-b border-neutral-100 p-6 sm:p-8"
               variants={sectionVariants}
@@ -556,7 +562,6 @@ export default function OrderStatusPage() {
               </AnimatePresence>
             </motion.div>
 
-            {/* ── Step tracker ─────────────────────────────────────────────── */}
             <motion.div
               className="border-b border-neutral-100 p-6 sm:p-8"
               variants={sectionVariants}
@@ -573,7 +578,11 @@ export default function OrderStatusPage() {
                         <motion.div
                           layoutId={`step-node-${step.key}`}
                           className={`relative z-10 flex h-10 w-10 items-center justify-center rounded-full border-2
-                            ${complete ? `${step.borderColor} ${step.bgColor}` : 'border-neutral-300 bg-white'}`}
+                            ${
+                              complete
+                                ? `${step.borderColor} ${step.bgColor}`
+                                : 'border-neutral-300 bg-white'
+                            }`}
                           variants={stepNodeVariants}
                           animate={active ? 'active' : complete ? 'complete' : 'inactive'}
                         >
@@ -617,7 +626,6 @@ export default function OrderStatusPage() {
               </LayoutGroup>
             </motion.div>
 
-            {/* ── Order Details ─────────────────────────────────────────────── */}
             <motion.div
               className="border-b border-neutral-100 p-6 sm:p-8"
               variants={sectionVariants}
@@ -625,6 +633,7 @@ export default function OrderStatusPage() {
               <h3 className="mb-4 text-xs font-semibold uppercase tracking-wider text-neutral-500">
                 Order Details
               </h3>
+
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
                 <div>
                   <p className="text-xs text-neutral-500">Order ID</p>
@@ -632,12 +641,14 @@ export default function OrderStatusPage() {
                     {order.id.slice(0, 8)}
                   </p>
                 </div>
+
                 <div>
                   <p className="text-xs text-neutral-500">Total</p>
                   <p className="mt-1 text-sm font-semibold text-neutral-900">
                     ${formatCents(order.amount_total)}
                   </p>
                 </div>
+
                 {order.customer_name ? (
                   <div>
                     <p className="text-xs text-neutral-500">Name</p>
@@ -646,6 +657,7 @@ export default function OrderStatusPage() {
                     </p>
                   </div>
                 ) : null}
+
                 {order.payment_status ? (
                   <div>
                     <p className="text-xs text-neutral-500">Payment</p>
@@ -664,7 +676,6 @@ export default function OrderStatusPage() {
               </div>
             </motion.div>
 
-            {/* ── Cart Items ────────────────────────────────────────────────── */}
             {cartItemViews.length > 0 ? (
               <motion.div
                 className="border-b border-neutral-100 p-6 sm:p-8"
@@ -698,6 +709,7 @@ export default function OrderStatusPage() {
                             ) : null}
                           </div>
                         </div>
+
                         {item.price != null ? (
                           <span className="whitespace-nowrap text-sm text-neutral-700">
                             ${formatCents(item.price * item.quantity)}
@@ -715,18 +727,21 @@ export default function OrderStatusPage() {
                       <span>${formatCents(order.amount_subtotal)}</span>
                     </div>
                   ) : null}
+
                   {order.amount_tax > 0 ? (
                     <div className="flex justify-between text-sm text-neutral-700">
                       <span>Tax</span>
                       <span>${formatCents(order.amount_tax)}</span>
                     </div>
                   ) : null}
+
                   {order.amount_shipping > 0 ? (
                     <div className="flex justify-between text-sm text-neutral-700">
                       <span>Delivery</span>
                       <span>${formatCents(order.amount_shipping)}</span>
                     </div>
                   ) : null}
+
                   <div className="flex justify-between border-t border-neutral-200 pt-2 font-semibold text-neutral-900">
                     <span>Total</span>
                     <span>${formatCents(order.amount_total)}</span>
@@ -735,7 +750,6 @@ export default function OrderStatusPage() {
               </motion.div>
             ) : null}
 
-            {/* ── CTAs + live indicator ─────────────────────────────────────── */}
             <motion.div className="p-6 sm:p-8" variants={sectionVariants}>
               <div className="space-y-3">
                 <motion.div
@@ -801,6 +815,8 @@ function ErrorState({
   actionLabel,
   actionPath,
   onClick,
+  secondaryLabel,
+  secondaryPath,
 }: {
   icon: React.ReactNode;
   title: string;
@@ -808,6 +824,8 @@ function ErrorState({
   actionLabel: string;
   actionPath?: string;
   onClick?: () => void;
+  secondaryLabel?: string;
+  secondaryPath?: string;
 }) {
   return (
     <div className="min-h-screen bg-neutral-50 px-4 py-12">
@@ -826,16 +844,12 @@ function ErrorState({
           >
             {icon}
           </motion.div>
+
           <h2 className="mb-2 text-xl font-bold text-neutral-900">{title}</h2>
           <p className="mb-6 text-sm text-neutral-600">{message}</p>
 
           {actionPath ? (
-            <motion.div
-              variants={{ rest: { scale: 1 }, hover: { scale: 1.025 }, tap: { scale: 0.97 } }}
-              initial="rest"
-              whileHover="hover"
-              whileTap="tap"
-            >
+            <motion.div variants={btnVariants} initial="rest" whileHover="hover" whileTap="tap">
               <Link
                 to={actionPath}
                 className="inline-block rounded-lg bg-orange-600 px-6 py-3 font-semibold text-white hover:bg-orange-700"
@@ -848,7 +862,7 @@ function ErrorState({
               type="button"
               onClick={onClick}
               className="inline-block rounded-lg bg-orange-600 px-6 py-3 font-semibold text-white hover:bg-orange-700"
-              variants={{ rest: { scale: 1 }, hover: { scale: 1.025 }, tap: { scale: 0.97 } }}
+              variants={btnVariants}
               initial="rest"
               whileHover="hover"
               whileTap="tap"
@@ -856,6 +870,15 @@ function ErrorState({
               {actionLabel}
             </motion.button>
           )}
+
+          {secondaryLabel && secondaryPath ? (
+            <Link
+              to={secondaryPath}
+              className="mt-4 inline-block text-sm text-neutral-500 underline underline-offset-2 hover:text-neutral-700"
+            >
+              {secondaryLabel}
+            </Link>
+          ) : null}
         </motion.div>
       </div>
     </div>

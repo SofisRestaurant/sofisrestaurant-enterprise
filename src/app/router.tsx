@@ -347,10 +347,13 @@ export const router = createBrowserRouter([
       // contact to receive a verification code and recover tracking
       // access after losing the original session.
       // ──────────────────────────────────────────────────────────
+      {
+        path: 'find-order',
+        lazy: lazyRoute(() => import('@/modules/orders/pages/FindOrder')),
+      },
 
       // ──────────────────────────────────────────────────────────
       // LEGAL
-      // ──────────────────────────────────────────────────────────
       {
         path: 'privacy-policy',
         lazy: lazyRoute(() => import('@/pages/Legal/PrivacyPolicy')),
