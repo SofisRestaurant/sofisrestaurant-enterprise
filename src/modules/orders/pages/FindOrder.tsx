@@ -22,7 +22,13 @@
 //   { path: 'find-order', lazy: lazyRoute(() => import('@/modules/orders/pages/FindOrder')) }
 // ============================================================================
 
-import { useState, useCallback }       from 'react';
+import {
+  useCallback,
+  useState,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type SyntheticEvent,
+} from 'react';
 import { useNavigate, Link }           from 'react-router-dom';
 import { motion, AnimatePresence, MotionConfig } from 'framer-motion';
 import { ArrowLeft, Search, CheckCircle2 } from 'lucide-react';
@@ -99,21 +105,18 @@ const fadeUp = {
 
 // ─── Primitives ───────────────────────────────────────────────────────────────
 
-function FieldLabel({ htmlFor, children }: { htmlFor?: string; children: React.ReactNode }) {
+function FieldLabel({ htmlFor, children }: { htmlFor?: string; children: ReactNode }) {
   return (
     <label
       htmlFor={htmlFor}
-      className="block text-[11px] font-bold uppercase tracking-caps text-neutral-500"
+      className="block text-[11px] font-bold uppercase tracking-[0.18em] text-neutral-500"
     >
       {children}
     </label>
   );
 }
 
-function TextInput({
-  className = '',
-  ...props
-}: React.InputHTMLAttributes<HTMLInputElement>) {
+function TextInput({ className = '', ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...props}
@@ -135,7 +138,7 @@ function SubmitButton({
 }: {
   busy?: boolean;
   disabled?: boolean;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <button
@@ -154,7 +157,7 @@ function SubmitButton({
   );
 }
 
-function InfoBanner({ children }: { children: React.ReactNode }) {
+function InfoBanner({ children }: { children: ReactNode }) {
   return (
     <div
       role="status"
@@ -166,7 +169,7 @@ function InfoBanner({ children }: { children: React.ReactNode }) {
   );
 }
 
-function ErrorBanner({ children }: { children: React.ReactNode }) {
+function ErrorBanner({ children }: { children: ReactNode }) {
   return (
     <motion.div
       role="alert"
@@ -222,7 +225,7 @@ export default function FindOrder() {
   // 4xx/5xx errors surface as user-facing messages that do not reveal order data.
 
   const handleRequestCode = useCallback(
-    async (e: React.FormEvent<HTMLFormElement>) => {
+    async (e: SyntheticEvent<HTMLFormElement>) => {
       e.preventDefault();
       if (requestBusy) return;
 
@@ -232,7 +235,7 @@ export default function FindOrder() {
       try {
         await invokeEdge('request-guest-order-access', {
           order_number: orderNumber.trim(),
-          contact:      contact.trim(),
+          contact: contact.trim(),
         });
         // Success (200) → step 2. Message is always generic.
         setStep('verify');
@@ -262,7 +265,7 @@ export default function FindOrder() {
   // On any failure: generic message — no oracle about which part failed.
 
   const handleVerifyCode = useCallback(
-    async (e: React.FormEvent<HTMLFormElement>) => {
+    async (e: SyntheticEvent<HTMLFormElement>) => {
       e.preventDefault();
       if (verifyBusy) return;
 
@@ -273,13 +276,13 @@ export default function FindOrder() {
 
       try {
         const result = await invokeEdge<{
-          ok:                   boolean;
-          order_id?:            string;
+          ok: boolean;
+          order_id?: string;
           guest_recovery_token?: string;
         }>('verify-guest-order-access', {
           order_number: orderNumber.trim(),
-          contact:      contact.trim(),
-          code:         sanitizedCode,
+          contact: contact.trim(),
+          code: sanitizedCode,
         });
 
         if (result.ok && result.order_id && result.guest_recovery_token) {
