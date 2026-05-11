@@ -567,6 +567,11 @@ export default function OrderSuccess() {
   const [order, setOrder] = useState<Order | null>(null);
   const [liveStatus, setLiveStatus] = useState<OrderStatus | null>(null);
   const [attempt, setAttempt] = useState(0);
+  // ── [CHANGE 1] Guest detection flag ───────────────────────────────────────
+  // Set to true in both found-paths when no JWT was present and a
+  // checkout_guest_token existed at the moment the order was confirmed.
+  // Drives the guest-only recovery info card below the Track My Order CTA.
+  const [isGuestOrder, setIsGuestOrder] = useState(false);
 
   const [loyalty, setLoyalty] = useState<LoyaltyTxV2 | null>(null);
   const [loyaltyAccount, setLoyaltyAccount] = useState<LoyaltyAccountSnap | null>(null);
@@ -696,6 +701,8 @@ export default function OrderSuccess() {
           setLiveStatus(mapped.status);
           setPageState('found');
           clearCart();
+          // ── [CHANGE 2] Guest detection — reconcile path ─────────────────
+          if (jwtRef.current === null && readGuestToken() !== null) setIsGuestOrder(true);
           // NOTE: clearGuestToken() intentionally omitted — guest must be
           // able to use the token on the /order-status page in the same session.
           if (loyaltyStartedForOrderRef.current !== mapped.id) {
@@ -779,6 +786,8 @@ export default function OrderSuccess() {
         setLiveStatus(mapped.status);
         setPageState('found');
         clearCart();
+        // ── [CHANGE 3] Guest detection — run() path ─────────────────────
+        if (jwtRef.current === null && readGuestToken() !== null) setIsGuestOrder(true);
         // NOTE: clearGuestToken() intentionally omitted — guest must be
         // able to use the token on the /order-status page in the same session.
 
@@ -1027,6 +1036,34 @@ export default function OrderSuccess() {
                         your order.
                       </p>
                     </motion.div>
+
+                    {/* ── [CHANGE 4] Guest recovery info card ───────────────────────────
+                         Shown only for guest checkouts (no JWT at order-found time).
+                         Explains same-session tracking and how to recover via Find My Order.
+                         Does not mention tokens, sessionStorage, or any internal identifiers.
+                         checkout_guest_token lifecycle is completely untouched.            */}
+                    {isGuestOrder && (
+                      <div className="rounded-xl border border-white/8 bg-white/3 px-4 py-3 text-xs leading-relaxed text-neutral-400">
+                        <p className="mb-1 font-semibold text-neutral-300">
+                          {order.order_number
+                            ? `Order #${String(order.order_number).padStart(4, '0')} · Lost this page?`
+                            : 'Lost this page?'}
+                        </p>
+                        <p>
+                          Go to{' '}
+                          <Link
+                            to="/find-order"
+                            className="text-amber-400 underline underline-offset-2 hover:text-amber-300 focus-visible:outline-none"
+                          >
+                            Find My Order
+                          </Link>
+                          {order.order_number
+                            ? ` and enter order #${String(order.order_number).padStart(4, '0')} with the email you used at checkout.`
+                            : ' and enter your order number with the email you used at checkout.'}
+                        </p>
+                      </div>
+                    )}
+
                     <motion.div
                       variants={btnVariants}
                       initial="rest"
