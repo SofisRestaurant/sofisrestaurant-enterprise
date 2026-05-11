@@ -1022,8 +1022,11 @@ export default function OrderSuccess() {
                         <MapPin size={15} className="shrink-0" />
                         Track My Order
                       </Link>
+                      <p className="mt-2 text-center text-[11px] leading-relaxed text-neutral-500">
+                        Guest tracking works in this browser session. Keep this tab open to follow
+                        your order.
+                      </p>
                     </motion.div>
-
                     <motion.div
                       variants={btnVariants}
                       initial="rest"
