@@ -226,6 +226,16 @@ export default function TopBar() {
                 <Search className="h-4 w-4" aria-hidden="true" />
               </button>
             )}
+            <Link
+              to="/find-order"
+              className="hidden items-center gap-1.5 rounded-full border border-(--color-cream-300) bg-white px-3 py-1.5 text-xs font-semibold text-(--color-ink-600) transition-colors hover:bg-(--color-ink-50) hover:text-(--color-ember-700) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 md:flex"
+            >
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-(--color-ember-400) opacity-60" />
+                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-(--color-ember-500)" />
+              </span>
+              Track Order
+            </Link>
             {isAuthed && activeOrderId && (
               <Link
                 to={`/order-status/${activeOrderId}`}

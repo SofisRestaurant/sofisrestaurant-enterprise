@@ -6,16 +6,31 @@
 //   1. loading    → spinner
 //   2. !isAuthed  → LoginGate (passwordless — Google + magic link)
 //   3. isAuthed   → full account layout
+//
+// Guest order recovery:
+//   - Guests who land here looking for an order get a clear, modern
+//     "Track an order" path to /find-order.
+//   - Logged-in users do not see this guest recovery CTA.
+//   - No auth, router, database, Supabase, Stripe, or order logic is changed.
 // =============================================================================
 
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { User, ClipboardList, Edit3, ShieldCheck, LogOut } from 'lucide-react';
+import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
+import {
+  User,
+  ClipboardList,
+  Edit3,
+  ShieldCheck,
+  LogOut,
+  Search,
+  ArrowRight,
+  Mail,
+} from 'lucide-react';
+import { useState, type ElementType, type FormEvent } from 'react';
+
 import { useAuth } from '@/features/auth/hooks/useAuth';
-import { useModal } from '@/components/ui/useModal';
 import { canAccessAdmin } from '@/security/permissions';
 import { GoogleSignInButton } from '@/features/auth/components/GoogleSignInButton';
 import { supabase } from '@/lib/supabase/supabaseClient';
-import { useState, type FormEvent } from 'react';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -28,7 +43,7 @@ function cx(...classes: (string | false | null | undefined)[]): string {
 type AccountNavItem = {
   to: string;
   label: string;
-  icon: React.ElementType;
+  icon: ElementType;
   end?: boolean;
 };
 
@@ -44,18 +59,22 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 type MagicStage = 'idle' | 'sending' | 'sent' | 'error';
 
 function LoginGate() {
-  const modal = useModal();
   const [email, setEmail] = useState('');
   const [stage, setStage] = useState<MagicStage>('idle');
   const [error, setError] = useState('');
 
   const emailValid = EMAIL_RE.test(email.trim());
 
-  const handleMagicLink = async (e: FormEvent) => {
+  const handleMagicLink = async (e: FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
-    if (!emailValid || stage === 'sending') return;
+
+    if (!emailValid || stage === 'sending') {
+      return;
+    }
+
     setStage('sending');
     setError('');
+
     try {
       const { error: err } = await supabase.auth.signInWithOtp({
         email: email.trim(),
@@ -64,7 +83,11 @@ function LoginGate() {
           shouldCreateUser: true,
         },
       });
-      if (err) throw err;
+
+      if (err) {
+        throw err;
+      }
+
       setStage('sent');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Something went wrong.');
@@ -81,47 +104,63 @@ function LoginGate() {
           className="mb-6 flex h-16 w-16 items-center justify-center rounded-full"
           style={{ background: 'var(--color-ember-50)' }}
         >
-          <svg
-            width="28"
-            height="28"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="var(--color-ember-500)"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
-            <polyline points="22,6 12,13 2,6" />
-          </svg>
+          <Mail className="h-7 w-7" style={{ color: 'var(--color-ember-500)' }} aria-hidden />
         </div>
+
         <h2
           className="mb-2 text-2xl font-normal tracking-tight"
           style={{ fontFamily: 'var(--font-display)', color: 'var(--color-ink-900)' }}
         >
           Check your email
         </h2>
+
         <p className="mb-1 text-sm" style={{ color: 'var(--color-ink-500)' }}>
           We sent a sign-in link to
         </p>
+
         <p className="mb-6 text-sm font-semibold" style={{ color: 'var(--color-ink-800)' }}>
           {email.trim()}
         </p>
+
         <p className="mb-6 max-w-xs text-xs" style={{ color: 'var(--color-ink-400)' }}>
           Click the link in your email to sign in. It expires in 10 minutes.
         </p>
-        <button
-          type="button"
-          onClick={() => {
-            setStage('idle');
-            setEmail('');
-          }}
-          className="text-sm font-medium"
-          style={{ color: 'var(--color-brand)' }}
-        >
-          ← Use a different email
-        </button>
+
+        <div className="w-full max-w-sm space-y-3">
+          <button
+            type="button"
+            onClick={() => {
+              setStage('idle');
+              setEmail('');
+            }}
+            className="w-full rounded-xl border border-cream-300 bg-white px-4 py-2.5 text-sm font-medium text-ink-600 transition hover:border-ink-200 hover:text-ink-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-gold-400"
+          >
+            ← Use a different email
+          </button>
+
+          <Link
+            to="/find-order"
+            className="group flex w-full items-center justify-between rounded-2xl border border-ember-200 bg-ember-50 px-4 py-3 text-left transition hover:bg-ember-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-gold-400"
+          >
+            <span className="flex min-w-0 items-center gap-3">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white text-ember-600 shadow-(--shadow-xs)">
+                <Search className="h-4 w-4" aria-hidden />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold text-ember-800">
+                  Just checking an order?
+                </span>
+                <span className="block text-xs text-ember-700/75">
+                  Track it with your order number and email.
+                </span>
+              </span>
+            </span>
+            <ArrowRight
+              className="h-4 w-4 shrink-0 text-ember-600 transition group-hover:translate-x-0.5"
+              aria-hidden
+            />
+          </Link>
+        </div>
       </div>
     );
   }
@@ -139,12 +178,53 @@ function LoginGate() {
           >
             Your account
           </h1>
+
           <p className="text-sm" style={{ color: 'var(--color-ink-400)' }}>
             Sign in to track orders, earn points, and manage your profile.
           </p>
         </div>
 
         <div className="space-y-4">
+          {/* Guest order helper — contextual, not a bottom-nav item */}
+          <Link
+            to="/find-order"
+            className={cx(
+              'group relative block overflow-hidden rounded-3xl border border-ember-200 bg-linear-to-br from-ember-50 via-cream-100 to-white p-4',
+              'shadow-(--shadow-sm) transition hover:-translate-y-0.5 hover:border-ember-300 hover:shadow-(--shadow-md)',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 focus-visible:ring-offset-2',
+            )}
+          >
+            <div
+              className="pointer-events-none absolute -right-10 -top-10 h-24 w-24 rounded-full bg-ember-200/35 blur-2xl"
+              aria-hidden
+            />
+
+            <div className="relative flex items-center justify-between gap-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white text-ember-600 shadow-(--shadow-xs)">
+                  <span className="absolute right-2 top-2 flex h-2 w-2">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ember-400 opacity-60" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-ember-500" />
+                  </span>
+                  <Search className="h-5 w-5" strokeWidth={1.8} aria-hidden />
+                </span>
+
+                <span className="min-w-0">
+                  <span className="block text-sm font-bold text-ink-900">Track an order</span>
+                  <span className="mt-0.5 block text-xs leading-relaxed text-ink-500">
+                    No account needed. Use your order number and checkout email.
+                  </span>
+                </span>
+              </div>
+
+              <ArrowRight
+                className="h-4 w-4 shrink-0 text-ember-600 transition group-hover:translate-x-0.5"
+                strokeWidth={1.9}
+                aria-hidden
+              />
+            </div>
+          </Link>
+
           {/* Google — primary */}
           <GoogleSignInButton label="Continue with Google" redirectPath="/account" />
 
@@ -168,7 +248,7 @@ function LoginGate() {
             noValidate
             className="space-y-3"
           >
-            {error && (
+            {error ? (
               <div
                 role="alert"
                 className="rounded-xl px-4 py-3 text-sm"
@@ -180,16 +260,17 @@ function LoginGate() {
               >
                 {error}
               </div>
-            )}
+            ) : null}
 
             <div>
               <label
                 htmlFor="gate-email"
-                className="block text-xs font-semibold uppercase tracking-wider mb-1.5"
+                className="mb-1.5 block text-xs font-semibold uppercase tracking-wider"
                 style={{ color: 'var(--color-ink-500)' }}
               >
                 Email address
               </label>
+
               <input
                 id="gate-email"
                 type="email"
@@ -254,6 +335,7 @@ function LoginGate() {
           >
             <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
           </svg>
+
           <p className="text-xs" style={{ color: 'var(--color-ink-500)' }}>
             Members earn points on every order
           </p>
@@ -267,6 +349,7 @@ function LoginGate() {
 
 function MobileTab({ item }: { item: AccountNavItem }) {
   const Icon = item.icon;
+
   return (
     <NavLink
       to={item.to}
@@ -275,10 +358,10 @@ function MobileTab({ item }: { item: AccountNavItem }) {
         cx(
           'flex items-center gap-1.5 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium',
           'transition-all duration-(--duration-base)',
-          'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-gold-400',
           isActive
-            ? 'bg-(--color-ember-600) text-white shadow-(--shadow-sm)'
-            : 'text-(--color-ink-600) hover:bg-(--color-cream-200)',
+            ? 'bg-ember-600 text-white shadow-(--shadow-sm)'
+            : 'text-ink-600 hover:bg-cream-200',
         )
       }
     >
@@ -290,6 +373,7 @@ function MobileTab({ item }: { item: AccountNavItem }) {
 
 function SidebarLink({ item }: { item: AccountNavItem }) {
   const Icon = item.icon;
+
   return (
     <NavLink
       to={item.to}
@@ -298,10 +382,10 @@ function SidebarLink({ item }: { item: AccountNavItem }) {
         cx(
           'flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-medium',
           'transition-all duration-(--duration-base)',
-          'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-gold-400',
           isActive
-            ? 'bg-(--color-ember-600) text-white shadow-(--shadow-sm)'
-            : 'text-(--color-ink-700) hover:bg-(--color-cream-100) hover:text-(--color-ink-900)',
+            ? 'bg-ember-600 text-white shadow-(--shadow-sm)'
+            : 'text-ink-700 hover:bg-cream-100 hover:text-ink-900',
         )
       }
     >
@@ -321,7 +405,7 @@ export default function AccountLayout() {
   const isAuthed = Boolean(user);
   const displayName = profile?.full_name?.trim() || user?.name?.trim() || user?.email || 'Account';
 
-  const handleSignOut = async () => {
+  const handleSignOut = async (): Promise<void> => {
     try {
       await signOut();
       void navigate('/');
@@ -339,7 +423,7 @@ export default function AccountLayout() {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
         <div
-          className="h-6 w-6 animate-spin rounded-full border-2 border-(--color-cream-300) border-t-(--color-ember-500)"
+          className="h-6 w-6 animate-spin rounded-full border-2 border-cream-300 border-t-ember-500"
           role="status"
           aria-label="Loading account"
         />
@@ -360,18 +444,16 @@ export default function AccountLayout() {
       {/* Mobile */}
       <div className="md:hidden">
         <div className="mb-4 flex items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-(--color-ember-100)">
-            <User
-              className="h-5 w-5 text-(--color-ember-600)"
-              strokeWidth={1.75}
-              aria-hidden="true"
-            />
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-ember-100">
+            <User className="h-5 w-5 text-ember-600" strokeWidth={1.75} aria-hidden="true" />
           </div>
+
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-(--color-ink-900)">{displayName}</p>
-            {user?.email && <p className="truncate text-xs text-(--color-ink-400)">{user.email}</p>}
+            <p className="truncate text-sm font-semibold text-ink-900">{displayName}</p>
+            {user?.email ? <p className="truncate text-xs text-ink-400">{user.email}</p> : null}
           </div>
         </div>
+
         <div className="-mx-4 mb-5 overflow-x-auto px-4 scrollbar-none">
           <nav className="flex gap-2 pb-0.5" role="navigation" aria-label="Account navigation">
             {navItems.map((item) => (
@@ -379,18 +461,20 @@ export default function AccountLayout() {
             ))}
           </nav>
         </div>
-        <div className="rounded-2xl border border-(--color-cream-300) bg-white p-4 shadow-(--shadow-sm)">
+
+        <div className="rounded-2xl border border-cream-300 bg-white p-4 shadow-(--shadow-sm)">
           <Outlet />
         </div>
+
         <button
           type="button"
           onClick={() => void handleSignOut()}
           className={cx(
             'mt-4 flex w-full items-center justify-center gap-2',
-            'rounded-xl border border-(--color-cream-300) bg-white py-2.5 px-4',
-            'text-sm font-medium text-(--color-ink-500)',
-            'transition-all hover:border-(--color-ink-200) hover:text-(--color-ink-800)',
-            'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)',
+            'rounded-xl border border-cream-300 bg-white px-4 py-2.5',
+            'text-sm font-medium text-ink-500',
+            'transition-all hover:border-ink-200 hover:text-ink-800',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-gold-400',
           )}
         >
           <LogOut className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
@@ -401,50 +485,46 @@ export default function AccountLayout() {
       {/* Desktop */}
       <div className="hidden md:grid md:grid-cols-[220px_1fr] md:gap-6">
         <aside className="flex flex-col gap-2">
-          <div className="rounded-2xl border border-(--color-cream-300) bg-white p-4 shadow-(--shadow-sm)">
-            <div className="mb-4 flex items-center gap-3 border-b border-(--color-cream-200) pb-4">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-(--color-ember-100)">
-                <User
-                  className="h-4 w-4 text-(--color-ember-600)"
-                  strokeWidth={1.75}
-                  aria-hidden="true"
-                />
+          <div className="rounded-2xl border border-cream-300 bg-white p-4 shadow-(--shadow-sm)">
+            <div className="mb-4 flex items-center gap-3 border-b border-cream-200 pb-4">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-ember-100">
+                <User className="h-4 w-4 text-ember-600" strokeWidth={1.75} aria-hidden="true" />
               </div>
+
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-(--color-ink-900)">
-                  {displayName}
-                </p>
-                {user?.email && (
-                  <p className="truncate text-xs text-(--color-ink-400)">{user.email}</p>
-                )}
+                <p className="truncate text-sm font-semibold text-ink-900">{displayName}</p>
+                {user?.email ? <p className="truncate text-xs text-ink-400">{user.email}</p> : null}
               </div>
             </div>
+
             <nav className="space-y-0.5" role="navigation" aria-label="Account navigation">
               {navItems.map((item) => (
                 <SidebarLink key={item.to} item={item} />
               ))}
             </nav>
           </div>
+
           <button
             type="button"
             onClick={() => void handleSignOut()}
             className={cx(
               'flex w-full items-center gap-2.5 rounded-xl',
-              'border border-(--color-cream-300) bg-white px-3 py-2.5',
-              'text-sm font-medium text-(--color-ink-500)',
-              'transition-all hover:border-(--color-ink-200) hover:bg-(--color-cream-50) hover:text-(--color-ink-800)',
-              'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)',
+              'border border-cream-300 bg-white px-3 py-2.5',
+              'text-sm font-medium text-ink-500',
+              'transition-all hover:border-ink-200 hover:bg-cream-50 hover:text-ink-800',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-gold-400',
             )}
           >
             <LogOut
-              className="h-4 w-4 shrink-0 text-(--color-ink-400)"
+              className="h-4 w-4 shrink-0 text-ink-400"
               strokeWidth={1.75}
               aria-hidden="true"
             />
             Sign out
           </button>
         </aside>
-        <section className="min-w-0 rounded-2xl border border-(--color-cream-300) bg-white p-6 shadow-(--shadow-sm)">
+
+        <section className="min-w-0 rounded-2xl border border-cream-300 bg-white p-6 shadow-(--shadow-sm)">
           <Outlet />
         </section>
       </div>
