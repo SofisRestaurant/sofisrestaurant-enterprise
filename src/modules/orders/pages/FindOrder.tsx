@@ -6,22 +6,31 @@
 // Flow:
 //   1. Guest submits order_number + email → get-guest-order-summary (initial)
 //   2. On found=true: show status card, store credentials in ref, start polling
-//   3. Every 10 s: re-call get-guest-order-summary with same credentials
-//        found=true  → update card, clear stale flag, record last-checked time
+//   3. Every 60 s: re-call get-guest-order-summary with same credentials
+//        found=true  → update card, clear stale/paused flags, record last-checked
 //        found=false → keep last known card, set refreshStale=true
-//        network err → same as found=false (keep card, show warning)
+//        429         → stop auto-refresh, set refreshPaused=true
+//        network err → keep card, set refreshStale=true
 //   4. Stop polling automatically when status is terminal
 //   5. Manual "Refresh status" button triggers an on-demand poll
-//   6. "Search a different order" stops polling and resets everything
+//   6. Manual button is disabled for 30 s after any completed lookup or refresh
+//   7. "Search a different order" stops polling and resets everything
 //
 // Polling architecture:
-//   - credentialsRef    — PollCredentials stored here only; never in state/URL/storage
-//   - pollIntervalRef   — setInterval handle; always cleared on reset/unmount
-//   - isActivePollRef   — prevents concurrent in-flight polls
-//   - isMountedRef      — guards all setState after unmount
-//   - runPollRef        — always holds the latest runPoll closure for the interval
+//   - credentialsRef      — PollCredentials stored here only; never in state/URL/storage
+//   - pollIntervalRef     — setInterval handle; always cleared on reset/unmount
+//   - isActivePollRef     — prevents concurrent in-flight polls
+//   - isMountedRef        — guards all setState after unmount
+//   - cooldownTimerRef    — setTimeout handle for manual-refresh cooldown
+//   - runPollRef          — always holds the latest runPoll closure for the interval
 //
-// Security contract (unchanged from snapshot build):
+// Rate-limit contract:
+//   Backend: 10 requests / 15 min / IP  (guest_rate_limits table)
+//   Frontend auto-poll: every 60 s  → ≤ 10 requests per 10 minutes per IP
+//   Manual refresh: disabled 30 s after any completed request
+//   On 429: auto-poll stops; manual refresh still available after cooldown
+//
+// Security contract (unchanged from previous version):
 //   - Nothing stored in sessionStorage or localStorage
 //   - No token issued or consumed
 //   - No navigation to /order-status/:id (no order id is returned)
@@ -60,12 +69,25 @@ import { invokeEdge, InvokeEdgeError } from '@/lib/supabase/invoke';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-/** How often the background poll fires after a successful lookup. */
-const POLL_INTERVAL_MS = 10_000;
+/**
+ * Background auto-refresh interval.
+ * 60 s keeps well within the backend's 10 req / 15 min / IP limit:
+ *   60 s × 10 req = 600 s = 10 min — one request headroom to spare.
+ */
+const AUTO_REFRESH_MS = 60_000;
+
+/**
+ * How long the manual "Refresh status" button stays disabled after any
+ * completed request (initial lookup or manual refresh).
+ * Prevents accidental rapid-fire requests.
+ */
+const MANUAL_REFRESH_COOLDOWN_MS = 30_000;
 
 /**
  * Statuses after which polling stops — the order will not advance further
  * from the guest's perspective.
+ * "ready" is terminal for this limited view: the guest only needs to know
+ * the order is ready; they don't need live updates beyond that point.
  */
 const TERMINAL_STATUSES = new Set([
   'completed',
@@ -402,8 +424,16 @@ function ErrorBanner({ children }: { children: ReactNode }) {
 interface StatusCardProps {
   order: SafeOrderSummary;
   lastChecked: Date | null;
+  /** A background refresh returned found=false or a non-429 network error. */
   refreshStale: boolean;
+  /** The endpoint returned 429; auto-refresh has been stopped. */
+  refreshPaused: boolean;
+  /** A request is currently in flight. */
   isPolling: boolean;
+  /** The auto-refresh interval is currently running. */
+  isAutoRefreshing: boolean;
+  /** Manual refresh button is in its post-request cooldown period. */
+  manualCooldown: boolean;
   isTerminal: boolean;
   onManualRefresh: () => void;
 }
@@ -412,7 +442,10 @@ function StatusCard({
   order,
   lastChecked,
   refreshStale,
+  refreshPaused,
   isPolling,
+  isAutoRefreshing,
+  manualCooldown,
   isTerminal,
   onManualRefresh,
 }: StatusCardProps) {
@@ -477,11 +510,6 @@ function StatusCard({
       </div>
 
       {/* ── Detail rows ── */}
-      {/*
-        cardStagger + cardRow run their entrance animation only on the initial
-        mount of this component (when lookupState first becomes 'found').
-        Subsequent prop updates (polls) do not re-trigger entrance animations.
-      */}
       <motion.dl
         className="divide-y divide-white/6 px-5"
         variants={cardStagger}
@@ -521,7 +549,7 @@ function StatusCard({
           </motion.div>
         ) : null}
 
-        {/* Order placed (server created_at — static after initial lookup) */}
+        {/* Order placed */}
         <motion.div variants={cardRow} className="flex items-center justify-between gap-4 py-3.5">
           <dt className="flex items-center gap-2 text-xs text-neutral-500">
             <CheckCircle2 size={13} aria-hidden="true" />
@@ -532,7 +560,7 @@ function StatusCard({
           </dd>
         </motion.div>
 
-        {/* Last updated (server updated_at — advances with each poll) */}
+        {/* Last updated (from server) */}
         <motion.div variants={cardRow} className="flex items-center justify-between gap-4 py-3.5">
           <dt className="flex items-center gap-2 text-xs text-neutral-500">
             <RefreshCw size={13} aria-hidden="true" />
@@ -546,9 +574,23 @@ function StatusCard({
 
       {/* ── Live footer ── */}
       <div className="border-t border-white/6">
-        {/* Stale-refresh warning — shown when poll returned found=false or errored */}
+        {/* Paused / stale banners — mutually exclusive, paused takes priority */}
         <AnimatePresence>
-          {refreshStale ? (
+          {refreshPaused ? (
+            <motion.div
+              key="paused"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.18 }}
+              className="overflow-hidden"
+            >
+              <div className="flex items-center gap-1.5 px-5 pt-3 text-[11px] text-amber-600/80">
+                <WifiOff size={11} aria-hidden="true" />
+                <span>Auto-refresh paused. You can try again in a few minutes.</span>
+              </div>
+            </motion.div>
+          ) : refreshStale ? (
             <motion.div
               key="stale"
               initial={{ opacity: 0, height: 0 }}
@@ -559,7 +601,7 @@ function StatusCard({
             >
               <div className="flex items-center gap-1.5 px-5 pt-3 text-[11px] text-amber-600/80">
                 <WifiOff size={11} aria-hidden="true" />
-                <span>Unable to refresh right now — will retry automatically</span>
+                <span>Unable to refresh right now. Showing the last known status.</span>
               </div>
             </motion.div>
           ) : null}
@@ -575,13 +617,31 @@ function StatusCard({
               </>
             ) : (
               <>
+                {/* Green pulse only when actively auto-refreshing and not paused */}
                 <span className="relative flex h-2 w-2 shrink-0" aria-hidden="true">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-50" />
-                  <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                  {isAutoRefreshing && !refreshPaused && !isPolling ? (
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-50" />
+                  ) : null}
+                  <span
+                    className={[
+                      'relative inline-flex h-2 w-2 rounded-full',
+                      refreshPaused ? 'bg-neutral-600' : 'bg-emerald-500',
+                    ].join(' ')}
+                  />
                 </span>
-                <Wifi size={11} className="text-emerald-600" aria-hidden="true" />
+                <Wifi
+                  size={11}
+                  className={refreshPaused ? 'text-neutral-600' : 'text-emerald-600'}
+                  aria-hidden="true"
+                />
                 <span className="text-[11px] text-neutral-500">
-                  {isPolling ? 'Refreshing…' : 'Live status'}
+                  {isPolling
+                    ? 'Refreshing…'
+                    : refreshPaused
+                      ? 'Paused'
+                      : isAutoRefreshing
+                        ? 'Auto-refreshing every 60 seconds'
+                        : 'Live status'}
                 </span>
               </>
             )}
@@ -603,7 +663,7 @@ function StatusCard({
             <button
               type="button"
               onClick={onManualRefresh}
-              disabled={isPolling}
+              disabled={isPolling || manualCooldown}
               className="flex items-center gap-1.5 text-[11px] font-medium text-neutral-500 transition hover:text-neutral-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-500/50 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <RefreshCw size={11} className={isPolling ? 'animate-spin' : ''} aria-hidden="true" />
@@ -653,11 +713,21 @@ export default function FindOrder() {
   // ── Polling state ─────────────────────────────────────────────────────────
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
   const [refreshStale, setRefreshStale] = useState(false);
+  /**
+   * True when the endpoint returned 429; auto-refresh has been stopped.
+   * Cleared on the next successful poll (manual or auto).
+   */
+  const [refreshPaused, setRefreshPaused] = useState(false);
   const [isPolling, setIsPolling] = useState(false);
+  /** True while the auto-refresh interval is running. */
+  const [isAutoRefreshing, setIsAutoRefreshing] = useState(false);
+  /** True for MANUAL_REFRESH_COOLDOWN_MS after any completed request. */
+  const [manualCooldown, setManualCooldown] = useState(false);
 
-  // ── Polling refs ──────────────────────────────────────────────────────────
+  // ── Refs ──────────────────────────────────────────────────────────────────
   const credentialsRef = useRef<PollCredentials | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isActivePollRef = useRef(false);
   const isMountedRef = useRef(true);
   const runPollRef = useRef<(() => Promise<void>) | null>(null);
@@ -672,6 +742,10 @@ export default function FindOrder() {
         clearInterval(pollIntervalRef.current);
         pollIntervalRef.current = null;
       }
+      if (cooldownTimerRef.current !== null) {
+        clearTimeout(cooldownTimerRef.current);
+        cooldownTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -682,7 +756,31 @@ export default function FindOrder() {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
     }
+    setIsAutoRefreshing(false);
   }, []);
+
+  // ── startCooldown — disables manual refresh for MANUAL_REFRESH_COOLDOWN_MS ──
+
+  const startCooldown = useCallback(() => {
+    if (cooldownTimerRef.current !== null) {
+      clearTimeout(cooldownTimerRef.current);
+    }
+    setManualCooldown(true);
+    cooldownTimerRef.current = setTimeout(() => {
+      if (isMountedRef.current) setManualCooldown(false);
+      cooldownTimerRef.current = null;
+    }, MANUAL_REFRESH_COOLDOWN_MS);
+  }, []);
+
+  // ── startPolling — defined after stopPolling for correct dep order ────────
+
+  const startPolling = useCallback(() => {
+    stopPolling(); // clear any pre-existing interval first
+    setIsAutoRefreshing(true);
+    pollIntervalRef.current = setInterval(() => {
+      void runPollRef.current?.();
+    }, AUTO_REFRESH_MS);
+  }, [stopPolling]);
 
   // ── runPoll — background & manual poll (never touches lookupState) ────────
 
@@ -704,37 +802,40 @@ export default function FindOrder() {
       if (result.found && result.order) {
         setFoundOrder(result.order);
         setRefreshStale(false);
+        setRefreshPaused(false); // successful response clears any prior pause
         setLastChecked(new Date());
 
-        // Automatically stop the interval when the order reaches a terminal state.
         if (isTerminalStatus(result.order.status)) {
           stopPolling();
+        } else if (pollIntervalRef.current === null) {
+          // Polling was stopped (e.g. after a prior 429). Restart now that the
+          // endpoint is responding normally again.
+          startPolling();
         }
       } else {
-        // Server says not-found on a refresh: keep the last known card visible
-        // but surface a subtle warning so the guest knows it's stale.
+        // found=false on a refresh: keep last known card, surface stale warning.
         setRefreshStale(true);
       }
-    } catch {
-      // Network or edge-function error: same treatment as not-found on refresh.
-      if (isMountedRef.current) setRefreshStale(true);
+    } catch (err) {
+      if (!isMountedRef.current) return;
+
+      if (err instanceof InvokeEdgeError && err.status === 429) {
+        // Rate-limited: stop the auto-refresh interval and show paused banner.
+        // The user can still manually refresh once the cooldown expires.
+        setRefreshPaused(true);
+        stopPolling();
+      } else {
+        // Any other network / edge-function error: keep card, surface stale warning.
+        setRefreshStale(true);
+      }
     } finally {
       isActivePollRef.current = false;
       if (isMountedRef.current) setIsPolling(false);
     }
-  }, [stopPolling]);
+  }, [stopPolling, startPolling]);
 
   // Keep ref current so the setInterval callback always uses the latest closure.
   runPollRef.current = runPoll;
-
-  // ── startPolling ──────────────────────────────────────────────────────────
-
-  const startPolling = useCallback(() => {
-    stopPolling(); // clear any pre-existing interval first
-    pollIntervalRef.current = setInterval(() => {
-      void runPollRef.current?.();
-    }, POLL_INTERVAL_MS);
-  }, [stopPolling]);
 
   // ── handleLookup — initial form submit ────────────────────────────────────
 
@@ -743,7 +844,7 @@ export default function FindOrder() {
       e.preventDefault();
       if (lookupState === 'busy') return;
 
-      // Tear down any polling from a previous search before starting fresh.
+      // Tear down any polling / cooldown from a previous search.
       stopPolling();
       credentialsRef.current = null;
 
@@ -751,6 +852,13 @@ export default function FindOrder() {
       setFoundOrder(null);
       setLastChecked(null);
       setRefreshStale(false);
+      setRefreshPaused(false);
+      setManualCooldown(false);
+      if (cooldownTimerRef.current !== null) {
+        clearTimeout(cooldownTimerRef.current);
+        cooldownTimerRef.current = null;
+      }
+
       setLookupState('busy');
 
       const submittedOrderNumber = orderNumber.trim();
@@ -763,8 +871,7 @@ export default function FindOrder() {
         });
 
         if (result.found && result.order) {
-          // Stash credentials in ref — the poll function reads them from here.
-          // They are never written to state, URL, or storage.
+          // Stash credentials in ref only — never in state, URL, or storage.
           credentialsRef.current = {
             order_number: submittedOrderNumber,
             email: submittedEmail,
@@ -774,7 +881,10 @@ export default function FindOrder() {
           setLastChecked(new Date());
           setLookupState('found');
 
-          // Begin polling only if the order is still in progress.
+          // Disable manual refresh for 30 s after the initial lookup.
+          startCooldown();
+
+          // Begin auto-polling only if the order is still in progress.
           if (!isTerminalStatus(result.order.status)) {
             startPolling();
           }
@@ -798,26 +908,36 @@ export default function FindOrder() {
         setLookupState('error');
       }
     },
-    [lookupState, orderNumber, email, stopPolling, startPolling],
+    [lookupState, orderNumber, email, stopPolling, startCooldown, startPolling],
   );
 
   // ── handleReset — wipe everything and stop polling ────────────────────────
 
   const handleReset = useCallback(() => {
     stopPolling();
+
+    if (cooldownTimerRef.current !== null) {
+      clearTimeout(cooldownTimerRef.current);
+      cooldownTimerRef.current = null;
+    }
+
     credentialsRef.current = null;
     setLookupState('idle');
     setLookupError(null);
     setFoundOrder(null);
     setLastChecked(null);
     setRefreshStale(false);
+    setRefreshPaused(false);
+    setManualCooldown(false);
   }, [stopPolling]);
 
-  // ── handleManualRefresh — on-demand poll ──────────────────────────────────
+  // ── handleManualRefresh — on-demand poll + cooldown ───────────────────────
 
-  const handleManualRefresh = useCallback(() => {
-    void runPoll();
-  }, [runPoll]);
+  const handleManualRefresh = useCallback(async () => {
+    await runPoll();
+    // Start the 30 s cooldown after the request completes, whether success or failure.
+    if (isMountedRef.current) startCooldown();
+  }, [runPoll, startCooldown]);
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
@@ -960,7 +1080,10 @@ export default function FindOrder() {
                           order={foundOrder}
                           lastChecked={lastChecked}
                           refreshStale={refreshStale}
+                          refreshPaused={refreshPaused}
                           isPolling={isPolling}
+                          isAutoRefreshing={isAutoRefreshing}
+                          manualCooldown={manualCooldown}
                           isTerminal={isTerminalNow}
                           onManualRefresh={handleManualRefresh}
                         />
