@@ -341,7 +341,10 @@ export const router = createBrowserRouter([
 
         lazy: lazyRoute(() => import('@/modules/orders/pages/OrderSuccess')),
       },
-
+      {
+        path: 'order-cancelled',
+        lazy: lazyRoute(() => import('@/modules/orders/pages/OrderCanceled')),
+      },
       {
         path: 'order-status/:orderId',
 
