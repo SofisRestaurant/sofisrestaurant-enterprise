@@ -1,24 +1,24 @@
 // src/modules/orders/pages/FindOrder.tsx
 // ============================================================================
-// FIND MY ORDER — Guest order recovery (Step 5 of Find My Order feature)
+// TRACK YOUR ORDER — Guest order status lookup (no OTP, no navigation)
 // ============================================================================
 //
-// Two-step recovery flow:
-//   Step 1 — Guest enters order_number + contact → request-guest-order-access
-//             Response is always generic: "If we found your order, we sent a code."
-//   Step 2 — Guest enters 6-digit OTP → verify-guest-order-access
-//             On success: stores guest_recovery_token in sessionStorage and
-//             navigates to /order-status/:orderId.
-//             On failure: generic error, no oracle about what failed.
+// Single-step flow:
+//   Guest enters order_number + checkout email → get-guest-order-summary
+//   Response:
+//     { ok: true, found: true,  order: SafeOrderSummary } → show status card
+//     { ok: true, found: false }                          → show not-found msg
 //
 // Security contract:
-//   - contact, code, and guest_recovery_token are never logged.
-//   - guest_recovery_token is stored in sessionStorage ONLY, never the URL.
-//   - checkout_guest_token (same-session flow) is completely untouched.
+//   - email is never logged.
+//   - Nothing is stored in sessionStorage or localStorage.
+//   - No token is issued or consumed.
+//   - No navigation to /order-status/:id (no order id is returned).
+//   - checkout_guest_token is completely untouched.
 //   - Authenticated user flow is completely untouched.
-//   - Error messages never reveal whether an order or contact was found.
+//   - Error messages never reveal whether an order or email was found.
 //
-// Wire-up: add to router only after this file exists (Step 7 of the feature).
+// Wire-up: already registered in router.tsx as
 //   { path: 'find-order', lazy: lazyRoute(() => import('@/modules/orders/pages/FindOrder')) }
 // ============================================================================
 
@@ -29,32 +29,40 @@ import {
   type ReactNode,
   type SyntheticEvent,
 } from 'react';
-import { useNavigate, Link }           from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { motion, AnimatePresence, MotionConfig } from 'framer-motion';
-import { ArrowLeft, Search, CheckCircle2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  Search,
+  CheckCircle2,
+  Clock,
+  Package,
+  CreditCard,
+  RefreshCw,
+  AlertCircle,
+} from 'lucide-react';
 
 import { invokeEdge, InvokeEdgeError } from '@/lib/supabase/invoke';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type FlowStep = 'request' | 'verify';
+interface SafeOrderSummary {
+  order_number: number;
+  status: string;
+  payment_status: string;
+  fulfillment_type: string | null;
+  pickup_time: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+interface GuestOrderSummaryResponse {
+  ok: boolean;
+  found: boolean;
+  order?: SafeOrderSummary;
+}
 
-/**
- * sessionStorage key for the recovered tracking token.
- * OrderStatus reads this alongside checkout_guest_token to authorize polling.
- * DISTINCT from checkout_guest_token — the two keys serve different flows.
- */
-const RECOVERY_TOKEN_STORAGE_KEY = 'guest_order_recovery_token';
-
-/** Always-generic message shown after step 1, regardless of server outcome. */
-const GENERIC_SENT_MSG =
-  'If we found your order, we sent you a verification code. Check your messages.';
-
-/** Always-generic message shown on step 2 failure, regardless of failure reason. */
-const GENERIC_FAIL_MSG =
-  'That code is incorrect or has expired. Please request a new one.';
+type LookupState = 'idle' | 'busy' | 'found' | 'not-found' | 'error';
 
 // ─── Client-side validation (UX only — not security gates) ───────────────────
 
@@ -63,18 +71,139 @@ function isNumericOrderNumber(v: string): boolean {
   return t.length > 0 && /^\d{1,8}$/.test(t);
 }
 
-function isPlausibleContact(v: string): boolean {
+function isPlausibleEmail(v: string): boolean {
   const t = v.trim();
-  if (t.length < 3) return false;
-  // Phone: starts with +, digit, or common local formats
-  if (/^[+\d\(]/.test(t)) return true;
-  // Email: contains @ with text on both sides
   return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(t);
 }
 
-/** Strips non-digits, returns up to 6 characters. */
-function sanitizeCode(v: string): string {
-  return v.replace(/\D/g, '').slice(0, 6);
+// ─── Formatters ───────────────────────────────────────────────────────────────
+
+function formatOrderNumber(n: number): string {
+  return String(n).padStart(4, '0');
+}
+
+function formatDateTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function formatTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+  } catch {
+    return iso;
+  }
+}
+
+// ─── Status helpers ───────────────────────────────────────────────────────────
+
+type StatusMeta = {
+  label: string;
+  color: string;          // text color class
+  bg: string;             // background class
+  border: string;         // border class
+  dotColor: string;       // pulsing dot class
+};
+
+function getStatusMeta(status: string): StatusMeta {
+  switch (status.toLowerCase()) {
+    case 'confirmed':
+      return {
+        label: 'Confirmed',
+        color: 'text-amber-400',
+        bg: 'bg-amber-500/10',
+        border: 'border-amber-500/25',
+        dotColor: 'bg-amber-400',
+      };
+    case 'preparing':
+      return {
+        label: 'Preparing',
+        color: 'text-orange-400',
+        bg: 'bg-orange-500/10',
+        border: 'border-orange-500/25',
+        dotColor: 'bg-orange-400',
+      };
+    case 'ready':
+      return {
+        label: 'Ready for Pickup',
+        color: 'text-emerald-400',
+        bg: 'bg-emerald-500/10',
+        border: 'border-emerald-500/25',
+        dotColor: 'bg-emerald-400',
+      };
+    case 'delivered':
+    case 'completed':
+      return {
+        label: 'Completed',
+        color: 'text-emerald-400',
+        bg: 'bg-emerald-500/10',
+        border: 'border-emerald-500/25',
+        dotColor: 'bg-emerald-500',
+      };
+    case 'cancelled':
+    case 'canceled':
+      return {
+        label: 'Cancelled',
+        color: 'text-red-400',
+        bg: 'bg-red-500/10',
+        border: 'border-red-500/25',
+        dotColor: 'bg-red-400',
+      };
+    default:
+      return {
+        label: status.charAt(0).toUpperCase() + status.slice(1),
+        color: 'text-neutral-400',
+        bg: 'bg-neutral-500/10',
+        border: 'border-neutral-500/25',
+        dotColor: 'bg-neutral-400',
+      };
+  }
+}
+
+function getPaymentMeta(status: string): { label: string; color: string } {
+  switch (status.toLowerCase()) {
+    case 'paid':
+    case 'succeeded':
+    case 'complete':
+    case 'completed':
+      return { label: 'Paid', color: 'text-emerald-400' };
+    case 'pending':
+      return { label: 'Pending', color: 'text-amber-400' };
+    case 'failed':
+      return { label: 'Failed', color: 'text-red-400' };
+    case 'refunded':
+      return { label: 'Refunded', color: 'text-blue-400' };
+    default:
+      return {
+        label: status.charAt(0).toUpperCase() + status.slice(1),
+        color: 'text-neutral-400',
+      };
+  }
+}
+
+function getFulfillmentLabel(type: string | null): string | null {
+  if (!type) return null;
+  switch (type.toLowerCase()) {
+    case 'pickup':   return 'Pickup';
+    case 'delivery': return 'Delivery';
+    case 'dine_in':
+    case 'dine-in':  return 'Dine In';
+    default:         return type.charAt(0).toUpperCase() + type.slice(1);
+  }
 }
 
 // ─── Animation variants ───────────────────────────────────────────────────────
@@ -103,13 +232,27 @@ const fadeUp = {
   },
 };
 
+const cardStagger = {
+  hidden: {},
+  visible: { transition: { staggerChildren: 0.06, delayChildren: 0.08 } },
+};
+
+const cardRow = {
+  hidden: { opacity: 0, x: -10 },
+  visible: {
+    opacity: 1,
+    x: 0,
+    transition: { type: 'spring' as const, stiffness: 340, damping: 28 },
+  },
+};
+
 // ─── Primitives ───────────────────────────────────────────────────────────────
 
 function FieldLabel({ htmlFor, children }: { htmlFor?: string; children: ReactNode }) {
   return (
     <label
       htmlFor={htmlFor}
-      className="block text-[11px] font-bold uppercase tracking-[0.18em] text-neutral-500"
+      className="block text-[11px] font-bold uppercase tracking-0.18em text-neutral-500"
     >
       {children}
     </label>
@@ -157,18 +300,6 @@ function SubmitButton({
   );
 }
 
-function InfoBanner({ children }: { children: ReactNode }) {
-  return (
-    <div
-      role="status"
-      className="flex gap-3 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm leading-relaxed text-amber-200"
-    >
-      <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-amber-400" />
-      <span>{children}</span>
-    </div>
-  );
-}
-
 function ErrorBanner({ children }: { children: ReactNode }) {
   return (
     <motion.div
@@ -177,151 +308,216 @@ function ErrorBanner({ children }: { children: ReactNode }) {
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ type: 'spring', stiffness: 400, damping: 28 }}
-      className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+      className="flex gap-3 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300"
     >
-      {children}
+      <AlertCircle size={15} className="mt-0.5 shrink-0 text-red-400" aria-hidden="true" />
+      <span>{children}</span>
     </motion.div>
   );
 }
 
-// ─── Step indicator ───────────────────────────────────────────────────────────
+// ─── Status card ─────────────────────────────────────────────────────────────
 
-function StepDots({ current }: { current: FlowStep }) {
+function StatusCard({ order }: { order: SafeOrderSummary }) {
+  const statusMeta = getStatusMeta(order.status);
+  const paymentMeta = getPaymentMeta(order.payment_status);
+  const fulfillLabel = getFulfillmentLabel(order.fulfillment_type);
+
   return (
-    <div className="mb-6 flex items-center gap-1.5" aria-hidden="true">
-      <div className="h-1 w-6 rounded-full bg-amber-500 transition-all" />
+    <motion.div
+      key="status-card"
+      variants={slideVariants}
+      initial="hidden"
+      animate="visible"
+      exit="exit"
+      className="overflow-hidden rounded-2xl border border-white/8 bg-white/4"
+      aria-label={`Order status for order ${formatOrderNumber(order.order_number)}`}
+    >
+      {/* Header band */}
       <div
         className={[
-          'h-1 w-6 rounded-full transition-all',
-          current === 'verify' ? 'bg-amber-500' : 'bg-white/10',
+          'flex items-center justify-between gap-3 px-5 py-4',
+          statusMeta.bg,
+          'border-b border-white/6',
         ].join(' ')}
-      />
-    </div>
+      >
+        <div className="flex items-center gap-2.5">
+          <span className="relative flex h-2.5 w-2.5 shrink-0">
+            <span
+              className={[
+                'absolute inline-flex h-full w-full animate-ping rounded-full opacity-60',
+                statusMeta.dotColor,
+              ].join(' ')}
+            />
+            <span
+              className={[
+                'relative inline-flex h-2.5 w-2.5 rounded-full',
+                statusMeta.dotColor,
+              ].join(' ')}
+            />
+          </span>
+          <span className={['text-sm font-bold', statusMeta.color].join(' ')}>
+            {statusMeta.label}
+          </span>
+        </div>
+
+        <span className="font-mono text-sm font-bold text-white/70">
+          #{formatOrderNumber(order.order_number)}
+        </span>
+      </div>
+
+      {/* Detail rows */}
+      <motion.dl
+        className="divide-y divide-white/6 px-5"
+        variants={cardStagger}
+        initial="hidden"
+        animate="visible"
+      >
+        {/* Payment */}
+        <motion.div variants={cardRow} className="flex items-center justify-between gap-4 py-3.5">
+          <dt className="flex items-center gap-2 text-xs text-neutral-500">
+            <CreditCard size={13} aria-hidden="true" />
+            Payment
+          </dt>
+          <dd className={['text-sm font-semibold', paymentMeta.color].join(' ')}>
+            {paymentMeta.label}
+          </dd>
+        </motion.div>
+
+        {/* Fulfillment type */}
+        {fulfillLabel ? (
+          <motion.div variants={cardRow} className="flex items-center justify-between gap-4 py-3.5">
+            <dt className="flex items-center gap-2 text-xs text-neutral-500">
+              <Package size={13} aria-hidden="true" />
+              Fulfillment
+            </dt>
+            <dd className="text-sm font-semibold text-white/80">{fulfillLabel}</dd>
+          </motion.div>
+        ) : null}
+
+        {/* Pickup time */}
+        {order.pickup_time ? (
+          <motion.div variants={cardRow} className="flex items-center justify-between gap-4 py-3.5">
+            <dt className="flex items-center gap-2 text-xs text-neutral-500">
+              <Clock size={13} aria-hidden="true" />
+              Pickup Time
+            </dt>
+            <dd className="text-sm font-semibold text-white/80">{formatTime(order.pickup_time)}</dd>
+          </motion.div>
+        ) : null}
+
+        {/* Placed at */}
+        <motion.div variants={cardRow} className="flex items-center justify-between gap-4 py-3.5">
+          <dt className="flex items-center gap-2 text-xs text-neutral-500">
+            <CheckCircle2 size={13} aria-hidden="true" />
+            Order Placed
+          </dt>
+          <dd className="text-right text-xs text-neutral-400">
+            {formatDateTime(order.created_at)}
+          </dd>
+        </motion.div>
+
+        {/* Last updated */}
+        <motion.div variants={cardRow} className="flex items-center justify-between gap-4 py-3.5">
+          <dt className="flex items-center gap-2 text-xs text-neutral-500">
+            <RefreshCw size={13} aria-hidden="true" />
+            Last Updated
+          </dt>
+          <dd className="text-right text-xs text-neutral-400">
+            {formatDateTime(order.updated_at)}
+          </dd>
+        </motion.div>
+      </motion.dl>
+    </motion.div>
+  );
+}
+
+// ─── Not-found notice ─────────────────────────────────────────────────────────
+
+function NotFoundNotice() {
+  return (
+    <motion.div
+      key="not-found"
+      variants={slideVariants}
+      initial="hidden"
+      animate="visible"
+      exit="exit"
+      role="status"
+      aria-live="polite"
+      className="flex gap-3 rounded-xl border border-white/10 bg-white/4 px-4 py-4 text-sm leading-relaxed text-neutral-400"
+    >
+      <Search size={15} className="mt-0.5 shrink-0 text-neutral-600" aria-hidden="true" />
+      <span>
+        We couldn't find an order with those details. Check your order number and the email address
+        you used at checkout.
+      </span>
+    </motion.div>
   );
 }
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function FindOrder() {
-  const navigate = useNavigate();
+  const [orderNumber, setOrderNumber] = useState('');
+  const [email, setEmail] = useState('');
+  const [lookupState, setLookupState] = useState<LookupState>('idle');
+  const [lookupError, setLookupError] = useState<string | null>(null);
+  const [foundOrder, setFoundOrder] = useState<SafeOrderSummary | null>(null);
 
-  const [step, setStep] = useState<FlowStep>('request');
+  // ── Lookup handler ────────────────────────────────────────────────────────
 
-  // Step 1 form state
-  const [orderNumber, setOrderNumber]     = useState('');
-  const [contact, setContact]             = useState('');
-  const [requestBusy, setRequestBusy]     = useState(false);
-  const [requestError, setRequestError]   = useState<string | null>(null);
-
-  // Step 2 form state
-  const [code, setCode]                   = useState('');
-  const [verifyBusy, setVerifyBusy]       = useState(false);
-  const [verifyError, setVerifyError]     = useState<string | null>(null);
-
-  // ── Step 1: request a verification code ──────────────────────────────────
-  //
-  // The server always returns a generic 200 when inputs are valid, regardless
-  // of whether an order was found. We move to step 2 on any 200 response.
-  // 4xx/5xx errors surface as user-facing messages that do not reveal order data.
-
-  const handleRequestCode = useCallback(
+  const handleLookup = useCallback(
     async (e: SyntheticEvent<HTMLFormElement>) => {
       e.preventDefault();
-      if (requestBusy) return;
+      if (lookupState === 'busy') return;
 
-      setRequestError(null);
-      setRequestBusy(true);
+      setLookupError(null);
+      setFoundOrder(null);
+      setLookupState('busy');
 
       try {
-        await invokeEdge('request-guest-order-access', {
+        const result = await invokeEdge<GuestOrderSummaryResponse>('get-guest-order-summary', {
           order_number: orderNumber.trim(),
-          contact: contact.trim(),
+          email: email.trim(),
         });
-        // Success (200) → step 2. Message is always generic.
-        setStep('verify');
+
+        if (result.found && result.order) {
+          setFoundOrder(result.order);
+          setLookupState('found');
+        } else {
+          setLookupState('not-found');
+        }
       } catch (err) {
         if (err instanceof InvokeEdgeError) {
           if (err.status === 429) {
-            setRequestError('Too many requests. Please wait a few minutes before trying again.');
+            setLookupError('Too many requests. Please wait a few minutes and try again.');
+            setLookupState('error');
             return;
           }
           if (err.status === 400) {
-            setRequestError('Please check your order number and contact details and try again.');
+            setLookupError('Please check your order number and email address and try again.');
+            setLookupState('error');
             return;
           }
         }
-        // All other errors: generic fallback.
-        setRequestError('Something went wrong. Please try again in a moment.');
-      } finally {
-        setRequestBusy(false);
+        setLookupError('Something went wrong. Please try again in a moment.');
+        setLookupState('error');
       }
     },
-    [requestBusy, orderNumber, contact],
+    [lookupState, orderNumber, email],
   );
 
-  // ── Step 2: verify the OTP and receive recovery token ────────────────────
-  //
-  // On success: store token in sessionStorage ONLY (never in URL), navigate.
-  // On any failure: generic message — no oracle about which part failed.
+  // ── Reset: let the user search again ─────────────────────────────────────
 
-  const handleVerifyCode = useCallback(
-    async (e: SyntheticEvent<HTMLFormElement>) => {
-      e.preventDefault();
-      if (verifyBusy) return;
-
-      setVerifyError(null);
-      setVerifyBusy(true);
-
-      const sanitizedCode = sanitizeCode(code);
-
-      try {
-        const result = await invokeEdge<{
-          ok: boolean;
-          order_id?: string;
-          guest_recovery_token?: string;
-        }>('verify-guest-order-access', {
-          order_number: orderNumber.trim(),
-          contact: contact.trim(),
-          code: sanitizedCode,
-        });
-
-        if (result.ok && result.order_id && result.guest_recovery_token) {
-          // Persist token to sessionStorage — scoped to this browser tab.
-          // NEVER placed in the URL, NEVER in localStorage.
-          try {
-            sessionStorage.setItem(RECOVERY_TOKEN_STORAGE_KEY, result.guest_recovery_token);
-          } catch {
-            // sessionStorage unavailable (sandboxed iframe, storage blocked).
-            // Proceed to navigation — get-order-status will return 401 and the
-            // guest can request a fresh code. Do not block the flow.
-          }
-
-          // Navigate: order_id goes in the path ONLY.
-          // The recovery token is read from sessionStorage by OrderStatus.
-          navigate(`/order-status/${result.order_id}`);
-        } else {
-          // Unexpected success shape — treat as failure.
-          setVerifyError(GENERIC_FAIL_MSG);
-        }
-      } catch {
-        // All failures use the same generic message.
-        // The specific reason (wrong code, expired, wrong order, wrong contact)
-        // is intentionally not surfaced to prevent an enumeration oracle.
-        setVerifyError(GENERIC_FAIL_MSG);
-      } finally {
-        setVerifyBusy(false);
-      }
-    },
-    [verifyBusy, code, orderNumber, contact, navigate],
-  );
-
-  // ── Start over: go back to step 1 ────────────────────────────────────────
-
-  const handleStartOver = useCallback(() => {
-    setStep('request');
-    setCode('');
-    setVerifyError(null);
+  const handleReset = useCallback(() => {
+    setLookupState('idle');
+    setLookupError(null);
+    setFoundOrder(null);
   }, []);
+
+  const busy = lookupState === 'busy';
+  const hasResult = lookupState === 'found' || lookupState === 'not-found';
+  const submitValid = isNumericOrderNumber(orderNumber) && isPlausibleEmail(email);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -329,14 +525,12 @@ export default function FindOrder() {
     <MotionConfig reducedMotion="user">
       <div className="flex min-h-svh items-center justify-center bg-neutral-950 px-4 py-10 text-neutral-200">
         <div className="w-full max-w-md">
-
-          {/* ── Card ─────────────────────────────────────────────────────── */}
+          {/* ── Card ──────────────────────────────────────────────────────── */}
           <div className="overflow-hidden rounded-2xl border border-white/8 bg-neutral-950 shadow-2xl shadow-black/60">
-            {/* Amber accent line — matches OrderSuccess */}
+            {/* Amber accent line */}
             <div className="h-0.5 w-full bg-linear-to-r from-transparent via-amber-500/60 to-transparent" />
 
             <div className="p-6 sm:p-8">
-
               {/* ── Back navigation ── */}
               <Link
                 to="/menu"
@@ -346,7 +540,7 @@ export default function FindOrder() {
                 Back to menu
               </Link>
 
-              {/* ── Page header (static — always visible) ── */}
+              {/* ── Page header ── */}
               <motion.div
                 variants={staggerContainer}
                 initial="hidden"
@@ -364,174 +558,123 @@ export default function FindOrder() {
                   variants={fadeUp}
                   className="text-2xl font-bold tracking-tight text-white"
                 >
-                  Find My Order
+                  Track Your Order
                 </motion.h1>
 
                 <motion.p
                   variants={fadeUp}
                   className="mt-2 text-sm leading-relaxed text-neutral-500"
                 >
-                  {step === 'request'
-                    ? "Enter your order number and the phone or email used at checkout. If we find your order, we'll send a verification code."
-                    : 'Enter the verification code we sent to your contact.'}
+                  Enter your order number and the email address you used at checkout.
                 </motion.p>
               </motion.div>
 
-              {/* ── Step dots ── */}
-              <StepDots current={step} />
-
-              {/* ── Step forms — animated transition between steps ── */}
+              {/* ── Lookup form ── */}
               <AnimatePresence mode="wait" initial={false}>
+                <motion.form
+                  key="lookup-form"
+                  onSubmit={handleLookup}
+                  noValidate
+                  variants={slideVariants}
+                  initial="hidden"
+                  animate="visible"
+                  className="space-y-4"
+                  aria-label="Track your order"
+                >
+                  {/* Order number */}
+                  <div className="space-y-1.5">
+                    <FieldLabel htmlFor="find-order-number">Order Number</FieldLabel>
+                    <TextInput
+                      id="find-order-number"
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="e.g. 0042"
+                      value={orderNumber}
+                      onChange={(e) =>
+                        setOrderNumber(e.target.value.replace(/\D/g, '').slice(0, 8))
+                      }
+                      autoComplete="off"
+                      autoFocus
+                      disabled={busy}
+                      required
+                      aria-describedby="order-number-hint"
+                    />
+                    <p
+                      id="order-number-hint"
+                      className="text-[11px] leading-relaxed text-neutral-600"
+                    >
+                      Found in your confirmation email or printed receipt.
+                    </p>
+                  </div>
 
-                {/* ─── Step 1: Request code ─────────────────────────────── */}
-                {step === 'request' && (
-                  <motion.form
-                    key="step-request"
-                    onSubmit={handleRequestCode}
-                    noValidate
-                    variants={slideVariants}
-                    initial="hidden"
-                    animate="visible"
-                    exit="exit"
-                    className="space-y-4"
-                    aria-label="Request verification code"
+                  {/* Email */}
+                  <div className="space-y-1.5">
+                    <FieldLabel htmlFor="find-order-email">Email Used at Checkout</FieldLabel>
+                    <TextInput
+                      id="find-order-email"
+                      type="email"
+                      inputMode="email"
+                      placeholder="you@example.com"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      autoComplete="email"
+                      disabled={busy}
+                      required
+                      aria-describedby="email-hint"
+                    />
+                    <p id="email-hint" className="text-[11px] leading-relaxed text-neutral-600">
+                      Use the exact email you provided at checkout.
+                    </p>
+                  </div>
+
+                  {/* Error banner */}
+                  <AnimatePresence>
+                    {lookupState === 'error' && lookupError ? (
+                      <ErrorBanner key="lookup-error">{lookupError}</ErrorBanner>
+                    ) : null}
+                  </AnimatePresence>
+
+                  {/* Submit */}
+                  <SubmitButton busy={busy} disabled={!submitValid}>
+                    {busy ? 'Checking…' : 'Check Status'}
+                  </SubmitButton>
+                </motion.form>
+              </AnimatePresence>
+
+              {/* ── Result area ── */}
+              <AnimatePresence>
+                {hasResult ? (
+                  <motion.div
+                    key="result-area"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ type: 'spring', stiffness: 340, damping: 28 }}
+                    className="mt-5 space-y-4"
                   >
-                    {/* Order number */}
-                    <div className="space-y-1.5">
-                      <FieldLabel htmlFor="find-order-number">Order Number</FieldLabel>
-                      <TextInput
-                        id="find-order-number"
-                        type="text"
-                        inputMode="numeric"
-                        placeholder="e.g. 0042"
-                        value={orderNumber}
-                        onChange={e =>
-                          setOrderNumber(e.target.value.replace(/\D/g, '').slice(0, 8))
-                        }
-                        autoComplete="off"
-                        autoFocus
-                        disabled={requestBusy}
-                        required
-                        aria-describedby="order-number-hint"
-                      />
-                      <p id="order-number-hint" className="text-[11px] leading-relaxed text-neutral-600">
-                        Found in your confirmation email or printed receipt.
-                      </p>
-                    </div>
-
-                    {/* Contact */}
-                    <div className="space-y-1.5">
-                      <FieldLabel htmlFor="find-order-contact">Phone or Email</FieldLabel>
-                      <TextInput
-                        id="find-order-contact"
-                        type="text"
-                        placeholder="Phone number or email address"
-                        value={contact}
-                        onChange={e => setContact(e.target.value)}
-                        autoComplete="email"
-                        disabled={requestBusy}
-                        required
-                        aria-describedby="contact-hint"
-                      />
-                      <p id="contact-hint" className="text-[11px] leading-relaxed text-neutral-600">
-                        Use the phone or email you provided at checkout.
-                      </p>
-                    </div>
-
-                    {/* Error */}
-                    <AnimatePresence>
-                      {requestError ? (
-                        <ErrorBanner key="req-error">{requestError}</ErrorBanner>
-                      ) : null}
+                    <AnimatePresence mode="wait">
+                      {lookupState === 'found' && foundOrder ? (
+                        <StatusCard key="card" order={foundOrder} />
+                      ) : (
+                        <NotFoundNotice key="not-found" />
+                      )}
                     </AnimatePresence>
 
-                    {/* Submit */}
-                    <SubmitButton
-                      busy={requestBusy}
-                      disabled={!isNumericOrderNumber(orderNumber) || !isPlausibleContact(contact)}
-                    >
-                      Send Code
-                    </SubmitButton>
-                  </motion.form>
-                )}
-
-                {/* ─── Step 2: Verify code ──────────────────────────────── */}
-                {step === 'verify' && (
-                  <motion.div
-                    key="step-verify"
-                    variants={slideVariants}
-                    initial="hidden"
-                    animate="visible"
-                    exit="exit"
-                    className="space-y-4"
-                  >
-                    {/* Generic sent message — always visible, never conditional.
-                        Rendered outside <form> so it cannot be confused as a
-                        form field description. */}
-                    <InfoBanner>{GENERIC_SENT_MSG}</InfoBanner>
-
-                    <form
-                      onSubmit={handleVerifyCode}
-                      noValidate
-                      className="space-y-4"
-                      aria-label="Enter verification code"
-                    >
-                      {/* Code input */}
-                      <div className="space-y-1.5">
-                        <FieldLabel htmlFor="find-order-code">Verification Code</FieldLabel>
-                        <TextInput
-                          id="find-order-code"
-                          type="text"
-                          inputMode="numeric"
-                          placeholder="000000"
-                          value={code}
-                          onChange={e => setCode(sanitizeCode(e.target.value))}
-                          maxLength={6}
-                          autoComplete="one-time-code"
-                          autoFocus
-                          disabled={verifyBusy}
-                          required
-                          className="font-mono text-center text-xl tracking-[0.4em]"
-                          aria-describedby="code-hint"
-                        />
-                        <p id="code-hint" className="text-[11px] leading-relaxed text-neutral-600">
-                          Enter the 6-digit code from your message.
-                        </p>
-                      </div>
-
-                      {/* Error */}
-                      <AnimatePresence>
-                        {verifyError ? (
-                          <ErrorBanner key="ver-error">{verifyError}</ErrorBanner>
-                        ) : null}
-                      </AnimatePresence>
-
-                      {/* Submit */}
-                      <SubmitButton
-                        busy={verifyBusy}
-                        disabled={sanitizeCode(code).length !== 6}
-                      >
-                        Verify &amp; Track Order
-                      </SubmitButton>
-                    </form>
-
-                    {/* Escape hatch — start over with different details */}
+                    {/* Search again */}
                     <button
                       type="button"
-                      onClick={handleStartOver}
-                      disabled={verifyBusy}
-                      className="w-full text-[11px] text-neutral-600 underline underline-offset-2 transition hover:text-neutral-400 disabled:opacity-40"
+                      onClick={handleReset}
+                      className="w-full text-[11px] text-neutral-600 underline underline-offset-2 transition hover:text-neutral-400"
                     >
-                      Try a different order or contact
+                      Search a different order
                     </button>
                   </motion.div>
-                )}
-
+                ) : null}
               </AnimatePresence>
             </div>
           </div>
 
-          {/* ── Footer ───────────────────────────────────────────────────── */}
+          {/* ── Footer ────────────────────────────────────────────────────── */}
           <p className="mt-4 text-center text-[11px] text-neutral-700">
             Still need help?{' '}
             <Link
@@ -539,10 +682,9 @@ export default function FindOrder() {
               className="underline underline-offset-2 transition hover:text-neutral-500"
             >
               Contact us
-            </Link>
-            {' '}and include your order number.
+            </Link>{' '}
+            and include your order number.
           </p>
-
         </div>
       </div>
     </MotionConfig>
