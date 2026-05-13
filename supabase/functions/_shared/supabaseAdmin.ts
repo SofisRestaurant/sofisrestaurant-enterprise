@@ -5,29 +5,21 @@
 //
 // PURPOSE
 //   Single authoritative source for the privileged Supabase client inside Edge
-//   Functions. All direct Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') call sites
-//   must migrate to use this module instead.
-//
-// USAGE (Edge Function)
-//   import { supabaseAdmin } from '../_shared/supabaseAdmin.ts';
-//   const db = supabaseAdmin();
-//   const { data } = await db.from('orders').select('*');
+//   Functions. All privileged DB access must go through this module.
 //
 // SECURITY CONTRACT
 //   ✅ Server-only — never imported by frontend code
-//   ✅ Delegates to createServiceClient() — single RLS-bypass surface
-//   ✅ Reads SUPABASE_SECRET_KEY (new name) with SUPABASE_SERVICE_ROLE_KEY
-//      as a safe fallback so migration can be incremental (no flag day)
-//   ✅ Fails fast at call time — never swallows a missing key silently
+//   ✅ Uses SUPABASE_SECRET_KEYS.default first — current Supabase key format
+//   ✅ Keeps SUPABASE_SECRET_KEY + SUPABASE_SERVICE_ROLE_KEY fallbacks temporarily
+//   ✅ Fails fast at call time with clear errors
 //   ✅ Carries X-Edge-Role: service-admin header for audit traceability
 //
-// MIGRATION PATH
-//   Phase 1 (now)  : New call sites use supabaseAdmin()
-//   Phase 2        : Old call sites are migrated one function at a time
-//   Phase 3        : SUPABASE_SERVICE_ROLE_KEY fallback is removed, only
-//                    SUPABASE_SECRET_KEY is accepted
+// KEY RESOLUTION ORDER
+//   1. SUPABASE_SECRET_KEYS.default       current Supabase JSON dictionary
+//   2. SUPABASE_SECRET_KEY                old transitional single-key name
+//   3. SUPABASE_SERVICE_ROLE_KEY          legacy deprecated fallback
 //
-// ⚠️  DO NOT import this file from any src/ (frontend) module.
+// ⚠️ DO NOT import this file from any src/ frontend module.
 // =============================================================================
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
@@ -35,65 +27,115 @@ import type { Database } from './database.types.ts';
 
 export type AdminClient = SupabaseClient<Database>;
 
+type SecretKeyDictionary = Record<string, string>;
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Reads an env var by name. Falls back to the legacy name if provided.
- * Throws a clear error at call time (not at import time) so the function
- * deployment itself never crashes on startup — only on first invocation.
- */
-function resolveKey(primaryName: string, fallbackName?: string): string {
-  const primary = Deno.env.get(primaryName)?.trim();
-  if (primary) return primary;
+function resolveUrl(): string {
+  const url = Deno.env.get('SUPABASE_URL')?.trim();
 
-  if (fallbackName) {
-    const fallback = Deno.env.get(fallbackName)?.trim();
-    if (fallback) {
-      // Emit a structured warning visible in Supabase Edge Function logs.
-      // Remove once all secrets are migrated to SUPABASE_SECRET_KEY.
-      console.warn(
-        JSON.stringify({
-          level: 'warn',
-          source: 'supabaseAdmin',
-          message: `${primaryName} not set — falling back to ${fallbackName}. Migrate secrets.`,
-        }),
-      );
-      return fallback;
+  if (!url) {
+    throw new Error('[supabaseAdmin] Missing required env var: SUPABASE_URL');
+  }
+
+  return url;
+}
+
+function readSecretKeysDictionary(): string | null {
+  const raw = Deno.env.get('SUPABASE_SECRET_KEYS')?.trim();
+
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as SecretKeyDictionary;
+    const key = parsed.default?.trim();
+
+    if (key) {
+      return key;
     }
+
+    console.warn(
+      JSON.stringify({
+        level: 'warn',
+        source: 'supabaseAdmin',
+        message:
+          'SUPABASE_SECRET_KEYS is set but does not contain a non-empty default key.',
+      }),
+    );
+
+    return null;
+  } catch {
+    console.warn(
+      JSON.stringify({
+        level: 'warn',
+        source: 'supabaseAdmin',
+        message:
+          'SUPABASE_SECRET_KEYS is set but is not valid JSON. Expected JSON dictionary with a default key.',
+      }),
+    );
+
+    return null;
+  }
+}
+
+function readSingleKey(name: string): string | null {
+  const key = Deno.env.get(name)?.trim();
+  return key || null;
+}
+
+function resolveAdminKey(): string {
+  const secretKeysDefault = readSecretKeysDictionary();
+
+  if (secretKeysDefault) {
+    return secretKeysDefault;
+  }
+
+  const transitional = readSingleKey('SUPABASE_SECRET_KEY');
+
+  if (transitional) {
+    console.warn(
+      JSON.stringify({
+        level: 'warn',
+        source: 'supabaseAdmin',
+        message:
+          'Using SUPABASE_SECRET_KEY fallback. Prefer SUPABASE_SECRET_KEYS.default.',
+      }),
+    );
+
+    return transitional;
+  }
+
+  const legacy = readSingleKey('SUPABASE_SERVICE_ROLE_KEY');
+
+  if (legacy) {
+    console.warn(
+      JSON.stringify({
+        level: 'warn',
+        source: 'supabaseAdmin',
+        message:
+          'Using deprecated SUPABASE_SERVICE_ROLE_KEY fallback. Migrate to SUPABASE_SECRET_KEYS.default.',
+      }),
+    );
+
+    return legacy;
   }
 
   throw new Error(
-    `[supabaseAdmin] Missing required env var: ${primaryName}` +
-      (fallbackName ? ` (and fallback ${fallbackName})` : '') +
-      '. Check Supabase project secrets.',
+    '[supabaseAdmin] Missing Supabase admin key. Expected SUPABASE_SECRET_KEYS.default, SUPABASE_SECRET_KEY, or SUPABASE_SERVICE_ROLE_KEY.',
   );
-}
-
-function resolveUrl(): string {
-  const url = Deno.env.get('SUPABASE_URL')?.trim();
-  if (!url) throw new Error('[supabaseAdmin] Missing required env var: SUPABASE_URL');
-  return url;
 }
 
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
 
-/**
- * Returns a privileged Supabase client that bypasses Row Level Security.
- *
- * Prefer calling this ONCE per Edge Function invocation and passing the
- * client instance down — do not call it in hot loops.
- *
- * Key resolution order:
- *   1. SUPABASE_SECRET_KEY       (new canonical name)
- *   2. SUPABASE_SERVICE_ROLE_KEY (legacy — emits deprecation warning)
- */
 export function supabaseAdmin(): AdminClient {
   const url = resolveUrl();
-  const key = resolveKey('SUPABASE_SECRET_KEY', 'SUPABASE_SERVICE_ROLE_KEY');
+  const key = resolveAdminKey();
 
   return createClient<Database>(url, key, {
     auth: {
@@ -104,17 +146,10 @@ export function supabaseAdmin(): AdminClient {
     global: {
       headers: {
         'X-Application-Name': 'sofis-edge',
-        // Carried on every DB request for audit log visibility.
         'X-Edge-Role': 'service-admin',
       },
     },
   });
 }
 
-// ---------------------------------------------------------------------------
-// Convenience re-export so callers can type their local variable cleanly:
-//
-//   import { supabaseAdmin, type AdminClient } from '../_shared/supabaseAdmin.ts';
-//   const db: AdminClient = supabaseAdmin();
-// ---------------------------------------------------------------------------
 export type { Database };

@@ -1,12 +1,13 @@
+// src/modules/menu/api/menu.api.ts
+import { env } from '@/lib/config/env';
 import { supabase } from '@/lib/supabase/supabaseClient';
 
 type UnknownRecord = Record<string, unknown>;
-type ImportMetaEnvLike = Readonly<Record<string, unknown>>;
 
 export const MENU_API_ERROR_CODES = {
   INVALID_INPUT: 'MENU_INVALID_INPUT',
   INVALID_RESPONSE: 'MENU_INVALID_RESPONSE',
-  MISSING_ENV: 'MENU_MISSING_ENV',
+  MISSING_ENV: 'MENU_MISSING_ENV',   // retained — safe to keep, removal needs broader audit
   NOT_FOUND: 'MENU_NOT_FOUND',
   FETCH_FAILED: 'MENU_FETCH_FAILED',
   UNKNOWN: 'MENU_UNKNOWN',
@@ -120,7 +121,6 @@ interface CacheEntry<TData> {
 const DEFAULT_CACHE_TTL_MS = 30_000;
 const DEFAULT_TABLE_LIMIT = 500;
 const MAX_TABLE_LIMIT = 2_000;
-const DEFAULT_APP_NAME = 'sofis-restaurant-v2';
 const DEFAULT_CURRENCY = 'USD';
 const CONTROL_MAX_CODE_POINT = 31;
 const DELETE_CODE_POINT = 127;
@@ -160,19 +160,6 @@ function replaceControlCharacters(value: string, replacement = ' '): string {
   }
 
   return output;
-}
-
-function getImportMetaEnv(): ImportMetaEnvLike {
-  const meta = import.meta as ImportMeta & {
-    readonly env?: unknown;
-  };
-
-  return isRecord(meta.env) ? meta.env : {};
-}
-
-function getEnvString(name: string): string | null {
-  const value = getImportMetaEnv()[name];
-  return isNonEmptyString(value) ? value.trim() : null;
 }
 
 function sanitizePlainText(value: unknown, maxLength: number): string | null {
@@ -429,34 +416,17 @@ function createRequestId(): string {
   }
 }
 
-function createMissingEnvError(
-  baseUrl: string | null,
-  anonKey: string | null,
-): MenuApiError {
-  return new MenuApiError({
-    code: MENU_API_ERROR_CODES.MISSING_ENV,
-    message: 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY.',
-    status: 0,
-    details: {
-      hasBaseUrl: baseUrl !== null,
-      hasAnonKey: anonKey !== null,
-    },
-  });
-}
+// ─── Request headers ──────────────────────────────────────────────────────────
+//
+// Uses the central env helper (env.supabase.publishableKey, env.app.name).
+// Attaches a Bearer token only when a real user session is active.
+// Public menu reads succeed with the publishable key alone.
 
 async function getRestHeaders(): Promise<Record<string, string>> {
-  const baseUrl = getEnvString('VITE_SUPABASE_URL');
-  const anonKey = getEnvString('VITE_SUPABASE_ANON_KEY');
-  const appName = getEnvString('VITE_APP_NAME') ?? DEFAULT_APP_NAME;
-
-  if (baseUrl === null || anonKey === null) {
-    throw createMissingEnvError(baseUrl, anonKey);
-  }
-
   const headers: Record<string, string> = {
     Accept: 'application/json',
-    apikey: anonKey,
-    'x-application-name': appName,
+    apikey: env.supabase.publishableKey,
+    'x-application-name': env.app.name,
     'x-request-id': createRequestId(),
   };
 
@@ -468,11 +438,19 @@ async function getRestHeaders(): Promise<Record<string, string>> {
       headers.Authorization = `Bearer ${accessToken.trim()}`;
     }
   } catch {
-    // Public menu reads should still work with anon key only.
+    // Public menu reads should still work with the publishable key only.
   }
 
   return headers;
 }
+
+// ─── URL builder ──────────────────────────────────────────────────────────────
+
+function buildRestUrl(table: string, searchParams: URLSearchParams): string {
+  return `${env.supabase.url.replace(/\/+$/u, '')}/rest/v1/${table}?${searchParams.toString()}`;
+}
+
+// ─── Shared fetch helpers ─────────────────────────────────────────────────────
 
 async function safeJson(response: Response): Promise<unknown> {
   const text = await response.text().catch(() => '');
@@ -553,19 +531,7 @@ async function fetchJsonWithCache<TData>(
   return data;
 }
 
-function buildRestUrl(table: string, searchParams: URLSearchParams): string {
-  const baseUrl = getEnvString('VITE_SUPABASE_URL');
-
-  if (baseUrl === null) {
-    throw new MenuApiError({
-      code: MENU_API_ERROR_CODES.MISSING_ENV,
-      message: 'Missing VITE_SUPABASE_URL.',
-      status: 0,
-    });
-  }
-
-  return `${baseUrl.replace(/\/+$/u, '')}/rest/v1/${table}?${searchParams.toString()}`;
-}
+// ─── Public API ───────────────────────────────────────────────────────────────
 
 export async function fetchMenuTableRows(
   table: string,

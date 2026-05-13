@@ -6,7 +6,20 @@
 // - Safe bearer token extraction
 // =============================================================================
 //
-// MIGRATION NOTE (2026)
+// MIGRATION NOTE (2026 — publishable key)
+//   env() previously read SUPABASE_ANON_KEY directly.
+//   It now delegates to resolvePublishableKey() — the single authoritative
+//   source for the browser-safe / public client key inside Edge Functions.
+//
+//   Resolution order (mirrors supabaseAdmin.ts resolveAdminKey()):
+//     1. SUPABASE_PUBLISHABLE_KEYS.default   current Supabase JSON dictionary
+//     2. SUPABASE_PUBLISHABLE_KEY            transitional single-key name
+//     3. SUPABASE_ANON_KEY                   legacy deprecated fallback (warns)
+//
+//   All call sites that use createAnonClient() / createAnonKeyClient() /
+//   createAuthClient() continue to work without changes.
+//
+// MIGRATION NOTE (2026 — service key)
 //   createServiceClient() previously read SUPABASE_SERVICE_ROLE_KEY directly.
 //   It now delegates to supabaseAdmin() — the single authoritative source for
 //   privileged DB access. SUPABASE_SERVICE_ROLE_KEY is no longer read anywhere
@@ -43,13 +56,86 @@ function mustEnv(name: string): string {
   return v.trim();
 }
 
-// MIGRATED: env() no longer reads SUPABASE_SERVICE_ROLE_KEY.
+// ─────────────────────────────────────────────────────────────
+// Publishable-key resolution
+// Mirrors the pattern in supabaseAdmin.ts resolveAdminKey().
+// SUPABASE_ANON_KEY is kept as a temporary legacy fallback only.
+// ─────────────────────────────────────────────────────────────
+
+type PublishableKeyDictionary = Record<string, string>;
+
+function readPublishableKeysDictionary(): string | null {
+  const raw = Deno.env.get('SUPABASE_PUBLISHABLE_KEYS')?.trim();
+
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as PublishableKeyDictionary;
+    const key = parsed.default?.trim();
+
+    if (key) return key;
+
+    console.warn(
+      JSON.stringify({
+        level: 'warn',
+        source: 'supabase',
+        message:
+          'SUPABASE_PUBLISHABLE_KEYS is set but does not contain a non-empty default key.',
+      }),
+    );
+
+    return null;
+  } catch {
+    console.warn(
+      JSON.stringify({
+        level: 'warn',
+        source: 'supabase',
+        message:
+          'SUPABASE_PUBLISHABLE_KEYS is set but is not valid JSON. Expected JSON dictionary with a default key.',
+      }),
+    );
+
+    return null;
+  }
+}
+
+function resolvePublishableKey(): string {
+  const dictDefault = readPublishableKeysDictionary();
+
+  if (dictDefault) return dictDefault;
+
+  const single = Deno.env.get('SUPABASE_PUBLISHABLE_KEY')?.trim();
+
+  if (single) return single;
+
+  const legacy = Deno.env.get('SUPABASE_ANON_KEY')?.trim();
+
+  if (legacy) {
+    console.warn(
+      JSON.stringify({
+        level: 'warn',
+        source: 'supabase',
+        message:
+          'Using deprecated SUPABASE_ANON_KEY fallback. Migrate to SUPABASE_PUBLISHABLE_KEYS.default.',
+      }),
+    );
+
+    return legacy;
+  }
+
+  throw new Error(
+    '[supabase] Missing publishable key. Expected SUPABASE_PUBLISHABLE_KEYS.default, SUPABASE_PUBLISHABLE_KEY, or SUPABASE_ANON_KEY.',
+  );
+}
+
+// MIGRATED: env() no longer reads SUPABASE_ANON_KEY directly.
+// Publishable key resolution is now centralised in resolvePublishableKey().
 // Only the two keys legitimately needed by the anon/public client
 // factories are resolved here.
 function env() {
   return {
-    SUPABASE_URL:      mustEnv('SUPABASE_URL'),
-    SUPABASE_ANON_KEY: mustEnv('SUPABASE_ANON_KEY'),
+    SUPABASE_URL:             mustEnv('SUPABASE_URL'),
+    SUPABASE_PUBLISHABLE_KEY: resolvePublishableKey(),
   };
 }
 
@@ -99,9 +185,9 @@ export function createServiceClient(): SvcClient {
  * - For public unauth flows only
  */
 export function createAnonKeyClient(): AnonClient {
-  const { SUPABASE_URL, SUPABASE_ANON_KEY } = env();
+  const { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } = env();
 
-  return createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  return createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
     ...BASE_CLIENT_OPTIONS,
     global: {
       headers: mergeHeaders({ 'X-Edge-Role': 'anon-key' }),
@@ -115,10 +201,10 @@ export function createAnonKeyClient(): AnonClient {
  * - Used for auth.getUser(jwt) + user-scoped reads when you want RLS
  */
 export function createAnonClient(userJwt: string): AnonClient {
-  const { SUPABASE_URL, SUPABASE_ANON_KEY } = env();
+  const { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } = env();
   const jwt = userJwt.trim();
 
-  return createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  return createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
     ...BASE_CLIENT_OPTIONS,
     global: {
       headers: mergeHeaders(

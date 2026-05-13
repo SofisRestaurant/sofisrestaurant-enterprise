@@ -31,6 +31,7 @@
 // =============================================================================
 
 import { useReducer, useCallback, useRef } from 'react';
+import { env } from '@/lib/config/env';
 import { useCartStore } from '@/modules/cart/store/cart.store';
 import { mapCheckoutError } from '@/modules/checkout/errors/mapCheckoutError';
 import {
@@ -176,23 +177,16 @@ function buildGuestRequestBody(
 async function fetchGuestCheckout(
   body: Record<string, unknown>,
 ): Promise<RawCheckoutResponse> {
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-  const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
-
-  if (!supabaseUrl || typeof supabaseUrl !== 'string' || supabaseUrl.length === 0) {
-    return { kind: 'error', message: 'Checkout is not configured. Please contact support.', code: 'config_error' };
-  }
-
-  if (!anonKey || typeof anonKey !== 'string' || anonKey.length === 0) {
-    return { kind: 'error', message: 'Checkout is not configured. Please contact support.', code: 'config_error' };
-  }
-
   const response = await fetch(
-    `${supabaseUrl}/functions/v1/${GUEST_CHECKOUT_ENDPOINT}`,
+    `${env.supabase.url.replace(/\/+$/u, '')}/functions/v1/${GUEST_CHECKOUT_ENDPOINT}`,
     {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', apikey: anonKey },
-      body:    JSON.stringify(body),
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: env.supabase.publishableKey,
+        'x-application-name': env.app.name,
+      },
+      body: JSON.stringify(body),
     },
   );
 

@@ -1,24 +1,14 @@
 // PATH: supabase/functions/write-fulfillment-evidence/index.ts
 // =============================================================================
-// MIGRATED: removed inline Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') reads.
-// createServiceClient() now delegates to supabaseAdmin() internally (via auth.ts).
-// createAnonClient() still receives url + anonKey — that path is unchanged.
-//
-// The env validation block is narrowed: only SUPABASE_URL and SUPABASE_ANON_KEY
-// are checked here. The service key is validated inside supabaseAdmin() itself,
-// which throws a structured error if missing.
-//
-// All business logic, auth checks, role guards, and evidence write logic are
-// byte-for-byte identical to the prior version.
-// =============================================================================
-
 import {
-  createAnonClient,
-  createServiceClient,
   getAuthenticatedUser,
   getBearerToken,
   getProfileRole,
 } from './auth.ts';
+import {
+  createAnonClient,
+  createServiceClient,
+} from '../_shared/supabase.ts';
 import {
   buildMarkOutForDeliveryUpsertRow,
   buildWriteUpsertRow,
@@ -113,32 +103,15 @@ Deno.serve(async (request: Request): Promise<Response> => {
 
   const payload = parsedPayload;
 
-  // ── Env validation ────────────────────────────────────────────────────────
-  // MIGRATED: SUPABASE_SERVICE_ROLE_KEY check removed — supabaseAdmin() handles
-  // that internally and throws a structured error if the key is absent.
-  // Only the two keys consumed directly in this file are validated here.
-  const supabaseUrl     = Deno.env.get('SUPABASE_URL')?.trim() ?? '';
-  const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')?.trim() ?? '';
-
-  if (supabaseUrl.length === 0 || supabaseAnonKey.length === 0) {
-    return errorResponse(
-      500,
-      'server_misconfigured',
-      'Required Supabase environment variables are missing.',
-      corsHeaders,
-    );
-  }
-
-  // ── Auth ──────────────────────────────────────────────────────────────────
+ 
   const jwt = getBearerToken(request.headers.get('authorization') ?? '');
 
   if (jwt === null) {
     return errorResponse(401, 'unauthorized', 'Missing bearer token.', corsHeaders);
   }
 
-  const anonClient    = createAnonClient(supabaseUrl, supabaseAnonKey, jwt);
-  // MIGRATED: createServiceClient() now calls supabaseAdmin() internally —
-  // no url/key args needed, but they are still accepted for compat.
+  const anonClient    = createAnonClient(jwt);
+
   const serviceClient = createServiceClient();
 
   const authUserId = await getAuthenticatedUser(anonClient, jwt);

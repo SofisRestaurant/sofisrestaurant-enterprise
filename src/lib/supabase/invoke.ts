@@ -182,7 +182,9 @@ function createMissingEnvError(
     functionName,
     requestId,
     status: 0,
-    message: 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY',
+    message:
+
+  'Missing VITE_SUPABASE_URL or VITE_SUPABASE_PUBLISHABLE_KEY (legacy fallback: VITE_SUPABASE_ANON_KEY)',
     details: {
       hasBaseUrl: baseUrl !== null,
       hasAnonKey: anonKey !== null,
@@ -273,11 +275,11 @@ export async function invokeEdge<TResponse = unknown, TBody = unknown>(
   const method = init?.method ?? 'POST';
   const requestId = readRequestId(init);
 
- const baseUrl = env.supabase.url;
-const anonKey = env.supabase.anonKey;
+  const baseUrl = env.supabase.url;
+  const publishableKey = env.supabase.publishableKey;
 
-  if (baseUrl === null || anonKey === null) {
-    throw createMissingEnvError(functionName, requestId, baseUrl, anonKey);
+  if (!baseUrl || !publishableKey) {
+    throw createMissingEnvError(functionName, requestId, baseUrl ?? null, publishableKey ?? null);
   }
 
   const appName = 'sofis-restaurant-v2';
@@ -290,7 +292,7 @@ const anonKey = env.supabase.anonKey;
     body,
     init,
     token,
-    anonKey,
+     anonKey: publishableKey,
     appName,
     requestId,
   });
@@ -307,7 +309,7 @@ const anonKey = env.supabase.anonKey;
         body,
         init,
         token,
-        anonKey,
+         anonKey: publishableKey,
         appName,
         requestId,
       });

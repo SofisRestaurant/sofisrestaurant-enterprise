@@ -5,7 +5,7 @@ import { env } from '@/lib/config/env';
 import type { Database } from './database.types';
 
 const SUPABASE_GLOBAL_HEADERS = {
-  'x-application-name': 'sofis-restaurant-v2',
+  'x-application-name': env.app.name,
 } as const;
 
 export const REALTIME_SUBSCRIBE_STATES = {
@@ -18,9 +18,12 @@ export const REALTIME_SUBSCRIBE_STATES = {
 export type RealtimeSubscribeState =
   (typeof REALTIME_SUBSCRIBE_STATES)[keyof typeof REALTIME_SUBSCRIBE_STATES];
 
-export function isRealtimeSubscribed(value: unknown): value is typeof REALTIME_SUBSCRIBE_STATES.SUBSCRIBED {
+export function isRealtimeSubscribed(
+  value: unknown,
+): value is typeof REALTIME_SUBSCRIBE_STATES.SUBSCRIBED {
   return value === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED;
 }
+
 export function isRealtimeSubscribeState(value: unknown): value is RealtimeSubscribeState {
   return (
     value === REALTIME_SUBSCRIBE_STATES.CLOSED ||
@@ -32,13 +35,14 @@ export function isRealtimeSubscribeState(value: unknown): value is RealtimeSubsc
 
 export const supabase: SupabaseClient<Database> = createClient<Database>(
   env.supabase.url,
-  env.supabase.anonKey,
+  env.supabase.publishableKey,
   {
     auth: {
       autoRefreshToken: true,
       detectSessionInUrl: true,
       flowType: 'pkce',
       persistSession: true,
+      storageKey: 'sofis-auth-token',
     },
     global: {
       headers: SUPABASE_GLOBAL_HEADERS,

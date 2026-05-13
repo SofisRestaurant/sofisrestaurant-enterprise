@@ -1,25 +1,12 @@
 // PATH: supabase/functions/admin-metrics/index.ts
 // ============================================================================
-// ADMIN METRICS — Enterprise / Production Hardened (2026)
-// ----------------------------------------------------------------------------
-// Goals:
-// - Fail-closed CORS (403 if origin not allowlisted)
-// - Auth required (shared authenticateAdmin) with correct 401/403 mapping
-// - Body size guard for POST (DoS hardening)
-// - Query timeouts (per-query) + total function timeout
-// - Safe logging (structured, no secrets)
-// - Stable frontend contract even if view column names drift
-// - No `any`, no unsafe casts
-// ============================================================================
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createServiceClient } from '../_shared/supabase.ts';
 import type { Database } from '../_shared/database.types.ts';
 import { authenticateAdmin } from '../_shared/auth.ts';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Env (fail-fast)
-// ─────────────────────────────────────────────────────────────────────────────
+
 function mustEnv(key: string): string {
   const value = Deno.env.get(key);
   if (!value || !value.trim()) {
@@ -27,11 +14,6 @@ function mustEnv(key: string): string {
   }
   return value.trim();
 }
-
-// MIGRATED: removed mustEnv('SUPABASE_SERVICE_ROLE_KEY') and mustEnv('SUPABASE_ANON_KEY').
-// createServiceClient() → supabaseAdmin() resolves SUPABASE_SECRET_KEY internally
-// (with SUPABASE_SERVICE_ROLE_KEY fallback) and throws a structured error on first
-// invocation if missing. SUPABASE_ANON_KEY is not used by this function at all.
 mustEnv('SUPABASE_URL');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -55,9 +37,7 @@ const ALLOWED_METHODS = 'GET, POST, OPTIONS';
 const ALLOWED_HEADERS =
   'authorization, x-client-info, apikey, content-type, x-application-name, x-request-id, x-idempotency-key';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────────────────────────
+
 type TypedClient = SupabaseClient<Database>;
 
 type QueryResult<T> = {

@@ -4,7 +4,7 @@
 // =============================================================================
 //
 // PURPOSE
-//   Canonical frontend Supabase client. Uses only the publishable anon key.
+//   Canonical frontend Supabase client. Uses only a browser-safe publishable key.
 //   All RLS policies are assumed to be enforced at the database layer.
 //
 // USAGE
@@ -12,21 +12,23 @@
 //   const { data } = await supabasePublic.from('menu_items').select('*');
 //
 // SECURITY CONTRACT
-//   ✅ Only VITE_SUPABASE_ANON_KEY (publishable) — never a secret key
-//   ✅ RLS is the only access boundary — no server-side privilege elevation
+//   ✅ Uses VITE_SUPABASE_PUBLISHABLE_KEY first — current public key name
+//   ✅ Temporarily supports VITE_SUPABASE_ANON_KEY as legacy fallback
+//   ✅ Never uses service role, secret, or admin keys
 //   ✅ Safe to ship in browser bundles
-//   ✅ Auth state is user-session scoped (not service role)
+//   ✅ Auth state is user-session scoped
+//
+// KEY RESOLUTION ORDER
+//   1. VITE_SUPABASE_PUBLISHABLE_KEY
+//   2. VITE_SUPABASE_ANON_KEY legacy fallback
 //
 // WHAT THIS FILE MUST NEVER CONTAIN
 //   ❌ VITE_SUPABASE_SERVICE_ROLE_KEY
+//   ❌ VITE_SUPABASE_SECRET_KEY
 //   ❌ SUPABASE_SECRET_KEY
+//   ❌ SUPABASE_SECRET_KEYS
 //   ❌ Any key that bypasses RLS
 //   ❌ Any admin or privileged operation
-//
-// NOTE ON EXISTING supabaseClient.ts
-//   The existing src/lib/supabase/supabaseClient.ts is preserved unchanged.
-//   This file is the hardened replacement. New code should import from here.
-//   supabaseClient.ts will be aliased to this file in a later migration phase.
 // =============================================================================
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
@@ -36,55 +38,77 @@ import type { Database } from './database.types';
 // Env validation — runs at module load so a misconfigured build fails loudly
 // ---------------------------------------------------------------------------
 
+function readEnv(name: string): string | null {
+  const value = import.meta.env[name]?.trim();
+  return value && value.length > 0 ? value : null;
+}
+
 function resolvePublishableKey(): string {
-  // Vite exposes env vars via import.meta.env. The variable MUST be prefixed
-  // with VITE_ to be included in the client bundle.
-  const key = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
+  const publishableKey = readEnv('VITE_SUPABASE_PUBLISHABLE_KEY');
 
-  if (!key) {
-    throw new Error(
-      '[supabasePublicClient] VITE_SUPABASE_ANON_KEY is not set. ' +
-        'Add it to your .env file. Never use a service role key here.',
-    );
+  if (publishableKey) {
+    assertBrowserSafeKey(publishableKey, 'VITE_SUPABASE_PUBLISHABLE_KEY');
+    return publishableKey;
   }
 
-  // Guard: catch accidental secret key usage at boot time.
-  // Service role JWTs contain "role":"service_role" in their payload.
-  // We can cheaply detect this without a full JWT parse.
-  if (isSecretKey(key)) {
-    throw new Error(
-      '[supabasePublicClient] Detected a service_role key in VITE_SUPABASE_ANON_KEY. ' +
-        'This key is SECRET and must never be exposed to the browser. ' +
-        'Use the anon/publishable key instead.',
+  const legacyAnonKey = readEnv('VITE_SUPABASE_ANON_KEY');
+
+  if (legacyAnonKey) {
+    console.warn(
+      '[supabasePublicClient] Using legacy VITE_SUPABASE_ANON_KEY fallback. ' +
+        'Add VITE_SUPABASE_PUBLISHABLE_KEY when ready.',
     );
+
+    assertBrowserSafeKey(legacyAnonKey, 'VITE_SUPABASE_ANON_KEY');
+    return legacyAnonKey;
   }
 
-  return key;
+  throw new Error(
+    '[supabasePublicClient] Missing Supabase browser key. ' +
+      'Set VITE_SUPABASE_PUBLISHABLE_KEY. Temporary fallback: VITE_SUPABASE_ANON_KEY.',
+  );
 }
 
 function resolveUrl(): string {
-  const url = import.meta.env.VITE_SUPABASE_URL?.trim();
+  const url = readEnv('VITE_SUPABASE_URL');
+
   if (!url) {
     throw new Error(
       '[supabasePublicClient] VITE_SUPABASE_URL is not set. Add it to your .env file.',
     );
   }
+
   return url;
 }
 
+function assertBrowserSafeKey(key: string, envName: string): void {
+  if (isSecretKey(key)) {
+    throw new Error(
+      `[supabasePublicClient] Detected a service_role/secret key in ${envName}. ` +
+        'This key is SECRET and must never be exposed to the browser. ' +
+        'Use a publishable key instead.',
+    );
+  }
+}
+
 /**
- * Heuristic check: Supabase service_role JWTs encode `"role":"service_role"`
- * in their base64 payload. This lets us catch mis-configured keys at startup
- * without a full JWKS verification round-trip.
+ * Heuristic check:
+ * - Legacy service_role JWTs encode `"role":"service_role"` in their payload.
+ * - New secret keys can use secret-style prefixes.
  *
- * This check is intentionally cheap (no crypto). The real security boundary
- * is RLS — this is a developer experience safeguard only.
+ * This is a developer-experience safeguard only. RLS remains the real boundary.
  */
 function isSecretKey(key: string): boolean {
+  const normalized = key.trim();
+
+  if (normalized.startsWith('sb_secret_') || normalized.includes('service_role')) {
+    return true;
+  }
+
   try {
-    const parts = key.split('.');
+    const parts = normalized.split('.');
     if (parts.length !== 3) return false;
-    // JWT payload is the middle segment, base64url encoded
+
     const payload = atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'));
     return payload.includes('"service_role"');
   } catch {
@@ -97,18 +121,19 @@ function isSecretKey(key: string): boolean {
 // ---------------------------------------------------------------------------
 
 const SUPABASE_URL = resolveUrl();
-const SUPABASE_ANON_KEY = resolvePublishableKey();
+const SUPABASE_PUBLISHABLE_KEY = resolvePublishableKey();
 
 /**
  * Browser-safe Supabase client.
  *
- * - Session persistence: enabled (localStorage — appropriate for browser)
+ * - Session persistence: enabled
  * - Auto token refresh: enabled
- * - RLS is enforced — this client has NO elevated privileges
+ * - RLS is enforced
+ * - This client has NO elevated privileges
  */
 export const supabasePublic: SupabaseClient<Database> = createClient<Database>(
   SUPABASE_URL,
-  SUPABASE_ANON_KEY,
+  SUPABASE_PUBLISHABLE_KEY,
   {
     auth: {
       persistSession: true,
@@ -124,9 +149,4 @@ export const supabasePublic: SupabaseClient<Database> = createClient<Database>(
   },
 );
 
-// ---------------------------------------------------------------------------
-// Named re-export so callers can also import the type if needed
-//
-//   import { supabasePublic } from '@/lib/supabase/supabasePublicClient';
-// ---------------------------------------------------------------------------
 export type { Database };
