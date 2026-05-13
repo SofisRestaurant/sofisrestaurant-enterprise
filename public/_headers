@@ -1,37 +1,7 @@
 # =============================================================================
 # Netlify HTTP Headers — Sofi's Restaurant
 # =============================================================================
-# IMPORTANT: Netlify _headers syntax rules:
-#   - Comments (#) and blank lines TERMINATE a header block.
-#   - All headers for one path must be consecutive, indented lines.
-#   - Comments are only valid BETWEEN blocks, never inside one.
-# Docs:      https://docs.netlify.com/routing/headers/
-# CSP check: https://csp-evaluator.withgoogle.com/
-# Sec check: https://securityheaders.com/
-# =============================================================================
 
-
-# ── ALL PAGES & RESPONSES ─────────────────────────────────────────────────────
-# Security headers applied universally.
-#
-# X-Content-Type-Options  — prevents MIME-sniffing attacks
-# X-Frame-Options         — blocks clickjacking via iframe embedding
-# X-XSS-Protection        — XSS filter for legacy browsers
-# Strict-Transport-Security — forces HTTPS for 1 year including subdomains
-# Referrer-Policy         — sends origin only on cross-origin requests
-# Permissions-Policy      — restricts sensitive browser APIs
-# Content-Security-Policy — allowlist of trusted resource origins
-#
-# CSP sources:
-#   'self'                 your own domain
-#   'unsafe-inline'        required by Tailwind CSS + Vite build output
-#   https://js.stripe.com  Stripe.js payment widget
-#   https://*.supabase.co  Supabase API, Storage, Auth, Realtime REST
-#   wss://*.supabase.co    Supabase Realtime WebSocket (live order status)
-#   https://images.pexels.com    Pexels stock photography (hero/menu images)
-#   https://images.unsplash.com  Unsplash stock photography (fallback images)
-#   data: blob:            canvas exports, createObjectURL for local images
-#   worker-src blob:       Vite web workers + model-viewer internal worker
 /*
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
@@ -40,47 +10,22 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(self "https://js.stripe.com"), usb=(), interest-cohort=()
   Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://js.stripe.com https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.supabase.co https://images.pexels.com https://images.unsplash.com https://sofisrestaurant.com https://sofisrestaurant.netlify.app; font-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.stripe.com https://unpkg.com; frame-src https://js.stripe.com https://hooks.stripe.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests;
-
-
-# ── HTML ENTRY POINT — never cache ────────────────────────────────────────────
-# index.html must always be fresh so React Router gets the correct shell.
-# Stale HTML = users stuck on old JS bundle hashes after a deploy.
-/
   Cache-Control: no-cache, no-store, must-revalidate
   Pragma: no-cache
 
-/*.html
-  Cache-Control: no-cache, no-store, must-revalidate
-  Pragma: no-cache
-
-
-# ── HASHED JS / CSS ASSETS — immutable forever ────────────────────────────────
-# Vite appends a content hash to every output filename (e.g. index.Bx3kP9mQ.js).
-# A new deploy = new hashes, so old cached files are never served for new code.
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
 
-
-# ── SELF-HOSTED FONTS — immutable + CORS ──────────────────────────────────────
-# Immutable: font bytes never change for a given filename.
-# CORS header: Firefox and Safari require Access-Control-Allow-Origin
-# to load fonts from the same origin when fetched as a font resource.
 /fonts/*
   Cache-Control: public, max-age=31536000, immutable
   Access-Control-Allow-Origin: *
 
-
-# ── LOCAL IMAGES — 1 week cache with stale-while-revalidate ──────────────────
 /images/*
   Cache-Control: public, max-age=604800, stale-while-revalidate=86400
 
 /icons/*
   Cache-Control: public, max-age=604800, stale-while-revalidate=86400
 
-
-# ── 3D MODEL ASSETS (.glb / .gltf) ────────────────────────────────────────────
-# sofis3dlogo-2.glb and any other model-viewer assets.
-# Content-Type must be explicit — some CDNs serve .glb as octet-stream
 /*.glb
   Cache-Control: public, max-age=604800, stale-while-revalidate=86400
   Content-Type: model/gltf-binary
@@ -89,36 +34,22 @@
   Cache-Control: public, max-age=604800, stale-while-revalidate=86400
   Content-Type: model/gltf+json
 
-
-# ── PWA MANIFEST — 24 h cache ─────────────────────────────────────────────────
-# Short enough that manifest updates reach installed PWA users within a day.
-# Content-Type must be application/manifest+json for Chrome installability.
 /manifest.json
   Cache-Control: public, max-age=86400
   Content-Type: application/manifest+json
 
-
-# ── SERVICE WORKER — never cache ──────────────────────────────────────────────
-# SW must always be fetched fresh so the browser can detect a new version.
 /sw.js
   Cache-Control: no-cache, no-store, must-revalidate
 
-
-# ── TRANSLATION JSON — 1 h cache ──────────────────────────────────────────────
-# Short cache so locale fixes and new translation keys reach users quickly.
-# stale-while-revalidate lets the browser serve stale while fetching fresh.
 /locales/*
   Cache-Control: public, max-age=3600, stale-while-revalidate=86400
   Content-Type: application/json; charset=utf-8
 
-
-# ── NETLIFY FUNCTIONS — no cache (dynamic API responses) ─────────────────────
 /.netlify/functions/*
   Cache-Control: no-store
 
-
-# ── ADMIN ROUTES — deny iframe embedding (defence-in-depth) ──────────────────
-# Admin pages carry an extra X-Frame-Options in case a middleware is bypassed.
 /admin/*
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
+  Cache-Control: no-cache, no-store, must-revalidate
+  Pragma: no-cache
