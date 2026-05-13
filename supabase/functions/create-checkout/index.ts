@@ -1181,6 +1181,40 @@ async function createStripeSession(
   preSessionKey: string,
   riskGate: RiskGatePayload,
 ): Promise<Result<Stripe.Checkout.Session>> {
+  // ── [FIX 1] Final charge amount guard ──────────────────────────────────────
+  // Verify that the amount Stripe will actually charge (snapshot total minus
+  // any loyalty coupon) is a positive integer before creating the session.
+  // A zero or negative final charge would be rejected by Stripe and by the
+  // webhook — prevent it here so we never create an unchargeble session.
+  //
+  // Line items are built from the full snapshot total. The loyalty coupon is
+  // applied as a Stripe discount on top of those line items. The net amount
+  // Stripe charges is therefore: totalCents - loyalty.discountCents.
+  const expectedChargedCents: number = loyalty.applied
+    ? pricing.snapshot.totalCents - loyalty.discountCents
+    : pricing.snapshot.totalCents;
+
+  if (
+    !Number.isInteger(expectedChargedCents) ||
+    expectedChargedCents <= 0
+  ) {
+    log("error", "checkout_invalid_charge_amount", {
+      requestId: ctx.requestId,
+      userId: prefix(ctx.userId),
+      cartId: prefix(cart.cartId),
+      totalCents: pricing.snapshot.totalCents,
+      loyaltyDiscountCents: loyalty.applied ? loyalty.discountCents : 0,
+      expectedChargedCents,
+    });
+    return fail(
+      failure(
+        422,
+        "pricing_failed",
+        "Unable to calculate checkout total. Please try again.",
+      ),
+    );
+  }
+
   // buildStripeLineItemsFromPricing throws PricingValidationError when line
   // items do not reconcile to the snapshot total. Catch it here so the caller
   // can roll back reservations before responding.
@@ -1267,6 +1301,16 @@ async function createStripeSession(
 // preSessionKey is passed in from the single computed value in the main handler.
 // It must NOT be recomputed here — doing so risks a mismatch if any input has
 // changed between the point of computation and this call.
+//
+// [FIX 2] customer_ip, device_fingerprint, and customer_user_agent are NOT
+// written to Stripe metadata. These values are privacy-sensitive and are
+// already captured in your own risk gate system (pre_checkout_risk_score /
+// pre_checkout_risk_level / pre_checkout_verif_status). Sending full IP and
+// device fingerprint into Stripe's metadata storage is unnecessary for
+// payment processing and increases PII exposure surface.
+//
+// The three risk gate fields ARE kept because the webhook reads them to skip
+// re-scoring post-payment.
 
 function buildSessionMetadata(
   ctx: RequestContext,
@@ -1286,38 +1330,33 @@ function buildSessionMetadata(
     // backward-compat with existing webhook consumers that have not yet been
     // migrated to user_id. Do not introduce new consumers of these fields —
     // use user_id exclusively going forward.
-    user_id: ctx.userId,
+    user_id:      ctx.userId,
     customer_uid: ctx.userId,
-    uid: ctx.userId,
+    uid:          ctx.userId,
 
     pending_cart_id: cart.cartId,
-    cart_ref: cart.cartId,
-    cart_id: cart.cartId,
-    order_type: body.order_type,
-    pricing_hash: pricing.pricingHash,
+    cart_ref:        cart.cartId,
+    cart_id:         cart.cartId,
+    order_type:      body.order_type,
+    pricing_hash:    pricing.pricingHash,
     pricing_snapshot_version: snapshot.version,
-    request_id: ctx.requestId,
+    request_id:      ctx.requestId,
     stripe_api_version: STRIPE_API_VERSION,
-    currency: snapshot.currency,
-    subtotal_cents: String(snapshot.subtotalCents),
-    discount_cents: String(
+    currency:        snapshot.currency,
+    subtotal_cents:  String(snapshot.subtotalCents),
+    discount_cents:  String(
       (snapshot.promoDiscountCents ?? 0) +
         (snapshot.campaignDiscountCents ?? 0) +
         (snapshot.creditCents ?? 0),
     ),
-    promo_discount_cents: String(snapshot.promoDiscountCents ?? 0),
+    promo_discount_cents:    String(snapshot.promoDiscountCents ?? 0),
     campaign_discount_cents: String(snapshot.campaignDiscountCents ?? 0),
-    credit_cents: String(snapshot.creditCents ?? 0),
-    tax_cents: String(snapshot.taxCents),
-    total_cents: String(snapshot.totalCents),
-    idempotency_key: cart.idempotencyKey,
+    credit_cents:            String(snapshot.creditCents ?? 0),
+    tax_cents:               String(snapshot.taxCents),
+    total_cents:             String(snapshot.totalCents),
+    idempotency_key:         cart.idempotencyKey,
     ...pickupTimeToMetadata(pickupTime),
-    ...(ctx.requestIp ? { customer_ip: ctx.requestIp } : {}),
-    ...(ctx.userAgent ? { customer_user_agent: ctx.userAgent.slice(0, 500) } : {}),
-    ...(ctx.deviceFingerprint
-      ? { device_fingerprint: ctx.deviceFingerprint.slice(0, 256) }
-      : {}),
-    ...(discounts.promoId ? { promo_id: discounts.promoId } : {}),
+    ...(discounts.promoId  ? { promo_id:  discounts.promoId  } : {}),
     ...(discounts.creditId ? { credit_id: discounts.creditId } : {}),
     ...(snapshot.appliedCampaignIds.length
       ? { applied_campaign_ids: snapshot.appliedCampaignIds.join(",") }
@@ -1325,37 +1364,29 @@ function buildSessionMetadata(
     ...(body.loyalty_redeem_points && body.loyalty_redeem_points > 0
       ? { loyalty_redeem_points: String(body.loyalty_redeem_points) }
       : {}),
-    ...(body.loyalty_reward_id ? { loyalty_reward_id: body.loyalty_reward_id } : {}),
+    ...(body.loyalty_reward_id
+      ? { loyalty_reward_id: body.loyalty_reward_id }
+      : {}),
     ...(body.loyalty_redemption_id
       ? { loyalty_redemption_id: body.loyalty_redemption_id }
       : {}),
-...(loyalty.applied
-
-  ? {
-
-    loyalty_account_id:      loyalty.accountId,
-
-    loyalty_reserved_points: String(loyalty.reservedPoints),
-
-    loyalty_discount_cents:  String(loyalty.discountCents),
-
-    // preSessionKey was computed once in the main handler and passed through —
-
-    // never recomputed at this stage.
-
-    loyalty_pre_session_key: preSessionKey,
-
-  }
-
-  // Earn-only path: authenticated user has a loyalty account
-
-  // but is not redeeming points during checkout.
-
-  : body.loyalty_account_id
-
-  ? { loyalty_account_id: body.loyalty_account_id }
-
-  : {}),
+    // [FIX 3+4] Loyalty metadata — cleaned up formatting, behavior unchanged.
+    // Redeem path: applied=true writes all four loyalty fields plus the
+    //   pre-session key (needed by the webhook to release/confirm the reserve).
+    // Earn-only path: applied=false but loyalty_account_id present — write
+    //   the account ID so the webhook can credit earn points post-payment.
+    ...(loyalty.applied
+      ? {
+          loyalty_account_id:      loyalty.accountId,
+          loyalty_reserved_points: String(loyalty.reservedPoints),
+          loyalty_discount_cents:  String(loyalty.discountCents),
+          // preSessionKey was computed once in the main handler and passed
+          // through — never recomputed at this stage.
+          loyalty_pre_session_key: preSessionKey,
+        }
+      : body.loyalty_account_id
+      ? { loyalty_account_id: body.loyalty_account_id }
+      : {}),
     // Pre-checkout risk gate result — read by the webhook to set order risk
     // fields without re-running evaluateOrderRisk() post-payment.
     pre_checkout_risk_score:   String(riskGate.riskScore),
@@ -1500,8 +1531,16 @@ Deno.serve(async (req: Request): Promise<Response> => {
     });
   }
 
+  // [FIX 5] Include Allow header so clients and load balancers know which
+  // methods this endpoint accepts.
   if (req.method !== "POST") {
-    return errorResponse(requestId, 405, "method_not_allowed", "Method not allowed.", corsHeaders);
+    return errorResponse(
+      requestId,
+      405,
+      "method_not_allowed",
+      "Method not allowed.",
+      { ...corsHeaders, "Allow": "POST, OPTIONS" },
+    );
   }
 
   // ── Stage: Authenticate ────────────────────────────────────────────────────

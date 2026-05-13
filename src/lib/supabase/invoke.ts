@@ -108,8 +108,6 @@ async function safeJson(response: Response): Promise<unknown> {
   }
 }
 
-
-
 async function getAccessToken(): Promise<string | null> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token ?? null;
@@ -176,18 +174,16 @@ function createMissingEnvError(
   functionName: string,
   requestId: string,
   baseUrl: string | null,
-  anonKey: string | null,
+  publishableKey: string | null,
 ): InvokeEdgeError {
   return new InvokeEdgeError({
     functionName,
     requestId,
     status: 0,
-    message:
-
-  'Missing VITE_SUPABASE_URL or VITE_SUPABASE_PUBLISHABLE_KEY (legacy fallback: VITE_SUPABASE_ANON_KEY)',
+    message: 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_PUBLISHABLE_KEY',
     details: {
       hasBaseUrl: baseUrl !== null,
-      hasAnonKey: anonKey !== null,
+      hasPublishableKey: publishableKey !== null,
     },
   });
 }
@@ -292,7 +288,7 @@ export async function invokeEdge<TResponse = unknown, TBody = unknown>(
     body,
     init,
     token,
-     anonKey: publishableKey,
+    anonKey: publishableKey,
     appName,
     requestId,
   });
@@ -309,7 +305,7 @@ export async function invokeEdge<TResponse = unknown, TBody = unknown>(
         body,
         init,
         token,
-         anonKey: publishableKey,
+        anonKey: publishableKey,
         appName,
         requestId,
       });

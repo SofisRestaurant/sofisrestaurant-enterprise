@@ -380,7 +380,13 @@ export async function prepareAuthoritativeCartState(args: {
   const stripeAmountTotal = typeof session.amount_total === "number"
     ? session.amount_total
     : null;
-  const stripeCurrency    = normCurrency(session.currency ?? "usd");
+const stripeCurrency = typeof session.currency === "string" &&
+
+  session.currency.trim().length > 0
+
+  ? normCurrency(session.currency)
+
+  : null;
   const snapshotTotal     = snapshotNumber(snapshot, "totalCents");
   const snapshotCurrency  = normCurrency(
     snapshotString(snapshot, "currency") ?? currency,
@@ -412,16 +418,16 @@ export async function prepareAuthoritativeCartState(args: {
     return null;
   }
 
-  if (stripeCurrency !== snapshotCurrency) {
-    log("warn", "webhook_currency_mismatch", {
-      requestId,
-      sessionId: prefix(session.id),
-      charged:   stripeCurrency,
-      expected:  snapshotCurrency,
-      isGuest,
-    });
-    return null;
-  }
+if (stripeCurrency === null || stripeCurrency !== snapshotCurrency) {
+  log("warn", "webhook_currency_mismatch", {
+    requestId,
+    sessionId: prefix(session.id),
+    charged:   stripeCurrency ?? "missing",
+    expected:  snapshotCurrency,
+    isGuest,
+  });
+  return null;
+}
 
   // ── Repair stale cart fields if needed ───────────────────────────────────
 

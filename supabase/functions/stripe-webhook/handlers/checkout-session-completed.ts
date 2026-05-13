@@ -51,6 +51,12 @@
 //     individually idempotent — safe to re-run on retry.
 //   - releaseIdempotencyClaim swallows its own errors: if the delete fails,
 //     behavior degrades to the old (stuck) state, never to silent data loss.
+//
+// [HARDEN] Invalid metadata on a paid session now throws instead of returning.
+//   A paid checkout.session.completed with unparseable metadata must never be
+//   silently accepted (HTTP 200). Throwing inside the try block causes the
+//   outer catch to release the idempotency claim before re-throwing, so Stripe
+//   retries and the event is not permanently lost.
 // =============================================================================
 
 import type Stripe from "stripe";
@@ -271,15 +277,21 @@ export async function handleCheckoutSessionCompleted(
   if (!normalizeStripePaid(session)) return;
 
   // ── 3. Parse and validate all metadata in one place ───────────────────────
+  // [HARDEN] Invalid metadata on a paid session must throw, not return.
+  // Returning would send HTTP 200 to Stripe, permanently acknowledging the
+  // event and preventing any retry. Throwing here causes the outer catch to
+  // release the idempotency claim so Stripe retries and the event is not lost.
   const metaResult = parseCheckoutMetadata(session.metadata, requestId);
   if (!metaResult.ok) {
-    log("warn", "webhook_checkout_metadata_invalid", {
+    log("error", "webhook_checkout_metadata_invalid_paid_session", {
       requestId,
       sessionId: prefix(session.id),
       code:      metaResult.code,
       message:   metaResult.message,
     });
-    return;
+    throw new Error(
+      `webhook_checkout_metadata_invalid:${session.id}:${metaResult.code}`,
+    );
   }
   const meta = metaResult.value;
 

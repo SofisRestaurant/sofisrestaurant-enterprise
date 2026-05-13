@@ -31,9 +31,9 @@ function getOptionalString(key: EnvKey): string | undefined {
 
 // ─── Publishable-key resolution ───────────────────────────────────────────────
 //
-// Read VITE_SUPABASE_PUBLISHABLE_KEY first.
-// Fall back to VITE_SUPABASE_ANON_KEY for compatibility during the migration
-// window. Throw if neither is present so misconfigured builds fail at startup.
+// VITE_SUPABASE_PUBLISHABLE_KEY is required. A build or startup that omits it
+// will throw immediately so the misconfiguration is caught before any request
+// is made. This is a browser-safe key only — never a service-role or secret key.
 
 function resolvePublishableKey(): string {
   const publishable = asTrimmedString(readEnv('VITE_SUPABASE_PUBLISHABLE_KEY'));
@@ -42,22 +42,9 @@ function resolvePublishableKey(): string {
     return publishable;
   }
 
-  const legacy = asTrimmedString(readEnv('VITE_SUPABASE_ANON_KEY'));
-
-  if (legacy !== null) {
-    // Warn once at module load so developers notice the pending migration.
-    if (typeof console !== 'undefined') {
-      console.warn(
-        '[env] Using legacy VITE_SUPABASE_ANON_KEY. ' +
-          'Add VITE_SUPABASE_PUBLISHABLE_KEY when ready.',
-      );
-    }
-    return legacy;
-  }
-
   throw new Error(
-    'Missing required Supabase browser key. ' +
-      'Set VITE_SUPABASE_PUBLISHABLE_KEY (or the legacy VITE_SUPABASE_ANON_KEY as a temporary fallback).',
+    'Missing required environment variable: VITE_SUPABASE_PUBLISHABLE_KEY. ' +
+      'Set this to your browser-safe Supabase publishable key.',
   );
 }
 
@@ -70,11 +57,11 @@ function mode(): AppMode {
     : 'development';
 }
 
-const supabaseUrl           = mustGetString('VITE_SUPABASE_URL');
+const supabaseUrl            = mustGetString('VITE_SUPABASE_URL');
 const supabasePublishableKey = resolvePublishableKey();
-const stripePublicKey       = getOptionalString('VITE_STRIPE_PUBLIC_KEY');
-const apiBaseUrl            = getOptionalString('VITE_API_BASE_URL') ?? '';
-const appName               = getOptionalString('VITE_APP_NAME') ?? DEFAULT_APP_NAME;
+const stripePublicKey        = getOptionalString('VITE_STRIPE_PUBLIC_KEY');
+const apiBaseUrl             = getOptionalString('VITE_API_BASE_URL') ?? '';
+const appName                = getOptionalString('VITE_APP_NAME') ?? DEFAULT_APP_NAME;
 
 export const env = {
   supabase: {

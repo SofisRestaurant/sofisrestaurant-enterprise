@@ -114,8 +114,32 @@ export function clampCents(value: unknown): number {
   return Math.min(MAX_AWARD_AMOUNT_CENTS, Math.max(0, normalized));
 }
 
+/**
+ * Returns true only when the Stripe session is definitively settled and
+ * carries a positive, integer amount in a non-empty currency.
+ *
+ * All five conditions must hold:
+ *   status === "complete"        — session lifecycle fully closed
+ *   payment_status === "paid"    — funds captured, not merely authorised
+ *   amount_total is a number     — field is present
+ *   amount_total is an integer   — no fractional cents
+ *   amount_total > 0             — guards free/zero sessions
+ *   currency is a non-empty str  — guards malformed sessions
+ *
+ * The prior OR-based check (paid || complete) was too lenient: it could
+ * accept a "complete" session whose payment_status was still "unpaid"
+ * (e.g. no_payment_required checkouts accidentally reaching this handler).
+ */
 export function normalizeStripePaid(session: Stripe.Checkout.Session): boolean {
-  return session.payment_status === "paid" || session.status === "complete";
+  return (
+    session.status === "complete" &&
+    session.payment_status === "paid" &&
+    typeof session.amount_total === "number" &&
+    Number.isInteger(session.amount_total) &&
+    session.amount_total > 0 &&
+    typeof session.currency === "string" &&
+    session.currency.trim().length > 0
+  );
 }
 
 export function shouldRepairToPaid(order: OrderLocated): boolean {

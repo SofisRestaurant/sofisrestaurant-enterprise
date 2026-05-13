@@ -82,6 +82,32 @@
 //        The INSERT was not setting verified_at, causing every verified order
 //        to fail with Postgres error 23514. Fix: set verified_at = nowIso()
 //        when verificationStatus === 'verified', null otherwise.
+//
+//  12. [HARDEN] Identity normalization + strict single-identity enforcement.
+//        userId and guestToken are normalized (whitespace-only → null) before
+//        any use. Both-missing and both-present are now rejected identically
+//        with webhook_order_invalid_identity. Raw identity values are never
+//        logged. normalizedUserId and normalizedGuestToken are used exclusively
+//        for all downstream operations.
+//
+//  13. [HARDEN] Stripe amount and currency integrity gate now throws instead of
+//        returning null. This ensures the outer catch in
+//        checkout-session-completed.ts releases the idempotency claim so Stripe
+//        retries the event. A paid session that fails the integrity check must
+//        never be silently acknowledged as success.
+//        - Missing/non-number amount_total throws.
+//        - amount_total !== pricing.chargedCents throws.
+//        - Missing or blank session.currency throws (no "usd" fallback).
+//        - session currency !== pricing currency throws.
+//
+//  14. [HARDEN] Raw guest_token removed from orders.metadata JSONB.
+//        Replaced with guest_token_present boolean. The authoritative
+//        orders.guest_token indexed column is unaffected.
+//
+//  15. [HARDEN] console.log calls replaced with structured log() helper.
+//        prefix() used for all logged ID fields; no raw IDs in log output.
+//
+//  16. [CLEANUP] Removed unused deriveVerificationStatus import.
 // =============================================================================
 
 import type Stripe from "stripe";
@@ -110,7 +136,6 @@ import {
 
 import {
   evaluateOrderRisk,
-  deriveVerificationStatus,
   type OrderRiskResult,
 } from "../_shared/order-risk.ts";
 
@@ -239,9 +264,13 @@ function buildValidatedOrderState(
     10,
   ) || 0;
 
-  const stripeAmountTotal = typeof session.amount_total === "number"
-    ? session.amount_total
-    : totalCents - loyaltyDiscountCents;
+if (typeof session.amount_total !== "number") {
+  throw new Error(
+    `[${requestId}] buildValidatedOrderState: Stripe session.amount_total is missing`,
+  );
+}
+
+const stripeAmountTotal = session.amount_total;
 
   return {
     orderType,
@@ -335,7 +364,10 @@ function buildOrderMetadata(args: {
     order_category:           "food",
     fulfillment_type:         orderType,
     is_guest:                 isGuest,
-    guest_token:              guestToken ?? null,
+    // [HARDEN] Raw guest token must not be duplicated in the metadata JSONB
+    // column. The authoritative orders.guest_token indexed column stores the
+    // token for lookup. This boolean flag is sufficient for observability.
+    guest_token_present:      isGuest && guestToken !== null,
     promo_id:                 snapshotString(snapshot, "promoId"),
     credit_id:                snapshotString(snapshot, "creditId"),
     applied_campaign_ids:     snapshotStringArray(snapshot, "appliedCampaignIds"),
@@ -475,23 +507,49 @@ export async function createOrderFromSession(args: {
   guestToken: string | null;
   requestId:  string;
 }): Promise<OrderLocated | null> {
-  const { db, session, userId, guestToken, requestId } = args;
+  const { db, session, requestId } = args;
 
-  if (userId === null && guestToken === null) {
-    log("error", "webhook_order_no_identity", {
+  // ── [HARDEN] Identity normalization ────────────────────────────────────────
+  // Whitespace-only strings are treated as null. This prevents a caller from
+  // passing "  " as an identity value that passes a null-check but carries no
+  // meaning. Raw values are never logged — only boolean presence flags.
+
+  const normalizedUserId: string | null =
+    typeof args.userId === "string" && args.userId.trim().length > 0
+      ? args.userId.trim()
+      : null;
+
+  const normalizedGuestToken: string | null =
+    typeof args.guestToken === "string" && args.guestToken.trim().length > 0
+      ? args.guestToken.trim()
+      : null;
+
+  const hasUserIdentity  = normalizedUserId !== null;
+  const hasGuestIdentity = normalizedGuestToken !== null;
+
+  // Exactly one identity must be present.
+  // Rejects: neither present (hasUserIdentity === hasGuestIdentity === false)
+  // Rejects: both present  (hasUserIdentity === hasGuestIdentity === true)
+  if (hasUserIdentity === hasGuestIdentity) {
+    log("error", "webhook_order_invalid_identity", {
       requestId,
-      sessionId: prefix(session.id),
+      sessionId:      prefix(session.id),
+      hasUserIdentity,
+      hasGuestIdentity,
     });
     return null;
   }
 
-  const isGuest = userId === null;
+  const isGuest = !hasUserIdentity;
+
+  // All downstream operations use normalizedUserId / normalizedGuestToken.
+  // The raw args.userId / args.guestToken are not referenced below this point.
 
   const prepared = await prepareAuthoritativeCartState({
     db,
     session,
-    userId,
-    _guestToken: guestToken,
+    userId:      normalizedUserId,
+    _guestToken: normalizedGuestToken,
     requestId,
   });
 
@@ -535,6 +593,61 @@ export async function createOrderFromSession(args: {
     snapshot, currency, loyaltyDiscountCents, stripeAmountTotal,
   );
 
+  // ── [HARDEN] Stripe amount integrity (throws — must never return null) ──────
+  // prepareAuthoritativeCartState validates snapshot-vs-Stripe totals, but we
+  // re-verify here against the final derived pricing struct as a defense-in-depth
+  // layer. Throwing (rather than returning null) forces the outer catch in
+  // checkout-session-completed.ts to release the idempotency claim so Stripe
+  // retries the event. A paid session with an amount or currency mismatch must
+  // never be silently acknowledged as success.
+
+  if (typeof session.amount_total !== "number") {
+    log("error", "webhook_order_amount_missing", {
+      requestId,
+      sessionId: prefix(session.id),
+      isGuest,
+    });
+    throw new Error(`webhook_order_amount_missing:${session.id}`);
+  }
+
+  if (session.amount_total !== pricing.chargedCents) {
+    log("error", "webhook_order_amount_integrity_failed", {
+      requestId,
+      sessionId:         prefix(session.id),
+      stripeAmountTotal: session.amount_total,
+      chargedCents:      pricing.chargedCents,
+      isGuest,
+    });
+    throw new Error(`webhook_order_amount_mismatch:${session.id}`);
+  }
+
+  // Do NOT use normCurrency fallback for a missing session currency — missing
+  // currency must fail, not silently default to "usd".
+  if (typeof session.currency !== "string" || session.currency.trim().length === 0) {
+    log("error", "webhook_order_currency_integrity_failed", {
+      requestId,
+      sessionId:       prefix(session.id),
+      sessionCurrency: "missing",
+      pricingCurrency: pricing.currency,
+      isGuest,
+    });
+    throw new Error(`webhook_order_currency_mismatch:${session.id}`);
+  }
+
+  const sessionCurrency = normCurrency(session.currency);
+  if (sessionCurrency !== pricing.currency) {
+    log("error", "webhook_order_currency_integrity_failed", {
+      requestId,
+      sessionId:       prefix(session.id),
+      sessionCurrency,
+      pricingCurrency: pricing.currency,
+      isGuest,
+    });
+    throw new Error(`webhook_order_currency_mismatch:${session.id}`);
+  }
+
+  // ── Low-amount warning (observability only — never rejects a paid order) ───
+
   if (pricing.chargedCents < MIN_EXPECTED_ORDER_CENTS) {
     log("warn", "webhook_order_below_minimum", {
       requestId,
@@ -559,9 +672,9 @@ export async function createOrderFromSession(args: {
     finalRiskScore     = preCheckoutRisk.riskScore;
     finalRiskLevel     = preCheckoutRisk.riskLevel;
 
-    console.log('[WEBHOOK_PRECHECKOUT_RISK_FOUND]', {
+    log("info", "webhook_precheckout_risk_found", {
       requestId,
-      sessionId:          session.id.slice(0, 8),
+      sessionId:          prefix(session.id),
       riskScore:          finalRiskScore,
       riskLevel:          finalRiskLevel,
       verificationStatus,
@@ -606,12 +719,12 @@ export async function createOrderFromSession(args: {
     finalRiskScore = risk?.score ?? null;
     finalRiskLevel = risk?.level ?? null;
 
-    console.log('[WEBHOOK_FALLBACK_RISK_EVALUATION]', {
+    log("info", "webhook_fallback_risk_evaluation", {
       requestId,
-      sessionId:         session.id.slice(0, 8),
+      sessionId:         prefix(session.id),
       riskScore:         finalRiskScore,
       verificationStatus,
-      reason:            'no pre_checkout_risk_* fields in session metadata',
+      reason:            "no pre_checkout_risk_* fields in session metadata",
     });
 
     if (risk !== null) {
@@ -638,7 +751,7 @@ export async function createOrderFromSession(args: {
     pricing,
     snapshot,
     isGuest,
-    guestToken,
+    guestToken:  normalizedGuestToken,
     risk,
     pickupTime,
   });
@@ -648,8 +761,8 @@ export async function createOrderFromSession(args: {
     stripe_payment_intent_id:  paymentIntentId,
     order_type:                "food",
     fulfillment_type:          orderType,
-    customer_uid:              userId,
-    guest_token:               guestToken ?? null,
+    customer_uid:              normalizedUserId,
+    guest_token:               normalizedGuestToken ?? null,
     source:                    isGuest ? "guest" : "auth",
     customer_email:            session.customer_details?.email ?? null,
     customer_name:             session.customer_details?.name ?? null,
@@ -747,9 +860,9 @@ export async function createOrderFromSession(args: {
       requestId,
     });
 
-    console.log('[ORDER_RISK_FIELDS_PERSISTED]', {
+    log("info", "webhook_order_risk_fields_persisted", {
       requestId,
-      orderId:             inserted.id.slice(0, 8),
+      orderId:             prefix(inserted.id),
       riskScore:           finalRiskScore,
       riskLevel:           finalRiskLevel,
       verificationStatus,
