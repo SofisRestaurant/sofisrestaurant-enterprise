@@ -757,8 +757,9 @@ export async function createOrderFromSession(args: {
   });
 
   const insert = {
-    stripe_session_id:         session.id,
-    stripe_payment_intent_id:  paymentIntentId,
+    stripe_checkout_session_id: session.id,
+    stripe_session_id:          session.id,
+    stripe_payment_intent_id:   paymentIntentId,
     order_type:                "food",
     fulfillment_type:          orderType,
     customer_uid:              normalizedUserId,
@@ -779,6 +780,7 @@ export async function createOrderFromSession(args: {
       pricing.campaignDiscountCents +
       pricing.creditCents +
       pricing.loyaltyDiscountCents,
+      loyalty_discount_cents: pricing.loyaltyDiscountCents,
     delivery_fee_cents:        pricing.deliveryFeeCents,
     service_fee_cents:         pricing.serviceFeeCents,
     total_cents:               pricing.chargedCents,
@@ -797,16 +799,17 @@ export async function createOrderFromSession(args: {
     // Set to the current timestamp when the pre-checkout gate marked the session
     // as verified. NULL for all other statuses ('not_required', 'required').
     verified_at: verificationStatus === 'verified' ? nowIso() : null,
-  } as OrderInsert & {
-    fulfillment_type:    string;
-    guest_token:         string | null;
-    source:              string;
-    pickup_time:         string | null;
-    risk_score:          number | null;
-    risk_level:          string | null;
-    verification_status: string;
-    verified_at:         string | null;
-  };
+} as OrderInsert & {
+  stripe_checkout_session_id: string;
+  fulfillment_type: string;
+  guest_token: string | null;
+  source: string;
+  pickup_time: string | null;
+  risk_score: number | null;
+  risk_level: string | null;
+  verification_status: string;
+  verified_at: string | null;
+};
 
   const { data: inserted, error: insertError } = await db
     .from("orders")
