@@ -983,32 +983,23 @@
   transform: scale(1);
 }
 
-/* ── Checkout SMS toggle switch ─────────────────────────────────────────────
-   Isolated custom switch used by GuestContactStrip.
-   Uses explicit CSS instead of Tailwind utilities so global button styles,
-   transforms, padding, and line-height cannot distort the thumb geometry.
-*/
+/* ── Checkout SMS toggle switch ───────────────────────────────────────────── */
 
 .sms-toggle-switch {
+  all: unset;
   position: relative;
-  display: inline-flex;
-  flex: 0 0 auto;
-  width: 2.75rem;
-  height: 1.5rem;
+  display: inline-block;
+  inline-size: 44px;
+  block-size: 24px;
+  min-inline-size: 44px;
+  min-block-size: 24px;
   box-sizing: border-box;
-  align-items: center;
-  border: 0;
+  flex: 0 0 44px;
   border-radius: 9999px;
-  padding: 0.125rem;
-  margin: 0;
-  background: var(--color-ink-200);
+  background-color: var(--color-ink-200);
   cursor: pointer;
   overflow: hidden;
-  appearance: none;
-  -webkit-appearance: none;
-  line-height: 1;
   vertical-align: middle;
-  isolation: isolate;
   transition:
     background-color var(--duration-base) var(--ease-out),
     box-shadow var(--duration-base) var(--ease-out);
@@ -1016,11 +1007,7 @@
 }
 
 .sms-toggle-switch:hover {
-  background: var(--color-ink-300);
-}
-
-.sms-toggle-switch:focus {
-  outline: none;
+  background-color: var(--color-ink-300);
 }
 
 .sms-toggle-switch:focus-visible {
@@ -1030,23 +1017,23 @@
 }
 
 .sms-toggle-switch--checked {
-  background: var(--color-ember-500);
+  background-color: var(--color-ember-500);
 }
 
 .sms-toggle-switch--checked:hover {
-  background: var(--color-ember-600);
+  background-color: var(--color-ember-600);
 }
 
 .sms-toggle-switch__thumb {
   position: absolute;
-  top: 0.125rem;
-  left: 0.125rem;
+  inset-block-start: 2px;
+  inset-inline-start: 2px;
   display: block;
-  width: 1.25rem;
-  height: 1.25rem;
+  inline-size: 20px;
+  block-size: 20px;
   box-sizing: border-box;
   border-radius: 9999px;
-  background: #ffffff;
+  background-color: #ffffff;
   box-shadow: 0 1px 3px rgb(20 14 4 / 0.20);
   transform: translateX(0);
   transition: transform var(--duration-base) var(--ease-spring-soft);
@@ -1054,5 +1041,5 @@
 }
 
 .sms-toggle-switch--checked .sms-toggle-switch__thumb {
-  transform: translateX(1.25rem);
+  transform: translateX(20px);
 }
