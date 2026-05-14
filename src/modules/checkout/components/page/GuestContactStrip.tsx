@@ -1,7 +1,16 @@
 // src/modules/checkout/components/page/GuestContactStrip.tsx
 
 import { AnimatePresence, motion } from 'framer-motion';
-import { cx } from './cx';
+import { SmsToggleSwitch } from './SmsToggleSwitch';
+
+type GuestContactStripProps = {
+  email: string;
+  onEmailChange: (v: string) => void;
+  phone: string;
+  onPhoneChange: (v: string) => void;
+  smsOptIn: boolean;
+  onSmsToggle: () => void;
+};
 
 export function GuestContactStrip({
   email,
@@ -10,23 +19,17 @@ export function GuestContactStrip({
   onPhoneChange,
   smsOptIn,
   onSmsToggle,
-}: {
-  email: string;
-  onEmailChange: (v: string) => void;
-  phone: string;
-  onPhoneChange: (v: string) => void;
-  smsOptIn: boolean;
-  onSmsToggle: () => void;
-}) {
+}: GuestContactStripProps) {
   return (
     <div className="space-y-4 px-5 py-5">
       <div>
         <label
           htmlFor="guest-email"
-          className="block text-xs font-semibold uppercase tracking-wide text-(--color-ink-400) mb-1.5"
+          className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-(--color-ink-400)"
         >
           Email <span className="text-(--color-ember-500)">*</span>
         </label>
+
         <input
           id="guest-email"
           type="email"
@@ -37,40 +40,29 @@ export function GuestContactStrip({
           placeholder="your@email.com"
           className="input w-full"
         />
+
         <p className="mt-1 text-[11px] text-(--color-ink-300)">Receipt sent here after payment.</p>
       </div>
-      <div className="flex items-center justify-between rounded-xl border border-(--color-cream-300) bg-(--color-cream-50) px-4 py-3">
-        <div>
+
+      <div className="flex items-center justify-between gap-4 rounded-xl border border-(--color-cream-300) bg-(--color-cream-50) px-4 py-3">
+        <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-(--color-ink-800)">Text me when ready</p>
           <p className="text-xs text-(--color-ink-400)">
-            Optional — no spam, just your order status
+            Optional, no spam, just your order status
           </p>
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={smsOptIn}
-          onClick={onSmsToggle}
-          className={cx(
-            'relative h-6 w-11 rounded-full transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)',
-            smsOptIn ? 'bg-(--color-ember-500)' : 'bg-(--color-ink-200)',
-          )}
-        >
-          <span
-            className={cx(
-              'absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200',
-              smsOptIn ? 'translate-x-5' : 'translate-x-0.5',
-            )}
-          />
-        </button>
+
+        <SmsToggleSwitch checked={smsOptIn} onChange={onSmsToggle} label="SMS order updates" />
       </div>
-      <AnimatePresence>
+
+      <AnimatePresence initial={false}>
         {smsOptIn && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
             transition={{ duration: 0.2 }}
+            className="overflow-hidden"
           >
             <input
               type="tel"
