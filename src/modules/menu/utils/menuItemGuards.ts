@@ -21,11 +21,10 @@ export function clampInt(n: unknown, min: number, max: number): number {
 
 export function safeStr(v: unknown, fallback = '', max = 500): string {
   if (typeof v !== 'string') return fallback;
-  const s = v.trim();``
+  const s = v.trim();
   if (!s) return fallback;
   return s.length > max ? s.slice(0, max) : s;
 }
-
 export function safeBool(v: unknown, fallback = false): boolean {
   return typeof v === 'boolean' ? v : fallback;
 }

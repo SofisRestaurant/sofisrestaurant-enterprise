@@ -432,7 +432,11 @@ export async function deleteAdminMenuItem(id: string): Promise<void> {
   try {
     await MenuWriteService.delete(id);
   } catch (err) {
-    throw new Error(`Failed to delete menu item: ${err instanceof Error ? err.message : err}`);
+    const message = err instanceof Error ? err.message : String(err);
+
+    throw new Error(`Failed to delete menu item: ${message}`, {
+      cause: err,
+    });
   }
 }
 

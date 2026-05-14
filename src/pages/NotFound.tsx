@@ -19,14 +19,16 @@ function cx(...classes: (string | false | null | undefined)[]): string {
 export default function NotFound() {
   const navigate = useNavigate();
 
-  const handleBack = () => {
-    // Go back if there's history, otherwise home
-    if (window.history.length > 1) {
-      navigate(-1);
-    } else {
-      navigate('/');
-    }
-  };
+const handleBack = () => {
+  // Go back if there's history, otherwise home.
+  // React Router navigate can return a Promise in Data/Framework mode,
+  // so void marks it as intentionally fire-and-forget.
+  if (window.history.length > 1) {
+    void navigate(-1);
+  } else {
+    void navigate('/');
+  }
+};;
 
   return (
     <div

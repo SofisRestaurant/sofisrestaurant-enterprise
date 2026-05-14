@@ -67,11 +67,13 @@ export default function TopBar() {
     [pathname],
   );
   const isHidden = HIDDEN_ON.some((p) => pathname === p || pathname.startsWith(`${p}/`));
-  const handleSignOut = useCallback(async () => {
-    try {
-      await signOut();
-    } catch {}
-  }, [signOut]);
+const handleSignOut = useCallback(async () => {
+  try {
+    await signOut();
+  } catch (error) {
+    console.warn('[TopBar] Sign out failed', error);
+  }
+}, [signOut]);
   const openModalSafe = useCallback(
     (type: 'login' | 'signup') => {
       modal?.openModal?.(type);

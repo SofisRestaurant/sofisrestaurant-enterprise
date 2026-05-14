@@ -26,6 +26,21 @@
 //       Extended the URL guard: `if (!url || data === null)` so TypeScript
 //       narrows data to non-null for subsequent property accesses.
 //
+//   [3] Removed explicit `(item: any)` / `(m: any)` annotations in
+//       buildGuestRequestBody.
+//
+//       cartItems was typed as unknown[] to allow the hook to receive the raw
+//       Zustand selector result. The map callbacks then had to use `:any` to
+//       access CartItem properties, which caused unsafe-member-access warnings
+//       on every field.
+//
+//       Fix: import CartItem and type the parameter as CartItem[]. The hook
+//       passes useCartStore((s) => s.items) which is CartItem[] — no cast
+//       needed at the call site. The explicit :any annotations and the now-
+//       redundant Array.isArray(item.modifiers) fallback are removed.
+//       The eslint-disable comment that suppressed the explicit-any warning
+//       is removed as well.
+//
 // All other logic, security boundaries, and phase machine behavior
 // are unchanged.
 // =============================================================================
@@ -34,6 +49,8 @@ import { useReducer, useCallback, useRef } from 'react';
 import { env } from '@/lib/config/env';
 import { useCartStore } from '@/modules/cart/store/cart.store';
 import { mapCheckoutError } from '@/modules/checkout/errors/mapCheckoutError';
+import type { CartItem } from '@/modules/cart/types/cart.types';
+import type { CheckoutItemWirePayload } from '../types/checkout-wire.types';
 import {
   isRecord,
   parseCheckoutPricingResponse,
@@ -147,22 +164,25 @@ function storeGuestToken(token: string): void {
 }
 
 // ─── Request body builder ─────────────────────────────────────────────────────
+//
+// cartItems is CartItem[] — typed from the CartStore interface.
+// item is inferred as CartItem; m is inferred as CartModifier.
+// No explicit :any annotations needed or permitted.
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function buildGuestRequestBody(
-  cartItems:       unknown[],
+  cartItems:       CartItem[],
   input:           GuestCheckoutInput,
   storedToken:     string | null,
   challengeToken?: string,
 ): Record<string, unknown> {
-  const itemsPayload = cartItems.map((item: any) => ({
-    id:       item.menuItemId ?? item.id,
-    quantity: Number(item.quantity ?? 1),
-    notes:    item.notes ?? undefined,
-    modifiers: Array.isArray(item.modifiers)
-      ? item.modifiers.map((m: any) => ({ id: String(m.id), group_id: String(m.groupId) }))
-      : [],
-  }));
+  const itemsPayload: CheckoutItemWirePayload[] = cartItems.map(
+    (item): CheckoutItemWirePayload => ({
+      id:       item.menuItemId,
+      quantity: item.quantity,
+      notes:    item.notes ?? undefined,
+      modifiers: item.modifiers.map((m) => ({ id: m.id, group_id: m.groupId })),
+    }),
+  );
 
   return {
     items: itemsPayload,

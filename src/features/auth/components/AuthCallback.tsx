@@ -56,7 +56,7 @@ export default function AuthCallback() {
 
     if (user) {
       navigatedRef.current = true;
-      navigate(redirectTo, { replace: true });
+      void navigate(redirectTo, { replace: true });
     }
     // If loading is done and user is still null, the timeout below will fire
   }, [user, loading, navigate, redirectTo]);
@@ -78,25 +78,21 @@ export default function AuthCallback() {
         style={{ background: 'var(--color-cream-100, #faf6ef)' }}
       >
         <div className="max-w-sm">
-          <p
-            className="text-lg font-semibold"
-            style={{ color: 'var(--color-ink-900, #1c1915)' }}
-          >
+          <p className="text-lg font-semibold" style={{ color: 'var(--color-ink-900, #1c1915)' }}>
             Sign-in took too long
           </p>
-          <p
-            className="mt-2 text-sm"
-            style={{ color: 'var(--color-ink-500, #8a7a6a)' }}
-          >
+          <p className="mt-2 text-sm" style={{ color: 'var(--color-ink-500, #8a7a6a)' }}>
             The session could not be established. Please try signing in again.
           </p>
           <button
             type="button"
-            onClick={() => navigate('/', { replace: true })}
+            onClick={() => {
+              void navigate('/', { replace: true });
+            }}
             className="mt-6 rounded-lg px-5 py-2.5 text-sm font-semibold transition-colors"
             style={{
               background: 'var(--color-accent, #d4af37)',
-              color:      'var(--color-ink-900, #1c1915)',
+              color: 'var(--color-ink-900, #1c1915)',
             }}
           >
             Back to home

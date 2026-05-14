@@ -6,9 +6,22 @@
 //
 // Dependency flow:
 //   admin-menu.ts  →  domain/menu/menu.types  (ModifierGroup, Modifier, etc.)
-//   admin-menu.ts  →  supabase database.types (DB Insert/Update shapes)
 //   domain/        →  never imports from this file (domain is upstream)
 //   UI / services  →  import from here
+//
+// ── Why write payloads are explicit interfaces, not Supabase derivations ─────
+//
+//   ModifierGroupWritePayload and ModifierWritePayload were previously derived
+//   from Database['public']['Tables']...['Insert'] (Supabase-generated types).
+//   That pattern is fragile: if database.types.ts is stale, missing, or has
+//   structural gaps, the property-access chain can silently resolve to `any`.
+//   `any` then propagates through Omit<> and ReadonlyArray<>, causing
+//   @typescript-eslint/no-unsafe-argument violations in consumers.
+//
+//   The professional fix is to define these shapes as explicit domain
+//   interfaces here. The persistence layer (modifier-group.service.ts, etc.)
+//   is responsible for mapping these domain types to the Supabase Insert rows.
+//   Domain types must never depend on generated infrastructure types.
 //
 // ── ModifierValidationResult disambiguation ──────────────────────────────────
 //
@@ -27,26 +40,26 @@
 //   the schema-layer shape via the alias at the bottom of this file.
 //   The two names never collide at runtime because they live in different modules.
 //
-// ── ModifierGroupWritePayload.type narrowing ─────────────────────────────────
+// ── ModifierGroupWritePayload.type ───────────────────────────────────────────
 //
-//   Supabase generates DB enum columns as `string` in Insert/Update types.
+//   `type` is defined directly as the literal union ModifierGroupType.
 //   modifier-group.service.ts calls MODIFIER_GROUP_TYPES.includes(payload.type)
 //   where the array is `readonly ('radio' | 'checkbox' | 'quantity')[]`.
 //   TypeScript's Array.includes() on a readonly literal tuple only accepts the
-//   exact union — passing a plain `string` is a type error.
-//   We fix this by overriding `type` to the literal union in our write payload.
+//   exact union — the explicit interface satisfies this without any narrowing
+//   ceremony.
 //
-// ── ModifierTemplate modifiers price_adjustment ──────────────────────────────
+// ── ModifierTemplateModifier ─────────────────────────────────────────────────
 //
-//   The DB Insert type for modifiers has price_adjustment as `number | null |
-//   undefined`. Template modifiers always have a concrete number (they are
-//   in-memory constants, not nullable DB rows). ModifierTemplateModifier narrows
-//   price_adjustment to `number` so Math.min/max spreads don't blow up.
+//   ModifierWritePayload defines price_adjustment as a concrete `number`.
+//   Template modifiers are in-memory constants and always carry a real value,
+//   so the explicit interface already captures this guarantee.
+//   ModifierTemplateModifier omits modifier_group_id because templates do not
+//   have a group id at definition time — it is assigned on instantiation.
 //
 // ============================================================================
 
 import type { ModifierGroup, Modifier, ModifierGroupType } from '@/domain/menu/menu.types';
-import type { Database } from '@/../supabase/functions/_shared/database.types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Re-exports for convenience
@@ -58,35 +71,42 @@ export type { ModifierGroup, Modifier, ModifierGroupType };
 // Admin write payloads
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// We derive the base shapes from the DB Insert types, then tighten fields that
-// Supabase generates too loosely for our use:
-//
-//   • `type`  on modifier_groups is generated as `string` (DB enum column).
-//             We narrow it to the literal union so service-layer includes()
-//             checks compile without error.
-//
-//   • Downstream consumers that spread a raw DB row back into this type are
-//     unaffected — a value of type `string` is assignable to the narrowed
-//     literal union IF it is one of the three valid values, which the DB
-//     guarantees. The tightening only affects write-path callers, which is
-//     exactly where we want the compiler to catch typos.
+// Explicit domain interfaces — intentionally NOT derived from the
+// Supabase-generated Database[...]['Insert'] types. The persistence service
+// maps these to the Supabase Insert rows; the domain never looks downward into
+// generated infrastructure types.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
-type _ModifierGroupInsert = Database['public']['Tables']['modifier_groups']['Insert'];
+/** Write payload for the modifier_groups table row. */
+export interface ModifierGroupWritePayload {
+  /** Present on update; omit on create (DB generates). */
+  readonly id?: string;
+  readonly name: string;
+  /** Human-readable description shown in the admin UI. */
+  readonly description?: string | null;
+  readonly type: ModifierGroupType;
+  /** Authoritative. Never inferred from min_selections. */
+  readonly required: boolean;
+  /** Non-negative integer. 0 = no minimum. */
+  readonly min_selections: number;
+  /** Positive integer or null (unlimited). */
+  readonly max_selections: number | null;
+  readonly sort_order: number;
+  readonly active: boolean;
+}
 
-/** Write payload for modifier_groups. `type` is narrowed to the literal union.
- *  `description` is added as optional — the DB column will be added via migration
- *  20260403000003_add_modifier_group_description.sql.
- */
-export type ModifierGroupWritePayload = Omit<_ModifierGroupInsert, 'type'> & {
-  type: ModifierGroupType;
-  /** Optional human-readable description shown in the admin UI. */
-  description?: string | null;
-};
-
-export type ModifierWritePayload =
-  Database['public']['Tables']['modifiers']['Insert'];
+/** Write payload for the modifiers table row. */
+export interface ModifierWritePayload {
+  /** Present on update; omit on create (DB generates). */
+  readonly id?: string;
+  readonly modifier_group_id: string;
+  readonly name: string;
+  /** Cents. Integer. May be negative. */
+  readonly price_adjustment: number;
+  readonly available: boolean;
+  readonly sort_order: number;
+}
 
 export interface MenuItemModifierGroupWritePayload {
   menu_item_id: string;
@@ -123,19 +143,16 @@ export interface ReorderPayload {
 // Template system
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// ModifierTemplateModifier narrows `price_adjustment` to `number` (not
-// `number | null | undefined` as the DB Insert type allows). Template modifiers
-// are in-memory constants — they always have a concrete price adjustment.
-// This lets ModifierTemplateLibrary call Math.min/max(...prices) without error.
+// ModifierTemplateModifier is the per-modifier shape used in template
+// definitions. modifier_group_id is omitted because it is unknown at template
+// definition time (it is only assigned when the template is instantiated).
+// price_adjustment is `number` — template modifiers always carry a concrete
+// value (they are in-memory constants, not nullable DB rows).
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
-type _ModifierInsertBase = Omit<ModifierWritePayload, 'modifier_group_id'>;
-
-/** Template-specific modifier shape: price_adjustment is always a concrete number. */
-export type ModifierTemplateModifier = Omit<_ModifierInsertBase, 'price_adjustment'> & {
-  price_adjustment: number;
-};
+/** Template-specific modifier shape: modifier_group_id is absent at definition time. */
+export type ModifierTemplateModifier = Omit<ModifierWritePayload, 'modifier_group_id'>;
 
 export interface ModifierTemplate {
   id: string;

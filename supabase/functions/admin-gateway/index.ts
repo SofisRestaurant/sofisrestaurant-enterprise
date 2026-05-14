@@ -84,12 +84,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // ── Body read ─────────────────────────────────────────────────────────────
-  let rawText = '';
+const rawText = await (async () => {
   try {
-    rawText = await req.text();
+    return await req.text();
   } catch {
-    return fail('BAD_BODY', 'Unable to read request body', metaPre, cors, requestId, 400);
+    return null;
   }
+})();
+
+if (rawText === null) {
+  return fail('BAD_BODY', 'Unable to read request body', metaPre, cors, requestId, 400);
+}
 
   const byteLen = new TextEncoder().encode(rawText).length;
   if (byteLen > CONFIG.MAX_BODY_BYTES) {

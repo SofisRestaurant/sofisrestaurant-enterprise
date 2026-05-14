@@ -216,53 +216,55 @@ export function getModifierInventoryStatus(
  */
 export function checkSelectionInventory(
   groups: readonly ModifierGroup[],
-  selectedModifiers: Record<string, SelectedModifier[]>,
+  selectedModifiers: Record<string, readonly SelectedModifier[]>,
 ): SelectionInventoryCheck {
   const blocked:  string[] = [];
   const warnings: string[] = [];
 
   for (const group of groups) {
     const selections = selectedModifiers[group.id] ?? [];
-    if (!Array.isArray(selections) || !Array.isArray(group.modifiers)) continue;
 
-for (const selection of selections) {
-  let selId: string;
+    // NOTE: No Array.isArray guard here — intentional.
+    //
+    // Applying Array.isArray() to a variable already typed as a concrete array
+    // (readonly SelectedModifier[] or readonly Modifier[]) triggers TypeScript's
+    // built-in type predicate `isArray(arg: any): arg is any[]`. The intersection
+    // of the existing type with `any[]` collapses to `any[]` (because T & any = any),
+    // so `selection` and `m` in the loops below would be inferred as `any`, firing
+    // @typescript-eslint/no-unsafe-assignment and @typescript-eslint/no-unsafe-member-access.
+    //
+    // Both variables are statically guaranteed to be arrays:
+    //   - `selections`: Record<string, readonly SelectedModifier[]> value + `?? []`
+    //   - `group.modifiers`: declared as `readonly Modifier[]` with the note
+    //     "Always an array. Never null/undefined." in the domain type.
+    //
+    // Per-element integrity (stale id, unavailable flag) is validated below.
 
-  if (selection?.id == null) {
-    continue; // skip null/undefined IDs
-  } else if (typeof selection.id === 'string') {
-    selId = selection.id.trim();
-  } else if (typeof selection.id === 'number' || typeof selection.id === 'boolean') {
-    selId = String(selection.id);
-  } else if (typeof selection.id === 'object') {
-    // Safely stringify objects, arrays, etc.
-    selId = JSON.stringify(selection.id);
-  } else {
-    // fallback for functions, symbols, unknown types
-    selId = '';
-  }
+    for (const selection of selections) {
+      // selection.id is string per SelectedModifier — trim and skip empty.
+      const selId = selection.id.trim();
+      if (!selId) continue;
 
-  if (!selId) continue;
+      // group.modifiers is readonly Modifier[] — m is Modifier, m.id is string.
+      const mod = group.modifiers.find((m) => m.id === selId);
 
-  const mod = group.modifiers.find((m) => m.id === selId);
+      // Not in this group anymore → stale UI selection, block.
+      if (!mod) {
+        blocked.push(selId);
+        continue;
+      }
 
-  // If it's not in this group anymore, block (stale UI selection)
-  if (!mod) {
-    blocked.push(selId);
-    continue;
-  }
+      // Explicitly unavailable → block.
+      if (!mod.available) {
+        blocked.push(selId);
+        continue;
+      }
 
-  // If explicitly unavailable, block
-  if (!mod.available) {
-    blocked.push(selId);
-    continue;
-  }
-
-  // Future-ready: if modifier later gains inventory fields, use it.
-  const st = getModifierInventoryStatus(mod as ModifierLike);
-  if (st.is_out_of_stock) blocked.push(selId);
-  else if (st.is_low_stock && st.message) warnings.push(st.message);
-}
+      // Future-ready: if modifier later gains inventory fields, use it.
+      const st = getModifierInventoryStatus(mod as ModifierLike);
+      if (st.is_out_of_stock) blocked.push(selId);
+      else if (st.is_low_stock && st.message) warnings.push(st.message);
+    }
   }
 
   const blocked_unique  = Array.from(new Set(blocked));

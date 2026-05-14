@@ -99,12 +99,30 @@ export function assertSelectionMapIntegrity(
   selectedModifiers: Record<string, readonly SelectedModifier[]>,
 ): void {
   for (const [groupId, selections] of Object.entries(selectedModifiers)) {
-    if (!Array.isArray(selections)) {
+    // Runtime guard for untyped JS call sites (e.g. data arriving after JSON.parse).
+    //
+    // IMPORTANT: We route the isArray check through a separate `unknown` variable
+    // rather than calling Array.isArray(selections) directly.
+    //
+    // TypeScript's Array.isArray is declared as `(arg: any) => arg is any[]`.
+    // Applying that predicate directly to `selections: readonly SelectedModifier[]`
+    // narrows it via intersection — `readonly SelectedModifier[] & any[]` — which
+    // collapses to `any[]` (because T & any = any in TypeScript's type algebra).
+    // Every `s` in the subsequent loop would then be inferred as `any`, causing
+    // @typescript-eslint/no-unsafe-member-access on every s.modifier_group_id and
+    // s.id access below.
+    //
+    // Routing through `selectionsUnknown: unknown` isolates the type-predicate
+    // narrowing to that throwaway binding. `selections` itself is untouched and
+    // remains `readonly SelectedModifier[]` for the rest of the function.
+    const selectionsUnknown: unknown = selections;
+    if (!Array.isArray(selectionsUnknown)) {
       throw new Error(
         `assertSelectionMapIntegrity: selections for group(id=${groupId}) is not an array`,
       );
     }
-    for (const s of selections) {
+
+    for (const s of selections) { // s is SelectedModifier — all member accesses are safe
       if (typeof s.modifier_group_id !== 'string' || s.modifier_group_id.length === 0) {
         throw new Error(
           `assertSelectionMapIntegrity: selection(id=${s.id}) is missing modifier_group_id`,

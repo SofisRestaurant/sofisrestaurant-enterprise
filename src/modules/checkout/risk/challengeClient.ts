@@ -15,13 +15,47 @@
 //   for guests. It is derived here (browser SubtleCrypto) and sent to
 //   the server so the challenge token can be identity-bound without the
 //   server needing access to the raw userId/email at issuance time.
+//
+// CHANGES FROM PRIOR VERSION:
+//
+//   Removed invoke<SendOtpResponse> / invoke<IssueChallengeTokenResponse>
+//   generic assertions and otp.types imports.
+//
+//   Supabase function responses must be treated as `unknown` at the boundary:
+//   the generic parameter on invoke<T>() asserts a type without runtime
+//   validation, so if the Edge Function changes its response shape, the
+//   assertion silently lies. Additionally, in some @supabase/supabase-js
+//   versions the error type is broad enough that `error?.message` triggers
+//   @typescript-eslint/no-unsafe-member-access.
+//
+//   Fix: declare `data: unknown` and use the local isRecord() guard before
+//   every property access. Error messages are extracted via `instanceof Error`
+//   which is safe regardless of the Supabase client version.
+//
+//   The public function signatures and return types are unchanged.
 // =============================================================================
 
 import { supabase } from '@/lib/supabase/supabaseClient';
-import type {
-  SendOtpResponse,
-  IssueChallengeTokenResponse,
-} from '../types/otp.types';
+
+// ─── Internal: safe record narrowing ─────────────────────────────────────────
+//
+// Defined locally because challengeClient is in risk/ and must not pull in
+// checkout domain types. isRecord is 3 lines — no shared dependency needed.
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+// ─── Internal: safe string from invoke error ──────────────────────────────────
+//
+// supabase.functions.invoke() error is typed as FunctionsHttpError |
+// FunctionsRelayError | FunctionsFetchError | null in current supabase-js,
+// but in older versions or when the type widens, `error.message` can be typed
+// as `any`. `instanceof Error` is the version-agnostic safe path.
+
+function invokeErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
 
 // ─── Identity key ─────────────────────────────────────────────────────────────
 
@@ -61,19 +95,30 @@ export async function sendChallengeOtp(phone: string): Promise<
   | { ok: false; error: string }
 > {
   try {
-    const { data, error } = await supabase.functions.invoke<SendOtpResponse>(
+    // Treat the response as unknown — narrowed before every property access.
+    const { data: rawData, error } = await supabase.functions.invoke(
       'verify-phone',
       { body: { action: 'send', phone } },
     );
 
-    if (error || !data?.ok) {
-      return { ok: false, error: data?.error ?? error?.message ?? 'Failed to send code.' };
+    if (error) {
+      return { ok: false, error: invokeErrorMessage(error, 'Failed to send code.') };
     }
 
-    return {
-      ok:             true,
-      normalizedPhone: data.normalizedPhone ?? phone,
-    };
+    const data: unknown = rawData;
+
+    if (!isRecord(data) || data['ok'] !== true) {
+      const serverError = isRecord(data) && typeof data['error'] === 'string'
+        ? data['error']
+        : null;
+      return { ok: false, error: serverError ?? 'Failed to send code.' };
+    }
+
+    const normalizedPhone = typeof data['normalizedPhone'] === 'string'
+      ? data['normalizedPhone']
+      : phone;
+
+    return { ok: true, normalizedPhone };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'Network error.' };
   }
@@ -96,7 +141,8 @@ export async function issueChallengeToken(args: {
   | { ok: false; error: string }
 > {
   try {
-    const { data, error } = await supabase.functions.invoke<IssueChallengeTokenResponse>(
+    // Treat the response as unknown — narrowed before every property access.
+    const { data: rawData, error } = await supabase.functions.invoke(
       'verify-phone',
       {
         body: {
@@ -110,23 +156,39 @@ export async function issueChallengeToken(args: {
     );
 
     if (error) {
-      return { ok: false, error: error.message ?? 'Verification failed.' };
+      return { ok: false, error: invokeErrorMessage(error, 'Verification failed.') };
     }
 
-    if (!data) {
+    const data: unknown = rawData;
+
+    if (!isRecord(data)) {
       return { ok: false, error: 'No response from verification service.' };
     }
 
-    if (!data.ok) {
-      // Type narrowing: if valid === false the code was wrong; otherwise it's
-      // a service-level error.
-      if ('valid' in data && data.valid === false) {
-        return { ok: false, valid: false, error: data.error ?? 'Incorrect code.' };
+    if (data['ok'] !== true) {
+      // If valid === false, the OTP code itself was wrong.
+      if (data['valid'] === false) {
+        const errorMessage = typeof data['error'] === 'string'
+          ? data['error']
+          : 'Incorrect code.';
+        return { ok: false, valid: false, error: errorMessage };
       }
-      return { ok: false, error: data.error ?? 'Unable to verify code.' };
+      // Otherwise it is a service-level error.
+      const errorMessage = typeof data['error'] === 'string'
+        ? data['error']
+        : 'Unable to verify code.';
+      return { ok: false, error: errorMessage };
     }
 
-    return { ok: true, challengeToken: data.challenge_token };
+    const challengeToken = typeof data['challenge_token'] === 'string'
+      ? data['challenge_token']
+      : null;
+
+    if (!challengeToken) {
+      return { ok: false, error: 'Verification service returned an invalid token.' };
+    }
+
+    return { ok: true, challengeToken };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'Network error.' };
   }

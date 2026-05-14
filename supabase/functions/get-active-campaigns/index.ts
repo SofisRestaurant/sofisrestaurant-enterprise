@@ -409,17 +409,22 @@ async function readJsonObjectBody(req: Request): Promise<ParseResult<JsonObject>
     };
   }
 
-  let rawBody = '';
+const rawBody = await (async () => {
   try {
-    rawBody = await req.text();
+    return await req.text();
   } catch {
-    return {
-      ok: false,
-      status: 400,
-      code: 'INVALID_JSON_BODY',
-      error: 'Unable to read request body.',
-    };
+    return null;
   }
+})();
+
+if (rawBody === null) {
+  return {
+    ok: false,
+    status: 400,
+    code: 'INVALID_JSON_BODY',
+    error: 'Unable to read request body.',
+  };
+}
 
   if (!rawBody.trim()) {
     return { ok: false, status: 400, code: 'EMPTY_BODY', error: 'Request body is required.' };

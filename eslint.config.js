@@ -1,7 +1,7 @@
 // eslint.config.js
 import js from '@eslint/js';
 import globals from 'globals';
-import react from 'eslint-plugin-react';
+import eslintReact from '@eslint-react/eslint-plugin';
 import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
 import tseslint from 'typescript-eslint';
@@ -29,16 +29,38 @@ const TYPE_AWARE_RULES_OFF = {
 export default defineConfig([
   // ── Global ignores ──────────────────────────────────────────────────────────
   globalIgnores([
+    // Build outputs
     'dist',
+    'dist/**/*',
     'build',
+    'build/**/*',
     'coverage',
+    'coverage/**/*',
+
+    // Dependencies
     'node_modules',
+    'node_modules/**/*',
+
+    // Archives / AI scratch
     'archive',
+    'archive/**/*',
     'src/_archive_ai_source',
+    'src/_archive_ai_source/**/*',
+
+    // Generated Capacitor/mobile output
+    'ios',
+    'ios/**/*',
+    'android',
+    'android/**/*',
+
+    // Generated type files
     'src/types/supabase.ts',
     'src/lib/supabase/database.types.ts',
     'supabase/functions/_shared/database.types.ts',
+
+    // Minified/vendor files
     '**/*.min.js',
+    '**/workbox-*.js',
   ]),
 
   // ── Base JS recommended ─────────────────────────────────────────────────────
@@ -72,6 +94,9 @@ export default defineConfig([
   //    and JSX namespace declarations. Silence them all.
   {
     files: ['**/*.d.ts'],
+    plugins: {
+      '@typescript-eslint': tseslint.plugin,
+    },
     languageOptions: {
       // TS parser for syntax — no projectService, no type program.
       parser: tseslint.parser,
@@ -92,6 +117,52 @@ export default defineConfig([
     },
   },
 
+  // ── k6 load tests ───────────────────────────────────────────────────────────
+  {
+    files: ['load-tests/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: {
+        console: 'readonly',
+        __ENV: 'readonly',
+      },
+    },
+    rules: {
+      'no-console': 'off',
+      'no-undef': 'off',
+    },
+  },
+
+  // ── Tests ───────────────────────────────────────────────────────────────────
+  {
+    files: ['src/tests/**/*.ts', 'src/tests/**/*.tsx'],
+    plugins: {
+      '@typescript-eslint': tseslint.plugin,
+    },
+    languageOptions: {
+      parser: tseslint.parser,
+      parserOptions: {
+        project: false,
+      },
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+      },
+    },
+    rules: {
+      ...TYPE_AWARE_RULES_OFF,
+      '@typescript-eslint/no-unused-vars': [
+        'warn',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+        },
+      ],
+    },
+  },
+
   // ── TypeScript type-checked rules (src .ts/.tsx only, not .d.ts) ────────────
   //
   // Per-block `ignores: ['**/*.d.ts']` excludes declaration files.
@@ -100,13 +171,13 @@ export default defineConfig([
   ...tseslint.configs.recommendedTypeChecked.map((cfg) => ({
     ...cfg,
     files: ['src/**/*.{ts,tsx}'],
-    ignores: ['**/*.d.ts'],
+    ignores: ['**/*.d.ts', 'src/tests/**/*'],
   })),
 
   // ── TypeScript + React frontend (src .ts/.tsx, not .d.ts) ───────────────────
   {
     files: ['src/**/*.{ts,tsx}'],
-    ignores: ['**/*.d.ts'],
+    ignores: ['**/*.d.ts', 'src/tests/**/*'],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',
@@ -129,12 +200,9 @@ export default defineConfig([
       },
     },
     plugins: {
-      react,
+      '@eslint-react': eslintReact,
       'react-hooks': reactHooks,
       'react-refresh': reactRefresh,
-    },
-    settings: {
-      react: { version: 'detect' },
     },
     rules: {
       // React hooks
@@ -145,8 +213,7 @@ export default defineConfig([
       'react-refresh/only-export-components': 'off',
 
       // React
-      'react/react-in-jsx-scope': 'off',
-      'react/no-array-index-key': 'warn',
+      '@eslint-react/no-array-index-key': 'warn',
 
       // TypeScript — variables
       '@typescript-eslint/no-unused-vars': [

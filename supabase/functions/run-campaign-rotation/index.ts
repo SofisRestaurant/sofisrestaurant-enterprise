@@ -216,13 +216,18 @@ function readJsonObjectBody(req: Request): Promise<ParsedJsonResult> {
       };
     }
 
-    let rawBody = '';
-    try {
-      rawBody = await req.text();
-    } catch {
-      return {
-        ok: false,
-        status: 400,
+  const rawBody = await (async () => {
+  try {
+    return await req.text();
+  } catch {
+    return null;
+  }
+})();
+
+if (rawBody === null) {
+  return {
+    ok: false,
+    status: 400,
         code: 'INVALID_JSON_BODY',
         error: 'Unable to read request body.',
       };

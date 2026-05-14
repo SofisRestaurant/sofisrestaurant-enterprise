@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "src/tests/**/*.ts",
+    "src/tests/**/*.tsx",
+    "supabase/functions/**/*.ts"
+  ],
+  "exclude": [
+    "dist",
+    "build",
+    "coverage",
+    "node_modules",
+    "ios",
+    "android",
+    "archive",
+    "src/_archive_ai_source"
+  ]
+}

@@ -51,7 +51,7 @@ const E164_RE = /^\+[1-9]\d{6,14}$/;
 export function normalizePhone(raw: string | null | undefined): string | null {
   if (!raw || typeof raw !== 'string') return null;
 
-  const stripped = raw.trim().replace(/[\s\-\.\(\)]/g, '');
+  const stripped = raw.trim().replace(/[\s.()-]/g, '');
 
   if (E164_RE.test(stripped)) return stripped;
 

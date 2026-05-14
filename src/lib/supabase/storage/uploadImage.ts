@@ -181,10 +181,15 @@ export async function compressImage(
     if (requiresConversion) {
       // Re-throw with a clear message — raw HEIC can't be uploaded to Supabase
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      throw new Error(
-        `Could not process iPhone photo (${msg}). ` +
-        'On iPhone: go to Settings → Camera → Formats → Most Compatible to shoot in JPEG instead.',
-      );
+throw new Error(
+
+  `Could not process iPhone photo (${msg}). ` +
+
+    'On iPhone: go to Settings → Camera → Formats → Most Compatible to shoot in JPEG instead.',
+
+  { cause: err },
+
+);
     }
     // For other formats, fall back to original
     return { blob: file, path: storagePath, originalSizeBytes: originalSize, compressedSizeBytes: originalSize, wasCompressed: false };
@@ -261,7 +266,7 @@ export async function uploadImage(
   if (!ALLOWED_MIME_SET.has(contentType))
     return { ok: false, error: `Unsupported image type "${contentType}".` };
 
-  const fileSize = file instanceof File || file instanceof Blob ? file.size : (file as ArrayBuffer).byteLength;
+const fileSize = file instanceof File || file instanceof Blob ? file.size : file.byteLength;
 
   if (fileSize > MAX_FILE_SIZE_BYTES)
     return { ok: false, error: `File too large (${(fileSize / 1024 / 1024).toFixed(1)} MB). Max: ${MAX_FILE_SIZE_BYTES / 1024 / 1024} MB.` };

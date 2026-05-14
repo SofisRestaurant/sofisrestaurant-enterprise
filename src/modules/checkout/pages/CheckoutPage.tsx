@@ -12,20 +12,21 @@
 //
 //   [5] Duplicate redirect prevention. (unchanged)
 //
-//   [FIX] challengeEmail: frozen identity email for OTP binding.
+//   [FIX] challengeEmail: frozen identity email for OTP binding. (unchanged)
 //
-//         The modal derives identityKey = SHA256(guestEmail) to bind the
-//         challenge token to this specific user. If the modal received the
-//         live `guestEmail` state and the user edited the email field while
-//         the modal was open, the identity hash sent to verify-phone would
-//         diverge from the hash used at checkout time (which captured the
-//         email from pendingInputRef at initiateGuestCheckout). The backend
-//         would then return identity_mismatch on the retry.
+//   [FIX] getLoyaltyAccount: supabase.functions.invoke() response narrowed
+//         from unknown before property access.
 //
-//         Fix: capture `guestEmail` into `challengeEmail` when the phase
-//         enters 'otp_required'. Pass `challengeEmail` to the modal instead
-//         of the live `guestEmail`. Clear on phase → 'idle' so a subsequent
-//         checkout attempt with a new email starts clean.
+//         supabase.functions.invoke() without a generic returns
+//         `{ data: any | null, ... }` in older @supabase/supabase-js or
+//         `{ data: unknown | null, ... }` in newer versions. Either way,
+//         accessing `data?.ok`, `data?.account?.id` etc. without a runtime
+//         guard causes @typescript-eslint/no-unsafe-member-access.
+//
+//         Fix: cast rawData to unknown, then use isRecord() to narrow
+//         to Record<string,unknown> before each property access.
+//         isRecord is imported from checkout.types (already used by the
+//         checkout result narrowing elsewhere in this file).
 //
 // Security invariants preserved:
 //   - No Stripe URL before verification (button is unmounted during challenge)
@@ -67,6 +68,8 @@ import {
   isCheckoutSuccess,
   isOtpRequired,
   isCheckoutBlocked,
+  // [FIX] isRecord added — used to narrow supabase.functions.invoke() responses
+  isRecord,
 } from '@/modules/checkout/types/checkout.types';
 import { supabase } from '@/lib/supabase/supabaseClient';
 import { computeLineTotalCents, cartItemKey } from '@/modules/cart/types/cart.types';
@@ -169,19 +172,38 @@ function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(' ');
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// getLoyaltyAccount
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// [FIX] supabase.functions.invoke() without a generic returns data as `any`
+// (older @supabase/supabase-js) or `unknown` (newer). Either way, accessing
+// data?.ok or data?.account?.id directly is an unsafe member access.
+//
+// Fix: cast rawData to unknown and narrow with isRecord() before each access.
+// The function's return type is explicit and unchanged.
+
 async function getLoyaltyAccount(): Promise<{
   accountId: string;
   balance: number;
   lastRedeemAt: string | null;
 } | null> {
   try {
-    const { data, error } = await supabase.functions.invoke('loyalty-account');
-    if (error || !data?.ok || !data?.account?.id) return null;
+    const { data: rawData, error } = await supabase.functions.invoke('loyalty-account');
+    if (error) return null;
+
+    // Treat as unknown — isRecord() narrows before every property access.
+    const data: unknown = rawData;
+    if (!isRecord(data) || data['ok'] !== true) return null;
+
+    const account: unknown = data['account'];
+    if (!isRecord(account) || typeof account['id'] !== 'string') return null;
+
     return {
-      accountId: String(data.account.id),
-      balance: typeof data.account.balance === 'number' ? data.account.balance : 0,
+      accountId: account['id'],
+      balance: typeof account['balance'] === 'number' ? account['balance'] : 0,
       lastRedeemAt:
-        typeof data.account.last_redeem_at === 'string' ? data.account.last_redeem_at : null,
+        typeof account['last_redeem_at'] === 'string' ? account['last_redeem_at'] : null,
     };
   } catch {
     return null;

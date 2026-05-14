@@ -196,31 +196,32 @@ function sortOrders(
   };
 
   return [...rows].sort((left, right) => {
-    let comparison = 0;
+    const comparison = (() => {
+      switch (activeSort.columnKey) {
+        case 'amountTotal':
+          return left.amountTotal - right.amountTotal;
 
-    switch (activeSort.columnKey) {
-      case 'amountTotal':
-        comparison = left.amountTotal - right.amountTotal;
-        break;
-      case 'status':
-        comparison = left.status.localeCompare(right.status, undefined, { sensitivity: 'base' });
-        break;
-      case 'customerName':
-        comparison = (left.customerName ?? '').localeCompare(right.customerName ?? '', undefined, {
-          sensitivity: 'base',
-        });
-        break;
-      case 'orderNumber':
-        comparison = (left.orderNumber ?? 0) - (right.orderNumber ?? 0);
-        break;
-      case 'waitMinutes':
-        comparison = left.waitMinutes - right.waitMinutes;
-        break;
-      case 'createdAt':
-      default:
-        comparison = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
-        break;
-    }
+        case 'status':
+          return left.status.localeCompare(right.status, undefined, {
+            sensitivity: 'base',
+          });
+
+        case 'customerName':
+          return (left.customerName ?? '').localeCompare(right.customerName ?? '', undefined, {
+            sensitivity: 'base',
+          });
+
+        case 'orderNumber':
+          return (left.orderNumber ?? 0) - (right.orderNumber ?? 0);
+
+        case 'waitMinutes':
+          return left.waitMinutes - right.waitMinutes;
+
+        case 'createdAt':
+        default:
+          return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+      }
+    })();
 
     if (comparison !== 0) {
       return activeSort.direction === 'asc' ? comparison : -comparison;
@@ -229,7 +230,6 @@ function sortOrders(
     return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
   });
 }
-
 function mapOrderRow(row: OrderRow): AdminOrderSummary {
   const createdAt = row.created_at;
   const status = normalizeAdminOrderStatus(row.status);

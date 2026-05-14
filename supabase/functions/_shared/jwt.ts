@@ -125,10 +125,17 @@ async function fetchJwks(): Promise<JwkKey[]> {
       // Timeout via AbortController — JWKS fetch should be fast
       signal: AbortSignal.timeout(5_000),
     });
-  } catch (err) {
-    throw new Error(`JWKS fetch network error: ${err instanceof Error ? err.message : String(err)}`);
-  }
+} catch (err) {
 
+    throw new Error(
+
+      `JWKS fetch network error: ${err instanceof Error ? err.message : String(err)}`,
+
+      { cause: err },
+
+    );
+
+  }
   if (!res.ok) {
     throw new Error(`JWKS fetch failed: HTTP ${res.status} from ${jwksUrl}`);
   }
@@ -136,8 +143,10 @@ async function fetchJwks(): Promise<JwkKey[]> {
   let body: JwksResponse;
   try {
     body = (await res.json()) as JwksResponse;
-  } catch {
-    throw new Error('JWKS response is not valid JSON');
+ } catch (err) {
+
+    throw new Error('JWKS response is not valid JSON', { cause: err });
+
   }
 
   if (!Array.isArray(body?.keys) || body.keys.length === 0) {

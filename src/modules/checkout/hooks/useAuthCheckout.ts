@@ -22,6 +22,25 @@
 //       code on the !response.ok path; these two paths are client-side failures
 //       where no server code exists.
 //
+//   [2] Removed explicit `(item: any)` / `(m: any)` annotations.
+//
+//       cartItems is CartItem[] from the Zustand store. The explicit `:any`
+//       annotations on the .map() callbacks overrode the inferred CartItem type,
+//       causing @typescript-eslint/no-unsafe-assignment and
+//       @typescript-eslint/no-unsafe-member-access on every property access.
+//
+//       Fix: import CartItem and CartModifier, remove annotations so TypeScript
+//       infers the correct types throughout the transformation.
+//
+//   [3] response.json() now typed as `unknown`, narrowed before property access.
+//
+//       `response.json()` returns `Promise<any>` per lib.dom.d.ts. Treating
+//       the result as `any` made every property access (json?.data, data?.url,
+//       data?.sessionId …) unsafe. Fix: declare `const json: unknown`, then use
+//       the isRecord() guard imported from checkout.types before each access.
+//       parseCheckoutPricingResponse() is used for the pricing field (same
+//       pattern as useGuestCheckout).
+//
 // pickup_time contract (unchanged):
 //   AuthCheckoutInput carries pickupSchedule (PickupSchedule domain object).
 //   serialiseAuthCheckoutInput() converts it to the wire body.
@@ -32,7 +51,11 @@ import { useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase/supabaseClient';
 import { useCartStore } from '@/modules/cart/store/cart.store';
 import { mapCheckoutError } from '@/modules/checkout/errors/mapCheckoutError';
+import type { CartItem } from '@/modules/cart/types/cart.types';
+import type { CheckoutItemWirePayload } from '../types/checkout-wire.types';
 import {
+  isRecord,
+  parseCheckoutPricingResponse,
   serialiseAuthCheckoutInput,
   type AuthCheckoutInput,
   type CheckoutResult,
@@ -64,6 +87,7 @@ export function useAuthCheckout(): UseAuthCheckoutReturn {
     sessionUrl: null,
   });
 
+  // cartItems is CartItem[] — typed by the CartStore interface
   const cartItems = useCartStore((s) => s.items);
 
   const initiateAuthCheckout = useCallback(
@@ -85,21 +109,19 @@ export function useAuthCheckout(): UseAuthCheckoutReturn {
       const accessToken = session.access_token;
 
       // ─── CART TRANSFORM ──────────────────────────────────────────────────
-      const itemsPayload = cartItems.map((item: any) => {
-        const modifiers = Array.isArray(item.modifiers)
-          ? item.modifiers.map((m: any) => ({
-              id:       String(m.id),
-              group_id: String(m.groupId),
-            }))
-          : [];
-
-        return {
-          id:       item.menuItemId ?? item.id,
-          quantity: Number(item.quantity ?? 1),
+      // item is CartItem (inferred from CartItem[]) — no explicit :any needed.
+      // m is CartModifier — id and groupId are string.
+      const itemsPayload: CheckoutItemWirePayload[] = cartItems.map(
+        (item: CartItem): CheckoutItemWirePayload => ({
+          id:       item.menuItemId,
+          quantity: item.quantity,
           notes:    item.notes ?? undefined,
-          modifiers,
-        };
-      });
+          modifiers: item.modifiers.map((m) => ({
+            id:       m.id,
+            group_id: m.groupId,
+          })),
+        }),
+      );
 
       // ─── SERIALISE INPUT → WIRE BODY ─────────────────────────────────────
       const serialised = serialiseAuthCheckoutInput(input);
@@ -123,19 +145,27 @@ export function useAuthCheckout(): UseAuthCheckoutReturn {
         );
 
         // response.json() returns Promise<any> per lib.dom.d.ts.
-        // json is any — assignable to Record<string, unknown> | null.
-        const json = await response.json().catch(() => null);
+        // Declare as unknown and narrow with isRecord() before every access
+        // so that no property read is unsafe.
+        const json: unknown = await response.json().catch(() => null);
 
         if (!response.ok) {
-          const err = mapCheckoutError(json, response);
+          const err = mapCheckoutError(isRecord(json) ? json : null, response);
           setState({ isLoading: false, error: err.message, sessionUrl: null });
           return { ok: false, error: err.message, code: err.code };
         }
 
-        const data = json?.data ?? json;
-        const url  = data?.url;
+        // Normalise { data: {...} } envelope or flat response.
+        const envelope = isRecord(json) ? json : null;
+        const rawData: unknown = envelope !== null
+          ? (isRecord(envelope['data']) ? envelope['data'] : envelope)
+          : null;
 
-        if (typeof url !== 'string') {
+        const url = isRecord(rawData) && typeof rawData['url'] === 'string'
+          ? rawData['url']
+          : null;
+
+        if (url === null) {
           const err = 'Invalid checkout response: missing URL.';
           setState({ isLoading: false, error: err, sessionUrl: null });
           // FIX [1]: added `code: null`.
@@ -147,16 +177,14 @@ export function useAuthCheckout(): UseAuthCheckoutReturn {
 
         setState({ isLoading: false, error: null, sessionUrl: url });
 
-        // data is any — data?.pricing is any, assignable to
-        // CheckoutPricingResponse | undefined without a parse step here
-        // because any satisfies any target type. The auth pipeline validates
-        // pricing server-side; client display uses this value read-only.
+        // Each field is narrowed from rawData before use.
+        // parseCheckoutPricingResponse safely parses an unknown pricing blob.
         return {
           ok:          true,
           url,
-          sessionId:   data?.sessionId,
-          pricingHash: data?.pricingHash,
-          pricing:     data?.pricing,
+          sessionId:   isRecord(rawData) && typeof rawData['sessionId']   === 'string' ? rawData['sessionId']   : undefined,
+          pricingHash: isRecord(rawData) && typeof rawData['pricingHash'] === 'string' ? rawData['pricingHash'] : undefined,
+          pricing:     isRecord(rawData) ? parseCheckoutPricingResponse(rawData['pricing']) : undefined,
         };
       } catch (err) {
         const message =

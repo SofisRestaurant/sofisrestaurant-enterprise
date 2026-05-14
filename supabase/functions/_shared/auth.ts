@@ -170,7 +170,7 @@ export async function authenticateAdmin(req: Request): Promise<AuthenticateAdmin
 
   const svc = createServiceClient();
 
-  let isAdmin = false;
+  let isAdmin: boolean;
   try {
     isAdmin = await checkAdminByRpc(svc, user.id);
   } catch {

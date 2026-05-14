@@ -195,9 +195,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // ── Body read ───────────────────────────────────────────────────────────────
-  let rawBody = "";
-  try {
-    const buffer = await req.arrayBuffer();
+ let rawBody: string;
+try {
+  const buffer = await req.arrayBuffer();
 
     if (buffer.byteLength === 0) {
       return errorResponse(requestId, 400, "empty_body", "Request body is required.", corsHeaders);
@@ -323,7 +323,7 @@ const pickupTimeResult = validatePickupTime(body.pickup_time ?? null);
 
   // ── Pricing resolution ──────────────────────────────────────────────────────
   let snapshot: PricingSnapshot;
-  let pricingHash = "";
+  let pricingHash: string;
 
   try {
     const pricing = await resolvePricingForCheckout({
@@ -423,10 +423,10 @@ const pickupTimeResult = validatePickupTime(body.pickup_time ?? null);
   }
 
   // ── Idempotency key ─────────────────────────────────────────────────────────
-  let idempotencyKey = "";
-  try {
-    const cartHash = await sha256Hex(JSON.stringify(body.items));
-    idempotencyKey = await buildGuestIdempotencyKey({
+ let idempotencyKey: string;
+try {
+  const cartHash = await sha256Hex(JSON.stringify(body.items));
+  idempotencyKey = await buildGuestIdempotencyKey({
       guestEmail: body.guest_email,
       cartHash,
       pricingHash,
