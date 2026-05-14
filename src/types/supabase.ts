@@ -2395,6 +2395,7 @@ export type Database = {
           disputed_at: string | null
           fulfillment_type: string
           guest_email: string | null
+          guest_phone_e164: string | null
           guest_token: string | null
           id: string
           idempotency_key: string | null
@@ -2425,6 +2426,7 @@ export type Database = {
           shipping_address: Json | null
           shipping_name: string | null
           shipping_phone: string | null
+          sms_opt_in: boolean
           source: string | null
           status: string
           stripe_charge_id: string | null
@@ -2468,6 +2470,7 @@ export type Database = {
           disputed_at?: string | null
           fulfillment_type?: string
           guest_email?: string | null
+          guest_phone_e164?: string | null
           guest_token?: string | null
           id?: string
           idempotency_key?: string | null
@@ -2498,6 +2501,7 @@ export type Database = {
           shipping_address?: Json | null
           shipping_name?: string | null
           shipping_phone?: string | null
+          sms_opt_in?: boolean
           source?: string | null
           status?: string
           stripe_charge_id?: string | null
@@ -2541,6 +2545,7 @@ export type Database = {
           disputed_at?: string | null
           fulfillment_type?: string
           guest_email?: string | null
+          guest_phone_e164?: string | null
           guest_token?: string | null
           id?: string
           idempotency_key?: string | null
@@ -2571,6 +2576,7 @@ export type Database = {
           shipping_address?: Json | null
           shipping_name?: string | null
           shipping_phone?: string | null
+          sms_opt_in?: boolean
           source?: string | null
           status?: string
           stripe_charge_id?: string | null
@@ -4419,6 +4425,7 @@ export type Database = {
           disputed_at: string | null
           fulfillment_type: string
           guest_email: string | null
+          guest_phone_e164: string | null
           guest_token: string | null
           id: string
           idempotency_key: string | null
@@ -4449,6 +4456,7 @@ export type Database = {
           shipping_address: Json | null
           shipping_name: string | null
           shipping_phone: string | null
+          sms_opt_in: boolean
           source: string | null
           status: string
           stripe_charge_id: string | null

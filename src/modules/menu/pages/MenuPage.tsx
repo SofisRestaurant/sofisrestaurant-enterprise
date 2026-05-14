@@ -711,7 +711,7 @@ function MenuPage() {
             className="flex flex-col items-center gap-4 py-24 text-zinc-500"
           >
             <Spinner />
-            <p className="text-sm">Loading the menu\u2026</p>
+            <p className="text-sm">Loading the menu</p>
           </m.div>
         )}
 

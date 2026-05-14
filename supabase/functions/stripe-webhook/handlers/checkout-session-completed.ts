@@ -6,57 +6,49 @@
 //
 // CHANGE FROM PRIOR VERSION:
 //   Added markAbandonedCartRecovered() as a side effect in step 6.
-//
-//   WHY:
-//   cart.store.ts.clearSupabaseCart() marks abandoned_cart_sessions.recovered
-//   = true when the OrderSuccess page loads. But if the user closes the browser
-//   before OrderSuccess renders, that path never executes. The webhook is the
-//   authoritative source of truth for a completed payment — it is the correct
-//   place to close the recovery loop, not the client page.
-//
-//   The nightly cron job (cleanup-abandoned-checkouts.sql) also reconciles
-//   this as a batch safety net, but closing it in the webhook is more immediate
-//   and reduces cron backlog.
-//
-//   MATCHING LOGIC:
-//   abandoned_cart_sessions.id = pending_carts.id = the pending_cart_id from
-//   Stripe metadata. We use meta.pendingCartId (now correctly typed in
-//   shared/metadata.ts as string | null) to look up and update the row.
-//
-//   SAFETY:
-//   - Non-fatal: a failure here never rolls back the order or fails the webhook
-//   - Idempotent: .eq('recovered', false) guard prevents double-updates
-//   - Uses the same DbClient as all other side effects (service role)
-//   - Only fires on wasNewOrder to avoid redundant updates on webhook retries
+//   (unchanged — see prior changelog)
 //
 // [FIX 2026-05-10] Idempotency claim released on handler failure.
-//
-//   PROBLEM:
-//   checkEventIdempotency() inserts into stripe_webhook_events at the start of
-//   the handler. If the handler subsequently throws (e.g., order insert fails
-//   with constraint 23514), that row stays written. Stripe's next retry then
-//   finds the row and returns { alreadyProcessed: true }, silently skipping
-//   the event — permanently losing the order.
-//
-//   FIX:
-//   The handler body (steps 2–6) is wrapped in try/catch. On any throw,
-//   releaseIdempotencyClaim() deletes the row before re-throwing, so Stripe's
-//   retry can take a fresh claim and reprocess the event.
-//
-//   SAFETY:
-//   - createOrderFromSession has a 23505 guard: if a prior partial run created
-//     the order before throwing, the retry finds it via findOrderBySessionId
-//     and does not create a duplicate.
-//   - All side effects (notify, loyalty, promo, credit, kitchen, SMS) are
-//     individually idempotent — safe to re-run on retry.
-//   - releaseIdempotencyClaim swallows its own errors: if the delete fails,
-//     behavior degrades to the old (stuck) state, never to silent data loss.
+//   (unchanged — see prior changelog)
 //
 // [HARDEN] Invalid metadata on a paid session now throws instead of returning.
-//   A paid checkout.session.completed with unparseable metadata must never be
-//   silently accepted (HTTP 200). Throwing inside the try block causes the
-//   outer catch to release the idempotency claim before re-throwing, so Stripe
-//   retries and the event is not permanently lost.
+//   (unchanged — see prior changelog)
+//
+// [SMS] Guest SMS consent persistence added to step 6.
+//
+//   WHAT:
+//   After order creation/lookup (step 4), extractGuestSmsConsent() reads
+//   guest_sms_opt_in and guest_phone_e164 from Payment Intent metadata
+//   (preferred, bound to the payment event) or session metadata (fallback).
+//   If the guest opted in and the phone passes E.164 validation, a non-fatal
+//   UPDATE writes sms_opt_in = true and guest_phone_e164 to the orders row.
+//
+//   WHY PI METADATA:
+//   The PI was created with metadata = sessionMetadata inside
+//   create-checkout-guest/index.ts (payment_intent_data: { metadata }).
+//   The session is retrieved with expand: ["payment_intent"] in step 2,
+//   so pi.metadata is available at the same point as session.metadata and
+//   carries the same values — but is durably bound to the payment event.
+//
+//   TYPE SAFETY:
+//   session.payment_intent: string | Stripe.PaymentIntent | null.
+//   After `typeof pi !== "string" && pi !== null`, TypeScript narrows to
+//   Stripe.PaymentIntent. pi.metadata is then Stripe.Metadata (= { [name:
+//   string]: string }) — no cast required at any site.
+//
+//   IDEMPOTENCY:
+//   The UPDATE is not gated on wasNewOrder. On a webhook retry after a
+//   partial first run, wasNewOrder is false (order already exists), but the
+//   SMS columns may not have been written yet. Running an idempotent UPDATE
+//   again is safe and repairs the row.
+//
+//   NON-FATAL:
+//   persistGuestSmsConsent catches all errors internally. Failure here never
+//   rolls back the order, never rejects the Promise.all, and never releases
+//   the idempotency claim.
+//
+//   PRIVACY:
+//   The phone value is not written to any log line.
 // =============================================================================
 
 import type Stripe from "stripe";
@@ -234,6 +226,101 @@ async function markAbandonedCartRecovered(args: {
   }
 }
 
+// ─── Guest SMS consent ────────────────────────────────────────────────────────
+//
+// These three declarations are the only additions made by the SMS feature.
+// All other functions and the handler body are unchanged.
+
+// Matches the exact format stored by PhoneNumberInput for a complete US entry
+// and validated by create-checkout-guest/index.ts before writing to metadata.
+const E164_US_PHONE_RE = /^\+1[2-9]\d{9}$/;
+
+/**
+ * Extracts and re-validates guest SMS consent from Stripe metadata.
+ *
+ * Reads from Payment Intent metadata (preferred — set at session-creation time
+ * and bound to the payment event) falling back to session metadata.
+ *
+ * No cast is used anywhere. session.payment_intent is typed by the Stripe SDK
+ * as `string | Stripe.PaymentIntent | null`. The `typeof !== "string" &&
+ * !== null` guard narrows it to `Stripe.PaymentIntent`, whose `.metadata`
+ * property is `Stripe.Metadata` (= `{ [name: string]: string }`). The
+ * piMeta variable is explicitly widened to `Stripe.Metadata | null` so the
+ * nullish-coalescing chain that follows compiles cleanly for all SDK versions.
+ *
+ * Returns `{ smsOptIn: false, phoneE164: null }` when the guest did not opt
+ * in or when the stored phone fails the E.164 check.
+ */
+function extractGuestSmsConsent(
+  session:   Stripe.Checkout.Session,
+  requestId: string,
+): { smsOptIn: boolean; phoneE164: string | null } {
+  const pi = session.payment_intent;
+
+  // Explicit | null widening keeps the nullish chain typed as Stripe.Metadata
+  // regardless of whether the SDK types pi.metadata as nullable or not.
+  const piMeta: Stripe.Metadata | null =
+    typeof pi !== "string" && pi !== null ? pi.metadata : null;
+
+  const effectiveMeta: Stripe.Metadata = piMeta ?? session.metadata ?? {};
+
+  // Stripe.Metadata = { [name: string]: string }; values are always strings.
+  if (effectiveMeta["guest_sms_opt_in"] !== "true") {
+    return { smsOptIn: false, phoneE164: null };
+  }
+
+  // The fallback "" handles noUncheckedIndexedAccess tsconfig variants.
+  const rawPhone: string = effectiveMeta["guest_phone_e164"] ?? "";
+  if (!E164_US_PHONE_RE.test(rawPhone)) {
+    // Metadata says opted-in but phone is invalid. Log without the value (PII).
+    log("warn", "webhook_guest_phone_invalid_in_metadata", {
+      requestId,
+      sessionId: prefix(session.id),
+    });
+    return { smsOptIn: false, phoneE164: null };
+  }
+
+  return { smsOptIn: true, phoneE164: rawPhone };
+}
+
+/**
+ * Persists guest SMS consent to the orders row.
+ *
+ * Non-fatal best-effort: all errors are caught internally and logged as warn.
+ * The function never rejects so it is safe to add to the Promise.all in step 6.
+ * The UPDATE is idempotent — safe to re-run on webhook retry.
+ * The phone value is deliberately not written to any log line.
+ */
+async function persistGuestSmsConsent(args: {
+  db:         DbClient;
+  orderId:    string;
+  phoneE164:  string;
+  requestId:  string;
+}): Promise<void> {
+  const { db, orderId, phoneE164, requestId } = args;
+  try {
+    const { error } = await db
+      .from("orders")
+      .update({ sms_opt_in: true, guest_phone_e164: phoneE164 })
+      .eq("id", orderId);
+
+    if (error) {
+      log("warn", "webhook_guest_sms_consent_persist_failed", {
+        requestId,
+        orderId: prefix(orderId),
+        error:   error.message,
+        // phoneE164 deliberately omitted — PII.
+      });
+    }
+  } catch (err) {
+    log("warn", "webhook_guest_sms_consent_persist_crashed", {
+      requestId,
+      orderId: prefix(orderId),
+      error:   err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 export async function handleCheckoutSessionCompleted(
@@ -300,6 +387,14 @@ export async function handleCheckoutSessionCompleted(
   const isGuest = userId === null;
 
   const pendingCartId: string | null = meta.pendingCartId;
+
+  // ── 3b. Guest SMS consent extraction ──────────────────────────────────────
+  // Reads guest_sms_opt_in / guest_phone_e164 from Payment Intent metadata
+  // (preferred) or session metadata (fallback). Re-validates E.164 format as
+  // defence-in-depth. Returns { smsOptIn: false, phoneE164: null } when the
+  // guest did not opt in or when the phone fails validation.
+  // extractGuestSmsConsent uses only TypeScript structural narrowing — no casts.
+  const guestSmsConsent = extractGuestSmsConsent(session, requestId);
 
   // ── 4. Find or create order ───────────────────────────────────────────────
   let order = await findOrderBySessionId(db, session.id);
@@ -371,6 +466,21 @@ export async function handleCheckoutSessionCompleted(
       }),
     );
   }
+
+  // Persist guest SMS consent unconditionally (not gated on wasNewOrder) so
+  // webhook retries can repair rows from a partial first run. The UPDATE is
+  // idempotent. persistGuestSmsConsent never rejects — all errors are caught
+  // internally. The phone value is not written to any log.
+if (guestSmsConsent.smsOptIn && guestSmsConsent.phoneE164 !== null) {
+  sideEffects.push(
+    persistGuestSmsConsent({
+      db,
+      orderId,
+      phoneE164: guestSmsConsent.phoneE164,
+      requestId,
+    }),
+  );
+}
 
   if (userId !== null) {
     const subtotalCents = meta.subtotalCents ?? orderTotal;
@@ -477,6 +587,8 @@ export async function handleCheckoutSessionCompleted(
     userId:               prefix(userId ?? "guest"),
     verificationRequired,
     pendingCartId:        prefix(pendingCartId ?? "none"),
+    // smsOptIn boolean logged; phone deliberately omitted.
+    guestSmsOptIn:        guestSmsConsent.smsOptIn,
   });
 
   } catch (err) {

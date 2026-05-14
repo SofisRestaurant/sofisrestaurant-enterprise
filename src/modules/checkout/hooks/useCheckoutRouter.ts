@@ -5,32 +5,27 @@
 //
 // CHANGES FROM PRIOR VERSION:
 //
-//   [1] otpChallenge: { nonce, expiresAt } | null
-//       Exposed from guestHook.otpChallenge. Non-null exactly when the guest
-//       phase is 'otp_required'. CheckoutPage uses this to conditionally render
-//       CheckoutChallengeModal.
+//   [1–6] unchanged — see prior changelog.
 //
-//   [2] retryWithToken(challengeToken: string) => Promise<void>
-//       Calls guestHook.retryWithChallengeToken, then redirects on success.
-//       Phase changes are handled inside guestHook — parent re-renders
-//       accordingly. This is the only call site that should trigger the
-//       window.location.assign on a successful OTP retry.
+//   [7] isValidE164UsPhone — new module-private helper.
+//       Accepts an unknown value and narrows it to a validated E.164 US number
+//       (+1 followed by area code 2–9 then nine more digits). Matches the
+//       exact format that PhoneNumberInput stores when the number is complete.
 //
-//   [3] guestPhase: GuestCheckoutPhase
-//       Exposed so CheckoutPage can branch on blocked vs error vs idle
-//       without knowing the internal hook shape. Prefer this over reading
-//       error/code strings for conditional rendering of terminal states.
+//   [8] CheckoutRouterArgs: added guestPhone (string, optional) and
+//       smsOptIn (boolean, optional). Both are ignored for authenticated users.
 //
-//   [4] errorCode now populated from the actual guest phase error code.
-//       Previously hardcoded to null, making it unusable.
+//   [9] checkout(): added phone validation for the guest path.
+//       Runs before initiateGuestCheckout so the network call is never made
+//       with an incomplete or missing phone when SMS opt-in is true.
+//       Sets routerError (displayed under the checkout button) and returns a
+//       typed { ok: false, code: 'phone_incomplete' } result.
 //
-//   [5] canRetry now false for checkout_blocked (terminal) and for
-//       non-recoverable errors. Previously Boolean(error) — always true.
-//
-//   [6] redirectToCheckout no longer throws on otp_required or blocked.
-//       It returns silently — the phase change causes the parent to re-render
-//       and show the appropriate UI. Throwing on otp_required prevented any
-//       call site using redirectToCheckout from ever seeing a challenge.
+//  [10] GuestCheckoutInput construction: passes guestPhone and smsOptIn
+//       through to the input type when smsOptIn is true.
+//       serialiseGuestCheckoutInput then writes them onto the wire body.
+//       When smsOptIn is false or absent the input is identical to the
+//       prior version and no phone fields reach the server.
 //
 // Import rules (unchanged):
 //   ✅ ASAP_PICKUP, scheduledPickup, PickupSchedule
@@ -83,6 +78,20 @@ export type CheckoutRouterArgs = {
     loyaltyRedemptionId?: string;
   };
   clientIntegrityHash?: string;
+  /**
+   * Backend-ready E.164 US phone (+1XXXXXXXXXX).
+   * Only consulted for guest checkout and only when smsOptIn is true.
+   * PhoneNumberInput stores this format when the number is complete (10 digits).
+   * Ignored entirely for authenticated users.
+   */
+  guestPhone?: string;
+  /**
+   * Guest SMS opt-in flag. When true, guestPhone must be a valid E.164 US
+   * number or checkout is blocked with a clear error before the network call.
+   * Defaults to absent / false — no phone fields are sent to the server.
+   * Ignored for authenticated users.
+   */
+  smsOptIn?: boolean;
 };
 
 export type CheckoutRouterReturn = {
@@ -91,22 +100,12 @@ export type CheckoutRouterReturn = {
   reset:              () => void;
   isLoading:          boolean;
   error:              string | null;
-  errorCode:          string | null;   // populated — was always null before
-  canRetry:           boolean;         // false for terminal states
+  errorCode:          string | null;
+  canRetry:           boolean;
   retryAfter:         number;
 
-  // OTP challenge — non-null when guest phase === 'otp_required'.
-  // Pass nonce/expiresAt to CheckoutChallengeModal as props.
-  // Use key={otpChallenge.nonce} on the modal to force remount on fresh challenge.
   otpChallenge: { nonce: string; expiresAt: string } | null;
-
-  // Initiates checkout retry after OTP verification succeeds.
-  // Handles the window.location.assign internally on success.
-  // On fresh otp_required (expired token): otpChallenge updates, modal remounts.
-  // On error: guestPhase transitions to 'error', parent shows error UI.
   retryWithToken: (challengeToken: string) => Promise<void>;
-
-  // Full phase state — use for conditional rendering of blocked/error UI.
   guestPhase:      GuestCheckoutPhase;
 
   mode:            'auth' | 'guest' | 'disabled';
@@ -120,6 +119,26 @@ function isValidEmail(value: unknown): boolean {
   if (typeof value !== 'string') return false;
   const s = value.trim().toLowerCase();
   return s.length > 0 && s.length <= 320 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+}
+
+/**
+ * Validates a backend-ready E.164 US phone number.
+ *
+ * Accepted format: +1 followed by an area code whose first digit is 2–9,
+ * then nine more digits. Total length: 12 characters.
+ *
+ * This matches exactly what PhoneNumberInput.toStoredPhoneValue() produces
+ * for a complete (10-digit) entry: `+1${localDigits}`.
+ *
+ * Rejects:
+ *   - non-strings
+ *   - local-only digits (no +1 prefix — incomplete PhoneNumberInput state)
+ *   - area codes starting with 0 or 1
+ *   - numbers shorter or longer than the E.164 US format
+ */
+function isValidE164UsPhone(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  return /^\+1[2-9]\d{9}$/.test(value);
 }
 
 function normOrderType(v: unknown): FulfillmentType {
@@ -204,10 +223,23 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
         return initiateAuthCheckout(input);
       }
 
+      // ── Guest path ──────────────────────────────────────────────────────────
+
       if (!isValidEmail(args.guestEmail)) {
         const err = 'A valid email is required for guest checkout.';
         setRouterError(err);
         return { ok: false, error: err, code: 'email_invalid' };
+      }
+
+      // Phone validation — only when the guest has opted into SMS updates.
+      // Runs before any network call so the error is instant and free.
+      if (args.smsOptIn) {
+        if (!isValidE164UsPhone(args.guestPhone)) {
+          const err =
+            'Please enter a complete 10-digit mobile number to receive SMS order updates.';
+          setRouterError(err);
+          return { ok: false, error: err, code: 'phone_incomplete' };
+        }
       }
 
       const input: GuestCheckoutInput = {
@@ -215,6 +247,12 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
         orderType:     normOrderType(args.orderType),
         notes:         trimOrUndefined(args.notes),
         pickupSchedule,
+        // Conditionally attach SMS fields. When smsOptIn is false or absent
+        // neither field is present and the wire body is identical to the
+        // pre-SMS version — preserving existing guest checkout behaviour.
+        ...(args.smsOptIn && isValidE164UsPhone(args.guestPhone)
+          ? { guestPhone: args.guestPhone, smsOptIn: true as const }
+          : {}),
       };
 
       return initiateGuestCheckout(input);
@@ -226,9 +264,6 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
     async (args: CheckoutRouterArgs): Promise<void> => {
       const result = await checkout(args);
 
-      // otp_required: phase is now 'otp_required' in guestHook, otpChallenge
-      // is non-null. Parent re-renders and shows CheckoutChallengeModal.
-      // Do not throw — throwing would prevent the modal from ever rendering.
       if (!result.ok && (result.code === 'otp_required' || result.code === 'checkout_blocked')) {
         return;
       }
@@ -241,17 +276,6 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
   );
 
   // ── OTP retry ──────────────────────────────────────────────────────────────
-  //
-  // Called by CheckoutPage when CheckoutChallengeModal emits onToken.
-  // Delegates to guestHook.retryWithChallengeToken which:
-  //   - Dispatches RETRY (phase → retrying, modal stays visible with spinner)
-  //   - Re-calls create-checkout-guest with challenge_token
-  //   - On success: dispatches RESET, returns { ok: true, url }
-  //   - On fresh otp_required: dispatches OTP_REQUIRED with new nonce
-  //   - On error: dispatches ERROR (phase → error, parent unmounts modal)
-  //
-  // window.location.assign is called here, not in guestHook, to keep the
-  // navigation concern in the router layer.
 
   const retryWithToken = useCallback(
     async (challengeToken: string): Promise<void> => {
@@ -259,7 +283,6 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
       if (result.ok && result.url) {
         window.location.assign(result.url);
       }
-      // All other cases: phase change in guestHook drives parent re-render.
     },
     [guestHook.retryWithChallengeToken],
   );
@@ -272,8 +295,6 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
   const error     = routerError ?? activeError;
   const isLoading = activeIsLoading;
 
-  // errorCode: derived from guestHook phase for guest path.
-  // Auth errors are not currently typed at the hook boundary.
   const errorCode: string | null = (() => {
     if (isAuthenticated) return null;
     const p = guestHook.phase;
@@ -282,8 +303,6 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
     return null;
   })();
 
-  // canRetry: false for terminal states (blocked, non-recoverable error).
-  // Prevents showing "Try again" buttons that cannot succeed.
   const canRetry = Boolean(error) &&
     guestHook.phase.tag !== 'blocked' &&
     !(guestHook.phase.tag === 'error' && !guestHook.phase.recoverable);

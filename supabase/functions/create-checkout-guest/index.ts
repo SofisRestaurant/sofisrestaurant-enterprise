@@ -13,24 +13,32 @@
 //   - promoId, promoCode, creditId hardcoded to null in pricing call
 //
 // MINIMUM ORDER ENFORCEMENT:
-//   MIN_ORDER_CENTS is imported from _shared/constants.ts — NOT declared locally.
-//   The check runs BEFORE findReusableGuestSession and before any Stripe API call.
-//   findReusableGuestSession also enforces the same check internally
-//   (defense-in-depth) to ensure the invariant holds regardless of call order or
-//   future refactors.
-//   Must match MIN_ORDER_CENTS in pending-cart.ts and create-checkout/index.ts.
+//   MIN_ORDER_CENTS imported from _shared/constants.ts — NOT declared locally.
 //
 // pickup_time support:
 //   Validated via shared _shared/pickup-time.ts (single source of truth).
-//   Written to Stripe metadata via pickupTimeToMetadata() — key is ABSENT
-//   (not null) for ASAP orders. The webhook reads it and writes to orders.
-//   NULL / absent = ASAP.
+//   Written to Stripe metadata via pickupTimeToMetadata(). NULL/absent = ASAP.
 //
 // Pre-checkout risk gate:
-//   enforcePreCheckoutRisk() runs after pricing is resolved and before any
-//   irreversible write (persistGuestPendingCart). On allow, three
-//   pre_checkout_risk_* fields are written into Stripe metadata so the webhook
-//   can persist them without re-running the post-payment scoring model.
+//   enforcePreCheckoutRisk() runs after pricing and before any irreversible
+//   write. On allow, pre_checkout_risk_* fields go into Stripe metadata so
+//   the webhook can persist them without re-running the scoring model.
+//
+// SMS opt-in / guest phone:
+//   guest_phone and sms_opt_in are read from the raw parsed body via isRecord
+//   guard — same pattern as challenge_token, no casts at read sites.
+//   Server re-validates E.164 format independently of the client guard.
+//   Full phone stored in Stripe metadata (PCI-compliant context) only when
+//   opted in. Never written to logs.
+//
+// NOTE ON PRE-EXISTING CAST:
+//   The `as Parameters<typeof persistGuestPendingCart>[0]` cast on the
+//   persistGuestPendingCart call was present in the original file before any
+//   SMS changes were introduced. It exists because create-checkout/pending-cart.ts
+//   does not declare pickup_time in its parameter type, even though the runtime
+//   implementation accepts it. The cast will be removable once pending-cart.ts
+//   is updated to include `pickup_time?: string` in its parameter interface.
+//   It has NOT been introduced or widened by the SMS changes in this file.
 // =============================================================================
 
 import Stripe from "stripe";
@@ -76,6 +84,25 @@ import type { DbClient } from "../create-checkout/types.ts";
 import { STRIPE_CANCEL_URL, STRIPE_SUCCESS_URL } from "../_shared/checkout-urls.ts";
 import { enforcePreCheckoutRisk } from "../create-checkout/risk-gate.ts";
 import type { RiskGateOutcome } from "../create-checkout/risk-gate.ts";
+
+// ─── Runtime guard ────────────────────────────────────────────────────────────
+//
+// Narrows unknown to Record<string, unknown> without any cast.
+// Used for every optional raw-body field access so no property is read on
+// an unnarrowed unknown value.
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+// ─── E.164 US phone validation ────────────────────────────────────────────────
+//
+// Matches +1 + area-code-first-digit-2-9 + nine more digits.
+// This is the exact format PhoneNumberInput stores when the number is complete.
+// The client uses the same regex in isValidE164UsPhone(); this is the server
+// authority that runs regardless of what the client sent.
+
+const E164_US_PHONE_RE = /^\+1[2-9]\d{9}$/;
 
 // ─── Local sha256Hex ──────────────────────────────────────────────────────────
 
@@ -195,9 +222,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // ── Body read ───────────────────────────────────────────────────────────────
- let rawBody: string;
-try {
-  const buffer = await req.arrayBuffer();
+  let rawBody: string;
+  try {
+    const buffer = await req.arrayBuffer();
 
     if (buffer.byteLength === 0) {
       return errorResponse(requestId, 400, "empty_body", "Request body is required.", corsHeaders);
@@ -240,15 +267,60 @@ try {
 
   const body: GuestRequestBody = validated.value;
 
-  // Read challenge_token from the raw parsed body — not typed in GuestRequestBody
-  // but present on OTP retry requests after a risk gate challenge.
+  // ── Raw body optional-field access — all via isRecord, no casts ────────────
+  //
+  // challenge_token, sms_opt_in, and guest_phone are intentionally absent from
+  // GuestRequestBody (same design as challenge_token was before SMS): they are
+  // opt-in extras read from the raw value after structural validation confirms
+  // the body is an object.
+  //
+  // isRecord(parsedBody) is true at this point — validateGuestBody would have
+  // rejected a non-object body above — but we guard unconditionally so each
+  // field access is TypeScript-verified rather than relying on a runtime invariant.
+  const rawBodyRecord = isRecord(parsedBody) ? parsedBody : {};
+
+  // challenge_token: present on OTP retry requests after a risk gate challenge.
   const challengeToken: string | undefined =
-    typeof (parsedBody as Record<string, unknown>).challenge_token === "string"
-      ? (parsedBody as Record<string, unknown>).challenge_token as string
+    typeof rawBodyRecord["challenge_token"] === "string"
+      ? rawBodyRecord["challenge_token"]
       : undefined;
 
-  // ── pickup_time validation ─────────────────────────────────────────────────
-const pickupTimeResult = validatePickupTime(body.pickup_time ?? null);
+  // sms_opt_in: must be the boolean literal true to be accepted.
+  // The string "true" is intentionally rejected here to stay strict.
+  const rawSmsOptIn   = rawBodyRecord["sms_opt_in"];
+  const rawGuestPhone = rawBodyRecord["guest_phone"];
+
+  // ── SMS opt-in + phone validation ──────────────────────────────────────────
+  //
+  // When sms_opt_in is absent or not === true, guest_phone is ignored entirely
+  // and no SMS metadata keys are written. The Stripe session metadata produced
+  // is byte-for-byte identical to the pre-SMS version for non-opted-in requests.
+  //
+  // When sms_opt_in === true the server re-validates the phone against the
+  // E.164 regex. Client-side validation (useCheckoutRouter) is defence-in-depth
+  // only; this is the authoritative check.
+  //
+  // The full E.164 number is stored in Stripe metadata (PCI-compliant partner).
+  // It is intentionally not written to any application log.
+  const smsOptIn = rawSmsOptIn === true;
+  let guestPhoneE164: string | null = null;
+
+  if (smsOptIn) {
+    if (typeof rawGuestPhone !== "string" || !E164_US_PHONE_RE.test(rawGuestPhone)) {
+      return errorResponse(
+        requestId,
+        422,
+        "validation_failed",
+        "A valid 10-digit US mobile number is required to receive SMS order updates.",
+        corsHeaders,
+      );
+    }
+    // rawGuestPhone is narrowed to string by the typeof check above.
+    guestPhoneE164 = rawGuestPhone;
+  }
+
+  // ── pickup_time validation ──────────────────────────────────────────────────
+  const pickupTimeResult = validatePickupTime(body.pickup_time ?? null);
 
   if (!pickupTimeResult.ok) {
     return errorResponse(
@@ -390,7 +462,7 @@ const pickupTimeResult = validatePickupTime(body.pickup_time ?? null);
     );
   }
 
-  // ── Minimum order enforcement ─────────────────────────────────────────────
+  // ── Minimum order enforcement ───────────────────────────────────────────────
   if (snapshot.totalCents < MIN_ORDER_CENTS) {
     log("warn", "guest_checkout_below_minimum", {
       requestId,
@@ -423,10 +495,10 @@ const pickupTimeResult = validatePickupTime(body.pickup_time ?? null);
   }
 
   // ── Idempotency key ─────────────────────────────────────────────────────────
- let idempotencyKey: string;
-try {
-  const cartHash = await sha256Hex(JSON.stringify(body.items));
-  idempotencyKey = await buildGuestIdempotencyKey({
+  let idempotencyKey: string;
+  try {
+    const cartHash = await sha256Hex(JSON.stringify(body.items));
+    idempotencyKey = await buildGuestIdempotencyKey({
       guestEmail: body.guest_email,
       cartHash,
       pricingHash,
@@ -521,6 +593,13 @@ try {
   }
 
   // ── Persist pending cart ────────────────────────────────────────────────────
+  //
+  // PRE-EXISTING CAST: `as Parameters<typeof persistGuestPendingCart>[0]` was
+  // present in the original file before any SMS changes. It is required because
+  // create-checkout/pending-cart.ts does not declare pickup_time in its
+  // TypeScript parameter type. The cast is NOT introduced by the SMS path and
+  // is NOT widened by it. Remove it by adding `pickup_time?: string` to the
+  // parameter interface in pending-cart.ts.
   const pendingCart = await persistGuestPendingCart({
     db,
     guestEmail: body.guest_email,
@@ -563,8 +642,19 @@ try {
   }
 
   // ── Guest Stripe metadata ───────────────────────────────────────────────────
+  //
   // MUST NOT contain: user_id, customer_uid, uid, device_fingerprint,
   // customer_ip, promo_id, credit_id, any loyalty_* fields.
+  //
+  // SMS keys are present only when the guest opted in and supplied a valid
+  // E.164 number above. When absent the metadata is identical to the pre-SMS
+  // version — no null/empty placeholders are written.
+  //
+  //   guest_sms_opt_in  "true"          explicit consent (Stripe values are strings)
+  //   guest_phone_e164  "+1XXXXXXXXXX"  full E.164 for downstream SMS dispatch
+  //
+  // The full phone is stored in a PCI-compliant Stripe context and is NOT
+  // written to application logs.
   const sessionMetadata: Stripe.MetadataParam = {
     pending_cart_id: pendingCart.cartId,
     cart_ref: pendingCart.cartId,
@@ -590,6 +680,13 @@ try {
     pre_checkout_risk_score:   String(preCheckoutRiskScore),
     pre_checkout_risk_level:   preCheckoutRiskLevel,
     pre_checkout_verif_status: preCheckoutVerifStatus,
+    // SMS opt-in — conditionally present, never null/empty.
+    ...(smsOptIn && guestPhoneE164 !== null
+      ? {
+          guest_sms_opt_in: "true",
+          guest_phone_e164: guestPhoneE164,
+        }
+      : {}),
   };
 
   // ── Create Stripe session ───────────────────────────────────────────────────
@@ -690,6 +787,8 @@ try {
     amountTotal: snapshot.totalCents,
     orderType: body.order_type,
     pickupTime: pickupTime ?? null,
+    // smsOptIn boolean only — the full phone is never written to logs.
+    smsOptIn,
     ms,
   });
 

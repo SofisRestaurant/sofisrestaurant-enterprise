@@ -6,33 +6,16 @@
 //           extracted into their checkout-owned files. This file is now the
 //           orchestrator only: state, effects, event handlers, render tree.
 //
-//           New files created by this split:
-//             types/checkout-page.types.ts
-//             utils/checkoutPageStorage.ts
-//             utils/checkoutPageFormatters.ts
-//             api/loyalty-account.api.ts
-//             components/page/animations.ts
-//             components/page/cx.ts
-//             components/page/SectionCard.tsx
-//             components/page/SectionHeader.tsx
-//             components/page/PickupTimeSelector.tsx
-//             components/page/BlockedOrderCard.tsx
-//             components/page/GuestContactStrip.tsx
-//             components/page/AuthContactStrip.tsx
-//             components/page/LoyaltyEarnBanner.tsx
-//             components/page/OrderItemsList.tsx
-//             components/page/OrderTotals.tsx
-//             components/page/PromoSection.tsx
-//             components/page/CreditsSection.tsx
-//             components/page/GuestPostCheckoutNudge.tsx
-//
-//   Behavior, Tailwind classes, and security invariants are unchanged.
+//   [SMS]   handleCheckout now passes guestPhone and smsOptIn to checkout()
+//           for guest users only. Authenticated users receive undefined for
+//           both fields and the router ignores them.
+//           Dependency array updated accordingly.
 //
 // Security invariants preserved:
 //   - No Stripe URL before verification (button is unmounted during challenge)
 //   - challenge_token lives only in CheckoutChallengeModal state + router memory
 //   - guest_token continuity preserved via sessionStorage (unchanged)
-//   - pendingInputRef in useGuestCheckout preserves cart across OTP cycle
+//   - pendingInputRef in useGuestCheckout preserves cart + phone across OTP cycle
 // =============================================================================
 import {
   useEffect,
@@ -357,6 +340,12 @@ export default function CheckoutPage() {
   }, [selectedCredit]);
 
   // ── handleCheckout — single checkout trigger ───────────────────────────────
+  //
+  // [SMS] guestPhone and smsOptIn are passed for guest users only.
+  //       For authenticated users both are explicitly undefined and the router
+  //       ignores them — the auth path is unchanged.
+  //       useCheckoutRouter validates the phone before any network call when
+  //       smsOptIn is true; the resulting routerError displays below the button.
   const handleCheckout = useCallback(async () => {
     const result = await checkout({
       guestEmail: guestEmail || undefined,
@@ -367,6 +356,8 @@ export default function CheckoutPage() {
       promoCode: promo.applied ? promo.code : undefined,
       creditId: isGuest ? undefined : (selectedCredit ?? undefined),
       loyalty: loyaltyIntent,
+      guestPhone: isGuest ? guestPhone : undefined,
+      smsOptIn: isGuest ? smsOptIn : undefined,
     });
 
     if (isCheckoutSuccess(result)) {
@@ -386,6 +377,8 @@ export default function CheckoutPage() {
   }, [
     checkout,
     guestEmail,
+    guestPhone,
+    smsOptIn,
     orderDetails,
     pickupTime,
     promo.applied,
