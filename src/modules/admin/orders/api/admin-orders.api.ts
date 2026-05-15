@@ -1,11 +1,8 @@
 // =============================================================================
-// PATH: src/modules/admin/orders/admin-orders.api.ts
+// PATH: src/modules/admin/orders/api/admin-orders.api.ts
 // =============================================================================
 // All Supabase calls for the admin orders feature.
 // No UI logic, no React, no state — fetch and mutate only.
-// =============================================================================
-// =============================================================================
-// PATH: src/modules/admin/orders/api/admin-orders.api.ts
 // =============================================================================
 
 import { supabase } from '@/lib/supabase/supabaseClient';
@@ -25,7 +22,7 @@ import { mapOrderRow } from '../utils/admin-orders.mapper';
 export async function fetchAdminOrders(): Promise<AdminOrder[]> {
   const { data, error } = await supabase
     .from('orders')
-    .select('*')
+    .select('*, guest_phone_e164, sms_opt_in')
     .order('created_at', { ascending: false })
     .limit(500);
 

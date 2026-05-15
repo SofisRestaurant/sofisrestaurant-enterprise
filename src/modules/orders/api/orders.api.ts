@@ -225,7 +225,7 @@ function requireMappedOrder(value: unknown, errorMessage: string): Order {
 async function getRawOrderById(orderId: string): Promise<OrderRow | null> {
   const { data, error } = await supabase
     .from('orders')
-    .select('*')
+    .select('*, guest_phone_e164, sms_opt_in')
     .eq('id', orderId)
     .maybeSingle<OrderRow>();
 
@@ -354,7 +354,7 @@ export async function fetchOrdersByCustomer(
   const [{ data, count, error }, metrics] = await Promise.all([
     supabase
       .from('orders')
-      .select('*', { count: 'exact' })
+      .select('*, guest_phone_e164, sms_opt_in', { count: 'exact' })
       .eq('customer_uid', currentUserId)
       .order('created_at', { ascending: false })
       .range(pagination.from, pagination.to),

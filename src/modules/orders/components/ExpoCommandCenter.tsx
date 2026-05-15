@@ -217,7 +217,7 @@ export default function ExpoCommandCenter() {
     try {
       const { data, error } = await supabase
         .from('orders')
-        .select('*')
+        .select('*, guest_phone_e164, sms_opt_in')
         .eq('payment_status', PaymentStatus.PAID)
         .eq('status', OrderStatus.READY)
         .order('created_at', { ascending: true });

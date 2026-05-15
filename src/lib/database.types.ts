@@ -12,6 +12,31 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.1"
   }
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
       abandoned_cart_sessions: {
@@ -368,6 +393,39 @@ export type Database = {
         }
         Relationships: []
       }
+      checkout_challenges: {
+        Row: {
+          attempt_count: number
+          consumed_at: string | null
+          expires_at: string
+          id: string
+          identity_key: string
+          issued_at: string
+          nonce: string
+          phone_e164: string
+        }
+        Insert: {
+          attempt_count?: number
+          consumed_at?: string | null
+          expires_at: string
+          id?: string
+          identity_key: string
+          issued_at?: string
+          nonce: string
+          phone_e164: string
+        }
+        Update: {
+          attempt_count?: number
+          consumed_at?: string | null
+          expires_at?: string
+          id?: string
+          identity_key?: string
+          issued_at?: string
+          nonce?: string
+          phone_e164?: string
+        }
+        Relationships: []
+      }
       checkout_rate_limits: {
         Row: {
           attempts: number
@@ -394,6 +452,39 @@ export type Database = {
           id?: string
           ip?: string | null
           last_attempt_at?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      checkout_risk_events: {
+        Row: {
+          created_at: string
+          device_fingerprint: string | null
+          guest_email: string | null
+          id: number
+          request_ip: string | null
+          risk_action: string | null
+          risk_score: number | null
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          device_fingerprint?: string | null
+          guest_email?: string | null
+          id?: never
+          request_ip?: string | null
+          risk_action?: string | null
+          risk_score?: number | null
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          device_fingerprint?: string | null
+          guest_email?: string | null
+          id?: never
+          request_ip?: string | null
+          risk_action?: string | null
+          risk_score?: number | null
           user_id?: string | null
         }
         Relationships: []
@@ -835,6 +926,39 @@ export type Database = {
           status?: string | null
           updated_at?: string | null
           weight?: number | null
+        }
+        Relationships: []
+      }
+      guest_order_recovery_codes: {
+        Row: {
+          attempt_count: number
+          code_hash: string
+          consumed_at: string | null
+          contact_hash: string
+          created_at: string
+          expires_at: string
+          id: string
+          order_id: string
+        }
+        Insert: {
+          attempt_count?: number
+          code_hash: string
+          consumed_at?: string | null
+          contact_hash: string
+          created_at?: string
+          expires_at: string
+          id?: string
+          order_id: string
+        }
+        Update: {
+          attempt_count?: number
+          code_hash?: string
+          consumed_at?: string | null
+          contact_hash?: string
+          created_at?: string
+          expires_at?: string
+          id?: string
+          order_id?: string
         }
         Relationships: []
       }
@@ -2271,6 +2395,7 @@ export type Database = {
           disputed_at: string | null
           fulfillment_type: string
           guest_email: string | null
+          guest_phone_e164: string | null
           guest_token: string | null
           id: string
           idempotency_key: string | null
@@ -2301,6 +2426,7 @@ export type Database = {
           shipping_address: Json | null
           shipping_name: string | null
           shipping_phone: string | null
+          sms_opt_in: boolean
           source: string | null
           status: string
           stripe_charge_id: string | null
@@ -2344,6 +2470,7 @@ export type Database = {
           disputed_at?: string | null
           fulfillment_type?: string
           guest_email?: string | null
+          guest_phone_e164?: string | null
           guest_token?: string | null
           id?: string
           idempotency_key?: string | null
@@ -2374,6 +2501,7 @@ export type Database = {
           shipping_address?: Json | null
           shipping_name?: string | null
           shipping_phone?: string | null
+          sms_opt_in?: boolean
           source?: string | null
           status?: string
           stripe_charge_id?: string | null
@@ -2417,6 +2545,7 @@ export type Database = {
           disputed_at?: string | null
           fulfillment_type?: string
           guest_email?: string | null
+          guest_phone_e164?: string | null
           guest_token?: string | null
           id?: string
           idempotency_key?: string | null
@@ -2447,6 +2576,7 @@ export type Database = {
           shipping_address?: Json | null
           shipping_name?: string | null
           shipping_phone?: string | null
+          sms_opt_in?: boolean
           source?: string | null
           status?: string
           stripe_charge_id?: string | null
@@ -4295,6 +4425,7 @@ export type Database = {
           disputed_at: string | null
           fulfillment_type: string
           guest_email: string | null
+          guest_phone_e164: string | null
           guest_token: string | null
           id: string
           idempotency_key: string | null
@@ -4325,6 +4456,7 @@ export type Database = {
           shipping_address: Json | null
           shipping_name: string | null
           shipping_phone: string | null
+          sms_opt_in: boolean
           source: string | null
           status: string
           stripe_charge_id: string | null
@@ -4801,6 +4933,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
       avs_check_enum: ["pass", "fail", "unavailable", "unchecked", "unknown"],

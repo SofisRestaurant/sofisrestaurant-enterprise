@@ -230,6 +230,7 @@ function sortOrders(
     return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
   });
 }
+
 function mapOrderRow(row: OrderRow): AdminOrderSummary {
   const createdAt = row.created_at;
   const status = normalizeAdminOrderStatus(row.status);
@@ -346,7 +347,7 @@ export async function listAdminOrders(
 
   const { data, count, error } = await supabase
     .from('orders')
-    .select('*', { count: 'exact' })
+    .select('*, guest_phone_e164, sms_opt_in', { count: 'exact' })
     .order('created_at', { ascending: false })
     .limit(safeMaxRows);
 
@@ -380,7 +381,7 @@ export async function getAdminOrderById(orderId: string): Promise<AdminOrderSumm
 
   const { data, error } = await supabase
     .from('orders')
-    .select('*')
+    .select('*, guest_phone_e164, sms_opt_in')
     .eq('id', normalizedOrderId)
     .maybeSingle();
 
