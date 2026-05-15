@@ -1,19 +1,6 @@
 // =============================================================================
 // PATH: src/modules/orders/components/ExpoCommandCenter.tsx
 // =============================================================================
-// EXPO COMMAND CENTER — FULFILLMENT EVIDENCE + DISPUTE DEFENSE — 2026
-// =============================================================================
-// ✅ All original logic preserved (realtime, priority, sound, failsafe)
-// ✅ "Handed Out" button opens HandoffModal instead of direct DB write
-// ✅ HandoffModal captures recipient name, handoff notes, PIN verification
-// ✅ Evidence strength bar shows staff how strong their record will be
-// ✅ writeFulfillmentEvidence called after order status update (best-effort)
-// ✅ Staff ID resolved from live Supabase session — never passed from client
-// ✅ Order type drives which evidence fields are shown
-// ✅ Fixed no-floating-promises / no-misused-promises / await-thenable lint errors
-// ✅ Fixed unsafe enum comparison on payment_status / realtime subscribe state
-// ✅ Removed array-index key usage
-// =============================================================================
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RealtimeChannel } from '@supabase/supabase-js';
@@ -36,6 +23,7 @@ import {
   type Order,
 } from '@/domain/orders/order.types';
 import { supabase, isRealtimeSubscribed } from '@/lib/supabase/supabaseClient';
+import { invokeEdge } from '@/lib/supabase/invoke';
 import { writeFulfillmentEvidence } from '@/modules/orders/api/order-evidence.api';
 import { mapOrderRowToDomain } from '@/modules/orders/mappers';
 import type { Database } from '@/types/supabase';
@@ -86,7 +74,6 @@ async function resolveStaffId(): Promise<string | null> {
     const {
       data: { session },
     } = await supabase.auth.getSession();
-
     return session?.user?.id ?? null;
   } catch {
     return null;
@@ -106,28 +93,20 @@ function isOrderDeliveredStatus(value: unknown): boolean {
 }
 
 function normalizeOrderType(value: unknown): OrderType {
-  if (value === 'delivery') {
-    return 'delivery';
-  }
-
-  if (value === 'dine_in') {
-    return 'dine_in';
-  }
-
+  if (value === 'delivery') return 'delivery';
+  if (value === 'dine_in') return 'dine_in';
   return 'pickup';
 }
 
 function removeChannelSafely(channel: RealtimeChannel): void {
   void supabase.removeChannel(channel).catch(() => {
-    // Best-effort cleanup only.
+    /* best-effort */
   });
 }
 
 function getLineItemKey(orderId: string, item: CartItemLike, position: number): string {
   const idPart = typeof item.id === 'string' && item.id.trim().length > 0 ? item.id.trim() : null;
-  if (idPart) {
-    return `${orderId}:${idPart}`;
-  }
+  if (idPart) return `${orderId}:${idPart}`;
 
   const namePart =
     typeof item.name === 'string' && item.name.trim().length > 0 ? item.name.trim() : 'item';
@@ -138,12 +117,9 @@ function getLineItemKey(orderId: string, item: CartItemLike, position: number): 
 }
 
 function playNotification(audio: HTMLAudioElement | null): void {
-  if (!audio) {
-    return;
-  }
-
+  if (!audio) return;
   void audio.play().catch(() => {
-    // Ignore autoplay / device playback failures.
+    /* ignore autoplay failures */
   });
 }
 
@@ -179,18 +155,10 @@ function mapToExpoOrder(order: Order, rawOrderType?: unknown): ExpoOrder {
 }
 
 function sortByPriority(list: ExpoOrder[]): ExpoOrder[] {
-  const weight: Record<Priority, number> = {
-    urgent: 0,
-    high: 1,
-    normal: 2,
-  };
-
+  const weight: Record<Priority, number> = { urgent: 0, high: 1, normal: 2 };
   return [...list].sort((left, right) => {
     const byPriority = weight[left.priority] - weight[right.priority];
-    if (byPriority !== 0) {
-      return byPriority;
-    }
-
+    if (byPriority !== 0) return byPriority;
     return new Date(left.created_at).getTime() - new Date(right.created_at).getTime();
   });
 }
@@ -209,9 +177,7 @@ export default function ExpoCommandCenter() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
 
-  // ============================================================================
-  // LOAD ORDERS
-  // ============================================================================
+  // ── Load orders ──────────────────────────────────────────────────────────
 
   const loadOrders = useCallback(async (): Promise<void> => {
     try {
@@ -222,9 +188,7 @@ export default function ExpoCommandCenter() {
         .eq('status', OrderStatus.READY)
         .order('created_at', { ascending: true });
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       const enriched = (data ?? [])
         .map((row) => mapOrderRowToDomain(row))
@@ -243,9 +207,7 @@ export default function ExpoCommandCenter() {
     void loadOrders();
   }, [loadOrders]);
 
-  // ============================================================================
-  // REALTIME SUBSCRIPTION
-  // ============================================================================
+  // ── Realtime ─────────────────────────────────────────────────────────────
 
   useEffect(() => {
     if (channelRef.current) {
@@ -255,39 +217,28 @@ export default function ExpoCommandCenter() {
 
     const handleUpdate = (payload: { new: OrderRow }): void => {
       const row = payload.new;
-      if (!row) {
-        return;
-      }
-
-      if (!isPaidPaymentStatus(row.payment_status)) {
-        return;
-      }
+      if (!row || !isPaidPaymentStatus(row.payment_status)) return;
 
       const order = mapOrderRowToDomain(row);
 
       setOrders((prev) => {
         if (isOrderDeliveredStatus(order.status)) {
-          return prev.filter((existing) => existing.id !== order.id);
+          return prev.filter((e) => e.id !== order.id);
         }
 
         if (isOrderReadyStatus(order.status)) {
-          const exists = prev.some((existing) => existing.id === order.id);
+          const exists = prev.some((e) => e.id === order.id);
           const enriched = mapToExpoOrder(order, row.order_type);
 
           if (!exists) {
-            if (soundEnabled) {
-              playNotification(audioRef.current);
-            }
-
+            if (soundEnabled) playNotification(audioRef.current);
             return sortByPriority([...prev, enriched]);
           }
 
-          return sortByPriority(
-            prev.map((existing) => (existing.id === order.id ? enriched : existing)),
-          );
+          return sortByPriority(prev.map((e) => (e.id === order.id ? enriched : e)));
         }
 
-        return prev.filter((existing) => existing.id !== order.id);
+        return prev.filter((e) => e.id !== order.id);
       });
     };
 
@@ -295,9 +246,7 @@ export default function ExpoCommandCenter() {
       .channel('expo-command-center')
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders' }, handleUpdate)
       .subscribe((status) => {
-        if (isRealtimeSubscribed(status)) {
-          console.log('🟢 Expo real-time connected');
-        }
+        if (isRealtimeSubscribed(status)) console.log('🟢 Expo real-time connected');
       });
 
     channelRef.current = channel;
@@ -310,9 +259,7 @@ export default function ExpoCommandCenter() {
     };
   }, [soundEnabled]);
 
-  // ============================================================================
-  // FAILSAFE AUTO-REFRESH
-  // ============================================================================
+  // ── Failsafe refresh ─────────────────────────────────────────────────────
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -320,14 +267,10 @@ export default function ExpoCommandCenter() {
       void loadOrders();
     }, CONFIG.AUTO_REFRESH_INTERVAL);
 
-    return () => {
-      window.clearInterval(intervalId);
-    };
+    return () => window.clearInterval(intervalId);
   }, [loadOrders]);
 
-  // ============================================================================
-  // COMPLETE ORDER — opens HandoffModal, then writes evidence + updates status
-  // ============================================================================
+  // ── Handoff ───────────────────────────────────────────────────────────────
 
   const requestHandoff = useCallback(
     async (id: string): Promise<void> => {
@@ -337,14 +280,10 @@ export default function ExpoCommandCenter() {
         return;
       }
 
-      const order = orders.find((entry) => entry.id === id);
+      const order = orders.find((e) => e.id === id);
       const orderType = normalizeOrderType(order?.order_type);
 
-      setHandoffContext({
-        orderId: id,
-        orderType,
-        staffId,
-      });
+      setHandoffContext({ orderId: id, orderType, staffId });
     },
     [orders],
   );
@@ -358,20 +297,15 @@ export default function ExpoCommandCenter() {
     ): Promise<void> => {
       setHandoffContext(null);
 
+      // Route the DELIVERED status update through the secure Edge Function.
+      // This ensures auth.uid() resolves correctly for staff_action_logs,
+      // and keeps all status transitions server-owned and consistently audited.
       try {
-        const { error } = await supabase
-          .from('orders')
-          .update({
-            status: OrderStatus.DELIVERED,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', ctx.orderId);
-
-        if (error) {
-          throw error;
-        }
-
-        setOrders((prev) => prev.filter((entry) => entry.id !== ctx.orderId));
+        await invokeEdge('admin-update-order-status', {
+          order_id: ctx.orderId,
+          new_status: OrderStatus.DELIVERED as string,
+        });
+        setOrders((prev) => prev.filter((e) => e.id !== ctx.orderId));
         console.log('✅ Order delivered:', ctx.orderId);
       } catch (error) {
         console.error('❌ Complete order failed:', error);
@@ -388,11 +322,7 @@ export default function ExpoCommandCenter() {
           recipientName: safeRecipient,
           handoffNotes: safeNotes,
         });
-
-        if (!result.ok) {
-          console.error('⚠️ Delivery evidence write failed:', result.error);
-        }
-
+        if (!result.ok) console.error('⚠️ Delivery evidence write failed:', result.error);
         return;
       }
 
@@ -403,11 +333,7 @@ export default function ExpoCommandCenter() {
           staffId: ctx.staffId,
           handoffNotes: safeNotes,
         });
-
-        if (!result.ok) {
-          console.error('⚠️ Dine-in evidence write failed:', result.error);
-        }
-
+        if (!result.ok) console.error('⚠️ Dine-in evidence write failed:', result.error);
         return;
       }
 
@@ -420,17 +346,12 @@ export default function ExpoCommandCenter() {
         handoffNotes: safeNotes,
         pinVerified,
       });
-
-      if (!result.ok) {
-        console.error('⚠️ Pickup evidence write failed:', result.error);
-      }
+      if (!result.ok) console.error('⚠️ Pickup evidence write failed:', result.error);
     },
     [],
   );
 
-  // ============================================================================
-  // LOADING STATE
-  // ============================================================================
+  // ── Render ────────────────────────────────────────────────────────────────
 
   if (loading) {
     return (
@@ -442,10 +363,6 @@ export default function ExpoCommandCenter() {
       </div>
     );
   }
-
-  // ============================================================================
-  // RENDER
-  // ============================================================================
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -603,7 +520,7 @@ function HandoffModal({ context, onConfirm, onCancel }: HandoffModalProps) {
               <input
                 type="text"
                 value={recipientName}
-                onChange={(event) => setRecipientName(event.target.value)}
+                onChange={(e) => setRecipientName(e.target.value)}
                 placeholder={isPickup ? 'Customer name' : 'Recipient name'}
                 maxLength={200}
                 className="w-full rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-white placeholder-neutral-500 focus:border-orange-500 focus:outline-none"
@@ -619,7 +536,7 @@ function HandoffModal({ context, onConfirm, onCancel }: HandoffModalProps) {
             </label>
             <textarea
               value={handoffNotes}
-              onChange={(event) => setHandoffNotes(event.target.value)}
+              onChange={(e) => setHandoffNotes(e.target.value)}
               placeholder="e.g. Left at front desk, Customer showed ID, No issues..."
               maxLength={500}
               rows={2}
@@ -632,7 +549,7 @@ function HandoffModal({ context, onConfirm, onCancel }: HandoffModalProps) {
               <input
                 type="checkbox"
                 checked={pinVerified}
-                onChange={(event) => setPinVerified(event.target.checked)}
+                onChange={(e) => setPinVerified(e.target.checked)}
                 className="h-4 w-4 accent-orange-500"
               />
               <span className="text-sm text-neutral-300">Customer PIN verified at handoff</span>
@@ -699,17 +616,14 @@ function EvidenceStrengthBar({
     score += 3;
     signals.push('Recipient name captured');
   }
-
   if (hasPinVerified && orderType === 'pickup') {
     score += 3;
     signals.push('PIN verified');
   }
-
   if (hasNotes) {
     score += 1;
     signals.push('Handoff notes');
   }
-
   if (orderType === 'dine_in') {
     score = Math.max(score, 5);
     signals.push('Dine-in table service');

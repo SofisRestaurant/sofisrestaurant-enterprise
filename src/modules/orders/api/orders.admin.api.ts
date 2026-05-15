@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-
+import { invokeEdge } from '@/lib/supabase/invoke';
 import { supabase } from '@/lib/supabase/supabaseClient';
 import type { Database } from '@/types/supabase';
 
@@ -35,12 +35,12 @@ import {
 export type OrderRow = Database['public']['Tables']['orders']['Row'];
 
 export interface AdminMetrics {
-  totalRevenue: number;
-  totalOrders: number;
-  todayRevenue: number;
-  todayOrders: number;
+  totalRevenue:      number;
+  totalOrders:       number;
+  todayRevenue:      number;
+  todayOrders:       number;
   averageOrderValue: number;
-  openOrders: number;
+  openOrders:        number;
 }
 
 export interface FetchAdminOrderRowsParams {
@@ -48,22 +48,22 @@ export interface FetchAdminOrderRowsParams {
 }
 
 export interface OrderListParams {
-  page?: number;
-  pageSize?: number;
-  status?: OrderStatus | 'all';
-  disputedOnly?: boolean;
-  refundedOnly?: boolean;
-  highRiskOnly?: boolean;
+  page?:             number;
+  pageSize?:         number;
+  status?:           OrderStatus | 'all';
+  disputedOnly?:     boolean;
+  refundedOnly?:     boolean;
+  highRiskOnly?:     boolean;
   proofMissingOnly?: boolean;
-  search?: string;
-  dateFrom?: string;
-  dateTo?: string;
+  search?:           string;
+  dateFrom?:         string;
+  dateTo?:           string;
 }
 
 export interface OrderListResult {
-  orders: Array<AdminOrder & { flags: OrderAdminFlags }>;
+  orders:     Array<AdminOrder & { flags: OrderAdminFlags }>;
   totalCount: number;
-  page: number;
+  page:       number;
   totalPages: number;
 }
 
@@ -72,24 +72,22 @@ export interface UpdateOrderStatusResult {
 }
 
 export interface AssignOrderToStaffResult {
-  orderId: string;
-  staffId: string;
+  orderId:    string;
+  staffId:    string;
   assignedAt: Date;
 }
 
 interface AdminMetricsRow {
   amount_total: number | null;
-  created_at: string | null;
-  status: string | null;
+  created_at:   string | null;
+  status:       string | null;
 }
 
 async function fetchRiskLookupMap(
-  client: SupabaseClient,
+  client:   SupabaseClient,
   orderIds: readonly string[],
 ): Promise<ApiResult<Map<string, string | null>>> {
-  if (orderIds.length === 0) {
-    return ok(new Map<string, string | null>());
-  }
+  if (orderIds.length === 0) return ok(new Map<string, string | null>());
 
   const { data, error } = await client
     .from('order_payment_details')
@@ -97,30 +95,21 @@ async function fetchRiskLookupMap(
     .in('order_id', orderIds)
     .returns<RiskLookupRow[]>();
 
-  if (error !== null) {
-    return fail(error);
-  }
+  if (error !== null) return fail(error);
 
   const riskMap = new Map<string, string | null>();
-
   for (const row of data ?? []) {
     const orderId = nonEmptyString(row.order_id);
-
-    if (orderId !== null) {
-      riskMap.set(orderId, nonEmptyString(row.risk_level));
-    }
+    if (orderId !== null) riskMap.set(orderId, nonEmptyString(row.risk_level));
   }
-
   return ok(riskMap);
 }
 
 async function fetchEvidenceLookupMap(
-  client: SupabaseClient,
+  client:   SupabaseClient,
   orderIds: readonly string[],
 ): Promise<ApiResult<Map<string, number>>> {
-  if (orderIds.length === 0) {
-    return ok(new Map<string, number>());
-  }
+  if (orderIds.length === 0) return ok(new Map<string, number>());
 
   const { data, error } = await client
     .from('order_fulfillment_evidence')
@@ -143,20 +132,13 @@ async function fetchEvidenceLookupMap(
     .in('order_id', orderIds)
     .returns<EvidenceLookupRow[]>();
 
-  if (error !== null) {
-    return fail(error);
-  }
+  if (error !== null) return fail(error);
 
   const scoreMap = new Map<string, number>();
-
   for (const row of data ?? []) {
     const orderId = nonEmptyString(row.order_id);
-
-    if (orderId !== null) {
-      scoreMap.set(orderId, computeEvidenceCompleteness(row));
-    }
+    if (orderId !== null) scoreMap.set(orderId, computeEvidenceCompleteness(row));
   }
-
   return ok(scoreMap);
 }
 
@@ -164,12 +146,10 @@ async function resolveCandidateOrderIds(
   client: SupabaseClient,
   params: OrderListParams,
 ): Promise<ApiResult<Set<string> | null>> {
-  const activeRiskFilter = params.highRiskOnly === true;
+  const activeRiskFilter  = params.highRiskOnly     === true;
   const activeProofFilter = params.proofMissingOnly === true;
 
-  if (!activeRiskFilter && !activeProofFilter) {
-    return ok<Set<string> | null>(null);
-  }
+  if (!activeRiskFilter && !activeProofFilter) return ok<Set<string> | null>(null);
 
   let candidateIds: Set<string> | null = null;
 
@@ -179,20 +159,13 @@ async function resolveCandidateOrderIds(
       .select('order_id, risk_level')
       .returns<RiskLookupRow[]>();
 
-    if (error !== null) {
-      return fail(error);
-    }
+    if (error !== null) return fail(error);
 
     const riskIds = new Set<string>();
-
     for (const row of data ?? []) {
       const orderId = nonEmptyString(row.order_id);
-
-      if (orderId !== null && isHighRiskLevel(row.risk_level)) {
-        riskIds.add(orderId);
-      }
+      if (orderId !== null && isHighRiskLevel(row.risk_level)) riskIds.add(orderId);
     }
-
     candidateIds = riskIds;
   }
 
@@ -217,24 +190,17 @@ async function resolveCandidateOrderIds(
       )
       .returns<EvidenceLookupRow[]>();
 
-    if (error !== null) {
-      return fail(error);
-    }
+    if (error !== null) return fail(error);
 
     const proofIds = new Set<string>();
-
     for (const row of data ?? []) {
       const orderId = nonEmptyString(row.order_id);
-
-      if (orderId !== null && computeEvidenceCompleteness(row) < 60) {
-        proofIds.add(orderId);
-      }
+      if (orderId !== null && computeEvidenceCompleteness(row) < 60) proofIds.add(orderId);
     }
-
     candidateIds =
       candidateIds === null
         ? proofIds
-        : new Set(Array.from(candidateIds).filter((value) => proofIds.has(value)));
+        : new Set(Array.from(candidateIds).filter((id) => proofIds.has(id)));
   }
 
   return ok(candidateIds ?? new Set<string>());
@@ -246,37 +212,33 @@ export async function fetchAdminMetrics(): Promise<AdminMetrics> {
     .select('amount_total, created_at, status')
     .returns<AdminMetricsRow[]>();
 
-  if (error !== null) {
-    throw new Error(error.message);
-  }
+  if (error !== null) throw new Error(error.message);
 
-  const rows = data ?? [];
-  const totalOrders = rows.length;
+  const rows         = data ?? [];
+  const totalOrders  = rows.length;
   const totalRevenue = rows.reduce((sum, row) => sum + (row.amount_total ?? 0), 0);
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  let todayOrders = 0;
+  let todayOrders  = 0;
   let todayRevenue = 0;
-  let openOrders = 0;
+  let openOrders   = 0;
 
   for (const row of rows) {
     const createdAt = row.created_at === null ? null : new Date(row.created_at);
-    const status = normalizeAdminOrderStatus(row.status);
+    const status    = normalizeAdminOrderStatus(row.status);
 
     if (
       createdAt !== null &&
       !Number.isNaN(createdAt.getTime()) &&
       createdAt.getTime() >= today.getTime()
     ) {
-      todayOrders += 1;
+      todayOrders  += 1;
       todayRevenue += row.amount_total ?? 0;
     }
 
-    if (isOpenOrderStatus(status)) {
-      openOrders += 1;
-    }
+    if (isOpenOrderStatus(status)) openOrders += 1;
   }
 
   return {
@@ -301,9 +263,7 @@ export async function fetchAdminOrderRows(
     .limit(limit)
     .returns<OrderRow[]>();
 
-  if (error !== null) {
-    throw new Error(error.message);
-  }
+  if (error !== null) throw new Error(error.message);
 
   return data ?? [];
 }
@@ -311,33 +271,24 @@ export async function fetchAdminOrderRows(
 /**
  * Updates order status via the secure server-owned Edge Function.
  *
- * The Edge Function validates the caller's JWT, confirms admin/staff role,
- * applies the status update, and — if the new status is "ready" — triggers
- * the SMS notification internally. The returned OrderRow is used by AdminOrders
- * to sync optimistic UI with server state.
+ * The Edge Function validates the JWT, confirms admin/staff role, calls
+ * update_order_status_secure with the user-context client (auth.uid() correct
+ * for staff_action_logs), and — if the new status is "ready" — triggers SMS
+ * internally. The returned OrderRow is used by AdminOrders to sync optimistic UI.
  */
 export async function updateOrderStatusRow(
   orderId: string,
-  status: OrderStatus,
+  status:  OrderStatus,
 ): Promise<OrderRow> {
-  const { data, error } = await supabase.functions.invoke(
+  type UpdateResult = { ok: boolean; order: OrderRow | null; error?: string };
+
+  const result = await invokeEdge<UpdateResult>(
     'admin-update-order-status',
-    { body: { order_id: orderId, new_status: status as string } },
+    { order_id: orderId, new_status: status as string },
   );
 
-  if (error !== null) {
-    throw new Error(error instanceof Error ? error.message : 'Status update failed');
-  }
-
-  const result = data as { ok: boolean; order: OrderRow | null; error?: string } | null;
-
-  if (!result?.ok) {
-    throw new Error(result?.error ?? 'Status update failed');
-  }
-
-  if (!result.order) {
-    throw new Error('Order not found');
-  }
+  if (!result.ok) throw new Error(result.error ?? 'Status update failed');
+  if (!result.order) throw new Error('Order not found');
 
   return result.order;
 }
@@ -352,24 +303,16 @@ export async function fetchAdminOrders(
       params.pageSize && params.pageSize > 0 ? Math.floor(params.pageSize) : DEFAULT_PAGE_SIZE;
 
     const candidateIdsResult = await resolveCandidateOrderIds(client, params);
-
-    if (candidateIdsResult.error !== null) {
-      return fail(candidateIdsResult.error);
-    }
+    if (candidateIdsResult.error !== null) return fail(candidateIdsResult.error);
 
     const candidateIds = candidateIdsResult.data;
 
     if (candidateIds !== null && candidateIds.size === 0) {
-      return ok({
-        orders: [],
-        totalCount: 0,
-        page,
-        totalPages: 0,
-      });
+      return ok({ orders: [], totalCount: 0, page, totalPages: 0 });
     }
 
     const from = (page - 1) * pageSize;
-    const to = from + pageSize - 1;
+    const to   = from + pageSize - 1;
 
     let query = client
       .from('orders')
@@ -380,25 +323,20 @@ export async function fetchAdminOrders(
     if (params.status !== undefined && params.status !== 'all') {
       query = query.eq('status', String(params.status));
     }
-
     if (params.disputedOnly === true) {
       query = query.not('dispute_status', 'in', '("none","won","lost","charge_refunded")');
     }
-
     if (params.refundedOnly === true) {
       query = query.in('payment_status', ['refunded', 'partially_refunded']);
     }
-
     if (params.dateFrom !== undefined && params.dateFrom.length > 0) {
       query = query.gte('created_at', params.dateFrom);
     }
-
     if (params.dateTo !== undefined && params.dateTo.length > 0) {
       query = query.lte('created_at', params.dateTo);
     }
 
     const search = nonEmptyString(params.search);
-
     if (search !== null) {
       query = query.or(
         [
@@ -415,152 +353,102 @@ export async function fetchAdminOrders(
     }
 
     const { data, error, count } = await query.returns<RawOrder[]>();
-
-    if (error !== null) {
-      return fail(error);
-    }
+    if (error !== null) return fail(error);
 
     const rawOrders = data ?? [];
-    const orderIds = rawOrders
+    const orderIds  = rawOrders
       .map((row) => nonEmptyString(row.id))
-      .filter((value): value is string => value !== null);
+      .filter((v): v is string => v !== null);
 
     const [riskLookupResult, evidenceLookupResult] = await Promise.all([
       fetchRiskLookupMap(client, orderIds),
       fetchEvidenceLookupMap(client, orderIds),
     ]);
 
-    if (riskLookupResult.error !== null) {
-      return fail(riskLookupResult.error);
-    }
+    if (riskLookupResult.error     !== null) return fail(riskLookupResult.error);
+    if (evidenceLookupResult.error !== null) return fail(evidenceLookupResult.error);
 
-    if (evidenceLookupResult.error !== null) {
-      return fail(evidenceLookupResult.error);
-    }
-
-    const riskMap = riskLookupResult.data;
+    const riskMap     = riskLookupResult.data;
     const evidenceMap = evidenceLookupResult.data;
 
     const orders = rawOrders
       .map((rawOrder) => {
-        const order = mapRawOrder(rawOrder);
-        const riskLevel = riskMap.get(order.id) ?? null;
+        const order        = mapRawOrder(rawOrder);
+        const riskLevel    = riskMap.get(order.id) ?? null;
         const evidenceScore =
           evidenceMap.has(order.id) ? (evidenceMap.get(order.id) ?? null) : null;
         const flags = buildFlags(order, riskLevel, evidenceScore);
-
-        order.isHighRisk = flags.isHighRisk;
+        order.isHighRisk      = flags.isHighRisk;
         order.hasProofMissing = flags.isProofMissing;
-
-        return {
-          ...order,
-          flags,
-        };
+        return { ...order, flags };
       })
-      .filter((row) => !params.highRiskOnly || row.flags.isHighRisk)
+      .filter((row) => !params.highRiskOnly    || row.flags.isHighRisk)
       .filter((row) => !params.proofMissingOnly || row.flags.isProofMissing);
 
     const totalCount = count ?? orders.length;
     const totalPages = totalCount === 0 ? 0 : Math.ceil(totalCount / pageSize);
 
-    return ok({
-      orders,
-      totalCount,
-      page,
-      totalPages,
-    });
+    return ok({ orders, totalCount, page, totalPages });
   } catch (error) {
     return fail(error);
   }
 }
 
 export async function updateOrderStatus(
-  client: SupabaseClient,
+  client:  SupabaseClient,
   orderId: string,
-  status: AdminOrderStatus | OrderStatus,
+  status:  AdminOrderStatus | OrderStatus,
 ): Promise<ApiResult<UpdateOrderStatusResult>> {
   try {
     const orderIdValidation = validateUuidLike(orderId, 'orderId');
-
-    if ('error' in orderIdValidation) {
-      return orderIdValidation;
-    }
+    if ('error' in orderIdValidation) return orderIdValidation;
 
     const normalizedStatus = normalizeAdminOrderStatus(status);
-
     if (!isSupportedAdminOrderStatus(normalizedStatus)) {
-      return fail({
-        message: 'status must be a supported admin order status',
-        code: 'VALIDATION_ERROR',
-      });
+      return fail({ message: 'status must be a supported admin order status', code: 'VALIDATION_ERROR' });
     }
 
     const nowIso = (): string => new Date().toISOString();
 
     const { error } = await client
       .from('orders')
-      .update({
-        status: normalizedStatus,
-        updated_at: nowIso(),
-      })
+      .update({ status: normalizedStatus, updated_at: nowIso() })
       .eq('id', orderIdValidation.value);
 
-    if (error !== null) {
-      return fail(error);
-    }
+    if (error !== null) return fail(error);
 
     const refreshedOrderResult = await fetchOrderById(client, orderIdValidation.value);
+    if (refreshedOrderResult.error !== null) return fail(refreshedOrderResult.error);
 
-    if (refreshedOrderResult.error !== null) {
-      return fail(refreshedOrderResult.error);
-    }
-
-    return ok({
-      order: mapRawOrder(refreshedOrderResult.data),
-    });
+    return ok({ order: mapRawOrder(refreshedOrderResult.data) });
   } catch (error) {
     return fail(error);
   }
 }
 
 export async function assignOrderToStaff(
-  client: SupabaseClient,
+  client:  SupabaseClient,
   orderId: string,
   staffId: string,
 ): Promise<ApiResult<AssignOrderToStaffResult>> {
   try {
     const orderIdValidation = validateUuidLike(orderId, 'orderId');
-
-    if ('error' in orderIdValidation) {
-      return orderIdValidation;
-    }
+    if ('error' in orderIdValidation) return orderIdValidation;
 
     const staffIdValidation = validateUuidLike(staffId, 'staffId');
+    if ('error' in staffIdValidation) return staffIdValidation;
 
-    if ('error' in staffIdValidation) {
-      return staffIdValidation;
-    }
-
-    const assignedAt = new Date();
+    const assignedAt    = new Date();
     const assignedAtIso = assignedAt.toISOString();
 
     const { error } = await client
       .from('orders')
-      .update({
-        assigned_staff_id: staffIdValidation.value,
-        updated_at: assignedAtIso,
-      })
+      .update({ assigned_staff_id: staffIdValidation.value, updated_at: assignedAtIso })
       .eq('id', orderIdValidation.value);
 
-    if (error !== null) {
-      return fail(error);
-    }
+    if (error !== null) return fail(error);
 
-    return ok({
-      orderId: orderIdValidation.value,
-      staffId: staffIdValidation.value,
-      assignedAt,
-    });
+    return ok({ orderId: orderIdValidation.value, staffId: staffIdValidation.value, assignedAt });
   } catch (error) {
     return fail(error);
   }

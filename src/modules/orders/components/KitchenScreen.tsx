@@ -57,27 +57,40 @@ const DEBUG = process.env.NODE_ENV !== 'production';
 
 function debugLog(stage: string, data: unknown): void {
   if (DEBUG) {
-    // eslint-disable-next-line no-console
     console.log(`[KitchenScreen] ${stage}`, data);
   }
 }
 
 function debugOrderSummary(
+
   label: string,
+
   orders: readonly KitchenOrderWithType[],
+
 ): void {
+
   if (!DEBUG) return;
-  // eslint-disable-next-line no-console
+
   console.table(
+
     orders.map((o) => ({
+
       id: o.id.slice(0, 8),
+
       status: o.status,
+
       pickup_time: o.pickup_time ?? 'ASAP',
+
       created_at: o.created_at,
+
       customer: o.customer_name,
+
     })),
+
   );
+
   debugLog(label, `${orders.length} orders`);
+
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

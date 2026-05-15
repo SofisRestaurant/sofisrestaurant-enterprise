@@ -6,7 +6,7 @@ import type {
   OrderTimeline,
   RecordEventRequest,
 } from '@/domain/orders/order-events.types';
-
+import { invokeEdge } from '@/lib/supabase/invoke';
 import {
   mapOrderRowToDomain,
   mapUnknownOrderEvent,
@@ -284,25 +284,31 @@ export async function updateOrder(orderId: string, updates: OrderUpdate): Promis
  * Updates order status via the secure server-owned Edge Function.
  *
  * The Edge Function validates the caller's JWT, confirms admin/staff role,
- * applies the status update, and — if the new status is "ready" — triggers
- * the SMS notification internally. The browser never touches the SMS path.
+ * calls update_order_status_secure with the user-context client (preserving
+ * auth.uid() for staff_action_logs), and — if the new status is "ready" —
+ * triggers the SMS notification internally. The browser never touches the
+ * SMS path.
  */
 export async function updateOrderStatus(orderId: string, status: OrderStatus): Promise<Order> {
-  const { data, error } = await supabase.functions.invoke(
-    'admin-update-order-status',
-    { body: { order_id: orderId, new_status: status as string } },
-  );
+  type UpdateResult = { ok: boolean; order: unknown; error?: string; sms?: unknown };
 
-  if (error) {
+  let result: UpdateResult;
+  try {
+    result = await invokeEdge<UpdateResult>(
+      'admin-update-order-status',
+      { order_id: orderId, new_status: status as string },
+    );
+  } catch (err) {
     await logIllegalAttempt(orderId, status);
-    throw new Error(error instanceof Error ? error.message : 'Status update failed');
+    throw new Error(
+      err instanceof Error ? err.message : 'Status update failed',
+      { cause: err },
+    );
   }
 
-  const result = data as { ok: boolean; order: unknown; error?: string } | null;
-
-  if (!result?.ok) {
+  if (!result.ok) {
     await logIllegalAttempt(orderId, status);
-    throw new Error(result?.error ?? 'Status update failed');
+    throw new Error(result.error ?? 'Status update failed');
   }
 
   return requireMappedOrder(result.order, 'No order returned from status update');
