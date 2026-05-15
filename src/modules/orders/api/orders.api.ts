@@ -21,6 +21,8 @@ import type {
   OrderUpdate,
 } from '../types/orders.types';
 
+import { triggerReadySms } from '@/modules/orders/utils/sms-trigger';
+
 const PAID_PAYMENT_STATUS = 'paid' as const;
 
 type AdminMetricStatus =
@@ -289,7 +291,16 @@ export async function updateOrderStatus(orderId: string, status: OrderStatus): P
     throw new Error(error.message);
   }
 
-  return requireMappedOrder(data, 'No order returned from secure update');
+  const order = requireMappedOrder(data, 'No order returned from secure update');
+
+  // Non-blocking SMS trigger — fires only on ready transition.
+  // send-sms guards duplicates via sms_log; this call never throws.
+  // OrderStatus is a type-only import so we compare the string value directly.
+  if ((status as string) === 'ready') {
+    triggerReadySms(orderId);
+  }
+
+  return order;
 }
 
 export async function assignOrderToStaff(orderId: string, staff: string): Promise<Order> {
@@ -492,7 +503,10 @@ export async function getOrderTimeline(orderId: string): Promise<OrderTimeline> 
 }
 
 export async function getOrderPerformance(orderId: string): Promise<OrderPerformanceMetrics> {
-  const [timeline, orderRow] = await Promise.all([getOrderTimeline(orderId), getRawOrderById(orderId)]);
+  const [timeline, orderRow] = await Promise.all([
+    getOrderTimeline(orderId),
+    getRawOrderById(orderId),
+  ]);
 
   if (!orderRow) {
     throw new Error('Order not found');

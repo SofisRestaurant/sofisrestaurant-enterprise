@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { supabase } from '@/lib/supabase/supabaseClient';
 import type { Database } from '@/types/supabase';
+import { triggerReadySms } from '@/modules/orders/utils/sms-trigger';
 
 import type {
   AdminOrder,
@@ -328,6 +329,13 @@ export async function updateOrderStatusRow(
     throw new Error('Order not found');
   }
 
+  // Non-blocking SMS trigger — fires only on ready transition.
+  // send-sms guards duplicates via sms_log; this call never throws.
+  // OrderStatus is a type-only import so we compare the string value directly.
+  if ((status as string) === 'ready') {
+    triggerReadySms(orderId);
+  }
+
   return data;
 }
 
@@ -484,14 +492,14 @@ export async function updateOrderStatus(
       });
     }
 
-const nowIso = (): string => new Date().toISOString();
+    const nowIso = (): string => new Date().toISOString();
 
-const { error } = await client
-  .from('orders')
-  .update({
-    status: normalizedStatus,
-    updated_at: nowIso(), // ✅ now it's callable
-  })
+    const { error } = await client
+      .from('orders')
+      .update({
+        status: normalizedStatus,
+        updated_at: nowIso(),
+      })
       .eq('id', orderIdValidation.value);
 
     if (error !== null) {

@@ -1,16 +1,13 @@
-// =============================================================================
-// PATH: src/modules/admin/orders/api/admin-orders.api.ts
+// src/modules/admin/orders/api/admin-orders.api.ts
 // =============================================================================
 // All Supabase calls for the admin orders feature.
 // No UI logic, no React, no state — fetch and mutate only.
 // =============================================================================
 
 import { supabase } from '@/lib/supabase/supabaseClient';
+import { triggerReadySms } from '@/modules/orders/utils/sms-trigger';
 
-// ✅ Types
 import type { AdminOrder } from '../types/admin-orders.types';
-
-// ✅ Utils / Mappers
 import { mapOrderRow } from '../utils/admin-orders.mapper';
 
 // ─── Fetch ────────────────────────────────────────────────────────────────────
@@ -36,6 +33,7 @@ export async function fetchAdminOrders(): Promise<AdminOrder[]> {
 /**
  * Advances an order to the given status via the hardened RPC.
  * Throws on Supabase error — callers handle optimistic rollback.
+ * Fires a non-blocking SMS when the new status is "ready".
  */
 export async function updateOrderStatus(
   orderId: string,
@@ -47,4 +45,10 @@ export async function updateOrderStatus(
   });
 
   if (error) throw error;
+
+  // Non-blocking SMS trigger — fires only on ready transition.
+  // send-sms guards duplicates via sms_log; this call never throws.
+  if (newStatus === 'ready') {
+    triggerReadySms(orderId);
+  }
 }
