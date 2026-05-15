@@ -7,8 +7,7 @@
 //           orchestrator only: state, effects, event handlers, render tree.
 //
 //   [SMS]   handleCheckout now passes guestPhone and smsOptIn to checkout()
-//           for guest users only. Authenticated users receive undefined for
-//           both fields and the router ignores them.
+//        [SMS] handleCheckout now passes phone and smsOptIn for both guest and authenticated users when SMS opt-in is enabled. The router validates the phone before any network call.
 //           Dependency array updated accordingly.
 //
 // Security invariants preserved:
@@ -356,8 +355,8 @@ export default function CheckoutPage() {
       promoCode: promo.applied ? promo.code : undefined,
       creditId: isGuest ? undefined : (selectedCredit ?? undefined),
       loyalty: loyaltyIntent,
-      guestPhone: isGuest ? guestPhone : undefined,
-      smsOptIn: isGuest ? smsOptIn : undefined,
+      guestPhone: smsOptIn ? guestPhone : undefined,
+      smsOptIn,
     });
 
     if (isCheckoutSuccess(result)) {
@@ -617,7 +616,14 @@ export default function CheckoutPage() {
             ) : (
               <>
                 <SectionHeader title="Your info" />
-                <AuthContactStrip email={user?.email ?? ''} name={user?.name ?? null} />
+                <AuthContactStrip
+                  email={user?.email ?? ''}
+                  name={user?.name ?? null}
+                  phone={guestPhone}
+                  onPhoneChange={setGuestPhone}
+                  smsOptIn={smsOptIn}
+                  onSmsToggle={() => setSmsOptIn((v) => !v)}
+                />
                 {!verifiedPhone && !phoneSkipped && (
                   <div className="border-t border-(--color-cream-200) px-5 py-4">
                     <PhoneVerification
