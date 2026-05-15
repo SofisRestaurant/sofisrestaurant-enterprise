@@ -112,6 +112,18 @@ export async function insertOrReadFinalOrder(args: {
 }): Promise<{ order: ExistingOrderRow; inserted: boolean }> {
   const { db, requestId, sessionId, userId, userEmail, stripeSession, paymentIntentId, snapshot, pendingCart, orderMetadata } = args;
 
+    const smsMeta = stripeSession.metadata ?? {};
+  const smsOptInRaw   = smsMeta["sms_opt_in"]    === "true";
+  const smsRawPhone   = typeof smsMeta["sms_phone_e164"] === "string"
+    ? smsMeta["sms_phone_e164"]
+    : null;
+  const smsValidPhone =
+    smsOptInRaw && smsRawPhone && /^\+1[2-9]\d{9}$/.test(smsRawPhone)
+      ? smsRawPhone
+      : null;
+  const orderSmsOptIn  = smsOptInRaw && smsValidPhone !== null;
+  const orderSmsPhone  = orderSmsOptIn ? smsValidPhone : null;
+
   const totalDiscountCents =
     snapshot.campaignDiscountCents + snapshot.promoDiscountCents + snapshot.creditCents;
 
@@ -152,14 +164,21 @@ export async function insertOrReadFinalOrder(args: {
     // verified_at must be null when verification_status is not 'verified'.
     // Explicit null satisfies orders_verified_at_completeness and prevents
     // any future constraint tightening from silently rejecting this insert.
-    verified_at: null,
+  verified_at: null,
+    // Persist opted-in phone so send-sms can dispatch transactional updates.
+    // finalize-order is auth-only; uses the same DB columns as the guest path
+    // (guest_phone_e164, sms_opt_in) — send-sms prefers guest_phone_e164 when
+    // sms_opt_in is true, then falls back to customer_phone.
+    sms_opt_in:       orderSmsOptIn,
+    guest_phone_e164: orderSmsPhone,
   } as OrderInsert & {
     verification_status: string;
     risk_score: number | null;
     risk_level: string | null;
     verified_at: string | null;
+    sms_opt_in: boolean;
+    guest_phone_e164: string | null;
   };
-
   const { data: insertedOrder, error: insertError } = await db
     .from('orders')
     .insert(orderInsert)

@@ -5,37 +5,23 @@
 //
 // CHANGES FROM PRIOR VERSION:
 //
-//   [1–6] unchanged — see prior changelog.
+//   [1–9] unchanged — see prior changelog.
 //
-//   [7] isValidE164UsPhone REMOVED.
+//  [10] Auth path gains SMS opt-in support (mirrors the guest path exactly).
 //
-//       The local predicate is replaced by toE164UsPhone() imported from
-//       checkout-wire.types.ts. This is the single phone-validation function
-//       for the entire checkout module (see checkout-wire.types.ts [2]).
+//       checkout() now validates guestPhone / smsOptIn for BOTH paths before
+//       constructing the input type. The early-return error gate ('phone_incomplete')
+//       fires for auth users who toggle SMS on but leave the field incomplete.
 //
-//       The old two-step pattern:
-//         if (!isValidE164UsPhone(args.guestPhone)) { ... }
-//         ...(isValidE164UsPhone(args.guestPhone) ? { guestPhone: args.guestPhone } : {})
+//       validatedPhone is spread into AuthCheckoutInput as { smsPhone, smsOptIn }
+//       (distinct field names from the guest input). TypeScript narrows the
+//       branded E164UsPhone type without a cast in both branches.
 //
-//       is replaced by a single toE164UsPhone() call whose return value is
-//       stored in validatedPhone. One call, one result, used in both the error
-//       gate and the input spread. No double-evaluation of the regex.
-//
-//   [8] CheckoutRouterArgs: guestPhone and smsOptIn unchanged (string / boolean).
-//       Raw form values stay unbranded at the boundary; branding happens inside
-//       checkout() when toE164UsPhone() runs.
-//
-//   [9] checkout(): guest path rewritten around validatedPhone.
-//
-//       const validatedPhone = args.smsOptIn ? toE164UsPhone(args.guestPhone) : null;
-//
-//       If smsOptIn is true and validatedPhone is null → early return with
-//       'phone_incomplete'. Otherwise validatedPhone is E164UsPhone | null and
-//       the spread condition `validatedPhone !== null` is sufficient — TypeScript
-//       narrows it to E164UsPhone inside the truthy branch with no cast needed.
-//
-//  [10] GuestCheckoutInput construction: passes the branded E164UsPhone through
-//       to guestPhone. serialiseGuestCheckoutInput() handles the wire mapping.
+//  [11] CheckoutRouterArgs.guestPhone / smsOptIn JSDoc updated.
+//       These fields now serve both guest AND authenticated checkout.
+//       The "guestPhone" naming reflects the original guest-only scope;
+//       it is not renamed to avoid a breaking change at the call site
+//       (CheckoutPage passes a single state variable for both paths).
 //
 // Import rules (unchanged):
 //   ✅ ASAP_PICKUP, scheduledPickup, PickupSchedule
@@ -93,15 +79,15 @@ export type CheckoutRouterArgs = {
   /**
    * Raw phone string from the form (PhoneNumberInput output).
    * Validated and branded to E164UsPhone inside checkout() via toE164UsPhone().
-   * Only consulted for guest checkout and only when smsOptIn is true.
-   * Ignored for authenticated users.
+   * Used by BOTH guest and authenticated checkout paths when smsOptIn is true.
+   * No-op when smsOptIn is false or absent.
    */
   guestPhone?: string;
   /**
-   * Guest SMS opt-in flag. When true, guestPhone must be a valid E.164 US
-   * number or checkout is blocked with a clear error before the network call.
+   * SMS order-updates opt-in flag. Applies to both guest and authenticated
+   * checkout paths. When true, guestPhone must be a valid E.164 US number or
+   * checkout is blocked with a clear error before the network call.
    * Defaults to absent / false — no phone fields are sent to the server.
-   * Ignored for authenticated users.
    */
   smsOptIn?: boolean;
 };
@@ -167,15 +153,11 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
   const authHook  = useAuthCheckout();
   const guestHook = useGuestCheckout();
 
-const initiateAuthCheckout  = authHook.initiateAuthCheckout;
-
-const initiateGuestCheckout = guestHook.initiateGuestCheckout;
-
-const retryWithChallengeToken = guestHook.retryWithChallengeToken;
-
-const clearAuthError        = authHook.clearError;
-
-const clearGuestError       = guestHook.clearError;
+  const initiateAuthCheckout    = authHook.initiateAuthCheckout;
+  const initiateGuestCheckout   = guestHook.initiateGuestCheckout;
+  const retryWithChallengeToken = guestHook.retryWithChallengeToken;
+  const clearAuthError          = authHook.clearError;
+  const clearGuestError         = guestHook.clearError;
 
   const authError      = authHook.error;
   const authIsLoading  = authHook.isLoading;
@@ -198,7 +180,33 @@ const clearGuestError       = guestHook.clearError;
 
       const pickupSchedule = resolvePickupSchedule(args);
 
+      // ── Authenticated path ────────────────────────────────────────────────
       if (isAuthenticated) {
+        // ── SMS phone validation (auth path) ──────────────────────────────
+        //
+        // Identical gate to the guest path below. toE164UsPhone() is called
+        // once; the result is stored in validatedPhone and reused in both the
+        // error guard and the input spread — no double evaluation.
+        //
+        // When smsOptIn is false or absent, validatedPhone is null and no SMS
+        // fields are included in the request — existing auth behavior preserved.
+        //
+        // When smsOptIn is true:
+        //   - validatedPhone null        → early return, error shown under button
+        //   - validatedPhone E164UsPhone → spread into AuthCheckoutInput
+        //
+        // TypeScript narrows validatedPhone to E164UsPhone inside the spread
+        // condition without a cast (toE164UsPhone returns E164UsPhone | null).
+
+        const validatedPhone = args.smsOptIn ? toE164UsPhone(args.guestPhone) : null;
+
+        if (args.smsOptIn && validatedPhone === null) {
+          const err =
+            'Please enter a complete 10-digit mobile number to receive SMS order updates.';
+          setRouterError(err);
+          return { ok: false, error: err, code: 'phone_incomplete' };
+        }
+
         const input: AuthCheckoutInput = {
           orderType:    normOrderType(args.orderType),
           notes:        trimOrUndefined(args.notes),
@@ -219,7 +227,15 @@ const clearGuestError       = guestHook.clearError;
               }
             : {}),
           clientIntegrityHash: trimOrUndefined(args.clientIntegrityHash),
+          // validatedPhone is E164UsPhone (branded) when non-null.
+          // TypeScript narrows without a cast inside the truthy branch.
+          // Absent when smsOptIn is false/unset — wire body is byte-identical
+          // to the pre-SMS auth checkout in that case.
+          ...(validatedPhone !== null
+            ? { smsPhone: validatedPhone, smsOptIn: true as const }
+            : {}),
         };
+
         return initiateAuthCheckout(input);
       }
 
@@ -243,10 +259,6 @@ const clearGuestError       = guestHook.clearError;
       // When smsOptIn is true:
       //   - validatedPhone null   → early return, routerError shown under button
       //   - validatedPhone E164UsPhone → spread into GuestCheckoutInput
-      //
-      // TypeScript narrows validatedPhone to E164UsPhone inside the spread
-      // condition without a cast because toE164UsPhone() returns E164UsPhone | null
-      // and we check !== null.
 
       const validatedPhone = args.smsOptIn ? toE164UsPhone(args.guestPhone) : null;
 
@@ -262,10 +274,6 @@ const clearGuestError       = guestHook.clearError;
         orderType:     normOrderType(args.orderType),
         notes:         trimOrUndefined(args.notes),
         pickupSchedule,
-        // validatedPhone is E164UsPhone (branded) when non-null, so no cast is
-        // needed here. serialiseGuestCheckoutInput() maps it to guest_phone on
-        // the wire. When validatedPhone is null the spread is empty and the wire
-        // body is identical to pre-SMS behavior.
         ...(validatedPhone !== null
           ? { guestPhone: validatedPhone, smsOptIn: true as const }
           : {}),
@@ -293,23 +301,15 @@ const clearGuestError       = guestHook.clearError;
 
   // ── OTP retry ──────────────────────────────────────────────────────────────
 
-const retryWithToken = useCallback(
-
-  async (challengeToken: string): Promise<void> => {
-
-    const result = await retryWithChallengeToken(challengeToken);
-
-    if (result.ok && result.url) {
-
-      window.location.assign(result.url);
-
-    }
-
-  },
-
-  [retryWithChallengeToken],
-
-);
+  const retryWithToken = useCallback(
+    async (challengeToken: string): Promise<void> => {
+      const result = await retryWithChallengeToken(challengeToken);
+      if (result.ok && result.url) {
+        window.location.assign(result.url);
+      }
+    },
+    [retryWithChallengeToken],
+  );
 
   // ── Derived state ──────────────────────────────────────────────────────────
 

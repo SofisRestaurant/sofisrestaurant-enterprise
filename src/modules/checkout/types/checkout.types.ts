@@ -10,26 +10,29 @@
 //   [2] Both helper predicates are module-private. (unchanged)
 //
 //   [3] SMS fields added to GuestCheckoutInput, GuestCheckoutWireBody,
-//       and serialiseGuestCheckoutInput().
+//       and serialiseGuestCheckoutInput(). (unchanged)
 //
-//       GuestCheckoutInput gains:
-//         guestPhone?: E164UsPhone   — validated branded phone from wire types
-//         smsOptIn?:   true          — narrowed to literal true (never false;
-//                                      false intent = field absent)
+//   [4] SMS fields added to AuthCheckoutInput, AuthCheckoutWireBody,
+//       and serialiseAuthCheckoutInput().
 //
-//       GuestCheckoutWireBody gains:
-//         guest_phone?: E164UsPhone  — only present when opt-in + valid phone
-//         sms_opt_in?:  true         — always true when present; absent otherwise
+//       AuthCheckoutInput gains:
+//         smsPhone?:  E164UsPhone  — branded phone from useCheckoutRouter
+//         smsOptIn?:  true         — narrowed to literal true (never false;
+//                                    false intent = field absent)
 //
-//       serialiseGuestCheckoutInput() emits both wire fields when smsOptIn is
-//       true and guestPhone is present. When smsOptIn is absent or false the
+//       AuthCheckoutWireBody gains:
+//         sms_phone_e164?: E164UsPhone  — present only when opted in + valid phone
+//         sms_opt_in?:     true         — always true when present; absent otherwise
+//
+//       serialiseAuthCheckoutInput() emits both wire fields when smsOptIn is
+//       true and smsPhone is present. When smsOptIn is absent or false the
 //       output is byte-for-byte identical to the previous version — no
 //       regression for callers that don't pass SMS fields.
 //
-//       E164UsPhone and toE164UsPhone() are imported from checkout-wire.types.ts,
-//       which is the single source of truth for phone validation in this module.
-//       The local isValidE164UsPhone() predicate that lived in
-//       useCheckoutRouter.ts is removed; all callers use toE164UsPhone().
+//       On the server, create-checkout independently validates sms_phone_e164
+//       against the same E.164 regex before writing the fields to Stripe
+//       metadata. The webhook reads the metadata and persists sms_opt_in and
+//       guest_phone_e164 on the order so send-sms can dispatch.
 //
 // All other types, guards, and serializers are unchanged.
 // =============================================================================
@@ -221,6 +224,19 @@ export type AuthCheckoutInput = {
   readonly loyaltyRedemptionId?: string;
   readonly clientIntegrityHash?: string;
   readonly pickupSchedule?:      PickupSchedule;
+  /**
+   * Validated E.164 US phone for transactional SMS order updates.
+   * Branded via toE164UsPhone() in useCheckoutRouter — a raw string cannot
+   * be assigned here. Only populated when smsOptIn is true.
+   */
+  readonly smsPhone?:            E164UsPhone;
+  /**
+   * Narrowed to literal `true` — never `false`. Absent field = no opt-in.
+   * Mirrors the semantics of GuestCheckoutInput.smsOptIn.
+   * When true, smsPhone must also be present for serialiseAuthCheckoutInput
+   * to emit the SMS wire fields.
+   */
+  readonly smsOptIn?:            true;
 };
 
 // =============================================================================
@@ -257,6 +273,19 @@ export type AuthCheckoutWireBody = {
   readonly loyalty_redemption_id?: string;
   readonly client_integrity_hash?: string;
   readonly pickup_time?:           string;
+  /**
+   * Validated E.164 US phone for opted-in SMS order updates.
+   * Present only when sms_opt_in is true. Never a null or empty-string
+   * sentinel — the field is absent entirely when SMS is off.
+   * create-checkout re-validates this server-side before writing to Stripe
+   * metadata. The webhook reads the metadata and persists to guest_phone_e164.
+   */
+  readonly sms_phone_e164?:        E164UsPhone;
+  /**
+   * Explicit SMS opt-in flag. Always `true` when present; omitted otherwise.
+   * Mirrors the guest wire field sms_opt_in; both land on the same DB column.
+   */
+  readonly sms_opt_in?:            true;
 };
 
 // =============================================================================
@@ -288,14 +317,24 @@ export function serialiseGuestCheckoutInput(
     guest_email: input.guestEmail,
     ...(input.notes      ? { notes:       input.notes  } : {}),
     ...(pickupTime       ? { pickup_time: pickupTime   } : {}),
-    // Emit SMS fields only when both conditions are satisfied. guestPhone is
-    // E164UsPhone (branded) so TypeScript enforces it was validated upstream.
     ...(input.smsOptIn === true && input.guestPhone !== undefined
       ? { guest_phone: input.guestPhone, sms_opt_in: true as const }
       : {}),
   };
 }
 
+/**
+ * Converts a validated AuthCheckoutInput into the flat wire body sent to
+ * create-checkout. This is the single place that maps domain field names to
+ * snake_case wire names for the auth path.
+ *
+ * SMS fields (sms_phone_e164, sms_opt_in) are emitted only when both smsOptIn
+ * is true AND smsPhone is present. The server independently re-validates the
+ * phone before writing it to Stripe metadata.
+ *
+ * When smsOptIn is absent or false the output is byte-for-byte identical to
+ * the pre-SMS version of this function — no regression for existing callers.
+ */
 export function serialiseAuthCheckoutInput(
   input: AuthCheckoutInput,
 ): AuthCheckoutWireBody {
@@ -305,15 +344,21 @@ export function serialiseAuthCheckoutInput(
 
   return {
     order_type: input.orderType,
-    ...(input.notes               ? { notes: input.notes }                               : {}),
-    ...(input.promoCode           ? { promo_code: input.promoCode }                      : {}),
-    ...(input.promoId             ? { promo_id: input.promoId }                          : {}),
-    ...(input.creditId            ? { credit_id: input.creditId }                        : {}),
+    ...(input.notes               ? { notes:                input.notes                } : {}),
+    ...(input.promoCode           ? { promo_code:           input.promoCode            } : {}),
+    ...(input.promoId             ? { promo_id:             input.promoId              } : {}),
+    ...(input.creditId            ? { credit_id:            input.creditId             } : {}),
     ...(input.loyaltyRedeemPoints ? { loyalty_redeem_points: input.loyaltyRedeemPoints } : {}),
-    ...(input.loyaltyAccountId    ? { loyalty_account_id: input.loyaltyAccountId }       : {}),
-    ...(input.loyaltyRewardId     ? { loyalty_reward_id: input.loyaltyRewardId }         : {}),
+    ...(input.loyaltyAccountId    ? { loyalty_account_id:   input.loyaltyAccountId     } : {}),
+    ...(input.loyaltyRewardId     ? { loyalty_reward_id:    input.loyaltyRewardId      } : {}),
     ...(input.loyaltyRedemptionId ? { loyalty_redemption_id: input.loyaltyRedemptionId } : {}),
     ...(input.clientIntegrityHash ? { client_integrity_hash: input.clientIntegrityHash } : {}),
-    ...(pickupTime                ? { pickup_time: pickupTime }                          : {}),
+    ...(pickupTime                ? { pickup_time:          pickupTime                 } : {}),
+    // Emit SMS fields only when both conditions are satisfied. smsPhone is
+    // E164UsPhone (branded) so TypeScript enforces it was validated upstream.
+    // create-checkout re-validates server-side — defense in depth.
+    ...(input.smsOptIn === true && input.smsPhone !== undefined
+      ? { sms_phone_e164: input.smsPhone, sms_opt_in: true as const }
+      : {}),
   };
 }

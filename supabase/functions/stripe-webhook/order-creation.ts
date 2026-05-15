@@ -585,6 +585,23 @@ export async function createOrderFromSession(args: {
     });
   }
 
+  const resolvedSmsOptIn: boolean = isGuest
+    ? pickMeta(session.metadata, "guest_sms_opt_in") === "true"
+    : pickMeta(session.metadata, "sms_opt_in")       === "true";
+
+  const resolvedSmsRawPhone: string | null = isGuest
+    ? pickMeta(session.metadata, "guest_phone_e164")
+    : pickMeta(session.metadata, "sms_phone_e164");
+
+  const resolvedSmsPhone: string | null =
+    resolvedSmsOptIn &&
+    resolvedSmsRawPhone !== null &&
+    /^\+1[2-9]\d{9}$/.test(resolvedSmsRawPhone)
+      ? resolvedSmsRawPhone
+      : null;
+
+  const orderSmsOptIn  = resolvedSmsOptIn && resolvedSmsPhone !== null;
+  const orderSmsPhone  = orderSmsOptIn ? resolvedSmsPhone : null;
   const paymentIntentId = typeof session.payment_intent === "string"
     ? session.payment_intent
     : session.payment_intent?.id ?? null;
@@ -793,12 +810,12 @@ export async function createOrderFromSession(args: {
     pickup_time:               pickupTime,
     risk_score:                finalRiskScore,
     risk_level:                finalRiskLevel,
-    verification_status:       verificationStatus,
-    // Required by constraint orders_verified_at_completeness:
-    //   CHECK (verification_status <> 'verified' OR verified_at IS NOT NULL)
-    // Set to the current timestamp when the pre-checkout gate marked the session
-    // as verified. NULL for all other statuses ('not_required', 'required').
-    verified_at: verificationStatus === 'verified' ? nowIso() : null,
+    verified_at:      verificationStatus === 'verified' ? nowIso() : null,
+    // Persist the opted-in phone so send-sms can dispatch transactional
+    // order updates. Uses the same columns for both guest and auth paths;
+    // send-sms already reads guest_phone_e164 when sms_opt_in is true.
+    sms_opt_in:       orderSmsOptIn,
+    guest_phone_e164: orderSmsPhone,
 } as OrderInsert & {
   stripe_checkout_session_id: string;
   fulfillment_type: string;
@@ -809,6 +826,8 @@ export async function createOrderFromSession(args: {
   risk_level: string | null;
   verification_status: string;
   verified_at: string | null;
+  sms_opt_in: boolean;
+  guest_phone_e164: string | null;
 };
 
   const { data: inserted, error: insertError } = await db

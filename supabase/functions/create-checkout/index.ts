@@ -189,12 +189,14 @@ function toRiskGateResponse(
 // type over validateAuthBody's return, which causes `body` to collapse to
 // `never` in some TypeScript versions when validateAuthBody's return type is
 // not fully resolved at the usage site.
-
 interface ParsedBody {
-  body: RequestBody;
+  body:       RequestBody;
   pickupTime: string | null;
+  /** Validated E.164 US phone for auth SMS opt-in, or null when not opted in. */
+  smsPhone:   string | null;
+  /** True only when smsPhone is non-null — the pair is always consistent. */
+  smsOptIn:   boolean;
 }
-
 // ─── Loyalty sealed outcome type ─────────────────────────────────────────────
 //
 // Discriminated on `applied` (boolean literal). The `applied: false` branch
@@ -412,10 +414,42 @@ async function parseRequest(
     return fail(failure(422, "validation_failed", pickupTimeResult.error));
   }
 
-  const parsed: ParsedBody = { body, pickupTime: pickupTimeResult.value };
+ const isRec = (v: unknown): v is Record<string, unknown> =>
+    typeof v === "object" && v !== null && !Array.isArray(v);
+
+  const rawSmsOptIn =
+    isRec(parsedJson) && parsedJson["sms_opt_in"] === true;
+
+  const rawSmsPhone =
+    isRec(parsedJson) && typeof parsedJson["sms_phone_e164"] === "string"
+      ? (parsedJson["sms_phone_e164"] as string)
+      : null;
+
+  // Server-side E.164 US validation — mirrors toE164UsPhone() on the client.
+  // +1, area code first digit 2–9, exactly 9 more digits → 12 characters.
+  const validSmsPhone =
+    rawSmsPhone !== null && /^\+1[2-9]\d{9}$/.test(rawSmsPhone)
+      ? rawSmsPhone
+      : null;
+
+  if (rawSmsOptIn && validSmsPhone === null) {
+    return fail(
+      failure(
+        422,
+        "validation_failed",
+        "sms_phone_e164 must be a valid E.164 US number (+1XXXXXXXXXX) when sms_opt_in is true.",
+      ),
+    );
+  }
+
+  const parsed: ParsedBody = {
+    body,
+    pickupTime: pickupTimeResult.value,
+    smsPhone:   rawSmsOptIn && validSmsPhone !== null ? validSmsPhone : null,
+    smsOptIn:   rawSmsOptIn && validSmsPhone !== null,
+  };
   return ok(parsed);
 }
-
 // ─── Stage 3: Init services ───────────────────────────────────────────────────
 
 interface Services {
@@ -1323,7 +1357,7 @@ function buildSessionMetadata(
   riskGate: RiskGatePayload,
 ): Stripe.MetadataParam {
   const { snapshot } = pricing;
-  const { body, pickupTime } = parsed;
+  const { body, pickupTime, smsPhone, smsOptIn } = parsed;
 
   return {
     // Canonical identity. customer_uid and uid are legacy aliases kept for
@@ -1392,6 +1426,15 @@ function buildSessionMetadata(
     pre_checkout_risk_score:   String(riskGate.riskScore),
     pre_checkout_risk_level:   riskGate.riskLevel,
     pre_checkout_verif_status: riskGate.verificationStatus,
+    // Transactional SMS opt-in for auth checkout.
+    // Written only when the user explicitly opted in and a valid phone was
+    // provided. The webhook reads these two fields to persist sms_opt_in and
+    // guest_phone_e164 on the order so send-sms can dispatch.
+    // Distinct key names from the guest path (guest_sms_opt_in / guest_phone_e164)
+    // so the webhook can resolve the correct pair per-path via isGuest.
+    ...(smsOptIn && smsPhone !== null
+      ? { sms_opt_in: "true", sms_phone_e164: smsPhone }
+      : {}),
   };
 }
 
