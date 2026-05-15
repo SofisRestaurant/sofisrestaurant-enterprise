@@ -21,7 +21,7 @@ import type {
   OrderUpdate,
 } from '../types/orders.types';
 
-import { triggerReadySms } from '@/modules/orders/utils/sms-trigger';
+// triggerReadySms import removed — SMS is now owned by admin-update-order-status.
 
 const PAID_PAYMENT_STATUS = 'paid' as const;
 
@@ -280,27 +280,32 @@ export async function updateOrder(orderId: string, updates: OrderUpdate): Promis
   return requireMappedOrder(data, 'Failed to map updated order');
 }
 
+/**
+ * Updates order status via the secure server-owned Edge Function.
+ *
+ * The Edge Function validates the caller's JWT, confirms admin/staff role,
+ * applies the status update, and — if the new status is "ready" — triggers
+ * the SMS notification internally. The browser never touches the SMS path.
+ */
 export async function updateOrderStatus(orderId: string, status: OrderStatus): Promise<Order> {
-  const { data, error } = await supabase.rpc('update_order_status_secure', {
-    order_id: orderId,
-    new_status: status,
-  });
+  const { data, error } = await supabase.functions.invoke(
+    'admin-update-order-status',
+    { body: { order_id: orderId, new_status: status as string } },
+  );
 
   if (error) {
     await logIllegalAttempt(orderId, status);
-    throw new Error(error.message);
+    throw new Error(error instanceof Error ? error.message : 'Status update failed');
   }
 
-  const order = requireMappedOrder(data, 'No order returned from secure update');
+  const result = data as { ok: boolean; order: unknown; error?: string } | null;
 
-  // Non-blocking SMS trigger — fires only on ready transition.
-  // send-sms guards duplicates via sms_log; this call never throws.
-  // OrderStatus is a type-only import so we compare the string value directly.
-  if ((status as string) === 'ready') {
-    triggerReadySms(orderId);
+  if (!result?.ok) {
+    await logIllegalAttempt(orderId, status);
+    throw new Error(result?.error ?? 'Status update failed');
   }
 
-  return order;
+  return requireMappedOrder(result.order, 'No order returned from status update');
 }
 
 export async function assignOrderToStaff(orderId: string, staff: string): Promise<Order> {

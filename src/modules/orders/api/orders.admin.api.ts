@@ -2,7 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { supabase } from '@/lib/supabase/supabaseClient';
 import type { Database } from '@/types/supabase';
-import { triggerReadySms } from '@/modules/orders/utils/sms-trigger';
+
+// triggerReadySms import removed — SMS is now owned by admin-update-order-status.
 
 import type {
   AdminOrder,
@@ -307,36 +308,38 @@ export async function fetchAdminOrderRows(
   return data ?? [];
 }
 
+/**
+ * Updates order status via the secure server-owned Edge Function.
+ *
+ * The Edge Function validates the caller's JWT, confirms admin/staff role,
+ * applies the status update, and — if the new status is "ready" — triggers
+ * the SMS notification internally. The returned OrderRow is used by AdminOrders
+ * to sync optimistic UI with server state.
+ */
 export async function updateOrderStatusRow(
   orderId: string,
   status: OrderStatus,
 ): Promise<OrderRow> {
-  const { data, error } = await supabase
-    .from('orders')
-    .update({
-      status,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', orderId)
-    .select('*')
-    .maybeSingle<OrderRow>();
+  const { data, error } = await supabase.functions.invoke(
+    'admin-update-order-status',
+    { body: { order_id: orderId, new_status: status as string } },
+  );
 
   if (error !== null) {
-    throw new Error(error.message);
+    throw new Error(error instanceof Error ? error.message : 'Status update failed');
   }
 
-  if (data === null) {
+  const result = data as { ok: boolean; order: OrderRow | null; error?: string } | null;
+
+  if (!result?.ok) {
+    throw new Error(result?.error ?? 'Status update failed');
+  }
+
+  if (!result.order) {
     throw new Error('Order not found');
   }
 
-  // Non-blocking SMS trigger — fires only on ready transition.
-  // send-sms guards duplicates via sms_log; this call never throws.
-  // OrderStatus is a type-only import so we compare the string value directly.
-  if ((status as string) === 'ready') {
-    triggerReadySms(orderId);
-  }
-
-  return data;
+  return result.order;
 }
 
 export async function fetchAdminOrders(

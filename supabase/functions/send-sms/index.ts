@@ -3,6 +3,12 @@
 // MIGRATED: replaced inline createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
 // with supabaseAdmin() from shared module.
 // All business logic, validation, and idempotency logic is unchanged.
+//
+// [CHANGE] Guest phone support:
+//   OrderRow now includes guest_phone_e164 and sms_opt_in.
+//   Phone resolution: prefer guest_phone_e164 when sms_opt_in is true,
+//   fall back to customer_phone. Existing behavior for non-opted-in orders
+//   (customer_phone path) is unchanged.
 // =============================================================================
 
 import { supabaseAdmin }                                              from '../_shared/supabaseAdmin.ts';
@@ -16,12 +22,15 @@ interface SendSmsPayload {
   event:    SmsEvent;
 }
 
+// [CHANGE] Added guest_phone_e164 and sms_opt_in.
 interface OrderRow {
-  id:             string;
-  customer_phone: string | null;
-  order_number:   number | null;
-  status:         string;
-  payment_status: string;
+  id:               string;
+  customer_phone:   string | null;
+  guest_phone_e164: string | null;   // guest opted-in phone (E.164 US)
+  sms_opt_in:       boolean;         // true only when guest explicitly opted in
+  order_number:     number | null;
+  status:           string;
+  payment_status:   string;
 }
 
 interface SmsLogInsert {
@@ -107,13 +116,13 @@ Deno.serve(async (req: Request) => {
 
   const { order_id, event } = body;
 
-  // 3. DB CLIENT — migrated from inline createClient to supabaseAdmin()
+  // 3. DB CLIENT — unchanged
   const db = supabaseAdmin();
 
-  // 4. FETCH ORDER — unchanged
+  // 4. FETCH ORDER — [CHANGE] select includes guest_phone_e164 and sms_opt_in
   const { data: order, error: orderError } = await db
     .from('orders')
-    .select('id, customer_phone, order_number, status, payment_status')
+    .select('id, customer_phone, guest_phone_e164, sms_opt_in, order_number, status, payment_status')
     .eq('id', order_id)
     .maybeSingle<OrderRow>();
 
@@ -122,8 +131,16 @@ Deno.serve(async (req: Request) => {
     return jsonResponse(req, { ok: false, error: 'Order not found' }, 404);
   }
 
-  // 5. NORMALIZE PHONE — unchanged
-  const phone = normalizePhone(order.customer_phone);
+  // 5. RESOLVE PHONE — [CHANGE]
+  //    Prefer guest_phone_e164 when sms_opt_in is true (guest explicitly opted in).
+  //    Fall back to customer_phone (Stripe-collected, e.g. delivery orders).
+  //    Existing behavior for non-opted-in orders is unchanged.
+  const rawPhone =
+    order.sms_opt_in === true && order.guest_phone_e164 !== null
+      ? order.guest_phone_e164
+      : order.customer_phone;
+
+  const phone = normalizePhone(rawPhone);
   if (!phone) {
     structuredLog('skipped', order_id, event, { reason: 'no_valid_phone' });
     return jsonResponse(req, { ok: true, skipped: true, reason: 'no_valid_phone' });
@@ -149,7 +166,13 @@ Deno.serve(async (req: Request) => {
   const orderNum  = formatOrderNumber(order.order_number);
   const smsBody   = buildSmsBody(event, orderNum);
   const twilioEnv = getTwilioEnv();
-  const result    = await sendSms({ env: twilioEnv, to: phone, body: smsBody });
+
+  if (!twilioEnv.ok) {
+    console.error(JSON.stringify({ fn: 'send-sms', outcome: 'error', detail: 'Twilio env missing', missing: twilioEnv.missing }));
+    return jsonResponse(req, { ok: false, error: 'SMS service misconfigured' }, 503);
+  }
+
+  const result = await sendSms({ env: twilioEnv.env, to: phone, body: smsBody });
 
   // 9. LOG — unchanged
   const logRow: SmsLogInsert = {
