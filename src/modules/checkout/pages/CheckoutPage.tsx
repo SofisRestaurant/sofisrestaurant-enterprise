@@ -30,7 +30,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 // ── Checkout module ────────────────────────────────────────────────────────────
 import CheckoutButton from '@/modules/checkout/components/CheckoutButton';
 import { CheckoutChallengeModal } from '@/modules/checkout/components/CheckoutChallengeModal';
-import { PhoneVerification } from '@/modules/checkout/components/PhoneVerification';
 import {
   RewardsRedeem,
   type LoyaltyRedeemValue,
@@ -624,33 +623,7 @@ export default function CheckoutPage() {
                   smsOptIn={smsOptIn}
                   onSmsToggle={() => setSmsOptIn((v) => !v)}
                 />
-                {!verifiedPhone && !phoneSkipped && (
-                  <div className="border-t border-(--color-cream-200) px-5 py-4">
-                    <PhoneVerification
-                      onVerified={(phone) => setVerifiedPhone(phone)}
-                      onSkip={() => setPhoneSkipped(true)}
-                    />
-                  </div>
-                )}
-                {verifiedPhone && (
-                  <div className="border-t border-(--color-cream-200) px-5 py-3">
-                    <div className="flex items-center justify-between rounded-xl border border-(--color-success) bg-(--color-success-bg) px-4 py-2.5">
-                      <p className="text-sm font-medium text-(--color-success)">
-                        📱 SMS updates active
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setVerifiedPhone(null);
-                          setPhoneSkipped(false);
-                        }}
-                        className="text-xs text-(--color-success) underline"
-                      >
-                        Change
-                      </button>
-                    </div>
-                  </div>
-                )}
+
               </>
             )}
           </SectionCard>
