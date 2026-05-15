@@ -2,14 +2,11 @@
    SOFIS — typography.css
    Editorial luxury typography system.
 
-   Scale philosophy:
-   • Display type: large and dramatic (Michelin-star menus, Aman collateral).
-   • Body type: airy and spacious (Aesop, Apple).
-   • Labels: tight, uppercase, wide tracking.
-
-   All font-size values use clamp() for smooth fluid scaling.
-   Tailwind's base reset (Preflight) is applied by @import "tailwindcss" in
-   app.css — this file adds editorial defaults on top.
+   Darker modern color pass:
+   • Rich ink for headings
+   • Softer warm-gray body text
+   • Ember links with gold hover
+   • No layout, spacing, or scale changes
    ============================================================================= */
 
 /* ── Base body ───────────────────────────────────────────────────────────── */
@@ -19,7 +16,7 @@ body {
   font-size: var(--text-base);
   line-height: var(--leading-relaxed);
   letter-spacing: -0.01em;
-  color: var(--color-ink-900);
+  color: #171312;
 }
 
 /* ── Display headings ────────────────────────────────────────────────────── */
@@ -28,7 +25,7 @@ h1, h2, h3, h4, h5, h6 {
   font-weight: 400;          /* Playfair looks best at regular weight */
   letter-spacing: var(--tracking-tight);
   line-height: var(--leading-tight);
-  color: var(--color-ink-900);
+  color: #120f0e;
 }
 
 h1 {
@@ -69,19 +66,19 @@ h6 {
 p {
   font-size: var(--text-base);
   line-height: var(--leading-relaxed);
-  color: var(--color-ink-700);
+  color: #3f3632;
 }
 
 p + p { margin-top: 1.25em; }
 
 /* ── Links ────────────────────────────────────────────────────────────────── */
 a {
-  color: var(--color-ember-500);
+  color: #b83224;
   text-underline-offset: 3px;
   transition: color var(--duration-base) var(--ease-luxury);
 }
 
-a:hover { color: var(--color-gold-400); }
+a:hover { color: #c7922b; }
 
 /* ── Serif body — editorial long-form ──────────────────────────────────── */
 .prose-serif {
@@ -89,7 +86,7 @@ a:hover { color: var(--color-gold-400); }
   font-size: clamp(1rem, 1.2vw, 1.15rem);
   line-height: var(--leading-loose);
   font-weight: 300;
-  color: var(--color-ink-700);
+  color: #3f3632;
 }
 
 /* ── Blockquote ──────────────────────────────────────────────────────────── */
@@ -99,8 +96,8 @@ blockquote {
   font-size: clamp(1.15rem, 1.5vw, 1.4rem);
   line-height: var(--leading-relaxed);
   padding-left: 1.5rem;
-  border-left: 2px solid var(--color-gold-400);
-  color: var(--color-ink-700);
+  border-left: 2px solid #c7922b;
+  color: #3a302c;
   margin: 2rem 0;
 }
 
@@ -112,7 +109,7 @@ blockquote cite {
   font-size: var(--text-xs);
   letter-spacing: var(--tracking-caps);
   text-transform: uppercase;
-  color: var(--color-ink-400);
+  color: #70635d;
 }
 
 /* ── Small / Caption ─────────────────────────────────────────────────────── */
@@ -120,7 +117,7 @@ small,
 .text-caption {
   font-size: var(--text-xs);
   line-height: 1.5;
-  color: var(--color-ink-500);
+  color: #5f534e;
 }
 
 /* ── Label / Eyebrow ─────────────────────────────────────────────────────── */
@@ -132,6 +129,7 @@ small,
   letter-spacing: var(--tracking-loose);
   text-transform: uppercase;
   line-height: 1;
+  color: #4b403b;
 }
 
 /* ── Section title ────────────────────────────────────────────────────────── */
@@ -141,6 +139,7 @@ small,
   letter-spacing: var(--tracking-tighter);
   line-height: 1.1;
   font-weight: 400;
+  color: #120f0e;
 }
 
 /* ── Hero display ─────────────────────────────────────────────────────────── */
@@ -150,13 +149,14 @@ small,
   letter-spacing: var(--tracking-tightest);
   line-height: 0.92;
   font-weight: 400;
+  color: #120f0e;
 }
 
 /* ── Italic accent span — inside headlines ──────────────────────────────── */
 .text-accent-italic {
   font-family: var(--font-display);
   font-style: italic;
-  color: var(--color-gold-300);
+  color: #b8841f;
 }
 
 /* ── Numeric figures — prices, stats, years ─────────────────────────────── */
@@ -164,6 +164,7 @@ small,
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum' 1;
   letter-spacing: 0.02em;
+  color: #171312;
 }
 
 /* ── Script / hand-lettered accent ─────────────────────────────────────── */
@@ -171,23 +172,27 @@ small,
   font-family: var(--font-hand);
   font-weight: 400;
   letter-spacing: 0.02em;
+  color: #171312;
 }
 
 .signature {
   font-family: var(--font-hand);
   font-size: clamp(1.4rem, 2vw, 2rem);
   line-height: 1.2;
+  color: #171312;
 }
 
 .menu-accent {
   font-family: var(--font-hand);
   font-size: 1.1em;
+  color: #b83224;
 }
 
 .hero-script {
   font-family: var(--font-hand);
   font-size: clamp(2rem, 5vw, 3rem);
   letter-spacing: 0.01em;
+  color: #b83224;
 }
 
 /* ── Prevent orphans in large headings ──────────────────────────────────── */

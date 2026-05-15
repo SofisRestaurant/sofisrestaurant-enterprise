@@ -116,3 +116,93 @@
   --btn-glass-bg:        rgb(255 255 255 / 0.05);
   --btn-glass-border:    rgb(255 255 255 / 0.12);
 }
+
+/* =============================================================================
+   APP THEME — Semantic surface layer
+   Drives system light / dark mode via data-theme on <html>.
+   Light values are the default. Dark values override under [data-theme='dark'].
+
+   Usage in components:  bg-(--app-bg)  text-(--app-text)  border-(--app-border)
+   ============================================================================= */
+
+:root,
+:root[data-theme='light'] {
+  /* Surfaces */
+  --app-bg:               var(--color-cream-100);   /* page canvas   #faf6ef */
+  --app-surface:          #ffffff;                  /* cards, panels          */
+  --app-surface-elevated: #ffffff;                  /* modals, popovers       */
+  --app-surface-hover:    var(--color-ink-50);      /* hover bg      #faf8f5  */
+
+  /* Header / nav bar — semi-transparent to show scroll blur */
+  --app-header:           rgba(255, 255, 255, 0.95);
+
+  /* Typography */
+  --app-text:             var(--color-ink-900);     /* primary text  #1c1a18  */
+  --app-muted:            var(--color-ink-500);     /* secondary     #8a7a6a  */
+
+  /* Borders & dividers */
+  --app-border:           var(--color-cream-200);   /* subtle border #f5ede0  */
+  --app-divider:          var(--color-cream-300);   /* hr / rule     #ede0ce  */
+
+  /* Cards */
+  --app-card:             #ffffff;
+  --app-card-hover:       var(--color-cream-50);
+
+  /* Inputs */
+  --app-input:            #ffffff;
+  --app-input-border:     var(--color-cream-400);
+
+  /* Focus ring — used in box-shadow */
+  --app-focus-ring:       0 0 0 3px rgba(212, 175, 55, 0.30);
+
+  /* Overlay / scrim */
+  --app-overlay:          rgba(0, 0, 0, 0.40);
+
+  /* Shadow */
+  --app-shadow:           var(--shadow-md);
+}
+
+:root[data-theme='dark'] {
+  /* ── Override existing semantic tokens so components using them
+        (e.g. .card → background: var(--color-surface)) automatically
+        get dark values without touching components.css. ─────────────── */
+  --color-surface:        var(--color-stone-900);
+  --color-surface-warm:   var(--color-stone-850);
+  --color-border:         rgba(255, 255, 255, 0.08);
+  --color-border-mid:     rgba(255, 255, 255, 0.12);
+
+  /* ── App-specific theme tokens ──────────────────────────────────────── */
+  /* Surfaces */
+  --app-bg:               var(--color-stone-950);   /* page canvas   #0c0b09  */
+  --app-surface:          var(--color-stone-900);   /* cards, panels #1a1814  */
+  --app-surface-elevated: var(--color-stone-850);   /* modals        #201d18  */
+  --app-surface-hover:    var(--color-stone-800);   /* hover bg      #2a2620  */
+
+  /* Header / nav bar */
+  --app-header:           rgba(26, 24, 20, 0.97);
+
+  /* Typography */
+  --app-text:             rgba(255, 255, 255, 0.90);
+  --app-muted:            rgba(255, 255, 255, 0.45);
+
+  /* Borders & dividers */
+  --app-border:           rgba(255, 255, 255, 0.08);
+  --app-divider:          rgba(255, 255, 255, 0.07);
+
+  /* Cards */
+  --app-card:             var(--color-stone-850);
+  --app-card-hover:       var(--color-stone-800);
+
+  /* Inputs */
+  --app-input:            rgba(255, 255, 255, 0.05);
+  --app-input-border:     rgba(255, 255, 255, 0.10);
+
+  /* Focus ring */
+  --app-focus-ring:       0 0 0 3px rgba(212, 175, 55, 0.25);
+
+  /* Overlay / scrim */
+  --app-overlay:          rgba(0, 0, 0, 0.65);
+
+  /* Shadow */
+  --app-shadow:           0 4px 24px rgba(0, 0, 0, 0.40);
+}

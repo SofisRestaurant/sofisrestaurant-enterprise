@@ -4,6 +4,22 @@
     <!-- ── Character encoding (must be first) ────────────────── -->
     <meta charset="UTF-8" />
 
+    <!--
+      ── No-flash theme script ─────────────────────────────────
+      Runs synchronously before any CSS is parsed or the first
+      frame is painted. Sets data-theme + colorScheme on <html>
+      so the correct CSS variables are active from frame zero.
+      No localStorage. No manual override. System-only.
+    -->
+    <script>
+      (function () {
+        var d = document.documentElement;
+        var t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        d.dataset.theme = t;
+        d.style.colorScheme = t;
+      }());
+    </script>
+
     <!-- ── Viewport ──────────────────────────────────────────── -->
     <!-- viewport-fit=cover: content extends under notches on iPhone -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -22,10 +38,18 @@
     <meta name="format-detection" content="telephone=no" />
 
     <!-- ── Theme & color scheme ──────────────────────────────── -->
-    <!-- stone-900 brand dark — matches header/footer background -->
-    <meta name="theme-color" content="#1c1915" />
-    <!-- Explicitly light-only; add "dark" here if dark mode is ever added -->
-    <meta name="color-scheme" content="light" />
+    <!--
+      Two theme-color entries — browsers that support media queries
+      on theme-color (Chrome 93+, Safari 15+) will pick the correct
+      one automatically. Older browsers fall back to the first entry.
+    -->
+    <meta name="theme-color" content="#faf6ef" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#1c1915" media="(prefers-color-scheme: dark)" />
+    <!--
+      Declares both schemes so the browser renders its own chrome
+      (scrollbars, inputs, form controls) in the correct mode.
+    -->
+    <meta name="color-scheme" content="light dark" />
 
     <!-- ── Favicon & touch icons ─────────────────────────────── -->
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
@@ -34,7 +58,6 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <!-- Windows tile -->
     <meta name="msapplication-TileColor" content="#1c1915" />
-
 
     <!-- ── Open Graph ────────────────────────────────────────── -->
     <!-- og:type "website" is the correct value; "restaurant.restaurant" is non-standard -->

@@ -1,17 +1,24 @@
-import { ReactNode } from 'react';
-import { UserProvider } from '@/providers/UserProvider';
-import { AnalyticsProvider } from '@/lib/analytics/AnalyticsProvider';
-import { ModalProvider } from '@/components/ui/ModalProvider';
+import type { ReactNode } from 'react';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { ModalProvider } from '@/components/ui/ModalProvider';
+import { ThemeProvider } from '@/features/theme';
+import { AnalyticsProvider } from '@/lib/analytics/AnalyticsProvider';
+import { UserProvider } from '@/providers/UserProvider';
 
-export function Providers({ children }: { children: ReactNode }) {
+type ProvidersProps = {
+  children: ReactNode;
+};
+
+export function Providers({ children }: ProvidersProps) {
   return (
     <ErrorBoundary>
-      <AnalyticsProvider>
-        <UserProvider>
-          <ModalProvider>{children}</ModalProvider>
-        </UserProvider>
-      </AnalyticsProvider>
+      <ThemeProvider>
+        <AnalyticsProvider>
+          <UserProvider>
+            <ModalProvider>{children}</ModalProvider>
+          </UserProvider>
+        </AnalyticsProvider>
+      </ThemeProvider>
     </ErrorBoundary>
   );
 }

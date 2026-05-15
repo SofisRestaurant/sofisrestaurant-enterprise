@@ -253,3 +253,31 @@
   --space-24:  6rem;
   --space-32:  8rem;
 }
+
+/* =============================================================================
+   BASE — System theme application
+   html and body pick up the theme surface + text from --app-* semantic vars.
+   Transitions are subtle and respect prefers-reduced-motion.
+   ============================================================================= */
+
+html {
+  background-color: var(--app-bg);
+}
+
+body {
+  background-color: var(--app-bg);
+  color: var(--app-text);
+  transition:
+    background-color 220ms ease,
+    color 220ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body {
+    transition: none;
+  }
+}
+
+#root {
+  min-height: 100vh;
+}

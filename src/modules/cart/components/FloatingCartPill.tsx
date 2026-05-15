@@ -3,65 +3,78 @@
 // Floating Cart Pill — mobile-only, highest-conversion cart entry point
 // =============================================================================
 // Appears above BottomNav when the cart has items.
-// This persistent-CTA pattern increases cart→checkout conversion vs top-bar alone.
+// Moves lower when BottomNav collapses, but stays visible.
 // Hidden on checkout, admin, kitchen, auth flows.
 // Hidden when any modal is open to prevent z-index conflicts.
 // =============================================================================
 
 import { useContext } from 'react';
 import { useLocation } from 'react-router-dom';
+
+import { ModalContext } from '@/components/ui/ModalContext';
 import { useCart } from '@/modules/cart/hooks/useCart';
 import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
-import { ModalContext } from '@/components/ui/ModalContext';
 
 const HIDDEN_ON = ['/checkout', '/admin', '/kitchen', '/expo', '/auth', '/update-password'];
 
-const f = (c: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
-    .format(Math.max(0, Number.isFinite(c) ? c : 0) / 100);
+function formatCurrencyFromCents(cents: number) {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 2,
+  }).format(Math.max(0, Number.isFinite(cents) ? cents : 0) / 100);
+}
 
 export function FloatingCartPill() {
   const { pathname } = useLocation();
   const { itemCount, items } = useCart();
-  const openCart = useCartUiStore((s) => s.open);
-  const modalCtx = useContext(ModalContext);
+  const openCart = useCartUiStore((state) => state.open);
+  const modalContext = useContext(ModalContext);
 
-  const hidden = HIDDEN_ON.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+  const hidden = HIDDEN_ON.some((path) => pathname === path || pathname.startsWith(`${path}/`));
   const count = itemCount ?? 0;
-  const modalIsOpen = Boolean(modalCtx?.activeModal);
+  const modalIsOpen = Boolean(modalContext?.activeModal);
 
-  if (hidden || count === 0 || modalIsOpen) return null;
+  if (hidden || count === 0 || modalIsOpen) {
+    return null;
+  }
 
   const subtotalCents = (items ?? []).reduce((sum, item) => {
-    const v =
+    const lineTotalCents =
       typeof item.lineTotalCents === 'number' && Number.isFinite(item.lineTotalCents)
         ? Math.max(0, Math.round(item.lineTotalCents))
         : 0;
-    return sum + v;
+
+    return sum + lineTotalCents;
   }, 0);
 
   return (
     <>
-      {/* Spacer so page content is not hidden behind the pill (mobile only) */}
-      <div className="h-20 shrink-0 md:hidden" aria-hidden="true" />
+      <div
+        className="h-[calc(88px+var(--bottom-nav-offset,56px)+env(safe-area-inset-bottom,0px))] shrink-0 transition-[height] duration-700 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none md:hidden"
+        aria-hidden="true"
+      />
 
       <div
-        className="fixed left-4 right-4 z-40 md:hidden"
-        style={{ bottom: 'calc(56px + env(safe-area-inset-bottom, 0px) + 10px)' }}
+        className="fixed left-4 right-4 z-40 transform-gpu transition-[bottom] duration-700 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none md:hidden"
+        style={{
+          bottom: 'calc(var(--bottom-nav-offset, 56px) + env(safe-area-inset-bottom, 0px) + 10px)',
+        }}
         role="region"
         aria-label="Cart summary"
       >
         <button
           type="button"
           onClick={openCart}
-          className="group relative flex w-full items-center justify-between overflow-hidden rounded-2xl px-5 py-3.5"
+          className="group relative flex w-full items-center justify-between overflow-hidden rounded-2xl px-5 py-3.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
           style={{
             background: 'linear-gradient(135deg,#1c1915 0%,#2e2a24 100%)',
             boxShadow: '0 8px 32px rgba(28,25,21,0.45),0 2px 8px rgba(28,25,21,0.3)',
           }}
-          aria-label={`View cart — ${count} item${count !== 1 ? 's' : ''}, ${f(subtotalCents)}`}
+          aria-label={`View cart — ${count} item${count !== 1 ? 's' : ''}, ${formatCurrencyFromCents(
+            subtotalCents,
+          )}`}
         >
-          {/* Gold shimmer top edge */}
           <span
             aria-hidden="true"
             className="pointer-events-none absolute inset-x-0 top-0 h-px"
@@ -70,7 +83,6 @@ export function FloatingCartPill() {
             }}
           />
 
-          {/* Left: count + label */}
           <div className="flex items-center gap-3">
             <span
               className="flex h-7 w-7 items-center justify-center rounded-xl text-xs font-black"
@@ -79,12 +91,15 @@ export function FloatingCartPill() {
             >
               {count > 99 ? '99+' : count}
             </span>
+
             <span className="text-sm font-semibold text-white">View Order</span>
           </div>
 
-          {/* Right: subtotal + chevron */}
           <div className="flex items-center gap-2">
-            <span className="text-sm font-bold tabular-nums text-white">{f(subtotalCents)}</span>
+            <span className="text-sm font-bold tabular-nums text-white">
+              {formatCurrencyFromCents(subtotalCents)}
+            </span>
+
             <svg
               width="16"
               height="16"

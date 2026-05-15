@@ -1,30 +1,27 @@
 // src/components/layout/BottomNav.tsx
 // =============================================================================
-// JITTER FIX — three changes vs previous version:
+// Mobile bottom navigation
 //
-// 1. backdrop-blur-md REMOVED from the nav element.
-//    Multiple simultaneous backdrop-blur layers (TopBar + BottomNav) cause
-//    GPU compositor stuttering on iOS Safari during scroll, which manifests
-//    as icon shake. Replaced with a solid bg-white/98 — visually identical,
-//    zero compositor cost.
-//
-// 2. translate-z-0 added to the nav element (translate3d(0,0,0) hack).
-//    Forces the BottomNav onto its own compositor layer independently of
-//    #app-root. This isolates it from any transform applied to the parent
-//    layout during modal open/close animations.
-//
-// 3. transition-all → transition-colors on TabButton.
-//    transition-all includes transform, which puts every tab button in the
-//    compositor's watch list on every scroll frame. transition-colors only
-//    tracks color/background — zero scroll overhead.
+// Professional behavior:
+// 1. Hidden on admin/kitchen/expo/checkout/auth utility routes.
+// 2. Auto-hides only after intentional downward scrolling, not immediately.
+// 3. Reappears when scrolling up, near the top of the page, after resize, or
+//    when route changes.
+// 4. Exposes --bottom-nav-offset so FloatingCartPill can move with it.
+// 5. Keeps iOS Safari performance stable:
+//    - no backdrop-blur on the fixed nav
+//    - translate3d compositor isolation
+//    - transition only transform/colors
+// 6. Respects safe-area inset for modern iPhones.
 // =============================================================================
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState, type ElementType } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, UtensilsCrossed, ShoppingBag, User } from 'lucide-react';
+import { Home, ShoppingBag, User, UtensilsCrossed } from 'lucide-react';
+
+import { useActiveOrderId } from '@/app/ActiveOrderContext';
 import { useCart } from '@/modules/cart/hooks/useCart';
 import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
-import { useActiveOrderId } from '@/app/ActiveOrderContext';
 
 type TabId = 'home' | 'menu' | 'cart' | 'account';
 
@@ -32,12 +29,20 @@ type Tab = {
   id: TabId;
   path: string;
   label: string;
-  icon: React.ElementType;
+  icon: ElementType;
   isButton?: boolean;
 };
 
-function cx(...c: (string | false | null | undefined)[]): string {
-  return c.filter(Boolean).join(' ');
+type TabButtonProps = {
+  tab: Tab;
+  isActive: boolean;
+  badge?: number | null;
+  hasLivePulse?: boolean;
+  onCartClick?: () => void;
+};
+
+function cx(...classes: Array<string | false | null | undefined>) {
+  return classes.filter(Boolean).join(' ');
 }
 
 const TABS: Tab[] = [
@@ -56,24 +61,114 @@ const HIDDEN_ON = [
   '/auth/callback',
 ];
 
-function useIsNavHidden(p: string) {
-  return HIDDEN_ON.some((prefix) => p === prefix || p.startsWith(`${prefix}/`));
+const TOP_LOCK_THRESHOLD_PX = 140;
+const INTENTIONAL_DOWN_SCROLL_PX = 72;
+const SCROLL_DELTA_THRESHOLD_PX = 6;
+const MIN_VISIBLE_TIME_MS = 420;
+
+const BOTTOM_NAV_VISIBLE_OFFSET = '56px';
+const BOTTOM_NAV_COLLAPSED_OFFSET = '18px';
+
+function useIsNavHidden(pathname: string) {
+  return HIDDEN_ON.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }
 
-function useActiveTab(p: string): TabId | null {
-  if (p === '/') return 'home';
-  if (p.startsWith('/menu')) return 'menu';
-  if (p.startsWith('/account') || p.startsWith('/order')) return 'account';
+function useActiveTab(pathname: string): TabId | null {
+  if (pathname === '/') return 'home';
+  if (pathname.startsWith('/menu')) return 'menu';
+  if (pathname.startsWith('/account') || pathname.startsWith('/order')) return 'account';
+
   return null;
 }
 
-type TabButtonProps = {
-  tab: Tab;
-  isActive: boolean;
-  badge?: number | null;
-  hasLivePulse?: boolean;
-  onCartClick?: () => void;
-};
+function useAutoHideBottomNav(isRouteHidden: boolean, pathname: string) {
+  const [isAutoHidden, setIsAutoHidden] = useState(false);
+
+  const lastScrollYRef = useRef(0);
+  const accumulatedDownScrollRef = useRef(0);
+  const lastShownAtRef = useRef(Date.now());
+  const tickingRef = useRef(false);
+
+  useEffect(() => {
+    setIsAutoHidden(false);
+    accumulatedDownScrollRef.current = 0;
+    lastScrollYRef.current = Math.max(window.scrollY, 0);
+    lastShownAtRef.current = Date.now();
+  }, [isRouteHidden, pathname]);
+
+  useEffect(() => {
+    if (isRouteHidden) {
+      return;
+    }
+
+    function showNav(currentScrollY: number) {
+      setIsAutoHidden(false);
+      accumulatedDownScrollRef.current = 0;
+      lastShownAtRef.current = Date.now();
+      lastScrollYRef.current = currentScrollY;
+    }
+
+    function updateNavVisibility() {
+      const currentScrollY = Math.max(window.scrollY, 0);
+      const previousScrollY = lastScrollYRef.current;
+      const delta = currentScrollY - previousScrollY;
+
+      tickingRef.current = false;
+
+      if (currentScrollY < TOP_LOCK_THRESHOLD_PX) {
+        showNav(currentScrollY);
+        return;
+      }
+
+      if (Math.abs(delta) < SCROLL_DELTA_THRESHOLD_PX) {
+        return;
+      }
+
+      if (delta < 0) {
+        showNav(currentScrollY);
+        return;
+      }
+
+      accumulatedDownScrollRef.current += delta;
+
+      const hasScrolledWithIntent = accumulatedDownScrollRef.current >= INTENTIONAL_DOWN_SCROLL_PX;
+
+      const hasStayedVisibleLongEnough = Date.now() - lastShownAtRef.current >= MIN_VISIBLE_TIME_MS;
+
+      if (hasScrolledWithIntent && hasStayedVisibleLongEnough) {
+        setIsAutoHidden(true);
+      }
+
+      lastScrollYRef.current = currentScrollY;
+    }
+
+    function handleScroll() {
+      if (tickingRef.current) {
+        return;
+      }
+
+      tickingRef.current = true;
+      window.requestAnimationFrame(updateNavVisibility);
+    }
+
+    function handleResize() {
+      setIsAutoHidden(false);
+      accumulatedDownScrollRef.current = 0;
+      lastScrollYRef.current = Math.max(window.scrollY, 0);
+      lastShownAtRef.current = Date.now();
+    }
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [isRouteHidden]);
+
+  return isAutoHidden;
+}
 
 function TabButton({ tab, isActive, badge, hasLivePulse, onCartClick }: TabButtonProps) {
   const Icon = tab.icon;
@@ -82,25 +177,20 @@ function TabButton({ tab, isActive, badge, hasLivePulse, onCartClick }: TabButto
     <>
       <div
         className={cx(
-          'relative flex items-center justify-center h-7 w-7 shrink-0rounded-xl',
-          // transition-colors only — not transition-all.
-          // transition-all includes transform which puts this in the
-          // compositor watch list on every scroll frame causing jitter.
+          'relative flex h-7 w-7 shrink-0 items-center justify-center rounded-xl',
           'transition-colors duration-200',
           isActive ? 'bg-(--color-ember-50)' : 'bg-transparent',
         )}
       >
-        {/* Icon scale is driven by CSS not JS — no transform transition needed */}
         <Icon
           className={cx(
             'h-5 w-5 shrink-0 transition-colors duration-200',
-            isActive ? 'text-(--color-ember-600)' : 'text-(--color-ink-400)',
+            isActive ? 'text-(--color-ember-600)' : 'text-[var(--app-muted)]',
           )}
           strokeWidth={isActive ? 2.2 : 1.75}
           aria-hidden="true"
         />
 
-        {/* Cart badge */}
         {badge != null && badge > 0 && (
           <span
             className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-(--color-ember-600) px-1 text-[9px] font-bold leading-none text-white shadow-(--shadow-xs)"
@@ -110,7 +200,6 @@ function TabButton({ tab, isActive, badge, hasLivePulse, onCartClick }: TabButto
           </span>
         )}
 
-        {/* Live order pulse */}
         {hasLivePulse && (
           <span className="absolute -right-0.5 -top-0.5 flex h-2 w-2" aria-hidden="true">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-(--color-ember-400) opacity-75" />
@@ -122,16 +211,15 @@ function TabButton({ tab, isActive, badge, hasLivePulse, onCartClick }: TabButto
       <span
         className={cx(
           'text-[10px] font-medium leading-none tracking-wide transition-colors duration-200',
-          isActive ? 'text-(--color-ember-600)' : 'text-(--color-ink-400)',
+          isActive ? 'text-(--color-ember-600)' : 'text-[var(--app-muted)]',
         )}
       >
         {tab.label}
       </span>
 
-      {/* Active indicator bar */}
       <span
         className={cx(
-          'absolute bottom-0 left-1/2 h-2px -translate-x-1/2 rounded-full transition-[width,opacity] duration-200',
+          'absolute bottom-0 left-1/2 h-px -translate-x-1/2 rounded-full transition-[width,opacity] duration-200',
           isActive ? 'w-6 bg-(--color-ember-500) opacity-100' : 'w-0 opacity-0',
         )}
         aria-hidden="true"
@@ -139,13 +227,12 @@ function TabButton({ tab, isActive, badge, hasLivePulse, onCartClick }: TabButto
     </>
   );
 
-  // Shared base — active:scale-95 kept but as a CSS active pseudo not transition-all
   const baseClass = cx(
-    'relative flex flex-col items-center justify-center gap-0.5',
-    'py-2 px-1 min-w-0 min-h-[56px]',
+    'relative flex min-h-[56px] min-w-0 flex-col items-center justify-center gap-0.5',
+    'rounded-lg px-1 py-2',
+    'text-[var(--app-muted)] transition-colors duration-200',
     'active:scale-95',
     'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-inset',
-    'rounded-lg',
   );
 
   if (tab.isButton) {
@@ -177,11 +264,38 @@ export default function BottomNav() {
   const { pathname } = useLocation();
   const { itemCount } = useCart();
   const activeOrderId = useActiveOrderId();
-  const openCart = useCartUiStore((s) => s.open);
-  const isHidden = useIsNavHidden(pathname);
+  const openCart = useCartUiStore((state) => state.open);
+
+  const isRouteHidden = useIsNavHidden(pathname);
+  const isAutoHidden = useAutoHideBottomNav(isRouteHidden, pathname);
   const activeTab = useActiveTab(pathname);
+
   const hasLiveOrder = Boolean(activeOrderId);
   const cartCount = itemCount ?? 0;
+
+  useEffect(() => {
+    const root = document.documentElement;
+
+    if (isRouteHidden) {
+      root.style.setProperty('--bottom-nav-offset', '0px');
+      root.dataset.bottomNav = 'hidden';
+      return;
+    }
+
+    if (isAutoHidden) {
+      root.style.setProperty('--bottom-nav-offset', BOTTOM_NAV_COLLAPSED_OFFSET);
+      root.dataset.bottomNav = 'collapsed';
+      return;
+    }
+
+    root.style.setProperty('--bottom-nav-offset', BOTTOM_NAV_VISIBLE_OFFSET);
+    root.dataset.bottomNav = 'visible';
+
+    return () => {
+      root.style.removeProperty('--bottom-nav-offset');
+      delete root.dataset.bottomNav;
+    };
+  }, [isRouteHidden, isAutoHidden]);
 
   const resolvedTabs = useMemo(
     () =>
@@ -194,11 +308,12 @@ export default function BottomNav() {
     [activeTab, cartCount, hasLiveOrder],
   );
 
-  if (isHidden) return null;
+  if (isRouteHidden) {
+    return null;
+  }
 
   return (
     <>
-      {/* Spacer — reserves the nav height in the flex column */}
       <div
         className="h-[calc(56px+env(safe-area-inset-bottom,0px))] shrink-0 md:hidden"
         aria-hidden="true"
@@ -207,22 +322,20 @@ export default function BottomNav() {
       <nav
         role="navigation"
         aria-label="App navigation"
+        data-state={isAutoHidden ? 'collapsed' : 'visible'}
         className={cx(
           'fixed bottom-0 left-0 right-0 z-30 md:hidden',
-          'border-t border-(--color-cream-300)',
-          // bg-white/98 instead of bg-white/95 + backdrop-blur-md.
-          // backdrop-blur on BottomNav + TopBar simultaneously causes GPU
-          // compositor stutter on iOS Safari → icons jiggle during scroll.
-          // Solid 98% opacity white is visually indistinguishable at this size.
-          'bg-white/98',
+          'border-t border-[var(--app-divider)] bg-[var(--app-header)]',
           'pb-[env(safe-area-inset-bottom,0px)]',
-          'shadow-[0_-1px_0_0_var(--color-cream-300),0_-4px_16px_-2px_rgb(26_18_9/0.08)]',
+          'transition-[transform,background-color,border-color] duration-700 ease-[cubic-bezier(0.16,1,0.3,1)]',
+          'motion-reduce:transition-none',
         )}
-        // translate-z-0 (translate3d(0,0,0)) promotes BottomNav to its own
-        // GPU compositor layer independently of #app-root. This isolates it
-        // from transforms applied to the parent during modal animations,
-        // preventing position recalculation jitter on every scroll frame.
-        style={{ transform: 'translateZ(0)' }}
+        style={{
+          transform: isAutoHidden
+            ? 'translate3d(0, calc(92% + env(safe-area-inset-bottom, 0px)), 0)'
+            : 'translate3d(0, 0, 0)',
+          willChange: 'transform',
+        }}
       >
         <div className="grid grid-cols-4">
           {resolvedTabs.map((tab) => (
