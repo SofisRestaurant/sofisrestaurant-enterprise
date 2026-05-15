@@ -7,25 +7,35 @@
 //
 //   [1–6] unchanged — see prior changelog.
 //
-//   [7] isValidE164UsPhone — new module-private helper.
-//       Accepts an unknown value and narrows it to a validated E.164 US number
-//       (+1 followed by area code 2–9 then nine more digits). Matches the
-//       exact format that PhoneNumberInput stores when the number is complete.
+//   [7] isValidE164UsPhone REMOVED.
 //
-//   [8] CheckoutRouterArgs: added guestPhone (string, optional) and
-//       smsOptIn (boolean, optional). Both are ignored for authenticated users.
+//       The local predicate is replaced by toE164UsPhone() imported from
+//       checkout-wire.types.ts. This is the single phone-validation function
+//       for the entire checkout module (see checkout-wire.types.ts [2]).
 //
-//   [9] checkout(): added phone validation for the guest path.
-//       Runs before initiateGuestCheckout so the network call is never made
-//       with an incomplete or missing phone when SMS opt-in is true.
-//       Sets routerError (displayed under the checkout button) and returns a
-//       typed { ok: false, code: 'phone_incomplete' } result.
+//       The old two-step pattern:
+//         if (!isValidE164UsPhone(args.guestPhone)) { ... }
+//         ...(isValidE164UsPhone(args.guestPhone) ? { guestPhone: args.guestPhone } : {})
 //
-//  [10] GuestCheckoutInput construction: passes guestPhone and smsOptIn
-//       through to the input type when smsOptIn is true.
-//       serialiseGuestCheckoutInput then writes them onto the wire body.
-//       When smsOptIn is false or absent the input is identical to the
-//       prior version and no phone fields reach the server.
+//       is replaced by a single toE164UsPhone() call whose return value is
+//       stored in validatedPhone. One call, one result, used in both the error
+//       gate and the input spread. No double-evaluation of the regex.
+//
+//   [8] CheckoutRouterArgs: guestPhone and smsOptIn unchanged (string / boolean).
+//       Raw form values stay unbranded at the boundary; branding happens inside
+//       checkout() when toE164UsPhone() runs.
+//
+//   [9] checkout(): guest path rewritten around validatedPhone.
+//
+//       const validatedPhone = args.smsOptIn ? toE164UsPhone(args.guestPhone) : null;
+//
+//       If smsOptIn is true and validatedPhone is null → early return with
+//       'phone_incomplete'. Otherwise validatedPhone is E164UsPhone | null and
+//       the spread condition `validatedPhone !== null` is sufficient — TypeScript
+//       narrows it to E164UsPhone inside the truthy branch with no cast needed.
+//
+//  [10] GuestCheckoutInput construction: passes the branded E164UsPhone through
+//       to guestPhone. serialiseGuestCheckoutInput() handles the wire mapping.
 //
 // Import rules (unchanged):
 //   ✅ ASAP_PICKUP, scheduledPickup, PickupSchedule
@@ -46,6 +56,8 @@ import {
   scheduledPickup,
   type PickupSchedule,
 } from '@/domain/adapters/pickup-schedule.adapter';
+
+import { toE164UsPhone } from '@/modules/checkout/types/checkout-wire.types';
 
 import type {
   AuthCheckoutInput,
@@ -79,10 +91,10 @@ export type CheckoutRouterArgs = {
   };
   clientIntegrityHash?: string;
   /**
-   * Backend-ready E.164 US phone (+1XXXXXXXXXX).
+   * Raw phone string from the form (PhoneNumberInput output).
+   * Validated and branded to E164UsPhone inside checkout() via toE164UsPhone().
    * Only consulted for guest checkout and only when smsOptIn is true.
-   * PhoneNumberInput stores this format when the number is complete (10 digits).
-   * Ignored entirely for authenticated users.
+   * Ignored for authenticated users.
    */
   guestPhone?: string;
   /**
@@ -121,25 +133,8 @@ function isValidEmail(value: unknown): boolean {
   return s.length > 0 && s.length <= 320 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 }
 
-/**
- * Validates a backend-ready E.164 US phone number.
- *
- * Accepted format: +1 followed by an area code whose first digit is 2–9,
- * then nine more digits. Total length: 12 characters.
- *
- * This matches exactly what PhoneNumberInput.toStoredPhoneValue() produces
- * for a complete (10-digit) entry: `+1${localDigits}`.
- *
- * Rejects:
- *   - non-strings
- *   - local-only digits (no +1 prefix — incomplete PhoneNumberInput state)
- *   - area codes starting with 0 or 1
- *   - numbers shorter or longer than the E.164 US format
- */
-function isValidE164UsPhone(value: unknown): boolean {
-  if (typeof value !== 'string') return false;
-  return /^\+1[2-9]\d{9}$/.test(value);
-}
+// isValidE164UsPhone has been removed.
+// Use toE164UsPhone() from checkout-wire.types.ts instead.
 
 function normOrderType(v: unknown): FulfillmentType {
   return v === 'delivery' || v === 'dine_in' || v === 'pickup' ? v : 'pickup';
@@ -172,10 +167,15 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
   const authHook  = useAuthCheckout();
   const guestHook = useGuestCheckout();
 
-  const initiateAuthCheckout  = authHook.initiateAuthCheckout;
-  const initiateGuestCheckout = guestHook.initiateGuestCheckout;
-  const clearAuthError        = authHook.clearError;
-  const clearGuestError       = guestHook.clearError;
+const initiateAuthCheckout  = authHook.initiateAuthCheckout;
+
+const initiateGuestCheckout = guestHook.initiateGuestCheckout;
+
+const retryWithChallengeToken = guestHook.retryWithChallengeToken;
+
+const clearAuthError        = authHook.clearError;
+
+const clearGuestError       = guestHook.clearError;
 
   const authError      = authHook.error;
   const authIsLoading  = authHook.isLoading;
@@ -231,15 +231,30 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
         return { ok: false, error: err, code: 'email_invalid' };
       }
 
-      // Phone validation — only when the guest has opted into SMS updates.
-      // Runs before any network call so the error is instant and free.
-      if (args.smsOptIn) {
-        if (!isValidE164UsPhone(args.guestPhone)) {
-          const err =
-            'Please enter a complete 10-digit mobile number to receive SMS order updates.';
-          setRouterError(err);
-          return { ok: false, error: err, code: 'phone_incomplete' };
-        }
+      // ── SMS phone validation ────────────────────────────────────────────────
+      //
+      // toE164UsPhone() is called once. The result is stored in validatedPhone
+      // so the regex runs exactly once regardless of how many times the value
+      // is referenced below.
+      //
+      // When smsOptIn is false or absent, validatedPhone is null and the SMS
+      // fields are not included in the input — existing behavior is preserved.
+      //
+      // When smsOptIn is true:
+      //   - validatedPhone null   → early return, routerError shown under button
+      //   - validatedPhone E164UsPhone → spread into GuestCheckoutInput
+      //
+      // TypeScript narrows validatedPhone to E164UsPhone inside the spread
+      // condition without a cast because toE164UsPhone() returns E164UsPhone | null
+      // and we check !== null.
+
+      const validatedPhone = args.smsOptIn ? toE164UsPhone(args.guestPhone) : null;
+
+      if (args.smsOptIn && validatedPhone === null) {
+        const err =
+          'Please enter a complete 10-digit mobile number to receive SMS order updates.';
+        setRouterError(err);
+        return { ok: false, error: err, code: 'phone_incomplete' };
       }
 
       const input: GuestCheckoutInput = {
@@ -247,11 +262,12 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
         orderType:     normOrderType(args.orderType),
         notes:         trimOrUndefined(args.notes),
         pickupSchedule,
-        // Conditionally attach SMS fields. When smsOptIn is false or absent
-        // neither field is present and the wire body is identical to the
-        // pre-SMS version — preserving existing guest checkout behaviour.
-        ...(args.smsOptIn && isValidE164UsPhone(args.guestPhone)
-          ? { guestPhone: args.guestPhone, smsOptIn: true as const }
+        // validatedPhone is E164UsPhone (branded) when non-null, so no cast is
+        // needed here. serialiseGuestCheckoutInput() maps it to guest_phone on
+        // the wire. When validatedPhone is null the spread is empty and the wire
+        // body is identical to pre-SMS behavior.
+        ...(validatedPhone !== null
+          ? { guestPhone: validatedPhone, smsOptIn: true as const }
           : {}),
       };
 
@@ -277,15 +293,23 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
 
   // ── OTP retry ──────────────────────────────────────────────────────────────
 
-  const retryWithToken = useCallback(
-    async (challengeToken: string): Promise<void> => {
-      const result = await guestHook.retryWithChallengeToken(challengeToken);
-      if (result.ok && result.url) {
-        window.location.assign(result.url);
-      }
-    },
-    [guestHook.retryWithChallengeToken],
-  );
+const retryWithToken = useCallback(
+
+  async (challengeToken: string): Promise<void> => {
+
+    const result = await retryWithChallengeToken(challengeToken);
+
+    if (result.ok && result.url) {
+
+      window.location.assign(result.url);
+
+    }
+
+  },
+
+  [retryWithChallengeToken],
+
+);
 
   // ── Derived state ──────────────────────────────────────────────────────────
 

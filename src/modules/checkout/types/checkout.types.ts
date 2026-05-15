@@ -5,30 +5,33 @@
 //
 // CHANGES FROM PRIOR VERSION:
 //
-//   [1] parseCheckoutPricingResponse rewritten — TS2339 fix.
+//   [1] parseCheckoutPricingResponse rewritten — TS2339 fix. (unchanged)
 //
-//       Previous implementation narrowed v to GuestCheckoutPricingResponse
-//       via isGuestPricingShape(), then attempted to access v.promoDiscountCents
-//       on that narrowed type. GuestCheckoutPricingResponse does not declare
-//       promoDiscountCents, so TypeScript correctly raised TS2339.
+//   [2] Both helper predicates are module-private. (unchanged)
 //
-//       Fix: two independent type predicates, each operating on unknown.
+//   [3] SMS fields added to GuestCheckoutInput, GuestCheckoutWireBody,
+//       and serialiseGuestCheckoutInput().
 //
-//       isAuthPricingShape(v: unknown): v is AuthCheckoutPricingResponse
-//         Validates ALL fields including auth-extended fields on the raw
-//         Record<string, unknown> before any narrowing occurs. No property
-//         access on a type that does not declare it.
+//       GuestCheckoutInput gains:
+//         guestPhone?: E164UsPhone   — validated branded phone from wire types
+//         smsOptIn?:   true          — narrowed to literal true (never false;
+//                                      false intent = field absent)
 //
-//       isGuestPricingShape(v: unknown): v is GuestCheckoutPricingResponse
-//         Validates only the guest baseline fields.
+//       GuestCheckoutWireBody gains:
+//         guest_phone?: E164UsPhone  — only present when opt-in + valid phone
+//         sms_opt_in?:  true         — always true when present; absent otherwise
 //
-//       parseCheckoutPricingResponse checks auth (more specific) first, then
-//       guest. No `as` cast anywhere. All narrowing is via type predicates.
+//       serialiseGuestCheckoutInput() emits both wire fields when smsOptIn is
+//       true and guestPhone is present. When smsOptIn is absent or false the
+//       output is byte-for-byte identical to the previous version — no
+//       regression for callers that don't pass SMS fields.
 //
-//   [2] Both helper predicates are now module-private (no export).
-//       isAuthPricingResponse() is the exported discriminator for callers.
+//       E164UsPhone and toE164UsPhone() are imported from checkout-wire.types.ts,
+//       which is the single source of truth for phone validation in this module.
+//       The local isValidE164UsPhone() predicate that lived in
+//       useCheckoutRouter.ts is removed; all callers use toE164UsPhone().
 //
-// All other types and exports are unchanged.
+// All other types, guards, and serializers are unchanged.
 // =============================================================================
 
 import {
@@ -39,6 +42,9 @@ import {
   scheduledPickup,
 } from '@/domain/adapters/pickup-schedule.adapter';
 
+import type { E164UsPhone } from './checkout-wire.types';
+
+export type { E164UsPhone };
 export type { PickupSchedule, IsoTimestamp };
 export { ASAP_PICKUP, scheduledPickup };
 
@@ -92,24 +98,6 @@ export function isAuthPricingResponse(
 // =============================================================================
 // PRICING RESPONSE PARSER
 // =============================================================================
-//
-// Both predicates take `unknown` as input so they operate on the raw
-// Record<string, unknown> before any narrowing. This avoids TS2339 — the
-// previous implementation narrowed to GuestCheckoutPricingResponse first,
-// then tried to access promoDiscountCents on that narrowed type.
-//
-// isAuthPricingShape: checks all guest baseline fields PLUS both auth-only
-//   fields in one pass. v['currency'] is unknown after isRecord; TypeScript
-//   narrows it to string within the && chain after the typeof check.
-//
-// isGuestPricingShape: checks guest baseline fields only.
-//
-// parseCheckoutPricingResponse: auth check runs first (more specific superset).
-//   If both predicates fail, the value is untrusted and undefined is returned.
-//   No `as` cast anywhere in this chain.
-//
-// Returning undefined on failure means a malformed pricing payload degrades
-// to "no pricing preview" rather than a checkout failure.
 
 function isAuthPricingShape(v: unknown): v is AuthCheckoutPricingResponse {
   if (!isRecord(v)) return false;
@@ -138,11 +126,7 @@ function isGuestPricingShape(v: unknown): v is GuestCheckoutPricingResponse {
 export function parseCheckoutPricingResponse(
   v: unknown,
 ): CheckoutPricingResponse | undefined {
-  // Auth check first: AuthCheckoutPricingResponse is a strict superset of
-  // GuestCheckoutPricingResponse. If auth shape matches, return it directly —
-  // TypeScript knows v is AuthCheckoutPricingResponse at this point with no cast.
   if (isAuthPricingShape(v)) return v;
-  // Guest fallback: all auth-specific fields absent or non-numeric.
   if (isGuestPricingShape(v)) return v;
   return undefined;
 }
@@ -150,17 +134,6 @@ export function parseCheckoutPricingResponse(
 // =============================================================================
 // CHECKOUT RESULT — discriminated union
 // =============================================================================
-//
-// WHY TYPE GUARDS INSTEAD OF DIRECT STRUCTURAL NARROWING:
-//
-// CheckoutResultFailure.code is string | null | undefined for backward compat
-// with callers that return { ok: false, error } without a code. Because string
-// is a supertype of all literals, result.code === 'otp_required' does not
-// exclusively narrow to CheckoutResultOtpRequired — TypeScript intersects it
-// with CheckoutResultFailure, leaving result.nonce inaccessible.
-//
-// The exported type guard functions narrow exactly once, in a tested location:
-//   if (isOtpRequired(result)) { result.nonce; result.expiresAt; }  // ✓
 
 export type CheckoutResultSuccess = {
   readonly ok:           true;
@@ -184,12 +157,6 @@ export type CheckoutResultBlocked = {
   readonly error: string;
 };
 
-/**
- * All other failures — network, server, validation, config errors.
- * code is string | null | undefined for backward compat with callers
- * that omit it. Use result.error for display; add a named variant for
- * any code that requires specific branching behavior.
- */
 export type CheckoutResultFailure = {
   readonly ok:    false;
   readonly code:  string | null | undefined;
@@ -227,6 +194,19 @@ export type GuestCheckoutInput = {
   readonly guestEmail:      string;
   readonly notes?:          string;
   readonly pickupSchedule?: PickupSchedule;
+  /**
+   * Validated E.164 US phone number (+1XXXXXXXXXX).
+   * Only ever populated when smsOptIn is true and the number passed
+   * toE164UsPhone() in useCheckoutRouter. The branded type enforces this at
+   * compile time: a raw string cannot be assigned here.
+   */
+  readonly guestPhone?:     E164UsPhone;
+  /**
+   * Narrowed to literal `true` — never `false`. Absent field = no opt-in.
+   * When true, guestPhone must also be present for serialiseGuestCheckoutInput
+   * to emit the SMS wire fields.
+   */
+  readonly smsOptIn?:       true;
 };
 
 export type AuthCheckoutInput = {
@@ -252,6 +232,17 @@ export type GuestCheckoutWireBody = {
   readonly guest_email:  string;
   readonly notes?:       string;
   readonly pickup_time?: string;
+  /**
+   * Validated E.164 US phone. Present only when the guest opted in and the
+   * number passed toE164UsPhone(). Never a null or empty-string sentinel —
+   * the field is absent entirely when SMS is off.
+   */
+  readonly guest_phone?: E164UsPhone;
+  /**
+   * Explicit SMS opt-in flag for the backend. Always `true` when present;
+   * omitted entirely when the guest has not opted in.
+   */
+  readonly sms_opt_in?:  true;
 };
 
 export type AuthCheckoutWireBody = {
@@ -272,6 +263,19 @@ export type AuthCheckoutWireBody = {
 // SERIALISERS
 // =============================================================================
 
+/**
+ * Converts a validated GuestCheckoutInput into the flat wire body sent to
+ * create-checkout-guest. This is the single place that maps domain field names
+ * to snake_case wire names for the guest path.
+ *
+ * SMS fields (guest_phone, sms_opt_in) are emitted only when both smsOptIn
+ * is true AND guestPhone is present. Either condition alone is insufficient —
+ * this mirrors the validation gate in useCheckoutRouter that guarantees the
+ * pair is always populated together when SMS opt-in is active.
+ *
+ * When smsOptIn is absent or false the output is identical to the pre-SMS
+ * version of this function.
+ */
 export function serialiseGuestCheckoutInput(
   input: GuestCheckoutInput,
 ): GuestCheckoutWireBody {
@@ -282,8 +286,13 @@ export function serialiseGuestCheckoutInput(
   return {
     order_type:  input.orderType,
     guest_email: input.guestEmail,
-    ...(input.notes ? { notes: input.notes }     : {}),
-    ...(pickupTime  ? { pickup_time: pickupTime } : {}),
+    ...(input.notes      ? { notes:       input.notes  } : {}),
+    ...(pickupTime       ? { pickup_time: pickupTime   } : {}),
+    // Emit SMS fields only when both conditions are satisfied. guestPhone is
+    // E164UsPhone (branded) so TypeScript enforces it was validated upstream.
+    ...(input.smsOptIn === true && input.guestPhone !== undefined
+      ? { guest_phone: input.guestPhone, sms_opt_in: true as const }
+      : {}),
   };
 }
 
