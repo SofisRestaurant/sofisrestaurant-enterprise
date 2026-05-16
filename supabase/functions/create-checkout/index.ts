@@ -1,28 +1,43 @@
 // supabase/functions/create-checkout/index.ts
 // =============================================================================
-// Authenticated checkout pipeline - staged architecture.
+// Authenticated checkout pipeline — staged architecture.
 //
-// CHANGES (2026-05 embedded checkout migration):
-//   - URL handling: client-supplied success_url / cancel_url now flow through
-//     ./urls.ts resolvers after validation.
-//   - ui_mode: parsed from the request body, defaulted to hosted, threaded
-//     through the loyalty stage and Stripe session creation.
-//   - Embedded mode: returns clientSecret instead of url and uses return_url.
-//   - Hosted mode: returns url and uses success_url / cancel_url.
-//   - Reusable session: requested ui_mode must match the existing session mode.
-//   - Loyalty resume: only resumes when the existing session matches ui_mode.
+// Each stage accepts a typed context and returns Result<T, CheckoutFailure>.
+// No shared mutable state crosses stage boundaries.
+// All external side-effects are tracked in ReservationState and reversed via
+// rollbackReservations() on any failure after the first irreversible side-effect.
 //
-// Type-hardening notes:
-//   - Stripe's generated `ui_mode` type can lag behind the API version in Deno.
-//     We avoid comparing Stripe's SDK union directly to our CheckoutUiMode.
-//   - Embedded Checkout params are cast only at the final Stripe call boundary.
-//   - successResponse body is typed as JsonObject, not Record<string, unknown>.
+// Identity: user_id is the ONLY canonical identifier in all TypeScript code.
+//   The DB column `orders.customer_uid` is a legacy schema name that stores
+//   the canonical user_id value — it is NOT a separate identifier concept.
+//   Legacy Stripe metadata aliases (customer_uid, uid) are written once, at the
+//   final metadata assembly step, solely to satisfy downstream webhook consumers
+//   that have not yet been migrated.
 //
-// All other staged behavior is preserved.
+// Result<T> note:
+//   The single-parameter form is intentional. The two-parameter form
+//   Result<T, CheckoutFailure> causes TypeScript to collapse E to `never` when
+//   the return type of validateAuthBody (a conditional type) is not fully
+//   resolved at downstream usage sites, producing cascading `never` errors.
+//   The error type is always CheckoutFailure — it is captured in the
+//   CheckoutFailure interface rather than in the generic parameter.
+//
+// pickup_time:
+//   Validated via shared _shared/pickup-time.ts.
+//   Written to Stripe metadata via pickupTimeToMetadata().
+//   Absent key (not null) = ASAP order.
+//
+// Rollback contract:
+//   commitLoyaltyWithCoupon() is the ONLY place that issues a loyalty reserve
+//   AND creates a Stripe coupon atomically. If coupon creation fails it
+//   releases the reserve before returning failure, so the main handler's
+//   post-loyalty failure branch never needs to roll back a stranded reserve.
+//   rollbackReservations() is called only after a successfully returned
+//   LoyaltyOutcome (applied: true) to undo both the reserve and coupon when
+//   a downstream stage (e.g. Stripe session create) subsequently fails.
 // =============================================================================
 
 import Stripe from "stripe";
-import type { Json } from "../_shared/database.types.ts";
 import {
   createAnonClient,
   createServiceClient,
@@ -41,10 +56,7 @@ import {
   pickupTimeToMetadata,
   validatePickupTime,
 } from "../_shared/pickup-time.ts";
-import {
-  type CheckoutUiMode,
-  DEFAULT_CHECKOUT_UI_MODE,
-} from "../_shared/checkout-ui-mode.ts";
+import { STRIPE_CANCEL_URL, STRIPE_SUCCESS_URL } from "../_shared/checkout-urls.ts";
 
 import { loadCanonicalCartItems } from "./catalog.ts";
 import { corsHeadersFor } from "./cors.ts";
@@ -73,20 +85,16 @@ import { getStripe } from "./stripe-client.ts";
 import type {
   DbClient,
   ErrorCode,
-  JsonObject,
   PendingCartUpdate,
   RequestBody,
 } from "./types.ts";
 import { validatePromo } from "./promos.ts";
 import { enforcePreCheckoutRisk } from "./risk-gate.ts";
 import type { RiskGateOutcome } from "./risk-gate.ts";
-import {
-  resolveCancelUrl,
-  resolveReturnUrl,
-  resolveSuccessUrl,
-} from "./urls.ts";
 
 // ─── Result type ──────────────────────────────────────────────────────────────
+//
+// Single-parameter generic. See file-level comment for rationale.
 
 type Result<T> =
   | { ok: true; data: T }
@@ -96,11 +104,16 @@ function ok<T>(data: T): Result<T> {
   return { ok: true, data };
 }
 
+// Explicit return type annotation prevents `never` from propagating into callers
+// when this function is used in a generic position.
 function fail(error: CheckoutFailure): Result<never> {
   return { ok: false, error };
 }
 
 // ─── Failure shape ────────────────────────────────────────────────────────────
+//
+// `code` is narrowed to ErrorCode (the union from types.ts) so that every call
+// site is checked against the declared error code set at compile time.
 
 interface CheckoutFailure {
   httpStatus: number;
@@ -133,6 +146,10 @@ function toResponse(
 }
 
 // ─── Risk gate response ───────────────────────────────────────────────────────
+//
+// Handles the otp_required case specially: returns nonce + expiresAt as
+// top-level JSON fields so the frontend can read them without parsing the
+// message string. All other failure codes go through the standard toResponse.
 
 function toRiskGateResponse(
   requestId: string,
@@ -142,10 +159,10 @@ function toRiskGateResponse(
   if (outcome.code === "otp_required" && outcome.otpPayload) {
     return new Response(
       JSON.stringify({
-        ok: false,
-        code: "otp_required",
-        message: outcome.message,
-        nonce: outcome.otpPayload.nonce,
+        ok:        false,
+        code:      "otp_required",
+        message:   outcome.message,
+        nonce:     outcome.otpPayload.nonce,
         expiresAt: outcome.otpPayload.expiresAt,
         requestId,
       }),
@@ -159,7 +176,6 @@ function toRiskGateResponse(
       },
     );
   }
-
   return toResponse(
     requestId,
     failure(outcome.httpStatus, outcome.code, outcome.message),
@@ -168,39 +184,45 @@ function toRiskGateResponse(
 }
 
 // ─── ParsedBody ───────────────────────────────────────────────────────────────
-
+//
+// Uses RequestBody directly (imported from types.ts) rather than a conditional
+// type over validateAuthBody's return, which causes `body` to collapse to
+// `never` in some TypeScript versions when validateAuthBody's return type is
+// not fully resolved at the usage site.
 interface ParsedBody {
-  body: RequestBody;
+  body:       RequestBody;
   pickupTime: string | null;
-  smsPhone: string | null;
-  smsOptIn: boolean;
-  uiMode: CheckoutUiMode;
+  /** Validated E.164 US phone for auth SMS opt-in, or null when not opted in. */
+  smsPhone:   string | null;
+  /** True only when smsPhone is non-null — the pair is always consistent. */
+  smsOptIn:   boolean;
 }
-
-// ─── Loyalty sealed outcome type ──────────────────────────────────────────────
+// ─── Loyalty sealed outcome type ─────────────────────────────────────────────
+//
+// Discriminated on `applied` (boolean literal). The `applied: false` branch
+// carries no additional fields — no phantom optional properties that could be
+// accessed unsafely after narrowing.
 
 type LoyaltyOutcome =
   | { applied: false }
   | {
-      applied: true;
-      discountCents: number;
-      reservedPoints: number;
-      accountId: string;
-      couponId: string;
-    };
+    applied: true;
+    discountCents: number;
+    reservedPoints: number;
+    accountId: string;
+    couponId: string;
+  };
 
 const LOYALTY_NOT_APPLIED: LoyaltyOutcome = { applied: false };
 
 // ─── Loyalty stage result ─────────────────────────────────────────────────────
+//
+// Discriminated on `kind` (string literal) rather than on null vs. non-null
+// properties, which TypeScript narrows reliably in all strict-mode settings.
 
 type LoyaltyStageOutcome =
   | { kind: "applied"; loyalty: LoyaltyOutcome }
-  | {
-      kind: "resume";
-      resumeSessionId: string;
-      resumeUrl: string | null;
-      resumeClientSecret: string | null;
-    };
+  | { kind: "resume"; resumeUrl: string; resumeSessionId: string };
 
 // ─── Resolved discounts ───────────────────────────────────────────────────────
 
@@ -210,6 +232,11 @@ interface ResolvedDiscounts {
 }
 
 // ─── Reservation state ────────────────────────────────────────────────────────
+//
+// Carries every reversible side-effect so rollbackReservations() has a
+// complete view of what to undo without inspecting global or closure state.
+// Constructed only after reserveLoyalty() returns ok(), which guarantees
+// loyalty.couponId is present when loyalty.applied === true.
 
 interface ReservationState {
   preSessionKey: string;
@@ -239,55 +266,55 @@ interface CartContext {
   idempotencyKey: string;
 }
 
+// ─── Risk gate payload ────────────────────────────────────────────────────────
+//
+// Carries the pre-checkout risk decision from enforcePreCheckoutRisk() through
+// createStripeSession() into Stripe metadata. The webhook reads these three
+// fields to avoid re-scoring post-payment.
+
 interface RiskGatePayload {
-  riskScore: number;
-  riskLevel: string;
+  riskScore:          number;
+  riskLevel:          string;
   verificationStatus: string;
 }
 
-type CheckoutSessionResponseShape = {
-  id: string;
-  url?: string | null;
-  client_secret?: string | null;
-};
-
 const LOYALTY_REDEEM_COOLDOWN_MINUTES = 30;
 
-// ─── Stripe mode helpers ──────────────────────────────────────────────────────
-//
-// Stripe's generated type for `session.ui_mode` can lag behind the API version.
-// Do not compare it directly against our CheckoutUiMode union. Normalize from
-// unknown and treat anything non-embedded as hosted for backward compatibility.
-
-function normalizeStripeCheckoutUiMode(value: unknown): CheckoutUiMode {
-  return value === "embedded_page" || value === "embedded" ? "embedded" : "hosted";
-}
-
-function hasHostedSessionUrl(
-  session: CheckoutSessionResponseShape,
-): session is CheckoutSessionResponseShape & { url: string } {
-  return typeof session.url === "string" && session.url.length > 0;
-}
-
-function hasEmbeddedClientSecret(
-  session: CheckoutSessionResponseShape,
-): session is CheckoutSessionResponseShape & { client_secret: string } {
-  return typeof session.client_secret === "string" && session.client_secret.length > 0;
-}
-
 // ─── Pre-session key ──────────────────────────────────────────────────────────
+//
+// Single authoritative builder. Never reconstruct this key via inline
+// string concatenation anywhere else in the codebase. The resulting key is
+// used as the idempotency key in the loyalty_ledger and as the stripe_session_id
+// parameter to the reserve/release RPCs.
+//
+// All three components are validated before reaching this call:
+//   userId    — from JWT (authenticateUser)
+//   cartId    — from persistPendingCart (non-null on success)
+//   requestId — from sanitizeRequestId (always a non-empty string)
+// An explicit guard is included so that any future refactor that bypasses
+// upstream validation still fails loudly rather than silently writing an
+// empty key to the ledger.
 
 function buildPreSessionKey(userId: string, cartId: string, requestId: string): string {
   if (!userId || !cartId || !requestId) {
+    // This path indicates a programmer error — all three inputs are validated
+    // upstream and should never be empty at this call site.
     throw new Error(
       `buildPreSessionKey: all arguments must be non-empty (userId=${!!userId}, cartId=${!!cartId}, requestId=${!!requestId})`,
     );
   }
-
   return `${userId}:${cartId}:${requestId}`;
 }
 
 // ─── Rollback ─────────────────────────────────────────────────────────────────
+//
+// Called only after a LoyaltyOutcome with applied=true has been returned from
+// reserveLoyalty() and a downstream stage subsequently fails. At that point
+// both the DB reserve and the Stripe coupon exist and must be undone.
+//
+// commitLoyaltyWithCoupon() handles the earlier failure case (reserve committed
+// but coupon creation failed) internally, so this function is never responsible
+// for that scenario.
 
 async function rollbackReservations(
   db: DbClient,
@@ -297,6 +324,8 @@ async function rollbackReservations(
   requestId: string,
 ): Promise<void> {
   if (state.loyalty.applied) {
+    // Release the DB reserve first — if coupon deletion fails below the user's
+    // points balance is at least restored.
     await releaseLoyaltyReserve(db, state.preSessionKey, reason, requestId);
     await deleteCouponSilently(stripe, state.loyalty.couponId, requestId);
   }
@@ -309,7 +338,6 @@ async function authenticateUser(
   requestId: string,
 ): Promise<Result<{ userId: string; userEmail: string | null }>> {
   const bearerToken = readBearerToken(req);
-
   if (!bearerToken) {
     return fail(failure(401, "authorization_required", "Authorization required."));
   }
@@ -323,7 +351,6 @@ async function authenticateUser(
       requestId,
       error: authError?.message ?? "No user returned",
     });
-
     return fail(failure(401, "invalid_token", "Invalid or expired token."));
   }
 
@@ -337,7 +364,6 @@ async function parseRequest(
   requestId: string,
 ): Promise<Result<ParsedBody>> {
   const contentType = req.headers.get("content-type")?.toLowerCase() ?? "";
-
   if (!contentType.includes("application/json")) {
     return fail(
       failure(415, "unsupported_content_type", "Content-Type must be application/json."),
@@ -345,7 +371,6 @@ async function parseRequest(
   }
 
   let buffer: ArrayBuffer;
-
   try {
     buffer = await req.arrayBuffer();
   } catch (err) {
@@ -363,13 +388,11 @@ async function parseRequest(
   }
 
   const rawBody = new TextDecoder().decode(buffer);
-
   if (rawBody.trim().length === 0) {
     return fail(failure(400, "empty_body", "Request body is required."));
   }
 
   let parsedJson: unknown;
-
   try {
     parsedJson = JSON.parse(rawBody);
   } catch {
@@ -377,33 +400,33 @@ async function parseRequest(
   }
 
   const validated = validateAuthBody(parsedJson);
-
   if (!validated.ok) {
-    const code: ErrorCode = validated.error.startsWith("'ui_mode'")
-      ? "invalid_ui_mode"
-      : "validation_failed";
-
-    return fail(failure(422, code, validated.error));
+    return fail(failure(422, "validation_failed", validated.error));
   }
 
+  // Assign to an explicitly typed const so TypeScript anchors this as
+  // RequestBody and does not re-evaluate the conditional in validateAuthBody's
+  // return type at every downstream usage site.
   const body: RequestBody = validated.value;
 
   const pickupTimeResult = validatePickupTime(body.pickup_time ?? null);
-
   if (!pickupTimeResult.ok) {
     return fail(failure(422, "validation_failed", pickupTimeResult.error));
   }
 
-  const isRec = (v: unknown): v is Record<string, unknown> =>
+ const isRec = (v: unknown): v is Record<string, unknown> =>
     typeof v === "object" && v !== null && !Array.isArray(v);
 
-  const rawSmsOptIn = isRec(parsedJson) && parsedJson["sms_opt_in"] === true;
+  const rawSmsOptIn =
+    isRec(parsedJson) && parsedJson["sms_opt_in"] === true;
 
   const rawSmsPhone =
     isRec(parsedJson) && typeof parsedJson["sms_phone_e164"] === "string"
-      ? parsedJson["sms_phone_e164"]
+      ? (parsedJson["sms_phone_e164"] as string)
       : null;
 
+  // Server-side E.164 US validation — mirrors toE164UsPhone() on the client.
+  // +1, area code first digit 2–9, exactly 9 more digits → 12 characters.
   const validSmsPhone =
     rawSmsPhone !== null && /^\+1[2-9]\d{9}$/.test(rawSmsPhone)
       ? rawSmsPhone
@@ -419,17 +442,14 @@ async function parseRequest(
     );
   }
 
-  const uiMode: CheckoutUiMode = body.ui_mode ?? DEFAULT_CHECKOUT_UI_MODE;
-
-  return ok({
+  const parsed: ParsedBody = {
     body,
     pickupTime: pickupTimeResult.value,
-    smsPhone: rawSmsOptIn && validSmsPhone !== null ? validSmsPhone : null,
-    smsOptIn: rawSmsOptIn && validSmsPhone !== null,
-    uiMode,
-  });
+    smsPhone:   rawSmsOptIn && validSmsPhone !== null ? validSmsPhone : null,
+    smsOptIn:   rawSmsOptIn && validSmsPhone !== null,
+  };
+  return ok(parsed);
 }
-
 // ─── Stage 3: Init services ───────────────────────────────────────────────────
 
 interface Services {
@@ -441,11 +461,9 @@ function initServices(requestId: string): Result<Services> {
   try {
     const db = createServiceClient();
     const stripe = getStripe();
-
     return ok({ db, stripe });
   } catch (err) {
     log("error", "checkout_service_init_failed", { requestId, error: asErr(err) });
-
     return fail(
       failure(500, "service_unavailable", "Checkout service is temporarily unavailable."),
     );
@@ -461,7 +479,6 @@ async function enforceRateLimit(
   requestId: string,
 ): Promise<Result<true>> {
   const rateLimit = await checkRateLimit(db, userId, requestIp, requestId);
-
   if (!rateLimit.allowed) {
     return fail(
       failure(429, "rate_limited", rateLimit.reason, {
@@ -469,7 +486,6 @@ async function enforceRateLimit(
       }),
     );
   }
-
   return ok(true as const);
 }
 
@@ -482,27 +498,26 @@ async function buildPricing(
   requestId: string,
 ): Promise<Result<PricingContext>> {
   let canonicalItems: CanonicalCartItem[];
-
   try {
     canonicalItems = await loadCanonicalCartItems(db, parsed.body.items);
   } catch (err) {
     if (err instanceof PricingValidationError) {
       return fail(pricingValidationToFailure(err));
     }
-
     log("error", "checkout_canonical_cart_failed", {
       requestId,
       userId: prefix(userId),
       error: asErr(err),
     });
-
     return fail(
       failure(422, "pricing_failed", "Unable to calculate pricing. Please try again."),
     );
   }
 
+  // Use an intermediate typed pair so `snapshot` is provably assigned before
+  // any subsequent use — avoids non-null assertions and "used before assigned"
+  // errors when TypeScript cannot follow control flow through try/catch.
   let pricingPair: { snapshot: PricingSnapshot; pricingHash: string };
-
   try {
     const resolved = await resolvePricingForCheckout({
       svc: db,
@@ -515,22 +530,16 @@ async function buildPricing(
       orderNotes: parsed.body.notes,
       taxRate: resolveTaxRate(),
     });
-
-    pricingPair = {
-      snapshot: resolved.snapshot,
-      pricingHash: resolved.pricingHash,
-    };
+    pricingPair = { snapshot: resolved.snapshot, pricingHash: resolved.pricingHash };
   } catch (err) {
     if (err instanceof PricingValidationError) {
       return fail(pricingValidationToFailure(err));
     }
-
     log("error", "checkout_pricing_failed", {
       requestId,
       userId: prefix(userId),
       error: asErr(err),
     });
-
     return fail(
       failure(422, "pricing_failed", "Unable to calculate pricing. Please try again."),
     );
@@ -539,6 +548,8 @@ async function buildPricing(
   const { snapshot } = pricingPair;
   let { pricingHash } = pricingPair;
 
+  // resolvePricingForCheckout may return an empty hash in edge cases — fall
+  // back to hashing the snapshot directly.
   if (!pricingHash) {
     try {
       pricingHash = await hashPricingSnapshot(snapshot);
@@ -548,7 +559,6 @@ async function buildPricing(
         userId: prefix(userId),
         error: asErr(err),
       });
-
       return fail(
         failure(500, "pricing_hash_failed", "Internal error during checkout. Please try again."),
       );
@@ -574,7 +584,6 @@ async function buildPricing(
       totalCents: snapshot.totalCents,
       minimumCents: MIN_ORDER_CENTS,
     });
-
     return fail(
       failure(
         400,
@@ -587,6 +596,9 @@ async function buildPricing(
   return ok({ canonicalItems, snapshot, pricingHash });
 }
 
+// Converts a PricingValidationError into a CheckoutFailure. If pricing-errors.ts
+// maps specific PricingValidationError codes to non-422 statuses, extend this
+// function to mirror those mappings.
 function pricingValidationToFailure(err: PricingValidationError): CheckoutFailure {
   return failure(422, "pricing_failed", err.message);
 }
@@ -661,7 +673,6 @@ async function buildIdempotencyKey(
       loyaltyRedemptionId: body.loyalty_redemption_id,
       pickupTime,
     });
-
     return ok(key);
   } catch (err) {
     log("error", "checkout_idempotency_key_failed", {
@@ -669,7 +680,6 @@ async function buildIdempotencyKey(
       userId: prefix(userId),
       error: asErr(err),
     });
-
     return fail(
       failure(500, "internal_error", "Unable to create checkout session. Please try again."),
     );
@@ -683,6 +693,9 @@ async function guardDuplicateOrder(
   userId: string,
   requestId: string,
 ): Promise<Result<true>> {
+  // `customer_uid` is the physical column name in the orders table. It stores
+  // the canonical user_id value. The column will be renamed to user_id in a
+  // future schema migration — this is NOT a separate identifier concept.
   const { data: recentOrder, error: orderError } = await db
     .from("orders")
     .select("id, created_at")
@@ -698,7 +711,6 @@ async function guardDuplicateOrder(
       userId: prefix(userId),
       error: orderError.message,
     });
-
     return fail(
       failure(
         500,
@@ -714,7 +726,6 @@ async function guardDuplicateOrder(
       userId: prefix(userId),
       recentOrderId: prefix(recentOrder.id),
     });
-
     return fail(
       failure(
         429,
@@ -764,7 +775,14 @@ async function createPendingCart(
   return ok({ cartId: pendingCart.cartId, idempotencyKey });
 }
 
-// ─── Stage 10: Loyalty reservation ────────────────────────────────────────────
+// ─── Stage 10: Loyalty reservation ───────────────────────────────────────────
+//
+// Failure contract (see file-level comment):
+//   Any path that commits a DB reserve and subsequently fails to create the
+//   Stripe coupon is handled by commitLoyaltyWithCoupon(), which releases the
+//   reserve before returning failure. Callers of this function never need to
+//   roll back a stranded reserve on a returned failure — that invariant is
+//   enforced by the structure below, not by caller discipline.
 
 async function reserveLoyalty(
   db: DbClient,
@@ -774,7 +792,6 @@ async function reserveLoyalty(
   snapshot: PricingSnapshot,
   discounts: ResolvedDiscounts,
   preSessionKey: string,
-  uiMode: CheckoutUiMode,
   requestId: string,
 ): Promise<Result<LoyaltyStageOutcome>> {
   const loyaltyIntent = buildLoyaltyIntent(body);
@@ -783,6 +800,8 @@ async function reserveLoyalty(
     return ok({ kind: "applied", loyalty: LOYALTY_NOT_APPLIED });
   }
 
+  // loyaltyIntent.loyaltyAccountId is guaranteed non-empty by buildLoyaltyIntent.
+  // Use it directly — never fall back to body.loyalty_account_id ?? "".
   const { loyaltyAccountId } = loyaltyIntent;
 
   if (discounts.promoId || body.promo_code) {
@@ -816,16 +835,14 @@ async function reserveLoyalty(
         db,
         stripe,
         loyaltyAccountId,
-        uiMode,
         requestId,
       );
 
-      if (resumeResult.resumeSessionId) {
+      if (resumeResult.resumeUrl !== null) {
         return ok({
           kind: "resume",
-          resumeSessionId: resumeResult.resumeSessionId,
           resumeUrl: resumeResult.resumeUrl,
-          resumeClientSecret: resumeResult.resumeClientSecret,
+          resumeSessionId: resumeResult.resumeSessionId,
         });
       }
 
@@ -833,6 +850,8 @@ async function reserveLoyalty(
         await releaseStaleReserves(db, resumeResult.staleSessionKeys, requestId);
       }
 
+      // Re-attempt after stale reserves are cleared. If this succeeds (reserve
+      // committed), commitLoyaltyWithCoupon owns the rollback on coupon failure.
       const retryResult = await applyLoyaltyToCheckout({
         intent: loyaltyIntent,
         userId,
@@ -859,6 +878,8 @@ async function reserveLoyalty(
     return fail(loyaltyDeclineToFailure(reason));
   }
 
+  // loyaltyResult.applied === true: reserve committed in DB.
+  // commitLoyaltyWithCoupon owns the rollback if coupon creation fails.
   return commitLoyaltyWithCoupon(
     db,
     stripe,
@@ -868,6 +889,11 @@ async function reserveLoyalty(
     requestId,
   );
 }
+
+// ─── buildLoyaltyIntent ───────────────────────────────────────────────────────
+//
+// Returns null if any required loyalty field is absent or invalid.
+// The loyaltyAccountId in the returned intent is guaranteed non-empty.
 
 function buildLoyaltyIntent(body: RequestBody): LoyaltyIntent | null {
   if (
@@ -881,18 +907,19 @@ function buildLoyaltyIntent(body: RequestBody): LoyaltyIntent | null {
       loyaltyAccountId: body.loyalty_account_id,
     };
   }
-
   return null;
 }
+
+// ─── checkLoyaltyCooldown ─────────────────────────────────────────────────────
 
 async function checkLoyaltyCooldown(
   db: DbClient,
   accountId: string,
   requestId: string,
 ): Promise<Result<true>> {
+  // Guard: accountId must be non-empty before any DB call.
   if (!accountId.trim()) {
     log("error", "checkout_loyalty_cooldown_empty_account_id", { requestId });
-
     return fail(
       failure(422, "loyalty_reserve_conflict", "Unable to verify loyalty eligibility. Please try again."),
     );
@@ -910,7 +937,7 @@ async function checkLoyaltyCooldown(
       accountId: prefix(accountId),
       error: cooldownError.message,
     });
-
+    // Fail closed — cannot verify cooldown eligibility, block the redemption.
     return fail(
       failure(
         422,
@@ -926,7 +953,6 @@ async function checkLoyaltyCooldown(
 
     if (minutesSince < LOYALTY_REDEEM_COOLDOWN_MINUTES) {
       const minutesLeft = Math.ceil(LOYALTY_REDEEM_COOLDOWN_MINUTES - minutesSince);
-
       return fail(
         failure(
           422,
@@ -942,6 +968,11 @@ async function checkLoyaltyCooldown(
   return ok(true as const);
 }
 
+// ─── loyaltyDeclineToFailure ──────────────────────────────────────────────────
+//
+// All reason strings originate from loyalty RPC check_violation messages.
+// Using ErrorCode literals keeps the failure() call site type-safe.
+
 function loyaltyDeclineToFailure(reason: string): CheckoutFailure {
   if (reason === "daily_limit_exceeded") {
     return failure(
@@ -950,7 +981,6 @@ function loyaltyDeclineToFailure(reason: string): CheckoutFailure {
       "You've reached your daily loyalty redemption limit. Try again tomorrow.",
     );
   }
-
   if (reason === "per_order_limit_exceeded") {
     return failure(
       422,
@@ -958,13 +988,23 @@ function loyaltyDeclineToFailure(reason: string): CheckoutFailure {
       "You've selected more points than the per-order maximum.",
     );
   }
-
+  // Covers active_reserve_exists (post-retry), reserve_rpc_error, and any
+  // future RPC reasons that are not yet mapped.
   return failure(
     422,
     "loyalty_reserve_conflict",
     "Unable to apply loyalty points. Please try again.",
   );
 }
+
+// ─── commitLoyaltyWithCoupon ──────────────────────────────────────────────────
+//
+// The ONLY function that transitions from a committed loyalty reserve to a
+// completed LoyaltyOutcome. Creates the Stripe coupon and, if that fails,
+// releases the already-committed reserve before returning failure.
+//
+// This coupling is intentional: it is not possible to return a failure from
+// this function and leave a stranded reserve in the DB.
 
 async function commitLoyaltyWithCoupon(
   db: DbClient,
@@ -987,13 +1027,15 @@ async function commitLoyaltyWithCoupon(
   );
 
   if (!couponId) {
+    // Reserve is committed in DB but coupon creation failed. Release the reserve
+    // before returning failure so the user's points balance is not permanently
+    // locked and no retry is left in an inconsistent state.
     await releaseLoyaltyReserve(
       db,
       preSessionKey,
       "coupon_create_failed",
       requestId,
     );
-
     return fail(
       failure(
         500,
@@ -1025,7 +1067,6 @@ async function commitLoyaltyWithCoupon(
 
 interface ResumableLoyaltySession {
   resumeUrl: string | null;
-  resumeClientSecret: string | null;
   resumeSessionId: string;
   staleSessionKeys: string[];
 }
@@ -1034,18 +1075,12 @@ async function findResumableLoyaltySession(
   db: DbClient,
   stripe: Stripe,
   accountId: string,
-  uiMode: CheckoutUiMode,
   requestId: string,
 ): Promise<ResumableLoyaltySession> {
+  // Guard: accountId must be non-empty before any DB call.
   if (!accountId.trim()) {
     log("error", "checkout_loyalty_resume_empty_account_id", { requestId });
-
-    return {
-      resumeUrl: null,
-      resumeClientSecret: null,
-      resumeSessionId: "",
-      staleSessionKeys: [],
-    };
+    return { resumeUrl: null, resumeSessionId: "", staleSessionKeys: [] };
   }
 
   const staleSessionKeys: string[] = [];
@@ -1065,17 +1100,11 @@ async function findResumableLoyaltySession(
         accountId: prefix(accountId),
         error: reservesError.message,
       });
-
-      return {
-        resumeUrl: null,
-        resumeClientSecret: null,
-        resumeSessionId: "",
-        staleSessionKeys,
-      };
+      return { resumeUrl: null, resumeSessionId: "", staleSessionKeys };
     }
 
     for (const row of activeReserves ?? []) {
-      const idemKey = String(row.idempotency_key ?? "");
+      const idemKey = (row.idempotency_key as string) ?? "";
       const releaseKey = idemKey.replace("reserve:", "release:");
 
       const { data: released } = await db
@@ -1086,16 +1115,13 @@ async function findResumableLoyaltySession(
 
       if (released?.id) continue;
 
-      const metadata =
-        typeof row.metadata === "object" && row.metadata !== null && !Array.isArray(row.metadata)
-          ? row.metadata as Record<string, unknown>
-          : {};
-
-      const rawSessionKey = metadata["stripe_session_id"];
-      const sessionKey = typeof rawSessionKey === "string" ? rawSessionKey : "";
+      const sessionKey =
+        ((row.metadata as Record<string, string>)?.stripe_session_id) ?? "";
       const cartId = sessionKey.split(":")[1];
 
       if (!cartId) {
+        // Only push non-empty session keys — releaseLoyaltyReserve guards
+        // against empty keys, but filtering here avoids unnecessary log noise.
         if (sessionKey) staleSessionKeys.push(sessionKey);
         continue;
       }
@@ -1113,13 +1139,11 @@ async function findResumableLoyaltySession(
           cartId: prefix(cartId),
           error: cartError.message,
         });
-
         if (sessionKey) staleSessionKeys.push(sessionKey);
         continue;
       }
 
       const stripeSessionId = cart?.stripe_session_id;
-
       if (!stripeSessionId) {
         if (sessionKey) staleSessionKeys.push(sessionKey);
         continue;
@@ -1127,56 +1151,19 @@ async function findResumableLoyaltySession(
 
       try {
         const existing = await stripe.checkout.sessions.retrieve(stripeSessionId);
-
-        if (existing.status !== "open") {
-          if (sessionKey) staleSessionKeys.push(sessionKey);
-          continue;
-        }
-
-        const existingMode = normalizeStripeCheckoutUiMode(
-          (existing as { ui_mode?: unknown }).ui_mode,
-        );
-
-        if (existingMode !== uiMode) {
-          log("info", "checkout_loyalty_resume_mode_mismatch", {
-            requestId,
-            sessionId: prefix(existing.id),
-            existingMode,
-            requestedMode: uiMode,
-          });
-
-          continue;
-        }
-
-        if (uiMode === "embedded") {
-          if (hasEmbeddedClientSecret(existing)) {
-            log("info", "checkout_loyalty_resume_existing_embedded", {
-              requestId,
-              sessionId: prefix(existing.id),
-            });
-
-            return {
-              resumeUrl: null,
-              resumeClientSecret: existing.client_secret,
-              resumeSessionId: existing.id,
-              staleSessionKeys,
-            };
-          }
-        } else if (hasHostedSessionUrl(existing)) {
-          log("info", "checkout_loyalty_resume_existing_hosted", {
+        if (existing.status === "open" && existing.url) {
+          log("info", "checkout_loyalty_resume_existing", {
             requestId,
             sessionId: prefix(existing.id),
           });
-
           return {
             resumeUrl: existing.url,
-            resumeClientSecret: null,
             resumeSessionId: existing.id,
             staleSessionKeys,
           };
+        } else {
+          if (sessionKey) staleSessionKeys.push(sessionKey);
         }
-
-        if (sessionKey) staleSessionKeys.push(sessionKey);
       } catch {
         if (sessionKey) staleSessionKeys.push(sessionKey);
       }
@@ -1188,12 +1175,7 @@ async function findResumableLoyaltySession(
     });
   }
 
-  return {
-    resumeUrl: null,
-    resumeClientSecret: null,
-    resumeSessionId: "",
-    staleSessionKeys,
-  };
+  return { resumeUrl: null, resumeSessionId: "", staleSessionKeys };
 }
 
 async function releaseStaleReserves(
@@ -1201,6 +1183,9 @@ async function releaseStaleReserves(
   sessionKeys: string[],
   requestId: string,
 ): Promise<void> {
+  // Empty keys are filtered at the push sites in findResumableLoyaltySession,
+  // but filter defensively here as well since this function is called from
+  // multiple paths.
   const validKeys = sessionKeys.filter((key) => key.trim().length > 0);
 
   if (validKeys.length === 0) return;
@@ -1230,7 +1215,16 @@ async function createStripeSession(
   preSessionKey: string,
   riskGate: RiskGatePayload,
 ): Promise<Result<Stripe.Checkout.Session>> {
-  const expectedChargedCents = loyalty.applied
+  // ── [FIX 1] Final charge amount guard ──────────────────────────────────────
+  // Verify that the amount Stripe will actually charge (snapshot total minus
+  // any loyalty coupon) is a positive integer before creating the session.
+  // A zero or negative final charge would be rejected by Stripe and by the
+  // webhook — prevent it here so we never create an unchargeble session.
+  //
+  // Line items are built from the full snapshot total. The loyalty coupon is
+  // applied as a Stripe discount on top of those line items. The net amount
+  // Stripe charges is therefore: totalCents - loyalty.discountCents.
+  const expectedChargedCents: number = loyalty.applied
     ? pricing.snapshot.totalCents - loyalty.discountCents
     : pricing.snapshot.totalCents;
 
@@ -1246,7 +1240,6 @@ async function createStripeSession(
       loyaltyDiscountCents: loyalty.applied ? loyalty.discountCents : 0,
       expectedChargedCents,
     });
-
     return fail(
       failure(
         422,
@@ -1256,8 +1249,10 @@ async function createStripeSession(
     );
   }
 
+  // buildStripeLineItemsFromPricing throws PricingValidationError when line
+  // items do not reconcile to the snapshot total. Catch it here so the caller
+  // can roll back reservations before responding.
   let lineItems: ReturnType<typeof buildStripeLineItemsFromPricing>;
-
   try {
     lineItems = buildStripeLineItemsFromPricing(pricing.snapshot);
   } catch (err) {
@@ -1267,12 +1262,13 @@ async function createStripeSession(
       cartId: prefix(cart.cartId),
       error: asErr(err),
     });
-
     return fail(
       failure(500, "line_items_failed", "Unable to build checkout. Please try again."),
     );
   }
 
+  // preSessionKey is passed in (computed once in the main handler) rather than
+  // recomputed here, ensuring a single source of truth for the key value.
   const sessionMetadata = buildSessionMetadata(
     ctx,
     parsed,
@@ -1284,38 +1280,25 @@ async function createStripeSession(
     riskGate,
   );
 
-  const modeSpecificParams =
-    parsed.uiMode === "embedded"
-      ? {
-          ui_mode: "embedded_page",
-          return_url: resolveReturnUrl(parsed.body.success_url),
-        }
-      : {
-          success_url: resolveSuccessUrl(parsed.body.success_url),
-          cancel_url: resolveCancelUrl(parsed.body.cancel_url),
-        };
-
-  const sessionParams = {
-    mode: "payment",
-    client_reference_id: cart.cartId,
-    line_items: lineItems,
-    expires_at: Math.floor(Date.now() / 1000) + SESSION_EXPIRES_AFTER_SECONDS,
-    metadata: sessionMetadata,
-    payment_intent_data: { metadata: sessionMetadata },
-    billing_address_collection: "auto",
-    ...(ctx.userEmail ? { customer_email: ctx.userEmail } : {}),
-    ...(parsed.body.order_type === "delivery"
-      ? { phone_number_collection: { enabled: true } }
-      : {}),
-    ...(loyalty.applied ? { discounts: [{ coupon: loyalty.couponId }] } : {}),
-    ...modeSpecificParams,
-  } as unknown as Stripe.Checkout.SessionCreateParams;
-
   let session: Stripe.Checkout.Session;
-
   try {
     session = await stripe.checkout.sessions.create(
-      sessionParams,
+      {
+        mode: "payment",
+        client_reference_id: cart.cartId,
+        line_items: lineItems,
+        success_url: STRIPE_SUCCESS_URL,
+        cancel_url: STRIPE_CANCEL_URL,
+        expires_at: Math.floor(Date.now() / 1000) + SESSION_EXPIRES_AFTER_SECONDS,
+        metadata: sessionMetadata,
+        payment_intent_data: { metadata: sessionMetadata },
+        billing_address_collection: "auto",
+        ...(ctx.userEmail ? { customer_email: ctx.userEmail } : {}),
+        ...(parsed.body.order_type === "delivery"
+          ? { phone_number_collection: { enabled: true } }
+          : {}),
+        ...(loyalty.applied ? { discounts: [{ coupon: loyalty.couponId }] } : {}),
+      },
       { idempotencyKey: cart.idempotencyKey },
     );
   } catch (err) {
@@ -1323,32 +1306,22 @@ async function createStripeSession(
       requestId: ctx.requestId,
       userId: prefix(ctx.userId),
       cartId: prefix(cart.cartId),
-      uiMode: parsed.uiMode,
       error: asErr(err),
     });
-
     return fail(
       failure(502, "stripe_session_failed", "Unable to create Stripe session. Please try again."),
     );
   }
 
-  if (parsed.uiMode === "embedded") {
-    if (!hasEmbeddedClientSecret(session)) {
-      log("error", "checkout_stripe_session_missing_client_secret", {
-        requestId: ctx.requestId,
-        sessionId: prefix(session.id),
-      });
-
-      return fail(
-        failure(502, "stripe_session_failed", "Unable to create Stripe session. Please try again."),
-      );
-    }
-  } else if (!hasHostedSessionUrl(session)) {
+  // DO NOT re-fetch the session after creation. If session.url is absent,
+  // fail explicitly — there is no safe fallback URL.
+  if (!session.url) {
     log("error", "checkout_stripe_session_missing_url", {
       requestId: ctx.requestId,
+      userId: prefix(ctx.userId),
+      cartId: prefix(cart.cartId),
       sessionId: prefix(session.id),
     });
-
     return fail(
       failure(502, "stripe_session_failed", "Unable to create Stripe session. Please try again."),
     );
@@ -1358,6 +1331,20 @@ async function createStripeSession(
 }
 
 // ─── Session metadata builder ─────────────────────────────────────────────────
+//
+// preSessionKey is passed in from the single computed value in the main handler.
+// It must NOT be recomputed here — doing so risks a mismatch if any input has
+// changed between the point of computation and this call.
+//
+// [FIX 2] customer_ip, device_fingerprint, and customer_user_agent are NOT
+// written to Stripe metadata. These values are privacy-sensitive and are
+// already captured in your own risk gate system (pre_checkout_risk_score /
+// pre_checkout_risk_level / pre_checkout_verif_status). Sending full IP and
+// device fingerprint into Stripe's metadata storage is unnecessary for
+// payment processing and increases PII exposure surface.
+//
+// The three risk gate fields ARE kept because the webhook reads them to skip
+// re-scoring post-payment.
 
 function buildSessionMetadata(
   ctx: RequestContext,
@@ -1370,36 +1357,40 @@ function buildSessionMetadata(
   riskGate: RiskGatePayload,
 ): Stripe.MetadataParam {
   const { snapshot } = pricing;
-  const { body, pickupTime, smsPhone, smsOptIn, uiMode } = parsed;
+  const { body, pickupTime, smsPhone, smsOptIn } = parsed;
 
   return {
-    user_id: ctx.userId,
+    // Canonical identity. customer_uid and uid are legacy aliases kept for
+    // backward-compat with existing webhook consumers that have not yet been
+    // migrated to user_id. Do not introduce new consumers of these fields —
+    // use user_id exclusively going forward.
+    user_id:      ctx.userId,
     customer_uid: ctx.userId,
-    uid: ctx.userId,
+    uid:          ctx.userId,
+
     pending_cart_id: cart.cartId,
-    cart_ref: cart.cartId,
-    cart_id: cart.cartId,
-    order_type: body.order_type,
-    pricing_hash: pricing.pricingHash,
+    cart_ref:        cart.cartId,
+    cart_id:         cart.cartId,
+    order_type:      body.order_type,
+    pricing_hash:    pricing.pricingHash,
     pricing_snapshot_version: snapshot.version,
-    request_id: ctx.requestId,
+    request_id:      ctx.requestId,
     stripe_api_version: STRIPE_API_VERSION,
-    checkout_ui_mode: uiMode,
-    currency: snapshot.currency,
-    subtotal_cents: String(snapshot.subtotalCents),
-    discount_cents: String(
+    currency:        snapshot.currency,
+    subtotal_cents:  String(snapshot.subtotalCents),
+    discount_cents:  String(
       (snapshot.promoDiscountCents ?? 0) +
         (snapshot.campaignDiscountCents ?? 0) +
         (snapshot.creditCents ?? 0),
     ),
-    promo_discount_cents: String(snapshot.promoDiscountCents ?? 0),
+    promo_discount_cents:    String(snapshot.promoDiscountCents ?? 0),
     campaign_discount_cents: String(snapshot.campaignDiscountCents ?? 0),
-    credit_cents: String(snapshot.creditCents ?? 0),
-    tax_cents: String(snapshot.taxCents),
-    total_cents: String(snapshot.totalCents),
-    idempotency_key: cart.idempotencyKey,
+    credit_cents:            String(snapshot.creditCents ?? 0),
+    tax_cents:               String(snapshot.taxCents),
+    total_cents:             String(snapshot.totalCents),
+    idempotency_key:         cart.idempotencyKey,
     ...pickupTimeToMetadata(pickupTime),
-    ...(discounts.promoId ? { promo_id: discounts.promoId } : {}),
+    ...(discounts.promoId  ? { promo_id:  discounts.promoId  } : {}),
     ...(discounts.creditId ? { credit_id: discounts.creditId } : {}),
     ...(snapshot.appliedCampaignIds.length
       ? { applied_campaign_ids: snapshot.appliedCampaignIds.join(",") }
@@ -1413,19 +1404,34 @@ function buildSessionMetadata(
     ...(body.loyalty_redemption_id
       ? { loyalty_redemption_id: body.loyalty_redemption_id }
       : {}),
+    // [FIX 3+4] Loyalty metadata — cleaned up formatting, behavior unchanged.
+    // Redeem path: applied=true writes all four loyalty fields plus the
+    //   pre-session key (needed by the webhook to release/confirm the reserve).
+    // Earn-only path: applied=false but loyalty_account_id present — write
+    //   the account ID so the webhook can credit earn points post-payment.
     ...(loyalty.applied
       ? {
-          loyalty_account_id: loyalty.accountId,
+          loyalty_account_id:      loyalty.accountId,
           loyalty_reserved_points: String(loyalty.reservedPoints),
-          loyalty_discount_cents: String(loyalty.discountCents),
+          loyalty_discount_cents:  String(loyalty.discountCents),
+          // preSessionKey was computed once in the main handler and passed
+          // through — never recomputed at this stage.
           loyalty_pre_session_key: preSessionKey,
         }
       : body.loyalty_account_id
-        ? { loyalty_account_id: body.loyalty_account_id }
-        : {}),
-    pre_checkout_risk_score: String(riskGate.riskScore),
-    pre_checkout_risk_level: riskGate.riskLevel,
+      ? { loyalty_account_id: body.loyalty_account_id }
+      : {}),
+    // Pre-checkout risk gate result — read by the webhook to set order risk
+    // fields without re-running evaluateOrderRisk() post-payment.
+    pre_checkout_risk_score:   String(riskGate.riskScore),
+    pre_checkout_risk_level:   riskGate.riskLevel,
     pre_checkout_verif_status: riskGate.verificationStatus,
+    // Transactional SMS opt-in for auth checkout.
+    // Written only when the user explicitly opted in and a valid phone was
+    // provided. The webhook reads these two fields to persist sms_opt_in and
+    // guest_phone_e164 on the order so send-sms can dispatch.
+    // Distinct key names from the guest path (guest_sms_opt_in / guest_phone_e164)
+    // so the webhook can resolve the correct pair per-path via isGuest.
     ...(smsOptIn && smsPhone !== null
       ? { sms_opt_in: "true", sms_phone_e164: smsPhone }
       : {}),
@@ -1448,14 +1454,12 @@ async function createLoyaltyCoupon(
       duration: "once",
       metadata: { request_id: requestId, source: "loyalty_checkout" },
     });
-
     return coupon.id;
   } catch (err) {
     log("error", "checkout_loyalty_coupon_create_failed", {
       requestId,
       error: asErr(err),
     });
-
     return null;
   }
 }
@@ -1482,12 +1486,13 @@ async function releaseLoyaltyReserve(
   reason: string,
   requestId: string,
 ): Promise<void> {
+  // Guard: an empty key would match no rows in the DB but constitutes a
+  // programmer error — log it clearly so it surfaces in alerting.
   if (!preSessionKey.trim()) {
     log("error", "checkout_loyalty_release_empty_key", {
       requestId,
       reason,
     });
-
     return;
   }
 
@@ -1496,7 +1501,6 @@ async function releaseLoyaltyReserve(
       "v2_release_loyalty_reserve" as never,
       { p_stripe_session_id: preSessionKey, p_reason: reason } as never,
     );
-
     if (error) {
       log("warn", "checkout_loyalty_release_failed", {
         requestId,
@@ -1518,6 +1522,8 @@ async function updatePendingCartWithLoyalty(
   db: DbClient,
   cartId: string,
   sessionId: string,
+  // Intersection type narrows to the `applied: true` branch — satisfies the
+  // PendingCartUpdate constraint without asserting non-null on individual fields.
   loyalty: LoyaltyOutcome & { applied: true },
   requestId: string,
 ): Promise<void> {
@@ -1540,34 +1546,6 @@ async function updatePendingCartWithLoyalty(
   }
 }
 
-// ─── Response body shaping ────────────────────────────────────────────────────
-
-function buildModeResponseBody(
-  session: CheckoutSessionResponseShape,
-  uiMode: CheckoutUiMode,
-  pricing: PricingContext,
-): JsonObject {
-  const pricingResponse = buildAuthPricingResponse(pricing.snapshot) as unknown as Json;
-
-  if (uiMode === "embedded") {
-    return {
-      sessionId: session.id,
-      clientSecret: session.client_secret ?? null,
-      uiMode,
-      pricingHash: pricing.pricingHash,
-      pricing: pricingResponse,
-    };
-  }
-
-  return {
-    sessionId: session.id,
-    url: session.url ?? null,
-    uiMode,
-    pricingHash: pricing.pricingHash,
-    pricing: pricingResponse,
-  };
-}
-
 // ─── Main handler ─────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -1577,13 +1555,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const requestOrigin = req.headers.get("origin");
   const corsHeaders = corsHeadersFor(requestOrigin);
 
+  // ── CORS preflight ──────────────────────────────────────────────────────────
   if (req.method === "OPTIONS") {
     if (!corsHeaders) {
       return errorResponse(requestId, 403, "origin_not_allowed", "Origin not allowed.", {
         "Vary": "Origin",
       });
     }
-
     return new Response(null, {
       status: 204,
       headers: { ...BASE_HEADERS, ...corsHeaders, "X-Request-Id": requestId },
@@ -1596,6 +1574,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
     });
   }
 
+  // [FIX 5] Include Allow header so clients and load balancers know which
+  // methods this endpoint accepts.
   if (req.method !== "POST") {
     return errorResponse(
       requestId,
@@ -1606,39 +1586,43 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
+  // ── Stage: Authenticate ────────────────────────────────────────────────────
   const authResult = await authenticateUser(req, requestId);
   if (!authResult.ok) return toResponse(requestId, authResult.error, corsHeaders);
-
   const { userId, userEmail } = authResult.data;
 
+  // ── Stage: Parse request ───────────────────────────────────────────────────
   const parseResult = await parseRequest(req, requestId);
   if (!parseResult.ok) return toResponse(requestId, parseResult.error, corsHeaders);
+  // Explicit type annotation prevents inference drift in downstream stage calls.
+  const parsed: ParsedBody = parseResult.data;
 
-  const parsed = parseResult.data;
-
+  // ── Stage: Init services ───────────────────────────────────────────────────
   const servicesResult = initServices(requestId);
   if (!servicesResult.ok) return toResponse(requestId, servicesResult.error, corsHeaders);
-
   const { db, stripe } = servicesResult.data;
 
   const ctx: RequestContext = {
     requestId,
     userId,
     userEmail,
+    // Truncated at ingestion so the value never exceeds 64 chars downstream.
     requestIp: getRequestIp(req)?.slice(0, 64) ?? null,
     userAgent: req.headers.get("user-agent") ?? null,
     deviceFingerprint: req.headers.get("x-device-fingerprint") ?? null,
     corsHeaders,
   };
 
+  // ── Stage: Rate limit ──────────────────────────────────────────────────────
   const rateLimitResult = await enforceRateLimit(db, userId, ctx.requestIp, requestId);
   if (!rateLimitResult.ok) return toResponse(requestId, rateLimitResult.error, corsHeaders);
 
+  // ── Stage: Pricing ─────────────────────────────────────────────────────────
   const pricingResult = await buildPricing(db, userId, parsed, requestId);
   if (!pricingResult.ok) return toResponse(requestId, pricingResult.error, corsHeaders);
+  const pricing: PricingContext = pricingResult.data;
 
-  const pricing = pricingResult.data;
-
+  // ── Integrity hash (advisory — logged, not hard-rejected) ──────────────────
   await checkIntegrityHash({
     db,
     clientHash: parsed.body.client_integrity_hash,
@@ -1648,15 +1632,19 @@ Deno.serve(async (req: Request): Promise<Response> => {
     requestId,
   });
 
+  // ── Stage: Pre-checkout risk gate ──────────────────────────────────────────
+  // Position: after buildPricing (needs totalCents for scoring) and before
+  // persistPendingCart (no irreversible DB writes may exist on rejection).
+  // Trusted auth users (≥3 paid orders, ≥7 days old) bypass with score=0.
   const riskOutcome = await enforcePreCheckoutRisk({
     db,
     userId,
-    isGuest: false,
-    requestIp: ctx.requestIp,
+    isGuest:           false,       // create-checkout is auth-only
+    requestIp:         ctx.requestIp,
     deviceFingerprint: ctx.deviceFingerprint,
-    guestEmail: parsed.body.guest_email ?? null,
-    orderTotalCents: pricing.snapshot.totalCents,
-    challengeToken: parsed.body.challenge_token ?? undefined,
+    guestEmail:        parsed.body.guest_email ?? null,
+    orderTotalCents:   pricing.snapshot.totalCents,
+    challengeToken:    parsed.body.challenge_token ?? undefined,
     requestId,
   });
 
@@ -1664,6 +1652,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return toRiskGateResponse(requestId, riskOutcome, corsHeaders);
   }
 
+  // Carry the pre-checkout risk decision forward into session metadata.
+  // The webhook reads these three fields to avoid re-scoring post-payment.
+  const preCheckoutRiskScore:   number = riskOutcome.riskScore;
+  const preCheckoutRiskLevel:   string = riskOutcome.riskLevel;
+  const preCheckoutVerifStatus: string = riskOutcome.verificationStatus;
+
+  // ── Stage: Resolve discounts ───────────────────────────────────────────────
   const discountsResult = await resolveDiscounts(
     db,
     userId,
@@ -1671,11 +1666,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
     parsed.body,
     requestId,
   );
-
   if (!discountsResult.ok) return toResponse(requestId, discountsResult.error, corsHeaders);
+  const discounts: ResolvedDiscounts = discountsResult.data;
 
-  const discounts = discountsResult.data;
-
+  // ── Stage: Build idempotency key ───────────────────────────────────────────
   const idempotencyKeyResult = await buildIdempotencyKey(
     userId,
     parsed.body,
@@ -1684,13 +1678,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
     discounts,
     requestId,
   );
-
   if (!idempotencyKeyResult.ok) {
     return toResponse(requestId, idempotencyKeyResult.error, corsHeaders);
   }
+  const idempotencyKey: string = idempotencyKeyResult.data;
 
-  const idempotencyKey = idempotencyKeyResult.data;
-
+  // ── Stage: Reusable session check ──────────────────────────────────────────
   const reusableSession = await findReusableSession({
     db,
     stripe,
@@ -1703,55 +1696,44 @@ Deno.serve(async (req: Request): Promise<Response> => {
   });
 
   if (reusableSession) {
-    const reusableMode = normalizeStripeCheckoutUiMode(
-      (reusableSession.session as { ui_mode?: unknown }).ui_mode,
-    );
-
-    if (reusableMode === parsed.uiMode) {
-      const hasRequiredField = parsed.uiMode === "embedded"
-        ? hasEmbeddedClientSecret(reusableSession.session)
-        : hasHostedSessionUrl(reusableSession.session);
-
-      if (!hasRequiredField) {
-        return errorResponse(
-          requestId,
-          502,
-          "stripe_session_failed",
-          "Unable to reuse Stripe session. Please try again.",
-          corsHeaders,
-        );
-      }
-
-      log("info", "checkout_session_reused", {
+    if (!reusableSession.session.url) {
+      return errorResponse(
         requestId,
-        userId: prefix(userId),
-        cartId: prefix(reusableSession.cartId),
-        sessionId: prefix(reusableSession.session.id),
-        amountTotal: pricing.snapshot.totalCents,
-        orderType: parsed.body.order_type,
-        uiMode: parsed.uiMode,
-        ms: Date.now() - start,
-      });
-
-      return successResponse(
-        requestId,
-        "checkout_session_reused",
-        buildModeResponseBody(reusableSession.session, parsed.uiMode, pricing),
+        502,
+        "stripe_session_failed",
+        "Unable to reuse Stripe session. Please try again.",
         corsHeaders,
       );
     }
 
-    log("info", "checkout_session_reuse_mode_mismatch", {
+    log("info", "checkout_session_reused", {
       requestId,
       userId: prefix(userId),
-      existingMode: reusableMode,
-      requestedMode: parsed.uiMode,
+      cartId: prefix(reusableSession.cartId),
+      sessionId: prefix(reusableSession.session.id),
+      amountTotal: pricing.snapshot.totalCents,
+      orderType: parsed.body.order_type,
+      ms: Date.now() - start,
     });
+
+    return successResponse(
+      requestId,
+      "checkout_session_reused",
+      {
+        sessionId: reusableSession.session.id,
+        url: reusableSession.session.url,
+        pricingHash: pricing.pricingHash,
+        pricing: buildAuthPricingResponse(pricing.snapshot),
+      },
+      corsHeaders,
+    );
   }
 
+  // ── Stage: Duplicate-order guard ───────────────────────────────────────────
   const duplicateResult = await guardDuplicateOrder(db, userId, requestId);
   if (!duplicateResult.ok) return toResponse(requestId, duplicateResult.error, corsHeaders);
 
+  // ── Stage: Persist pending cart ────────────────────────────────────────────
   const cartResult = await createPendingCart(
     db,
     userId,
@@ -1761,12 +1743,20 @@ Deno.serve(async (req: Request): Promise<Response> => {
     idempotencyKey,
     requestId,
   );
-
   if (!cartResult.ok) return toResponse(requestId, cartResult.error, corsHeaders);
+  const cart: CartContext = cartResult.data;
 
-  const cart = cartResult.data;
+  // Computed once here and threaded through all downstream calls.
+  // buildPreSessionKey throws on empty input — a failure here indicates a
+  // programmer error upstream (cart.cartId or userId unexpectedly empty).
   const preSessionKey = buildPreSessionKey(userId, cart.cartId, requestId);
 
+  // ── Stage: Loyalty reservation ─────────────────────────────────────────────
+  // Failure contract: any failure returned by reserveLoyalty() either:
+  //   (a) occurred before any reserve was committed (no cleanup needed), or
+  //   (b) occurred after committing a reserve but was handled internally by
+  //       commitLoyaltyWithCoupon() (reserve already released).
+  // No rollback is required here on failure.
   const loyaltyStageResult = await reserveLoyalty(
     db,
     stripe,
@@ -1775,7 +1765,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
     pricing.snapshot,
     discounts,
     preSessionKey,
-    parsed.uiMode,
     requestId,
   );
 
@@ -1783,36 +1772,38 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return toResponse(requestId, loyaltyStageResult.error, corsHeaders);
   }
 
-  const loyaltyStage = loyaltyStageResult.data;
+  const loyaltyStage: LoyaltyStageOutcome = loyaltyStageResult.data;
 
+  // Resume path: an open Stripe session with a valid loyalty reserve exists.
   if (loyaltyStage.kind === "resume") {
     log("info", "checkout_session_reused", {
       requestId,
       userId: prefix(userId),
       sessionId: prefix(loyaltyStage.resumeSessionId),
-      uiMode: parsed.uiMode,
       ms: Date.now() - start,
     });
-
     return successResponse(
       requestId,
       "checkout_session_reused",
-      buildModeResponseBody(
-        {
-          id: loyaltyStage.resumeSessionId,
-          url: loyaltyStage.resumeUrl,
-          client_secret: loyaltyStage.resumeClientSecret,
-        },
-        parsed.uiMode,
-        pricing,
-      ),
+      {
+        sessionId: loyaltyStage.resumeSessionId,
+        url: loyaltyStage.resumeUrl,
+        pricingHash: pricing.pricingHash,
+        pricing: buildAuthPricingResponse(pricing.snapshot),
+      },
       corsHeaders,
     );
   }
 
-  const loyalty = loyaltyStage.loyalty;
+  // kind === "applied" — narrowed by the discriminant above.
+  const loyalty: LoyaltyOutcome = loyaltyStage.loyalty;
+
+  // ReservationState is constructed here — after reserveLoyalty() returns ok()
+  // — so that rollbackReservations() has a complete view of committed
+  // side-effects (loyalty reserve + coupon) if a downstream stage fails.
   const reservationState: ReservationState = { preSessionKey, loyalty };
 
+  // ── Stage: Create Stripe session ───────────────────────────────────────────
   const stripeResult = await createStripeSession(
     stripe,
     ctx,
@@ -1823,9 +1814,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
     loyalty,
     preSessionKey,
     {
-      riskScore: riskOutcome.riskScore,
-      riskLevel: riskOutcome.riskLevel,
-      verificationStatus: riskOutcome.verificationStatus,
+      riskScore:          preCheckoutRiskScore,
+      riskLevel:          preCheckoutRiskLevel,
+      verificationStatus: preCheckoutVerifStatus,
     },
   );
 
@@ -1837,12 +1828,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
       "stripe_session_create_failed",
       requestId,
     );
-
     return toResponse(requestId, stripeResult.error, corsHeaders);
   }
 
-  const stripeSession = stripeResult.data;
+  const stripeSession: Stripe.Checkout.Session = stripeResult.data;
 
+  // ── Post-session bookkeeping ────────────────────────────────────────────────
+  // Both calls are fire-and-forget (non-blocking on success path). Failures are
+  // logged as warnings — they do not roll back the session or fail the response.
   await backfillCartSessionId(
     db,
     cart.cartId,
@@ -1865,14 +1858,20 @@ Deno.serve(async (req: Request): Promise<Response> => {
     loyaltyOff: loyalty.applied ? loyalty.discountCents : 0,
     orderType: parsed.body.order_type,
     pickupTime: parsed.pickupTime ?? null,
-    uiMode: parsed.uiMode,
-     ms: Date.now() - start,
+    ms: Date.now() - start,
   });
 
   return successResponse(
     requestId,
     "checkout_session_created",
-    buildModeResponseBody(stripeSession, parsed.uiMode, pricing),
+    {
+      sessionId: stripeSession.id,
+      // url is guaranteed non-null: createStripeSession validates it and returns
+      // a failure before ok() if it is absent. The cast is safe.
+      url: stripeSession.url as string,
+      pricingHash: pricing.pricingHash,
+      pricing: buildAuthPricingResponse(pricing.snapshot),
+    },
     corsHeaders,
   );
 });

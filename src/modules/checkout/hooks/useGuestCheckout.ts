@@ -1,19 +1,9 @@
 // src/modules/checkout/hooks/useGuestCheckout.ts
 // =============================================================================
-// Guest checkout hook — calls `create-checkout-guest` with the `apikey` header
-// and no Authorization header. Server owns Stripe session creation.
+// Guest checkout hook — hosted Stripe Checkout only.
 //
-// CHANGES (2026-05 embedded checkout migration):
-//   • Success response now supports BOTH hosted and embedded checkout:
-//       - hosted:   url
-//       - embedded: clientSecret
-//   • RawCheckoutResponse carries url/clientSecret/uiMode.
-//   • handleRawResponse returns clientSecret to CheckoutPage, allowing
-//     <EmbeddedStripePayment /> to render.
-//   • Missing-URL guard replaced with missing-transport guard.
-//   • OTP challenge preservation kept.
-//   • Guest token continuity kept.
-//   • No `any`.
+// Calls `create-checkout-guest` with the `apikey` header and NO Authorization.
+// Server owns Stripe session creation.
 // =============================================================================
 
 import { useReducer, useCallback, useRef } from 'react';
@@ -21,10 +11,7 @@ import { env } from '@/lib/config/env';
 import { useCartStore } from '@/modules/cart/store/cart.store';
 import { mapCheckoutError } from '@/modules/checkout/errors/mapCheckoutError';
 import type { CartItem } from '@/modules/cart/types/cart.types';
-import type {
-  CheckoutItemWirePayload,
-  CheckoutUiMode,
-} from '../types/checkout-wire.types';
+import type { CheckoutItemWirePayload } from '../types/checkout-wire.types';
 import {
   isRecord,
   parseCheckoutPricingResponse,
@@ -37,8 +24,6 @@ import {
   type CheckoutResultSuccess,
   type GuestCheckoutInput,
 } from '../types/checkout.types';
-
-// ─── Constants ────────────────────────────────────────────────────────────────
 
 const GUEST_TOKEN_STORAGE_KEY = 'checkout_guest_token';
 const GUEST_CHECKOUT_ENDPOINT = 'create-checkout-guest';
@@ -53,8 +38,6 @@ const FORBIDDEN_FIELDS = [
   'loyalty_account_id',
   'client_integrity_hash',
 ] as const;
-
-// ─── Phase machine ────────────────────────────────────────────────────────────
 
 export type GuestCheckoutPhase =
   | { tag: 'idle' }
@@ -74,7 +57,7 @@ type PhaseAction =
 
 const IDLE: GuestCheckoutPhase = { tag: 'idle' };
 
-function phaseReducer(state: GuestCheckoutPhase, action: PhaseAction): GuestCheckoutPhase {
+function phaseReducer(_state: GuestCheckoutPhase, action: PhaseAction): GuestCheckoutPhase {
   switch (action.type) {
     case 'INITIATE':
       return { tag: 'initiating' };
@@ -105,14 +88,10 @@ function phaseReducer(state: GuestCheckoutPhase, action: PhaseAction): GuestChec
   }
 }
 
-// ─── Internal API response type ───────────────────────────────────────────────
-
 type RawCheckoutResponse =
   | {
       readonly kind: 'success';
-      readonly url?: string;
-      readonly clientSecret?: string;
-      readonly uiMode?: CheckoutUiMode;
+      readonly url: string;
       readonly sessionId?: string;
       readonly pricingHash?: string;
       readonly pricing?: CheckoutPricingResponse;
@@ -134,8 +113,6 @@ type RawCheckoutResponse =
       readonly code: string | null;
     };
 
-// ─── Return type ──────────────────────────────────────────────────────────────
-
 export type UseGuestCheckoutReturn = {
   phase: GuestCheckoutPhase;
   otpChallenge: { nonce: string; expiresAt: string } | null;
@@ -146,8 +123,6 @@ export type UseGuestCheckoutReturn = {
   retryWithChallengeToken: (challengeToken: string) => Promise<CheckoutResult>;
   clearError: () => void;
 };
-
-// ─── Storage helpers ──────────────────────────────────────────────────────────
 
 function getStoredGuestToken(): string | null {
   try {
@@ -165,52 +140,22 @@ function storeGuestToken(token: string): void {
   }
 }
 
-// ─── Small parsers ────────────────────────────────────────────────────────────
-
 function readString(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
-function readUiMode(record: Record<string, unknown>): CheckoutUiMode | undefined {
-  const value = record['uiMode'];
-  return value === 'hosted' || value === 'embedded' ? value : undefined;
-}
-
-/**
- * Accepts both response shapes:
- *
- * 1. successResponse helper shape:
- *    { ok: true, code, requestId, url/clientSecret, ... }
- *
- * 2. nested shape:
- *    { ok: true, data: { url/clientSecret, ... } }
- */
 function unwrapSuccessPayload(json: unknown): Record<string, unknown> | null {
   if (!isRecord(json)) return null;
-
-  if (isRecord(json['data'])) {
-    return json['data'];
-  }
-
+  if (isRecord(json['data'])) return json['data'];
   return json;
 }
 
-/**
- * Some older guest endpoints may return flat error shapes while newer helpers
- * return nested error objects. This keeps OTP/block parsing compatible with both.
- */
 function unwrapErrorPayload(json: unknown): Record<string, unknown> | null {
   if (!isRecord(json)) return null;
-
-  if (isRecord(json['error'])) {
-    return json['error'];
-  }
-
+  if (isRecord(json['error'])) return json['error'];
   return json;
 }
-
-// ─── Request body builder ─────────────────────────────────────────────────────
 
 function buildGuestRequestBody(
   cartItems: CartItem[],
@@ -238,11 +183,7 @@ function buildGuestRequestBody(
   };
 }
 
-// ─── Endpoint invocation ──────────────────────────────────────────────────────
-
-async function fetchGuestCheckout(
-  body: Record<string, unknown>,
-): Promise<RawCheckoutResponse> {
+async function fetchGuestCheckout(body: Record<string, unknown>): Promise<RawCheckoutResponse> {
   const response = await fetch(
     `${env.supabase.url.replace(/\/+$/u, '')}/functions/v1/${GUEST_CHECKOUT_ENDPOINT}`,
     {
@@ -259,7 +200,6 @@ async function fetchGuestCheckout(
   const json: unknown = await response.json().catch(() => null);
   const errorPayload = unwrapErrorPayload(json);
 
-  // ── otp_required: intercept before mapCheckoutError discards nonce ────────
   if (
     response.status === 403 &&
     errorPayload !== null &&
@@ -280,7 +220,6 @@ async function fetchGuestCheckout(
     };
   }
 
-  // ── checkout_blocked: terminal ────────────────────────────────────────────
   if (
     response.status === 403 &&
     errorPayload !== null &&
@@ -295,7 +234,6 @@ async function fetchGuestCheckout(
     };
   }
 
-  // ── All other errors ──────────────────────────────────────────────────────
   if (!response.ok) {
     const mapped = mapCheckoutError(isRecord(json) ? json : null, response);
     return {
@@ -305,7 +243,6 @@ async function fetchGuestCheckout(
     };
   }
 
-  // ── Success: hosted OR embedded ───────────────────────────────────────────
   const data = unwrapSuccessPayload(json);
 
   if (data === null) {
@@ -317,12 +254,11 @@ async function fetchGuestCheckout(
   }
 
   const url = readString(data, 'url');
-  const clientSecret = readString(data, 'clientSecret');
 
-  if (!url && !clientSecret) {
+  if (!url) {
     return {
       kind: 'error',
-      message: 'Invalid checkout response: missing URL or client secret.',
+      message: 'Invalid checkout response: missing checkout URL.',
       code: 'invalid_response',
     };
   }
@@ -330,8 +266,6 @@ async function fetchGuestCheckout(
   return {
     kind: 'success',
     url,
-    clientSecret,
-    uiMode: readUiMode(data),
     sessionId: readString(data, 'sessionId'),
     pricingHash: readString(data, 'pricingHash'),
     pricing: parseCheckoutPricingResponse(data['pricing']),
@@ -339,14 +273,11 @@ async function fetchGuestCheckout(
   };
 }
 
-// ─── Hook ─────────────────────────────────────────────────────────────────────
-
 export function useGuestCheckout(): UseGuestCheckoutReturn {
   const [phase, dispatch] = useReducer(phaseReducer, IDLE);
 
   const pendingInputRef = useRef<GuestCheckoutInput | null>(null);
   const cartItems = useCartStore((state) => state.items);
-
   const lastOtpChallengeRef = useRef<{ nonce: string; expiresAt: string } | null>(null);
 
   const handleRawResponse = useCallback((raw: RawCheckoutResponse): CheckoutResult => {
@@ -360,8 +291,6 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
         const result: CheckoutResultSuccess = {
           ok: true,
           url: raw.url,
-          clientSecret: raw.clientSecret,
-          uiMode: raw.uiMode,
           sessionId: raw.sessionId,
           pricingHash: raw.pricingHash,
           pricing: raw.pricing,
@@ -442,13 +371,11 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
             recoverable: false,
           });
 
-          const result: CheckoutResultFailure = {
+          return {
             ok: false,
             error: message,
             code: 'forbidden_field',
           };
-
-          return result;
         }
       }
 
@@ -464,13 +391,11 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
           recoverable: true,
         });
 
-        const result: CheckoutResultFailure = {
+        return {
           ok: false,
           error: message,
           code: null,
         };
-
-        return result;
       }
     },
     [cartItems, handleRawResponse],
@@ -490,13 +415,11 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
           recoverable: false,
         });
 
-        const result: CheckoutResultFailure = {
+        return {
           ok: false,
           error: message,
           code: 'session_expired',
         };
-
-        return result;
       }
 
       dispatch({ type: 'RETRY' });
@@ -520,13 +443,11 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
           recoverable: true,
         });
 
-        const result: CheckoutResultFailure = {
+        return {
           ok: false,
           error: message,
           code: null,
         };
-
-        return result;
       }
     },
     [cartItems, handleRawResponse],
