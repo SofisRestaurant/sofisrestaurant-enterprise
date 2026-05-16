@@ -2,28 +2,28 @@
 // =============================================================================
 // CheckoutPage
 // =============================================================================
-// Current ownership:
-// - CheckoutPage orchestrates checkout state, loyalty/rewards, contact,
-//   promo, order summary, and payment CTA.
+// Ownership:
+// - Orchestrates checkout state, loyalty/rewards, contact, promo, order summary,
+//   recommended add-ons, and payment CTA.
 // - Order intent is owned by useOrderIntentStore and controlled from TopBar /
 //   MobileOrderIntentSheet.
-// - Embedded Stripe is supported without deleting the hosted redirect flow.
+// - Embedded Stripe is supported while preserving hosted redirect fallback.
 //
 // Embedded Stripe behavior:
-// - Hosted mode: server returns url, then we redirect with window.location.assign.
+// - Hosted mode: server returns url, then this page redirects.
 // - Embedded mode: server returns clientSecret, then this page renders
 //   <EmbeddedStripePayment /> inside the payment section.
 // - OTP challenge and blocked states still take priority.
-// - No Stripe URL is used before the router/server finishes verification.
+// - No Stripe UI is shown until the router/server finishes verification.
 //
-// UX upgrades:
-// - Adds a restaurant-style "Recommended for You" section before payment.
-// - Adds clearer terms copy before payment.
-// - Adds a stronger "Select payment method" embedded Stripe surface.
-// - Scrolls the user to the payment section after embedded checkout starts.
-// - Clears embedded checkout when order/contact/payment-affecting inputs change.
+// UX behavior:
+// - The payment area is styled like a modern restaurant checkout panel.
+// - Recommended add-ons are shown before payment.
+// - The first CTA calls checkout directly, without opening an extra review modal.
+// - After embedded checkout starts, the page scrolls to the Stripe payment area.
+// - Payment-affecting changes clear the existing embedded session.
 //
-// Security invariants preserved:
+// Security invariants:
 // - Stripe payment finalization remains webhook-owned.
 // - CheckoutButton is unmounted during OTP challenge and blocked state.
 // - challenge_token lives only in CheckoutChallengeModal state + router memory.
@@ -42,8 +42,8 @@ import {
 } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
+import { ChefHat, Plus, ShoppingBag, Utensils } from 'lucide-react';
 
-// ── Checkout module ───────────────────────────────────────────────────────────
 import CheckoutButton from '@/modules/checkout/components/CheckoutButton';
 import { CheckoutChallengeModal } from '@/modules/checkout/components/CheckoutChallengeModal';
 import EmbeddedStripePayment from '@/modules/checkout/components/EmbeddedStripePayment';
@@ -67,14 +67,12 @@ import {
   isOtpRequired,
 } from '@/modules/checkout/types/checkout.types';
 
-// ── Page types ────────────────────────────────────────────────────────────────
 import type {
   OrderDetailsState,
   OrderType,
   PromoState,
 } from '@/modules/checkout/types/checkout-page.types';
 
-// ── Page storage ──────────────────────────────────────────────────────────────
 import {
   CHECKOUT_LIMITS,
   CHECKOUT_STORAGE,
@@ -83,7 +81,6 @@ import {
   safeLocalSet,
 } from '@/modules/checkout/utils/checkoutPageStorage';
 
-// ── Page formatters ───────────────────────────────────────────────────────────
 import {
   clampInt,
   computeDisplayLineTotalCents,
@@ -92,7 +89,6 @@ import {
   safeMoneyCents,
 } from '@/modules/checkout/utils/checkoutPageFormatters';
 
-// ── Page sub-components ───────────────────────────────────────────────────────
 import { fadeUp } from '@/modules/checkout/components/page/animations';
 import { AuthContactStrip } from '@/modules/checkout/components/page/AuthContactStrip';
 import { BlockedOrderCard } from '@/modules/checkout/components/page/BlockedOrderCard';
@@ -106,7 +102,6 @@ import { PromoSection } from '@/modules/checkout/components/page/PromoSection';
 import { SectionCard } from '@/modules/checkout/components/page/SectionCard';
 import { SectionHeader } from '@/modules/checkout/components/page/SectionHeader';
 
-// ── Other modules ─────────────────────────────────────────────────────────────
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useCart } from '@/modules/cart/hooks/useCart';
 import { formatCents } from '@/modules/cart/utils/cart.utils';
@@ -116,27 +111,34 @@ import {
   useOrderIntentStore,
 } from '@/modules/orders/store/orderIntent.store';
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Local checkout merchandising
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 const RECOMMENDED_ADD_ONS = [
   {
     name: 'Handmade Tortillas',
     description: 'Fresh side for your meal',
+    meta: 'Fresh made · $3.00',
     priceLabel: '$3.00',
   },
   {
     name: 'Chips & Salsa',
     description: 'Perfect starter to share',
+    meta: 'Crispy chips · $4.99',
     priceLabel: '$4.99',
   },
   {
     name: 'Rice & Beans',
     description: 'Classic side upgrade',
+    meta: 'House favorite · $3.99',
     priceLabel: '$3.99',
   },
 ] as const;
+
+// =============================================================================
+// Component
+// =============================================================================
 
 export default function CheckoutPage() {
   const navigate = useNavigate();
@@ -163,6 +165,7 @@ export default function CheckoutPage() {
 
   const [embeddedClientSecret, setEmbeddedClientSecret] = useState<string | null>(null);
   const [checkoutContractError, setCheckoutContractError] = useState<string | null>(null);
+  const [paymentStarted, setPaymentStarted] = useState(false);
 
   const showChallenge = guestPhase.tag === 'otp_required' || guestPhase.tag === 'retrying';
   const showBlocked = guestPhase.tag === 'blocked';
@@ -201,7 +204,6 @@ export default function CheckoutPage() {
     return `Pickup · ${pickupTimingLabel}`;
   }, [effectiveOrderType, pickupTimingLabel]);
 
-  // ── Order details ──────────────────────────────────────────────────────────
   const [orderDetails, setOrderDetails] = useState<OrderDetailsState>(() => {
     const storedType = safeLocalGet(CHECKOUT_STORAGE.ORDER_TYPE);
     const storedNotes = safeLocalGet(CHECKOUT_STORAGE.NOTES);
@@ -237,15 +239,20 @@ export default function CheckoutPage() {
     else safeLocalSet(CHECKOUT_STORAGE.NOTES, orderDetails.notes);
   }, [orderDetails.notes]);
 
-  // ── Promo ──────────────────────────────────────────────────────────────────
   const [promo, setPromo] = useState<PromoState>(() => {
     const stored = safeLocalGet(CHECKOUT_STORAGE.PROMO);
-    return { code: stored ? normalizePromo(stored) : '', applied: false, error: null };
+
+    return {
+      code: stored ? normalizePromo(stored) : '',
+      applied: false,
+      error: null,
+    };
   });
 
   const clearEmbeddedCheckout = useCallback(() => {
     setEmbeddedClientSecret(null);
     setCheckoutContractError(null);
+    setPaymentStarted(false);
   }, []);
 
   const scrollToPayment = useCallback(() => {
@@ -298,7 +305,6 @@ export default function CheckoutPage() {
     [onPromoApply, onPromoClear],
   );
 
-  // ── Guest/contact state ────────────────────────────────────────────────────
   const [guestEmail, setGuestEmail] = useState('');
   const [guestPhone, setGuestPhone] = useState('');
   const [smsOptIn, setSmsOptIn] = useState(false);
@@ -324,7 +330,6 @@ export default function CheckoutPage() {
     setSmsOptIn((current) => !current);
   }, [clearEmbeddedCheckout]);
 
-  // Frozen identity email for OTP token binding.
   const [challengeEmail, setChallengeEmail] = useState<string | null>(null);
 
   useEffect(() => {
@@ -337,7 +342,6 @@ export default function CheckoutPage() {
     }
   }, [guestPhase.tag, guestEmail, challengeEmail]);
 
-  // ── Auth: credits ──────────────────────────────────────────────────────────
   const [credits, setCredits] = useState<UserCredit[]>([]);
   const [selectedCredit, setSelectedCredit] = useState<string | null>(() =>
     safeLocalGet(CHECKOUT_STORAGE.CREDIT),
@@ -363,7 +367,6 @@ export default function CheckoutPage() {
     setSelectedCredit(null);
   }, [clearEmbeddedCheckout]);
 
-  // ── Auth: loyalty ──────────────────────────────────────────────────────────
   const [loyaltyProfile, setLoyaltyProfile] = useState<LoyaltyProfile | null>(null);
   const [loyaltyPreview, setLoyaltyPreview] = useState<LoyaltyPreview | null>(null);
   const [loyaltyBalance, setLoyaltyBalance] = useState(0);
@@ -383,12 +386,10 @@ export default function CheckoutPage() {
     [clearEmbeddedCheckout],
   );
 
-  // Clear embedded session when cart or fulfillment inputs change.
   useEffect(() => {
     clearEmbeddedCheckout();
   }, [items, effectiveOrderType, pickupTiming, clearEmbeddedCheckout]);
 
-  // ── Data loading: credits ──────────────────────────────────────────────────
   const loadCredits = useCallback(async () => {
     setCreditsLoading(true);
     setCreditsError(null);
@@ -430,7 +431,6 @@ export default function CheckoutPage() {
     };
   }, [isAuthenticated, loadCredits]);
 
-  // ── Data loading: loyalty ──────────────────────────────────────────────────
   useEffect(() => {
     if (!isAuthenticated) return;
 
@@ -483,31 +483,36 @@ export default function CheckoutPage() {
     else safeLocalSet(CHECKOUT_STORAGE.CREDIT, selectedCredit);
   }, [selectedCredit]);
 
-  // ── Checkout trigger ───────────────────────────────────────────────────────
   const handleCheckout = useCallback(async () => {
     setCheckoutContractError(null);
     setEmbeddedClientSecret(null);
+    setPaymentStarted(true);
+    scrollToPayment();
 
     const pickupTime =
       effectiveOrderType === 'pickup'
         ? (getPickupTimingDate(pickupTiming) ?? undefined)
         : undefined;
 
-    const result = await checkout({
-      guestEmail: guestEmail || undefined,
-      orderType: effectiveOrderType,
-      notes: orderDetails.notes || null,
-      pickupTime,
-      promoCode: promo.applied ? promo.code : undefined,
-      creditId: isGuest ? undefined : (selectedCredit ?? undefined),
-      loyalty: loyaltyIntent,
-      guestPhone: smsOptIn ? guestPhone : undefined,
-      smsOptIn,
-    });
+const result = await checkout({
+  guestEmail: guestEmail || undefined,
+  orderType: effectiveOrderType,
+  notes: orderDetails.notes || null,
+  pickupTime,
+  promoCode: promo.applied ? promo.code : undefined,
+  creditId: isGuest ? undefined : (selectedCredit ?? undefined),
+  loyalty: loyaltyIntent,
+  guestPhone: smsOptIn ? guestPhone : undefined,
+  smsOptIn,
+
+  // Force embedded Stripe so payment options render inside CheckoutPage.
+  uiMode: 'embedded',
+});
 
     if (isCheckoutSuccess(result)) {
       if (result.clientSecret) {
         setEmbeddedClientSecret(result.clientSecret);
+        setPaymentStarted(false);
         scrollToPayment();
         return;
       }
@@ -517,12 +522,15 @@ export default function CheckoutPage() {
         return;
       }
 
+      setPaymentStarted(false);
       setCheckoutContractError(
         'Checkout started, but the payment session was missing. Please try again.',
       );
       scrollToPayment();
       return;
     }
+
+    setPaymentStarted(false);
 
     if (!isOtpRequired(result) && !isCheckoutBlocked(result)) {
       if (result.code === 'promo_invalid' || result.code === 'promo_not_found') {
@@ -551,7 +559,6 @@ export default function CheckoutPage() {
     scrollToPayment,
   ]);
 
-  // ── Copy summary ───────────────────────────────────────────────────────────
   const copySummary = useCallback(async () => {
     if (!hasItems) return;
 
@@ -598,6 +605,7 @@ export default function CheckoutPage() {
 
   const paymentError = checkoutContractError ?? routerError;
   const paymentSectionIndex = isGuest ? 5 : 6;
+  const checkoutButtonLoading = isLoading || paymentStarted;
 
   return (
     <main className="relative mx-auto w-full max-w-2xl px-4 py-8 sm:py-12">
@@ -852,70 +860,101 @@ export default function CheckoutPage() {
             </SectionCard>
           )}
 
-          <SectionCard index={isGuest ? 4 : 5}>
-            <SectionHeader
-              title="Recommended for You"
-              subtitle="Add a little extra before placing your order"
-              right={
-                <Link
-                  to="/menu"
-                  className="text-xs text-(--color-ink-400) underline hover:text-(--color-ink-700)"
-                >
-                  Return to Menu
-                </Link>
-              }
-            />
+          <motion.section
+            custom={isGuest ? 4 : 5}
+            variants={fadeUp}
+            initial="hidden"
+            animate="visible"
+            className="rounded-[2rem] bg-[#f4f1ee] px-5 py-6 shadow-sm ring-1 ring-black/5"
+          >
+            <div className="mb-6 grid grid-cols-2 gap-3">
+              <Link
+                to="/menu"
+                onClick={clearEmbeddedCheckout}
+                className="flex min-h-14 items-center justify-center gap-2 rounded-full border-2 border-(--color-ember-500) bg-white px-4 py-3 text-sm font-extrabold text-(--color-ember-700) transition hover:bg-(--color-ember-50)"
+              >
+                <ChefHat className="h-4 w-4" />
+                Add Condiments
+              </Link>
 
-            <div className="space-y-2 px-5 py-4">
-              {RECOMMENDED_ADD_ONS.map((item) => (
+              <Link
+                to="/menu"
+                onClick={clearEmbeddedCheckout}
+                className="flex min-h-14 items-center justify-center gap-2 rounded-full border-2 border-(--color-ember-500) bg-white px-4 py-3 text-sm font-extrabold text-(--color-ember-700) transition hover:bg-(--color-ember-50)"
+              >
+                <ShoppingBag className="h-4 w-4" />
+                Return to Menu
+              </Link>
+            </div>
+
+            <div className="mb-4">
+              <h2 className="text-2xl font-black tracking-tight text-(--color-ink-900)">
+                Recommended for You
+              </h2>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              {RECOMMENDED_ADD_ONS.slice(0, 2).map((item) => (
                 <Link
                   key={item.name}
                   to="/menu"
                   onClick={clearEmbeddedCheckout}
-                  className="flex w-full items-center justify-between rounded-2xl border border-(--color-cream-200) bg-white p-4 text-left transition-colors hover:bg-(--color-cream-50)"
+                  className="group flex min-h-28 items-center justify-between gap-4 rounded-3xl bg-white p-4 text-left shadow-sm ring-1 ring-black/5 transition hover:-translate-y-0.5 hover:shadow-md"
                 >
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold text-(--color-ink-900)">{item.name}</p>
-                    <p className="mt-0.5 text-xs text-(--color-ink-400)">
-                      {item.description} · {item.priceLabel}
-                    </p>
+                  <div className="flex items-center gap-4">
+                    <div className="grid h-16 w-16 shrink-0 place-items-center rounded-2xl bg-(--color-cream-100)">
+                      <Utensils className="h-7 w-7 text-(--color-ember-600)" />
+                    </div>
+
+                    <div className="min-w-0">
+                      <p className="text-lg font-black leading-tight text-(--color-ink-900)">
+                        {item.name}
+                      </p>
+                      <p className="mt-1 text-sm font-medium text-(--color-ink-400)">{item.meta}</p>
+                    </div>
                   </div>
 
-                  <span
-                    aria-hidden="true"
-                    className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-(--color-cream-300) bg-(--color-cream-50) text-lg font-bold text-(--color-ember-700)"
-                  >
-                    +
-                  </span>
+                  <Plus className="h-8 w-8 shrink-0 text-(--color-ember-600) transition group-hover:scale-110" />
                 </Link>
               ))}
             </div>
-          </SectionCard>
+          </motion.section>
 
           <div ref={paymentSectionRef}>
-            <SectionCard
-              index={paymentSectionIndex}
-              className="border-(--color-ember-200) bg-linear-to-b from-white to-(--color-cream-50)"
+            <motion.section
+              custom={paymentSectionIndex}
+              variants={fadeUp}
+              initial="hidden"
+              animate="visible"
+              className="rounded-[2rem] bg-[#f4f1ee] px-5 py-7 shadow-sm ring-1 ring-black/5"
             >
-              <div className="space-y-4 px-5 py-5">
-                <div className="rounded-2xl border border-(--color-cream-200) bg-white p-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-wide text-(--color-ink-400)">
-                        Payment
-                      </p>
-                      <h2 className="mt-1 text-lg font-bold text-(--color-ink-900)">
-                        {embeddedClientSecret ? 'Select Payment Method' : 'Review Order'}
-                      </h2>
-                      <p className="mt-1 text-xs leading-5 text-(--color-ink-400)">
-                        By placing an order, you agree to Sofi&apos;s order and payment terms. No
-                        changes can be guaranteed after payment is submitted.
-                      </p>
-                    </div>
+              <p className="mx-auto max-w-xl text-center text-base leading-7 text-(--color-ink-800)">
+                By placing an order, you agree to Sofi&apos;s{' '}
+                <Link
+                  to="/privacy"
+                  className="font-bold text-teal-700 underline underline-offset-4"
+                >
+                  Privacy Policy
+                </Link>
+                ,{' '}
+                <Link to="/terms" className="font-bold text-teal-700 underline underline-offset-4">
+                  Mobile Order and Payment Terms
+                </Link>
+                , and{' '}
+                <Link to="/terms" className="font-bold text-teal-700 underline underline-offset-4">
+                  Terms of Service
+                </Link>
+                . No changes to the order can be guaranteed after payment is submitted.
+              </p>
 
-                    <div className="rounded-full bg-(--color-cream-50) px-3 py-1 text-xs font-bold text-(--color-ember-700)">
-                      {formatCents(estimatedTotalCents)}
-                    </div>
+              <div className="mt-8">
+                <div className="mb-4 flex items-center justify-between gap-4">
+                  <h2 className="text-2xl font-black tracking-tight text-(--color-ink-900)">
+                    Select Payment Method
+                  </h2>
+
+                  <div className="rounded-full bg-white px-4 py-2 text-sm font-black text-(--color-ink-900) shadow-sm ring-1 ring-black/5">
+                    {formatCents(estimatedTotalCents)}
                   </div>
                 </div>
 
@@ -956,15 +995,15 @@ export default function CheckoutPage() {
                 </AnimatePresence>
 
                 {!showChallenge && !showBlocked && embeddedClientSecret && (
-                  <div className="space-y-3">
-                    <div className="overflow-hidden rounded-2xl border border-(--color-cream-200) bg-white p-3">
+                  <div className="space-y-4">
+                    <div className="overflow-hidden rounded-[1.75rem] bg-white p-3 shadow-sm ring-1 ring-black/5">
                       <EmbeddedStripePayment clientSecret={embeddedClientSecret} />
                     </div>
 
                     <button
                       type="button"
                       onClick={clearEmbeddedCheckout}
-                      className="w-full rounded-xl border border-(--color-cream-300) bg-white px-4 py-2.5 text-sm font-semibold text-(--color-ink-600) transition-colors hover:bg-(--color-cream-50) hover:text-(--color-ember-700)"
+                      className="mx-auto block text-sm font-black text-(--color-ink-800) underline underline-offset-4 transition hover:text-(--color-ember-700)"
                     >
                       Edit order details
                     </button>
@@ -972,24 +1011,36 @@ export default function CheckoutPage() {
                 )}
 
                 {!showChallenge && !showBlocked && !embeddedClientSecret && (
-                  <CheckoutButton
-                    onCheckout={handleCheckout}
-                    isLoading={isLoading}
-                    disabled={!hasItems}
-                  />
+                  <div className="space-y-4">
+                    <CheckoutButton
+                      onCheckout={handleCheckout}
+                      isLoading={checkoutButtonLoading}
+                      disabled={!hasItems || paymentStarted}
+                      reviewFirst={false}
+                      className="rounded-full bg-(--color-ember-600) py-5 text-lg font-black hover:bg-(--color-ember-700)"
+                    />
+
+                    <p className="text-center text-xs leading-5 text-(--color-ink-400)">
+                      Click Review Order to securely load available payment methods.
+                    </p>
+                  </div>
                 )}
 
                 {paymentError && !showChallenge && !showBlocked && (
-                  <p className="text-center text-sm font-medium text-(--color-error)" role="alert">
+                  <p
+                    className="mt-4 text-center text-sm font-semibold text-(--color-error)"
+                    role="alert"
+                  >
                     {paymentError}
                   </p>
                 )}
 
-                <p className="text-center text-[11px] leading-5 text-(--color-ink-300)">
-                  🔒 Secure payment via Stripe. Card details are never stored on our servers.
+                <p className="mt-5 text-center text-[11px] leading-5 text-(--color-ink-400)">
+                  🔒 Secure payment via Stripe. Card details are never stored on Sofi&apos;s
+                  servers.
                 </p>
               </div>
-            </SectionCard>
+            </motion.section>
           </div>
 
           {isGuest && (
