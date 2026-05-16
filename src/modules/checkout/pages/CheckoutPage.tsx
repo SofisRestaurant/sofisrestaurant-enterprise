@@ -16,6 +16,13 @@
 // - OTP challenge and blocked states still take priority.
 // - No Stripe URL is used before the router/server finishes verification.
 //
+// UX upgrades:
+// - Adds a restaurant-style "Recommended for You" section before payment.
+// - Adds clearer terms copy before payment.
+// - Adds a stronger "Select payment method" embedded Stripe surface.
+// - Scrolls the user to the payment section after embedded checkout starts.
+// - Clears embedded checkout when order/contact/payment-affecting inputs change.
+//
 // Security invariants preserved:
 // - Stripe payment finalization remains webhook-owned.
 // - CheckoutButton is unmounted during OTP challenge and blocked state.
@@ -28,6 +35,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ChangeEvent,
   type KeyboardEvent,
@@ -108,8 +116,32 @@ import {
   useOrderIntentStore,
 } from '@/modules/orders/store/orderIntent.store';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Local checkout merchandising
+// ─────────────────────────────────────────────────────────────────────────────
+
+const RECOMMENDED_ADD_ONS = [
+  {
+    name: 'Handmade Tortillas',
+    description: 'Fresh side for your meal',
+    priceLabel: '$3.00',
+  },
+  {
+    name: 'Chips & Salsa',
+    description: 'Perfect starter to share',
+    priceLabel: '$4.99',
+  },
+  {
+    name: 'Rice & Beans',
+    description: 'Classic side upgrade',
+    priceLabel: '$3.99',
+  },
+] as const;
+
 export default function CheckoutPage() {
   const navigate = useNavigate();
+  const paymentSectionRef = useRef<HTMLDivElement | null>(null);
+
   const { items } = useCart();
   const { user, isAuthenticated } = useAuth();
   const isGuest = !isAuthenticated;
@@ -214,6 +246,15 @@ export default function CheckoutPage() {
   const clearEmbeddedCheckout = useCallback(() => {
     setEmbeddedClientSecret(null);
     setCheckoutContractError(null);
+  }, []);
+
+  const scrollToPayment = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      paymentSectionRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    });
   }, []);
 
   const onPromoChange = useCallback(
@@ -467,6 +508,7 @@ export default function CheckoutPage() {
     if (isCheckoutSuccess(result)) {
       if (result.clientSecret) {
         setEmbeddedClientSecret(result.clientSecret);
+        scrollToPayment();
         return;
       }
 
@@ -478,6 +520,7 @@ export default function CheckoutPage() {
       setCheckoutContractError(
         'Checkout started, but the payment session was missing. Please try again.',
       );
+      scrollToPayment();
       return;
     }
 
@@ -489,6 +532,8 @@ export default function CheckoutPage() {
           error: result.error || 'Invalid promo code.',
         }));
       }
+
+      scrollToPayment();
     }
   }, [
     checkout,
@@ -503,6 +548,7 @@ export default function CheckoutPage() {
     selectedCredit,
     loyaltyIntent,
     isGuest,
+    scrollToPayment,
   ]);
 
   // ── Copy summary ───────────────────────────────────────────────────────────
@@ -515,7 +561,7 @@ export default function CheckoutPage() {
         : undefined;
 
     const lines = [
-      `Sofi's — Checkout Summary`,
+      `Sofi's - Checkout Summary`,
       `Type: ${formatOrderTypeLabel(effectiveOrderType)}`,
     ];
 
@@ -534,7 +580,7 @@ export default function CheckoutPage() {
 
     for (const item of items) {
       lines.push(
-        `- ${item.name} x${clampInt(item.quantity, 1, 100)} — ${formatCents(
+        `- ${item.name} x${clampInt(item.quantity, 1, 100)} - ${formatCents(
           computeDisplayLineTotalCents(item),
         )}`,
       );
@@ -551,6 +597,7 @@ export default function CheckoutPage() {
   }, [hasItems, items, subtotalCents, effectiveOrderType, pickupTiming, pickupTimingLabel]);
 
   const paymentError = checkoutContractError ?? routerError;
+  const paymentSectionIndex = isGuest ? 5 : 6;
 
   return (
     <main className="relative mx-auto w-full max-w-2xl px-4 py-8 sm:py-12">
@@ -805,93 +852,153 @@ export default function CheckoutPage() {
             </SectionCard>
           )}
 
-          <SectionCard
-            index={isGuest ? 4 : 5}
-            className="border-(--color-ember-200) bg-linear-to-b from-white to-(--color-cream-50)"
-          >
-            <div className="space-y-3 px-5 py-5">
-              <AnimatePresence>
-                {showChallenge && otpChallenge && (
-                  <motion.div
-                    key="otp-challenge"
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -4 }}
-                    transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-                  >
-                    <CheckoutChallengeModal
-                      key={otpChallenge.nonce}
-                      nonce={otpChallenge.nonce}
-                      expiresAt={otpChallenge.expiresAt}
-                      userId={isAuthenticated && user?.id ? user.id : null}
-                      guestEmail={challengeEmail}
-                      onToken={(token) => void retryWithToken(token)}
-                      onExpired={() => reset()}
-                    />
-                  </motion.div>
-                )}
-              </AnimatePresence>
+          <SectionCard index={isGuest ? 4 : 5}>
+            <SectionHeader
+              title="Recommended for You"
+              subtitle="Add a little extra before placing your order"
+              right={
+                <Link
+                  to="/menu"
+                  className="text-xs text-(--color-ink-400) underline hover:text-(--color-ink-700)"
+                >
+                  Return to Menu
+                </Link>
+              }
+            />
 
-              <AnimatePresence>
-                {showBlocked && (
-                  <motion.div
-                    key="blocked"
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.2 }}
-                  >
-                    <BlockedOrderCard onReset={reset} />
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {!showChallenge && !showBlocked && embeddedClientSecret && (
-                <div className="space-y-3">
-                  <div className="rounded-2xl border border-(--color-cream-200) bg-white p-3">
-                    <p className="mb-3 text-sm font-bold text-(--color-ink-900)">
-                      Select payment method
+            <div className="space-y-2 px-5 py-4">
+              {RECOMMENDED_ADD_ONS.map((item) => (
+                <Link
+                  key={item.name}
+                  to="/menu"
+                  onClick={clearEmbeddedCheckout}
+                  className="flex w-full items-center justify-between rounded-2xl border border-(--color-cream-200) bg-white p-4 text-left transition-colors hover:bg-(--color-cream-50)"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-(--color-ink-900)">{item.name}</p>
+                    <p className="mt-0.5 text-xs text-(--color-ink-400)">
+                      {item.description} · {item.priceLabel}
                     </p>
-                    <EmbeddedStripePayment clientSecret={embeddedClientSecret} />
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={clearEmbeddedCheckout}
-                    className="w-full rounded-xl border border-(--color-cream-300) bg-white px-4 py-2.5 text-sm font-semibold text-(--color-ink-600) transition-colors hover:bg-(--color-cream-50) hover:text-(--color-ember-700)"
+                  <span
+                    aria-hidden="true"
+                    className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-(--color-cream-300) bg-(--color-cream-50) text-lg font-bold text-(--color-ember-700)"
                   >
-                    Edit order details
-                  </button>
-                </div>
-              )}
-
-              {!showChallenge && !showBlocked && !embeddedClientSecret && (
-                <CheckoutButton
-                  onCheckout={handleCheckout}
-                  isLoading={isLoading}
-                  disabled={!hasItems}
-                />
-              )}
-
-              {paymentError && !showChallenge && !showBlocked && (
-                <p className="text-center text-sm font-medium text-(--color-error)" role="alert">
-                  {paymentError}
-                </p>
-              )}
-
-              <p className="text-center text-[11px] text-(--color-ink-300)">
-                🔒 Secure payment via Stripe. Card details are never stored on our servers.
-              </p>
+                    +
+                  </span>
+                </Link>
+              ))}
             </div>
           </SectionCard>
 
+          <div ref={paymentSectionRef}>
+            <SectionCard
+              index={paymentSectionIndex}
+              className="border-(--color-ember-200) bg-linear-to-b from-white to-(--color-cream-50)"
+            >
+              <div className="space-y-4 px-5 py-5">
+                <div className="rounded-2xl border border-(--color-cream-200) bg-white p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-(--color-ink-400)">
+                        Payment
+                      </p>
+                      <h2 className="mt-1 text-lg font-bold text-(--color-ink-900)">
+                        {embeddedClientSecret ? 'Select Payment Method' : 'Review Order'}
+                      </h2>
+                      <p className="mt-1 text-xs leading-5 text-(--color-ink-400)">
+                        By placing an order, you agree to Sofi&apos;s order and payment terms. No
+                        changes can be guaranteed after payment is submitted.
+                      </p>
+                    </div>
+
+                    <div className="rounded-full bg-(--color-cream-50) px-3 py-1 text-xs font-bold text-(--color-ember-700)">
+                      {formatCents(estimatedTotalCents)}
+                    </div>
+                  </div>
+                </div>
+
+                <AnimatePresence>
+                  {showChallenge && otpChallenge && (
+                    <motion.div
+                      key="otp-challenge"
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -4 }}
+                      transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+                    >
+                      <CheckoutChallengeModal
+                        key={otpChallenge.nonce}
+                        nonce={otpChallenge.nonce}
+                        expiresAt={otpChallenge.expiresAt}
+                        userId={isAuthenticated && user?.id ? user.id : null}
+                        guestEmail={challengeEmail}
+                        onToken={(token) => void retryWithToken(token)}
+                        onExpired={() => reset()}
+                      />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                <AnimatePresence>
+                  {showBlocked && (
+                    <motion.div
+                      key="blocked"
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.2 }}
+                    >
+                      <BlockedOrderCard onReset={reset} />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {!showChallenge && !showBlocked && embeddedClientSecret && (
+                  <div className="space-y-3">
+                    <div className="overflow-hidden rounded-2xl border border-(--color-cream-200) bg-white p-3">
+                      <EmbeddedStripePayment clientSecret={embeddedClientSecret} />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={clearEmbeddedCheckout}
+                      className="w-full rounded-xl border border-(--color-cream-300) bg-white px-4 py-2.5 text-sm font-semibold text-(--color-ink-600) transition-colors hover:bg-(--color-cream-50) hover:text-(--color-ember-700)"
+                    >
+                      Edit order details
+                    </button>
+                  </div>
+                )}
+
+                {!showChallenge && !showBlocked && !embeddedClientSecret && (
+                  <CheckoutButton
+                    onCheckout={handleCheckout}
+                    isLoading={isLoading}
+                    disabled={!hasItems}
+                  />
+                )}
+
+                {paymentError && !showChallenge && !showBlocked && (
+                  <p className="text-center text-sm font-medium text-(--color-error)" role="alert">
+                    {paymentError}
+                  </p>
+                )}
+
+                <p className="text-center text-[11px] leading-5 text-(--color-ink-300)">
+                  🔒 Secure payment via Stripe. Card details are never stored on our servers.
+                </p>
+              </div>
+            </SectionCard>
+          </div>
+
           {isGuest && (
-            <motion.div custom={5} variants={fadeUp} initial="hidden" animate="visible">
+            <motion.div custom={6} variants={fadeUp} initial="hidden" animate="visible">
               <GuestPostCheckoutNudge email={guestEmail} />
             </motion.div>
           )}
 
-          <motion.div custom={6} variants={fadeUp} initial="hidden" animate="visible">
+          <motion.div custom={7} variants={fadeUp} initial="hidden" animate="visible">
             <div className="px-1 py-2 text-center">
               <p className="text-xs text-(--color-ink-400)">
                 Need help?{' '}

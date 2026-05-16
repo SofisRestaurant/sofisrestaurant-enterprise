@@ -1,48 +1,19 @@
 // src/modules/checkout/hooks/useGuestCheckout.ts
 // =============================================================================
 // Guest checkout hook — calls `create-checkout-guest` with the `apikey` header
-// and no Authorization header. Server owns the Stripe redirect URLs.
+// and no Authorization header. Server owns Stripe session creation.
 //
-// CHANGES IN THIS VERSION:
-//
-//   [1] lastOtpChallengeRef preserves { nonce, expiresAt } during retrying.
-//
-//       otpChallenge was derived as:
-//         phase.tag === 'otp_required' ? { nonce, expiresAt } : null
-//
-//       When onToken fires, retryWithChallengeToken dispatches RETRY, moving
-//       phase to 'retrying'. otpChallenge became null. In CheckoutPage, the
-//       modal mount condition is `showChallenge && otpChallenge`. During
-//       'retrying', showChallenge is true (button stays unmounted) but
-//       otpChallenge is null — the modal unmounts. The section goes blank for
-//       the duration of the retry network call.
-//
-//       Fix: store the last issued challenge in lastOtpChallengeRef. Derive
-//       otpChallenge as non-null for both 'otp_required' and 'retrying'.
-//       Clear the ref on RESET (successful checkout) so it doesn't leak into
-//       a subsequent unrelated checkout attempt.
-//
-//   [2] TS2531 fix — data null narrowing in fetchGuestCheckout.
-//       Extended the URL guard: `if (!url || data === null)` so TypeScript
-//       narrows data to non-null for subsequent property accesses.
-//
-//   [3] Removed explicit `(item: any)` / `(m: any)` annotations in
-//       buildGuestRequestBody.
-//
-//       cartItems was typed as unknown[] to allow the hook to receive the raw
-//       Zustand selector result. The map callbacks then had to use `:any` to
-//       access CartItem properties, which caused unsafe-member-access warnings
-//       on every field.
-//
-//       Fix: import CartItem and type the parameter as CartItem[]. The hook
-//       passes useCartStore((s) => s.items) which is CartItem[] — no cast
-//       needed at the call site. The explicit :any annotations and the now-
-//       redundant Array.isArray(item.modifiers) fallback are removed.
-//       The eslint-disable comment that suppressed the explicit-any warning
-//       is removed as well.
-//
-// All other logic, security boundaries, and phase machine behavior
-// are unchanged.
+// CHANGES (2026-05 embedded checkout migration):
+//   • Success response now supports BOTH hosted and embedded checkout:
+//       - hosted:   url
+//       - embedded: clientSecret
+//   • RawCheckoutResponse carries url/clientSecret/uiMode.
+//   • handleRawResponse returns clientSecret to CheckoutPage, allowing
+//     <EmbeddedStripePayment /> to render.
+//   • Missing-URL guard replaced with missing-transport guard.
+//   • OTP challenge preservation kept.
+//   • Guest token continuity kept.
+//   • No `any`.
 // =============================================================================
 
 import { useReducer, useCallback, useRef } from 'react';
@@ -50,7 +21,10 @@ import { env } from '@/lib/config/env';
 import { useCartStore } from '@/modules/cart/store/cart.store';
 import { mapCheckoutError } from '@/modules/checkout/errors/mapCheckoutError';
 import type { CartItem } from '@/modules/cart/types/cart.types';
-import type { CheckoutItemWirePayload } from '../types/checkout-wire.types';
+import type {
+  CheckoutItemWirePayload,
+  CheckoutUiMode,
+} from '../types/checkout-wire.types';
 import {
   isRecord,
   parseCheckoutPricingResponse,
@@ -102,12 +76,32 @@ const IDLE: GuestCheckoutPhase = { tag: 'idle' };
 
 function phaseReducer(state: GuestCheckoutPhase, action: PhaseAction): GuestCheckoutPhase {
   switch (action.type) {
-    case 'INITIATE':     return { tag: 'initiating' };
-    case 'OTP_REQUIRED': return { tag: 'otp_required', nonce: action.nonce, expiresAt: action.expiresAt };
-    case 'RETRY':        return { tag: 'retrying' };
-    case 'BLOCKED':      return { tag: 'blocked' };
-    case 'ERROR':        return { tag: 'error', message: action.message, code: action.code, recoverable: action.recoverable };
-    case 'RESET':        return IDLE;
+    case 'INITIATE':
+      return { tag: 'initiating' };
+
+    case 'OTP_REQUIRED':
+      return {
+        tag: 'otp_required',
+        nonce: action.nonce,
+        expiresAt: action.expiresAt,
+      };
+
+    case 'RETRY':
+      return { tag: 'retrying' };
+
+    case 'BLOCKED':
+      return { tag: 'blocked' };
+
+    case 'ERROR':
+      return {
+        tag: 'error',
+        message: action.message,
+        code: action.code,
+        recoverable: action.recoverable,
+      };
+
+    case 'RESET':
+      return IDLE;
   }
 }
 
@@ -115,79 +109,131 @@ function phaseReducer(state: GuestCheckoutPhase, action: PhaseAction): GuestChec
 
 type RawCheckoutResponse =
   | {
-      readonly kind:         'success';
-      readonly url:          string;
-      readonly sessionId?:   string;
+      readonly kind: 'success';
+      readonly url?: string;
+      readonly clientSecret?: string;
+      readonly uiMode?: CheckoutUiMode;
+      readonly sessionId?: string;
       readonly pricingHash?: string;
-      readonly pricing?:     CheckoutPricingResponse;
-      readonly guestToken?:  string;
+      readonly pricing?: CheckoutPricingResponse;
+      readonly guestToken?: string;
     }
   | {
-      readonly kind:      'otp_required';
-      readonly nonce:     string;
+      readonly kind: 'otp_required';
+      readonly nonce: string;
       readonly expiresAt: string;
-      readonly message:   string;
-    }
-  | {
-      readonly kind:    'blocked';
       readonly message: string;
     }
   | {
-      readonly kind:    'error';
+      readonly kind: 'blocked';
       readonly message: string;
-      readonly code:    string | null;
+    }
+  | {
+      readonly kind: 'error';
+      readonly message: string;
+      readonly code: string | null;
     };
 
 // ─── Return type ──────────────────────────────────────────────────────────────
 
 export type UseGuestCheckoutReturn = {
-  phase:        GuestCheckoutPhase;
+  phase: GuestCheckoutPhase;
   otpChallenge: { nonce: string; expiresAt: string } | null;
-  isLoading:    boolean;
-  error:        string | null;
-  sessionUrl:   string | null;
-  initiateGuestCheckout:   (input: GuestCheckoutInput) => Promise<CheckoutResult>;
-  retryWithChallengeToken: (challengeToken: string)     => Promise<CheckoutResult>;
-  clearError:              () => void;
+  isLoading: boolean;
+  error: string | null;
+  sessionUrl: string | null;
+  initiateGuestCheckout: (input: GuestCheckoutInput) => Promise<CheckoutResult>;
+  retryWithChallengeToken: (challengeToken: string) => Promise<CheckoutResult>;
+  clearError: () => void;
 };
 
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 
 function getStoredGuestToken(): string | null {
-  try   { return sessionStorage.getItem(GUEST_TOKEN_STORAGE_KEY); }
-  catch { return null; }
+  try {
+    return sessionStorage.getItem(GUEST_TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
 }
 
 function storeGuestToken(token: string): void {
-  try   { sessionStorage.setItem(GUEST_TOKEN_STORAGE_KEY, token); }
-  catch { /* private browsing safe */ }
+  try {
+    sessionStorage.setItem(GUEST_TOKEN_STORAGE_KEY, token);
+  } catch {
+    // Private browsing safe.
+  }
+}
+
+// ─── Small parsers ────────────────────────────────────────────────────────────
+
+function readString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function readUiMode(record: Record<string, unknown>): CheckoutUiMode | undefined {
+  const value = record['uiMode'];
+  return value === 'hosted' || value === 'embedded' ? value : undefined;
+}
+
+/**
+ * Accepts both response shapes:
+ *
+ * 1. successResponse helper shape:
+ *    { ok: true, code, requestId, url/clientSecret, ... }
+ *
+ * 2. nested shape:
+ *    { ok: true, data: { url/clientSecret, ... } }
+ */
+function unwrapSuccessPayload(json: unknown): Record<string, unknown> | null {
+  if (!isRecord(json)) return null;
+
+  if (isRecord(json['data'])) {
+    return json['data'];
+  }
+
+  return json;
+}
+
+/**
+ * Some older guest endpoints may return flat error shapes while newer helpers
+ * return nested error objects. This keeps OTP/block parsing compatible with both.
+ */
+function unwrapErrorPayload(json: unknown): Record<string, unknown> | null {
+  if (!isRecord(json)) return null;
+
+  if (isRecord(json['error'])) {
+    return json['error'];
+  }
+
+  return json;
 }
 
 // ─── Request body builder ─────────────────────────────────────────────────────
-//
-// cartItems is CartItem[] — typed from the CartStore interface.
-// item is inferred as CartItem; m is inferred as CartModifier.
-// No explicit :any annotations needed or permitted.
 
 function buildGuestRequestBody(
-  cartItems:       CartItem[],
-  input:           GuestCheckoutInput,
-  storedToken:     string | null,
+  cartItems: CartItem[],
+  input: GuestCheckoutInput,
+  storedToken: string | null,
   challengeToken?: string,
 ): Record<string, unknown> {
   const itemsPayload: CheckoutItemWirePayload[] = cartItems.map(
     (item): CheckoutItemWirePayload => ({
-      id:       item.menuItemId,
+      id: item.menuItemId,
       quantity: item.quantity,
-      notes:    item.notes ?? undefined,
-      modifiers: item.modifiers.map((m) => ({ id: m.id, group_id: m.groupId })),
+      notes: item.notes ?? undefined,
+      modifiers: item.modifiers.map((modifier) => ({
+        id: modifier.id,
+        group_id: modifier.groupId,
+      })),
     }),
   );
 
   return {
     items: itemsPayload,
     ...serialiseGuestCheckoutInput(input),
-    ...(storedToken    ? { guest_token:     storedToken    } : {}),
+    ...(storedToken ? { guest_token: storedToken } : {}),
     ...(challengeToken ? { challenge_token: challengeToken } : {}),
   };
 }
@@ -211,67 +257,85 @@ async function fetchGuestCheckout(
   );
 
   const json: unknown = await response.json().catch(() => null);
+  const errorPayload = unwrapErrorPayload(json);
 
   // ── otp_required: intercept before mapCheckoutError discards nonce ────────
   if (
     response.status === 403 &&
-    isRecord(json) &&
-    json['code'] === 'otp_required' &&
-    typeof json['nonce']     === 'string' && json['nonce'].length > 0 &&
-    typeof json['expiresAt'] === 'string' && json['expiresAt'].length > 0
+    errorPayload !== null &&
+    errorPayload['code'] === 'otp_required' &&
+    typeof errorPayload['nonce'] === 'string' &&
+    errorPayload['nonce'].length > 0 &&
+    typeof errorPayload['expiresAt'] === 'string' &&
+    errorPayload['expiresAt'].length > 0
   ) {
     return {
-      kind:      'otp_required',
-      nonce:     json['nonce'],
-      expiresAt: json['expiresAt'],
-      message:   typeof json['message'] === 'string'
-        ? json['message']
-        : 'Phone verification is required to complete this order.',
+      kind: 'otp_required',
+      nonce: errorPayload['nonce'],
+      expiresAt: errorPayload['expiresAt'],
+      message:
+        typeof errorPayload['message'] === 'string'
+          ? errorPayload['message']
+          : 'Phone verification is required to complete this order.',
     };
   }
 
   // ── checkout_blocked: terminal ────────────────────────────────────────────
   if (
     response.status === 403 &&
-    isRecord(json) &&
-    json['code'] === 'checkout_blocked'
+    errorPayload !== null &&
+    errorPayload['code'] === 'checkout_blocked'
   ) {
     return {
-      kind:    'blocked',
-      message: typeof json['message'] === 'string'
-        ? json['message']
-        : 'This order could not be processed. Please contact support.',
+      kind: 'blocked',
+      message:
+        typeof errorPayload['message'] === 'string'
+          ? errorPayload['message']
+          : 'This order could not be processed. Please contact support.',
     };
   }
 
   // ── All other errors ──────────────────────────────────────────────────────
   if (!response.ok) {
     const mapped = mapCheckoutError(isRecord(json) ? json : null, response);
-    return { kind: 'error', message: mapped.message, code: mapped.code ?? null };
+    return {
+      kind: 'error',
+      message: mapped.message,
+      code: mapped.code ?? null,
+    };
   }
 
-  // ── Success ───────────────────────────────────────────────────────────────
-  const envelope = isRecord(json) ? json : null;
-  const data: Record<string, unknown> | null = envelope !== null
-    ? (isRecord(envelope['data']) ? envelope['data'] : envelope)
-    : null;
+  // ── Success: hosted OR embedded ───────────────────────────────────────────
+  const data = unwrapSuccessPayload(json);
 
-  const url = typeof data?.['url'] === 'string' ? data['url'] : null;
+  if (data === null) {
+    return {
+      kind: 'error',
+      message: 'Invalid checkout response.',
+      code: 'invalid_response',
+    };
+  }
 
-  // `|| data === null` added: TypeScript does not bridge the null correlation
-  // between `data` and `url` across separate variable bindings. This guard
-  // narrows data to Record<string, unknown> for all accesses below.
-  if (!url || data === null) {
-    return { kind: 'error', message: 'Invalid checkout response: missing URL.', code: 'invalid_response' };
+  const url = readString(data, 'url');
+  const clientSecret = readString(data, 'clientSecret');
+
+  if (!url && !clientSecret) {
+    return {
+      kind: 'error',
+      message: 'Invalid checkout response: missing URL or client secret.',
+      code: 'invalid_response',
+    };
   }
 
   return {
-    kind:        'success',
+    kind: 'success',
     url,
-    sessionId:   typeof data['sessionId']   === 'string' ? data['sessionId']   : undefined,
-    pricingHash: typeof data['pricingHash'] === 'string' ? data['pricingHash'] : undefined,
-    pricing:     parseCheckoutPricingResponse(data['pricing']),
-    guestToken:  typeof data['guest_token'] === 'string' ? data['guest_token'] : undefined,
+    clientSecret,
+    uiMode: readUiMode(data),
+    sessionId: readString(data, 'sessionId'),
+    pricingHash: readString(data, 'pricingHash'),
+    pricing: parseCheckoutPricingResponse(data['pricing']),
+    guestToken: readString(data, 'guest_token'),
   };
 }
 
@@ -280,75 +344,85 @@ async function fetchGuestCheckout(
 export function useGuestCheckout(): UseGuestCheckoutReturn {
   const [phase, dispatch] = useReducer(phaseReducer, IDLE);
 
-  const pendingInputRef     = useRef<GuestCheckoutInput | null>(null);
-  const cartItems           = useCartStore((s) => s.items);
+  const pendingInputRef = useRef<GuestCheckoutInput | null>(null);
+  const cartItems = useCartStore((state) => state.items);
 
-  // [FIX 1] lastOtpChallengeRef: retains the last { nonce, expiresAt } so
-  // otpChallenge remains non-null during the 'retrying' phase. Without this,
-  // phase → 'retrying' sets otpChallenge to null and the modal unmounts
-  // mid-flight, leaving the section blank until the network call resolves.
   const lastOtpChallengeRef = useRef<{ nonce: string; expiresAt: string } | null>(null);
 
-  const handleRawResponse = useCallback(
-    (raw: RawCheckoutResponse): CheckoutResult => {
-      switch (raw.kind) {
-        case 'success': {
-          if (raw.guestToken) storeGuestToken(raw.guestToken);
-          lastOtpChallengeRef.current = null;  // [FIX 1] clear on successful checkout
-          dispatch({ type: 'RESET' });
-          const r: CheckoutResultSuccess = {
-            ok:          true,
-            url:         raw.url,
-            sessionId:   raw.sessionId,
-            pricingHash: raw.pricingHash,
-            pricing:     raw.pricing,
-          };
-          return r;
-        }
+  const handleRawResponse = useCallback((raw: RawCheckoutResponse): CheckoutResult => {
+    switch (raw.kind) {
+      case 'success': {
+        if (raw.guestToken) storeGuestToken(raw.guestToken);
 
-        case 'otp_required': {
-          // [FIX 1] Persist before dispatch so the ref is populated when
-          // the 'retrying' phase renders and needs otpChallenge non-null.
-          lastOtpChallengeRef.current = { nonce: raw.nonce, expiresAt: raw.expiresAt };
-          dispatch({ type: 'OTP_REQUIRED', nonce: raw.nonce, expiresAt: raw.expiresAt });
-          const r: CheckoutResultOtpRequired = {
-            ok:        false,
-            code:      'otp_required',
-            error:     raw.message,
-            nonce:     raw.nonce,
-            expiresAt: raw.expiresAt,
-          };
-          return r;
-        }
+        lastOtpChallengeRef.current = null;
+        dispatch({ type: 'RESET' });
 
-        case 'blocked': {
-          dispatch({ type: 'BLOCKED' });
-          const r: CheckoutResultBlocked = {
-            ok:    false,
-            code:  'checkout_blocked',
-            error: raw.message,
-          };
-          return r;
-        }
+        const result: CheckoutResultSuccess = {
+          ok: true,
+          url: raw.url,
+          clientSecret: raw.clientSecret,
+          uiMode: raw.uiMode,
+          sessionId: raw.sessionId,
+          pricingHash: raw.pricingHash,
+          pricing: raw.pricing,
+        };
 
-        case 'error': {
-          dispatch({
-            type:        'ERROR',
-            message:     raw.message,
-            code:        raw.code,
-            recoverable: raw.code !== 'config_error' && raw.code !== 'forbidden_field',
-          });
-          const r: CheckoutResultFailure = {
-            ok:    false,
-            error: raw.message,
-            code:  raw.code,
-          };
-          return r;
-        }
+        return result;
       }
-    },
-    [],
-  );
+
+      case 'otp_required': {
+        lastOtpChallengeRef.current = {
+          nonce: raw.nonce,
+          expiresAt: raw.expiresAt,
+        };
+
+        dispatch({
+          type: 'OTP_REQUIRED',
+          nonce: raw.nonce,
+          expiresAt: raw.expiresAt,
+        });
+
+        const result: CheckoutResultOtpRequired = {
+          ok: false,
+          code: 'otp_required',
+          error: raw.message,
+          nonce: raw.nonce,
+          expiresAt: raw.expiresAt,
+        };
+
+        return result;
+      }
+
+      case 'blocked': {
+        dispatch({ type: 'BLOCKED' });
+
+        const result: CheckoutResultBlocked = {
+          ok: false,
+          code: 'checkout_blocked',
+          error: raw.message,
+        };
+
+        return result;
+      }
+
+      case 'error': {
+        dispatch({
+          type: 'ERROR',
+          message: raw.message,
+          code: raw.code,
+          recoverable: raw.code !== 'config_error' && raw.code !== 'forbidden_field',
+        });
+
+        const result: CheckoutResultFailure = {
+          ok: false,
+          error: raw.message,
+          code: raw.code,
+        };
+
+        return result;
+      }
+    }
+  }, []);
 
   const initiateGuestCheckout = useCallback(
     async (input: GuestCheckoutInput): Promise<CheckoutResult> => {
@@ -359,20 +433,44 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
 
       for (const field of FORBIDDEN_FIELDS) {
         if (Object.prototype.hasOwnProperty.call(body, field)) {
-          const msg = `BUG: forbidden field '${field}' in guest checkout request`;
-          dispatch({ type: 'ERROR', message: msg, code: 'forbidden_field', recoverable: false });
-          const r: CheckoutResultFailure = { ok: false, error: msg, code: 'forbidden_field' };
-          return r;
+          const message = `BUG: forbidden field '${field}' in guest checkout request`;
+
+          dispatch({
+            type: 'ERROR',
+            message,
+            code: 'forbidden_field',
+            recoverable: false,
+          });
+
+          const result: CheckoutResultFailure = {
+            ok: false,
+            error: message,
+            code: 'forbidden_field',
+          };
+
+          return result;
         }
       }
 
       try {
         return handleRawResponse(await fetchGuestCheckout(body));
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Network error. Please try again.';
-        dispatch({ type: 'ERROR', message, code: null, recoverable: true });
-        const r: CheckoutResultFailure = { ok: false, error: message, code: null };
-        return r;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Network error. Please try again.';
+
+        dispatch({
+          type: 'ERROR',
+          message,
+          code: null,
+          recoverable: true,
+        });
+
+        const result: CheckoutResultFailure = {
+          ok: false,
+          error: message,
+          code: null,
+        };
+
+        return result;
       }
     },
     [cartItems, handleRawResponse],
@@ -383,15 +481,25 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
       const input = pendingInputRef.current;
 
       if (!input) {
-        const msg = 'Your session has expired. Please restart checkout.';
-        dispatch({ type: 'ERROR', message: msg, code: 'session_expired', recoverable: false });
-        const r: CheckoutResultFailure = { ok: false, error: msg, code: 'session_expired' };
-        return r;
+        const message = 'Your session has expired. Please restart checkout.';
+
+        dispatch({
+          type: 'ERROR',
+          message,
+          code: 'session_expired',
+          recoverable: false,
+        });
+
+        const result: CheckoutResultFailure = {
+          ok: false,
+          error: message,
+          code: 'session_expired',
+        };
+
+        return result;
       }
 
       dispatch({ type: 'RETRY' });
-      // lastOtpChallengeRef.current is still set from the prior OTP_REQUIRED
-      // dispatch, so otpChallenge remains non-null during this network call.
 
       const body = buildGuestRequestBody(
         cartItems,
@@ -402,11 +510,23 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
 
       try {
         return handleRawResponse(await fetchGuestCheckout(body));
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Network error. Please try again.';
-        dispatch({ type: 'ERROR', message, code: null, recoverable: true });
-        const r: CheckoutResultFailure = { ok: false, error: message, code: null };
-        return r;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Network error. Please try again.';
+
+        dispatch({
+          type: 'ERROR',
+          message,
+          code: null,
+          recoverable: true,
+        });
+
+        const result: CheckoutResultFailure = {
+          ok: false,
+          error: message,
+          code: null,
+        };
+
+        return result;
       }
     },
     [cartItems, handleRawResponse],
@@ -418,12 +538,8 @@ export function useGuestCheckout(): UseGuestCheckoutReturn {
   }, []);
 
   const isLoading = phase.tag === 'initiating' || phase.tag === 'retrying';
-  const error     = phase.tag === 'error' ? phase.message : null;
+  const error = phase.tag === 'error' ? phase.message : null;
 
-  // [FIX 1] Preserve otpChallenge across the 'retrying' transition.
-  // During 'retrying', the ref holds the challenge from the prior 'otp_required'
-  // phase, keeping the modal mounted and visible while the retry is in flight.
-  // Returns null for all other phases (idle, initiating, blocked, error).
   const otpChallenge: { nonce: string; expiresAt: string } | null =
     phase.tag === 'otp_required'
       ? { nonce: phase.nonce, expiresAt: phase.expiresAt }
