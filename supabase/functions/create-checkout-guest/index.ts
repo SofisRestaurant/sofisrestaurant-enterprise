@@ -7,19 +7,17 @@
 // HARD CONSTRAINTS:
 //   - No import of loyalty.ts, credits.ts, promos.ts, riskScore.ts
 //   - No userId anywhere in executable auth/customer context
-//   - No bearer token handling (Authorization header → 403)
+//   - No bearer token handling. Authorization header is rejected with 403.
 //   - No checkIntegrityHash
 //   - No user_id / customer_uid / uid in Stripe metadata
 //   - promoId, promoCode, creditId hardcoded to null in pricing call
 //
-// Embedded Checkout support:
-//   - Reads optional ui_mode from raw validated body.
-//   - Absent/null → hosted mode.
-//   - hosted   → Stripe Checkout URL returned as `url`.
-//   - embedded → Stripe client secret returned as `clientSecret`.
-//   - Uses create-checkout/urls.ts resolvers so caller success/cancel URLs
-//     are origin-allowlist validated upstream by request-validation.ts when
-//     present, with safe env/default fallbacks.
+// Hosted Stripe Checkout only:
+//   - Server creates a hosted Stripe Checkout Session.
+//   - Success returns a Stripe Checkout `url`.
+//   - Client redirects to Stripe Checkout.
+//   - success_url and cancel_url are resolved server-side through allowlisted
+//     URL resolvers with safe environment/default fallbacks.
 //
 // Security invariants:
 //   - Stripe payment finalization remains webhook-owned.
@@ -43,11 +41,6 @@ import {
   pickupTimeToMetadata,
   validatePickupTime,
 } from "../_shared/pickup-time.ts";
-import {
-  DEFAULT_CHECKOUT_UI_MODE,
-  isCheckoutUiMode,
-  type CheckoutUiMode,
-} from "../_shared/checkout-ui-mode.ts";
 
 import { loadCanonicalCartItems } from "../create-checkout/catalog.ts";
 import { corsHeadersFor } from "../create-checkout/cors.ts";
@@ -84,7 +77,6 @@ import { enforcePreCheckoutRisk } from "../create-checkout/risk-gate.ts";
 import type { RiskGateOutcome } from "../create-checkout/risk-gate.ts";
 import {
   resolveCancelUrl,
-  resolveReturnUrl,
   resolveSuccessUrl,
 } from "../create-checkout/urls.ts";
 
@@ -94,17 +86,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function readStripeSessionUiMode(session: Stripe.Checkout.Session): CheckoutUiMode {
-  const rawMode = (session as { readonly ui_mode?: unknown }).ui_mode;
-  return rawMode === "embedded_page" || rawMode === "embedded" ? "embedded" : "hosted";
-}
-
 function hasHostedUrl(session: Stripe.Checkout.Session): boolean {
   return typeof session.url === "string" && session.url.length > 0;
-}
-
-function hasEmbeddedClientSecret(session: Stripe.Checkout.Session): boolean {
-  return typeof session.client_secret === "string" && session.client_secret.length > 0;
 }
 
 // ─── E.164 US phone validation ────────────────────────────────────────────────
@@ -170,78 +153,20 @@ function toRiskGateResponse(
   );
 }
 
-// ─── UI mode parsing ──────────────────────────────────────────────────────────
-
-function parseCheckoutUiMode(
-  rawBodyRecord: Record<string, unknown>,
-): { ok: true; value: CheckoutUiMode } | { ok: false; error: string } {
-  const rawUiMode = rawBodyRecord["ui_mode"];
-
-  if (rawUiMode === undefined || rawUiMode === null) {
-    return { ok: true, value: DEFAULT_CHECKOUT_UI_MODE };
-  }
-
-  if (!isCheckoutUiMode(rawUiMode)) {
-    return {
-      ok: false,
-      error: "'ui_mode' must be 'hosted' or 'embedded'.",
-    };
-  }
-
-  return { ok: true, value: rawUiMode };
-}
-
-// ─── Stripe session create params ─────────────────────────────────────────────
-//
-// Some installed Stripe TypeScript builds lag the runtime API and do not yet
-// type `ui_mode: "embedded"` correctly. The runtime API supports it, so the
-// small cast is isolated here instead of leaking casts through the pipeline.
-
-function buildModeSpecificStripeParams(
-  uiMode: CheckoutUiMode,
-  suppliedSuccessUrl: string | null,
-  suppliedCancelUrl: string | null,
-): Partial<Stripe.Checkout.SessionCreateParams> {
-  if (uiMode === "embedded") {
-    return {
-      ui_mode: "embedded_page",
-      return_url: resolveReturnUrl(suppliedSuccessUrl),
-    } as unknown as Partial<Stripe.Checkout.SessionCreateParams>;
-  }
-
-  return {
-    success_url: resolveSuccessUrl(suppliedSuccessUrl),
-    cancel_url: resolveCancelUrl(suppliedCancelUrl),
-  };
-}
-
 // ─── Response body shaping ────────────────────────────────────────────────────
 
 function buildGuestModeResponseBody(
   session: Stripe.Checkout.Session,
-  uiMode: CheckoutUiMode,
   pricingHash: string,
   snapshot: PricingSnapshot,
   guestToken: string,
 ): JsonObject {
-  const base = {
+  return {
     sessionId: session.id,
-    uiMode,
+    url: session.url,
     pricingHash,
     pricing: buildGuestPricingResponse(snapshot),
     guest_token: guestToken,
-  };
-
-  if (uiMode === "embedded") {
-    return {
-      ...base,
-      clientSecret: session.client_secret,
-    } as JsonObject;
-  }
-
-  return {
-    ...base,
-    url: session.url,
   } as JsonObject;
 }
 
@@ -387,21 +312,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   const body: GuestRequestBody = validated.value;
   const rawBodyRecord = isRecord(parsedBody) ? parsedBody : {};
-
-  // ── ui_mode ─────────────────────────────────────────────────────────────────
-  const uiModeResult = parseCheckoutUiMode(rawBodyRecord);
-
-  if (!uiModeResult.ok) {
-    return errorResponse(
-      requestId,
-      422,
-      "invalid_ui_mode",
-      uiModeResult.error,
-      corsHeaders,
-    );
-  }
-
-  const uiMode = uiModeResult.value;
 
   // ── Optional raw-body fields ────────────────────────────────────────────────
   const challengeToken: string | undefined =
@@ -687,11 +597,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const preCheckoutVerifStatus = riskOutcome.verificationStatus;
 
   // ── Session reuse check ─────────────────────────────────────────────────────
-  //
-  // findReusableGuestSession currently only returns hosted sessions because it
-  // checks `stripeSession.url`. That is safe: embedded requests will simply
-  // create a fresh session until pending-cart.ts is upgraded for mode-aware
-  // guest reuse.
   const reusableSession = await findReusableGuestSession({
     db,
     stripe,
@@ -704,56 +609,38 @@ Deno.serve(async (req: Request): Promise<Response> => {
   });
 
   if (reusableSession) {
-    const reusableMode = readStripeSessionUiMode(reusableSession.session);
-
-    if (reusableMode === uiMode) {
-      const canReuse =
-        uiMode === "embedded"
-          ? hasEmbeddedClientSecret(reusableSession.session)
-          : hasHostedUrl(reusableSession.session);
-
-      if (!canReuse) {
-        return errorResponse(
-          requestId,
-          502,
-          "stripe_session_failed",
-          "Unable to reuse checkout session. Please try again.",
-          corsHeaders,
-        );
-      }
-
-      const ms = Date.now() - start;
-
-      log("info", "guest_checkout_session_reused", {
+    if (!hasHostedUrl(reusableSession.session)) {
+      return errorResponse(
         requestId,
-        cartId: prefix(reusableSession.cartId),
-        sessionId: prefix(reusableSession.session.id),
-        amountTotal: snapshot.totalCents,
-        orderType: body.order_type,
-        uiMode,
-        ms,
-      });
-
-      return successResponse(
-        requestId,
-        "checkout_session_reused",
-        buildGuestModeResponseBody(
-          reusableSession.session,
-          uiMode,
-          pricingHash,
-          snapshot,
-          guestToken,
-        ),
+        502,
+        "stripe_session_failed",
+        "Unable to reuse checkout session. Please try again.",
         corsHeaders,
       );
     }
 
-    log("info", "guest_checkout_session_reuse_mode_mismatch", {
+    const ms = Date.now() - start;
+
+    log("info", "guest_checkout_session_reused", {
       requestId,
       cartId: prefix(reusableSession.cartId),
-      existingMode: reusableMode,
-      requestedMode: uiMode,
+      sessionId: prefix(reusableSession.session.id),
+      amountTotal: snapshot.totalCents,
+      orderType: body.order_type,
+      ms,
     });
+
+    return successResponse(
+      requestId,
+      "checkout_session_reused",
+      buildGuestModeResponseBody(
+        reusableSession.session,
+        pricingHash,
+        snapshot,
+        guestToken,
+      ),
+      corsHeaders,
+    );
   }
 
   // ── Persist pending cart ────────────────────────────────────────────────────
@@ -810,7 +697,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     pricing_snapshot_version: snapshot.version,
     request_id: requestId,
     stripe_api_version: STRIPE_API_VERSION,
-    checkout_ui_mode: uiMode,
+    checkout_ui_mode: "hosted",
     currency: snapshot.currency,
     subtotal_cents: String(snapshot.subtotalCents),
     campaign_discount_cents: String(snapshot.campaignDiscountCents ?? 0),
@@ -833,13 +720,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       : {}),
   };
 
-  const modeSpecificParams = buildModeSpecificStripeParams(
-    uiMode,
-    suppliedSuccessUrl,
-    suppliedCancelUrl,
-  );
-
-  // ── Create Stripe session ───────────────────────────────────────────────────
+  // ── Create Stripe hosted Checkout session ───────────────────────────────────
   let stripeSession: Stripe.Checkout.Session;
 
   try {
@@ -856,7 +737,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
         ...(body.order_type === "delivery"
           ? { phone_number_collection: { enabled: true } }
           : {}),
-        ...modeSpecificParams,
+        success_url: resolveSuccessUrl(suppliedSuccessUrl),
+        cancel_url: resolveCancelUrl(suppliedCancelUrl),
       },
       { idempotencyKey },
     );
@@ -864,7 +746,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
     log("error", "guest_checkout_stripe_session_failed", {
       requestId,
       cartId: prefix(pendingCart.cartId),
-      uiMode,
       error: asErr(error),
     });
 
@@ -877,23 +758,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
-  if (uiMode === "embedded") {
-    if (!stripeSession.client_secret) {
-      log("error", "guest_checkout_stripe_session_missing_client_secret", {
-        requestId,
-        cartId: prefix(pendingCart.cartId),
-        sessionId: prefix(stripeSession.id),
-      });
-
-      return errorResponse(
-        requestId,
-        502,
-        "stripe_session_failed",
-        "Unable to create checkout session. Please try again.",
-        corsHeaders,
-      );
-    }
-  } else if (!stripeSession.url) {
+  if (!hasHostedUrl(stripeSession)) {
     log("error", "guest_checkout_stripe_session_missing_url", {
       requestId,
       cartId: prefix(pendingCart.cartId),
@@ -910,36 +775,33 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // Hosted sessions sometimes benefit from a refetch for the authoritative URL.
-  // Embedded sessions already return client_secret directly and do not need it.
   let authoritativeSession = stripeSession;
 
-  if (uiMode === "hosted") {
-    try {
-      const retrievedSession = await stripe.checkout.sessions.retrieve(stripeSession.id, {
-        expand: ["payment_intent"],
-      });
+  try {
+    const retrievedSession = await stripe.checkout.sessions.retrieve(stripeSession.id, {
+      expand: ["payment_intent"],
+    });
 
-      if (retrievedSession.url) {
-        authoritativeSession = retrievedSession;
-      }
-    } catch (error) {
-      log("warn", "guest_checkout_stripe_session_refetch_failed", {
-        requestId,
-        cartId: prefix(pendingCart.cartId),
-        sessionId: prefix(stripeSession.id),
-        error: asErr(error),
-      });
+    if (retrievedSession.url) {
+      authoritativeSession = retrievedSession;
     }
+  } catch (error) {
+    log("warn", "guest_checkout_stripe_session_refetch_failed", {
+      requestId,
+      cartId: prefix(pendingCart.cartId),
+      sessionId: prefix(stripeSession.id),
+      error: asErr(error),
+    });
+  }
 
-    if (!authoritativeSession.url) {
-      return errorResponse(
-        requestId,
-        502,
-        "stripe_session_failed",
-        "Unable to create checkout session. Please try again.",
-        corsHeaders,
-      );
-    }
+  if (!hasHostedUrl(authoritativeSession)) {
+    return errorResponse(
+      requestId,
+      502,
+      "stripe_session_failed",
+      "Unable to create checkout session. Please try again.",
+      corsHeaders,
+    );
   }
 
   // ── Backfill stripe_session_id into pending_carts ──────────────────────────
@@ -961,7 +823,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
     amountTotal: snapshot.totalCents,
     orderType: body.order_type,
     pickupTime: pickupTime ?? null,
-    uiMode,
     smsOptIn,
     ms,
   });
@@ -971,7 +832,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
     "checkout_session_created",
     buildGuestModeResponseBody(
       authoritativeSession,
-      uiMode,
       pricingHash,
       snapshot,
       guestToken,
