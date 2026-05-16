@@ -1,107 +1,113 @@
 // src/modules/checkout/pages/CheckoutPage.tsx
 // =============================================================================
-// CheckoutPage
-// =============================================================================
-// Ownership:
-// - Orchestrates checkout state, loyalty/rewards, contact, promo, order summary,
-//   recommended add-ons, and payment CTA.
-// - Order intent is owned by useOrderIntentStore and controlled from TopBar /
-//   MobileOrderIntentSheet.
-// - Embedded Stripe is supported while preserving hosted redirect fallback.
+// CHANGES FROM PRIOR VERSION:
 //
-// Embedded Stripe behavior:
-// - Hosted mode: server returns url, then this page redirects.
-// - Embedded mode: server returns clientSecret, then this page renders
-//   <EmbeddedStripePayment /> inside the payment section.
-// - OTP challenge and blocked states still take priority.
-// - No Stripe UI is shown until the router/server finishes verification.
+//   [SPLIT] All helpers, sub-components, and the loyalty API call have been
+//           extracted into their checkout-owned files. This file is now the
+//           orchestrator only: state, effects, event handlers, render tree.
 //
-// UX behavior:
-// - The payment area is styled like a modern restaurant checkout panel.
-// - Recommended add-ons are shown before payment.
-// - The first CTA calls checkout directly, without opening an extra review modal.
-// - After embedded checkout starts, the page scrolls to the Stripe payment area.
-// - Payment-affecting changes clear the existing embedded session.
+//   [SMS]   handleCheckout passes guestPhone and smsOptIn when SMS opt-in is enabled.
+//           The router validates the phone before any network call.
 //
-// Security invariants:
-// - Stripe payment finalization remains webhook-owned.
-// - CheckoutButton is unmounted during OTP challenge and blocked state.
-// - challenge_token lives only in CheckoutChallengeModal state + router memory.
-// - guest_token continuity remains inside useGuestCheckout.
-// - Client never calculates authoritative totals.
+//   [ORDER INTENT]
+//           Checkout no longer owns pickup-time selection.
+//           Pickup/delivery intent now comes from useOrderIntentStore, which is
+//           controlled by the top-nav OrderIntentSelector and the mobile
+//           bottom sheet. This prevents duplicate pickup-time UI and keeps the
+//           customer's order setup consistent before checkout.
+//
+//           The local `pickupTimingToIso` helper has been replaced by the
+//           shared `getPickupTimingDate` helper exported from the store so the
+//           selector, the sheet, the checkout payload, and the copy-summary
+//           all agree on what a given timing means.
+//
+//           A mobile-only "Change" button in the Order Details card now opens
+//           MobileOrderIntentSheet (the same one rendered by TopBar) via the
+//           store, so the customer doesn't have to scroll up to change pickup
+//           timing on mobile.
+//
+// Security invariants preserved:
+//   - No Stripe URL before verification.
+//   - CheckoutButton is unmounted during OTP challenge.
+//   - challenge_token lives only in CheckoutChallengeModal state + router memory.
+//   - guest_token continuity preserved via sessionStorage.
+//   - pendingInputRef in useGuestCheckout preserves cart + phone across OTP cycle.
 // =============================================================================
 
 import {
-  useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
+  useCallback,
   type ChangeEvent,
   type KeyboardEvent,
 } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { AnimatePresence, motion } from 'framer-motion';
-import { ChefHat, Plus, ShoppingBag, Utensils } from 'lucide-react';
+import { useNavigate, Link } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
 
+// ── Checkout module ────────────────────────────────────────────────────────────
 import CheckoutButton from '@/modules/checkout/components/CheckoutButton';
 import { CheckoutChallengeModal } from '@/modules/checkout/components/CheckoutChallengeModal';
-import EmbeddedStripePayment from '@/modules/checkout/components/EmbeddedStripePayment';
 import {
   RewardsRedeem,
   type LoyaltyRedeemValue,
 } from '@/modules/checkout/components/RewardsRedeem';
 import { useCheckoutRouter } from '@/modules/checkout/hooks/useCheckoutRouter';
 import {
-  calculatePointsPreview,
   getAvailableCredits,
   getLoyaltyProfile,
-  type LoyaltyPreview,
-  type LoyaltyProfile,
+  calculatePointsPreview,
   type UserCredit,
+  type LoyaltyProfile,
+  type LoyaltyPreview,
 } from '@/modules/checkout/api/checkout.api';
 import { getLoyaltyAccount } from '@/modules/checkout/api/loyalty-account.api';
 import {
-  isCheckoutBlocked,
   isCheckoutSuccess,
   isOtpRequired,
+  isCheckoutBlocked,
 } from '@/modules/checkout/types/checkout.types';
 
+// ── Page types ─────────────────────────────────────────────────────────────────
 import type {
-  OrderDetailsState,
-  OrderType,
   PromoState,
+  OrderType,
+  OrderDetailsState,
 } from '@/modules/checkout/types/checkout-page.types';
 
+// ── Page storage ───────────────────────────────────────────────────────────────
 import {
-  CHECKOUT_LIMITS,
   CHECKOUT_STORAGE,
+  CHECKOUT_LIMITS,
   safeLocalGet,
-  safeLocalRemove,
   safeLocalSet,
+  safeLocalRemove,
 } from '@/modules/checkout/utils/checkoutPageStorage';
 
+// ── Page formatters ────────────────────────────────────────────────────────────
 import {
   clampInt,
-  computeDisplayLineTotalCents,
-  formatOrderTypeLabel,
   normalizePromo,
   safeMoneyCents,
+  computeDisplayLineTotalCents,
+  formatOrderTypeLabel,
 } from '@/modules/checkout/utils/checkoutPageFormatters';
 
+// ── Page sub-components ────────────────────────────────────────────────────────
 import { fadeUp } from '@/modules/checkout/components/page/animations';
-import { AuthContactStrip } from '@/modules/checkout/components/page/AuthContactStrip';
+import { SectionCard } from '@/modules/checkout/components/page/SectionCard';
+import { SectionHeader } from '@/modules/checkout/components/page/SectionHeader';
 import { BlockedOrderCard } from '@/modules/checkout/components/page/BlockedOrderCard';
-import { CreditsSection } from '@/modules/checkout/components/page/CreditsSection';
 import { GuestContactStrip } from '@/modules/checkout/components/page/GuestContactStrip';
-import { GuestPostCheckoutNudge } from '@/modules/checkout/components/page/GuestPostCheckoutNudge';
+import { AuthContactStrip } from '@/modules/checkout/components/page/AuthContactStrip';
 import { LoyaltyEarnBanner } from '@/modules/checkout/components/page/LoyaltyEarnBanner';
 import { OrderItemsList } from '@/modules/checkout/components/page/OrderItemsList';
 import { OrderTotals } from '@/modules/checkout/components/page/OrderTotals';
 import { PromoSection } from '@/modules/checkout/components/page/PromoSection';
-import { SectionCard } from '@/modules/checkout/components/page/SectionCard';
-import { SectionHeader } from '@/modules/checkout/components/page/SectionHeader';
+import { CreditsSection } from '@/modules/checkout/components/page/CreditsSection';
+import { GuestPostCheckoutNudge } from '@/modules/checkout/components/page/GuestPostCheckoutNudge';
 
+// ── Other modules ──────────────────────────────────────────────────────────────
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useCart } from '@/modules/cart/hooks/useCart';
 import { formatCents } from '@/modules/cart/utils/cart.utils';
@@ -111,39 +117,12 @@ import {
   useOrderIntentStore,
 } from '@/modules/orders/store/orderIntent.store';
 
-// =============================================================================
-// Local checkout merchandising
-// =============================================================================
-
-const RECOMMENDED_ADD_ONS = [
-  {
-    name: 'Handmade Tortillas',
-    description: 'Fresh side for your meal',
-    meta: 'Fresh made · $3.00',
-    priceLabel: '$3.00',
-  },
-  {
-    name: 'Chips & Salsa',
-    description: 'Perfect starter to share',
-    meta: 'Crispy chips · $4.99',
-    priceLabel: '$4.99',
-  },
-  {
-    name: 'Rice & Beans',
-    description: 'Classic side upgrade',
-    meta: 'House favorite · $3.99',
-    priceLabel: '$3.99',
-  },
-] as const;
-
-// =============================================================================
-// Component
-// =============================================================================
+// ─────────────────────────────────────────────────────────────────────────────
+// Main Component
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function CheckoutPage() {
   const navigate = useNavigate();
-  const paymentSectionRef = useRef<HTMLDivElement | null>(null);
-
   const { items } = useCart();
   const { user, isAuthenticated } = useAuth();
   const isGuest = !isAuthenticated;
@@ -163,10 +142,6 @@ export default function CheckoutPage() {
   const deliveryAvailability = useOrderIntentStore((state) => state.deliveryAvailability);
   const openOrderIntentSheet = useOrderIntentStore((state) => state.openMobileSheet);
 
-  const [embeddedClientSecret, setEmbeddedClientSecret] = useState<string | null>(null);
-  const [checkoutContractError, setCheckoutContractError] = useState<string | null>(null);
-  const [paymentStarted, setPaymentStarted] = useState(false);
-
   const showChallenge = guestPhase.tag === 'otp_required' || guestPhase.tag === 'retrying';
   const showBlocked = guestPhase.tag === 'blocked';
 
@@ -174,7 +149,7 @@ export default function CheckoutPage() {
 
   const subtotalCents = useMemo(() => {
     if (!hasItems) return 0;
-    return items.reduce((sum, item) => sum + computeDisplayLineTotalCents(item), 0);
+    return items.reduce((sum, i) => sum + computeDisplayLineTotalCents(i), 0);
   }, [items, hasItems]);
 
   const estimatedTaxCents = useMemo(() => Math.round(subtotalCents * 0.095), [subtotalCents]);
@@ -186,9 +161,12 @@ export default function CheckoutPage() {
 
   const itemCount = useMemo(() => {
     if (!hasItems) return 0;
-    return items.reduce((sum, item) => sum + clampInt(item.quantity, 0, 10_000), 0);
+    return items.reduce((acc, i) => acc + clampInt(i.quantity, 0, 10_000), 0);
   }, [items, hasItems]);
 
+  // Effective order type: only "delivery" if delivery is BOTH selected AND
+  // actually available. Otherwise we submit pickup. Defensive double-lock
+  // alongside the store-level guard in setFulfillmentType.
   const effectiveOrderType = useMemo<OrderType>(() => {
     if (fulfillmentType === 'delivery' && deliveryAvailability === 'available') {
       return 'delivery';
@@ -200,10 +178,14 @@ export default function CheckoutPage() {
   const pickupTimingLabel = useMemo(() => getPickupTimingLabel(pickupTiming), [pickupTiming]);
 
   const orderSummarySubtitle = useMemo(() => {
-    if (effectiveOrderType === 'delivery') return 'Delivery';
+    if (effectiveOrderType === 'delivery') {
+      return 'Delivery';
+    }
+
     return `Pickup · ${pickupTimingLabel}`;
   }, [effectiveOrderType, pickupTimingLabel]);
 
+  // ── Order details ──────────────────────────────────────────────────────────
   const [orderDetails, setOrderDetails] = useState<OrderDetailsState>(() => {
     const storedType = safeLocalGet(CHECKOUT_STORAGE.ORDER_TYPE);
     const storedNotes = safeLocalGet(CHECKOUT_STORAGE.NOTES);
@@ -239,97 +221,49 @@ export default function CheckoutPage() {
     else safeLocalSet(CHECKOUT_STORAGE.NOTES, orderDetails.notes);
   }, [orderDetails.notes]);
 
+  // ── Promo ──────────────────────────────────────────────────────────────────
   const [promo, setPromo] = useState<PromoState>(() => {
     const stored = safeLocalGet(CHECKOUT_STORAGE.PROMO);
-
-    return {
-      code: stored ? normalizePromo(stored) : '',
-      applied: false,
-      error: null,
-    };
+    return { code: stored ? normalizePromo(stored) : '', applied: false, error: null };
   });
 
-  const clearEmbeddedCheckout = useCallback(() => {
-    setEmbeddedClientSecret(null);
-    setCheckoutContractError(null);
-    setPaymentStarted(false);
+  const onPromoChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+    const code = normalizePromo(e.target.value);
+    setPromo({ code, applied: false, error: null });
+    if (code) safeLocalSet(CHECKOUT_STORAGE.PROMO, code);
+    else safeLocalRemove(CHECKOUT_STORAGE.PROMO);
   }, []);
-
-  const scrollToPayment = useCallback(() => {
-    window.requestAnimationFrame(() => {
-      paymentSectionRef.current?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-      });
-    });
-  }, []);
-
-  const onPromoChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      clearEmbeddedCheckout();
-
-      const code = normalizePromo(event.target.value);
-      setPromo({ code, applied: false, error: null });
-
-      if (code) safeLocalSet(CHECKOUT_STORAGE.PROMO, code);
-      else safeLocalRemove(CHECKOUT_STORAGE.PROMO);
-    },
-    [clearEmbeddedCheckout],
-  );
 
   const onPromoApply = useCallback(() => {
-    if (!promo.code.trim()) return;
-
-    clearEmbeddedCheckout();
-    setPromo((current) => ({ ...current, applied: true, error: null }));
-  }, [promo.code, clearEmbeddedCheckout]);
+    if (promo.code.trim()) setPromo((p) => ({ ...p, applied: true, error: null }));
+  }, [promo.code]);
 
   const onPromoClear = useCallback(() => {
-    clearEmbeddedCheckout();
     setPromo({ code: '', applied: false, error: null });
     safeLocalRemove(CHECKOUT_STORAGE.PROMO);
-  }, [clearEmbeddedCheckout]);
+  }, []);
 
   const onPromoKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLInputElement>) => {
-      if (event.key === 'Enter') {
-        event.preventDefault();
+    (e: KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
         onPromoApply();
       }
 
-      if (event.key === 'Escape') {
-        event.preventDefault();
+      if (e.key === 'Escape') {
+        e.preventDefault();
         onPromoClear();
       }
     },
     [onPromoApply, onPromoClear],
   );
 
+  // ── Guest state ────────────────────────────────────────────────────────────
   const [guestEmail, setGuestEmail] = useState('');
   const [guestPhone, setGuestPhone] = useState('');
   const [smsOptIn, setSmsOptIn] = useState(false);
 
-  const handleGuestEmailChange = useCallback(
-    (value: string) => {
-      clearEmbeddedCheckout();
-      setGuestEmail(value);
-    },
-    [clearEmbeddedCheckout],
-  );
-
-  const handleGuestPhoneChange = useCallback(
-    (value: string) => {
-      clearEmbeddedCheckout();
-      setGuestPhone(value);
-    },
-    [clearEmbeddedCheckout],
-  );
-
-  const handleSmsToggle = useCallback(() => {
-    clearEmbeddedCheckout();
-    setSmsOptIn((current) => !current);
-  }, [clearEmbeddedCheckout]);
-
+  // [FIX] Frozen identity email for OTP token binding.
   const [challengeEmail, setChallengeEmail] = useState<string | null>(null);
 
   useEffect(() => {
@@ -342,6 +276,7 @@ export default function CheckoutPage() {
     }
   }, [guestPhase.tag, guestEmail, challengeEmail]);
 
+  // ── Auth: credits ──────────────────────────────────────────────────────────
   const [credits, setCredits] = useState<UserCredit[]>([]);
   const [selectedCredit, setSelectedCredit] = useState<string | null>(() =>
     safeLocalGet(CHECKOUT_STORAGE.CREDIT),
@@ -354,19 +289,7 @@ export default function CheckoutPage() {
     [credits],
   );
 
-  const handleSelectCredit = useCallback(
-    (id: string) => {
-      clearEmbeddedCheckout();
-      setSelectedCredit(id);
-    },
-    [clearEmbeddedCheckout],
-  );
-
-  const handleRemoveCredit = useCallback(() => {
-    clearEmbeddedCheckout();
-    setSelectedCredit(null);
-  }, [clearEmbeddedCheckout]);
-
+  // ── Auth: loyalty ──────────────────────────────────────────────────────────
   const [loyaltyProfile, setLoyaltyProfile] = useState<LoyaltyProfile | null>(null);
   const [loyaltyPreview, setLoyaltyPreview] = useState<LoyaltyPreview | null>(null);
   const [loyaltyBalance, setLoyaltyBalance] = useState(0);
@@ -378,18 +301,7 @@ export default function CheckoutPage() {
     loyaltyAccountId: '',
   });
 
-  const handleLoyaltyChange = useCallback(
-    (next: LoyaltyRedeemValue) => {
-      clearEmbeddedCheckout();
-      setLoyaltyIntent(next);
-    },
-    [clearEmbeddedCheckout],
-  );
-
-  useEffect(() => {
-    clearEmbeddedCheckout();
-  }, [items, effectiveOrderType, pickupTiming, clearEmbeddedCheckout]);
-
+  // ── Data loading (auth only) ───────────────────────────────────────────────
   const loadCredits = useCallback(async () => {
     setCreditsLoading(true);
     setCreditsError(null);
@@ -475,7 +387,7 @@ export default function CheckoutPage() {
 
   useEffect(() => {
     if (!loyaltyAccountId) return;
-    setLoyaltyIntent((current) => ({ ...current, loyaltyAccountId }));
+    setLoyaltyIntent((prev) => ({ ...prev, loyaltyAccountId }));
   }, [loyaltyAccountId]);
 
   useEffect(() => {
@@ -483,65 +395,38 @@ export default function CheckoutPage() {
     else safeLocalSet(CHECKOUT_STORAGE.CREDIT, selectedCredit);
   }, [selectedCredit]);
 
+  // ── handleCheckout — single checkout trigger ───────────────────────────────
   const handleCheckout = useCallback(async () => {
-    setCheckoutContractError(null);
-    setEmbeddedClientSecret(null);
-    setPaymentStarted(true);
-    scrollToPayment();
-
     const pickupTime =
       effectiveOrderType === 'pickup'
         ? (getPickupTimingDate(pickupTiming) ?? undefined)
         : undefined;
 
-const result = await checkout({
-  guestEmail: guestEmail || undefined,
-  orderType: effectiveOrderType,
-  notes: orderDetails.notes || null,
-  pickupTime,
-  promoCode: promo.applied ? promo.code : undefined,
-  creditId: isGuest ? undefined : (selectedCredit ?? undefined),
-  loyalty: loyaltyIntent,
-  guestPhone: smsOptIn ? guestPhone : undefined,
-  smsOptIn,
-
-  // Force embedded Stripe so payment options render inside CheckoutPage.
-  uiMode: 'embedded',
-});
+    const result = await checkout({
+      guestEmail: guestEmail || undefined,
+      orderType: effectiveOrderType,
+      notes: orderDetails.notes || null,
+      pickupTime,
+      promoCode: promo.applied ? promo.code : undefined,
+      creditId: isGuest ? undefined : (selectedCredit ?? undefined),
+      loyalty: loyaltyIntent,
+      guestPhone: smsOptIn ? guestPhone : undefined,
+      smsOptIn,
+    });
 
     if (isCheckoutSuccess(result)) {
-      if (result.clientSecret) {
-        setEmbeddedClientSecret(result.clientSecret);
-        setPaymentStarted(false);
-        scrollToPayment();
-        return;
-      }
-
-      if (result.url) {
-        window.location.assign(result.url);
-        return;
-      }
-
-      setPaymentStarted(false);
-      setCheckoutContractError(
-        'Checkout started, but the payment session was missing. Please try again.',
-      );
-      scrollToPayment();
+      window.location.assign(result.url);
       return;
     }
 
-    setPaymentStarted(false);
-
     if (!isOtpRequired(result) && !isCheckoutBlocked(result)) {
       if (result.code === 'promo_invalid' || result.code === 'promo_not_found') {
-        setPromo((current) => ({
-          ...current,
+        setPromo((prev) => ({
+          ...prev,
           applied: false,
           error: result.error || 'Invalid promo code.',
         }));
       }
-
-      scrollToPayment();
     }
   }, [
     checkout,
@@ -556,9 +441,9 @@ const result = await checkout({
     selectedCredit,
     loyaltyIntent,
     isGuest,
-    scrollToPayment,
   ]);
 
+  // ── Copy summary ───────────────────────────────────────────────────────────
   const copySummary = useCallback(async () => {
     if (!hasItems) return;
 
@@ -568,7 +453,7 @@ const result = await checkout({
         : undefined;
 
     const lines = [
-      `Sofi's - Checkout Summary`,
+      `Sofi's — Checkout Summary`,
       `Type: ${formatOrderTypeLabel(effectiveOrderType)}`,
     ];
 
@@ -587,7 +472,7 @@ const result = await checkout({
 
     for (const item of items) {
       lines.push(
-        `- ${item.name} x${clampInt(item.quantity, 1, 100)} - ${formatCents(
+        `- ${item.name} x${clampInt(item.quantity, 1, 100)} — ${formatCents(
           computeDisplayLineTotalCents(item),
         )}`,
       );
@@ -599,13 +484,13 @@ const result = await checkout({
     try {
       await navigator.clipboard.writeText(lines.join('\n'));
     } catch {
-      // Clipboard is optional.
+      /* clipboard unavailable */
     }
   }, [hasItems, items, subtotalCents, effectiveOrderType, pickupTiming, pickupTimingLabel]);
 
-  const paymentError = checkoutContractError ?? routerError;
-  const paymentSectionIndex = isGuest ? 5 : 6;
-  const checkoutButtonLoading = isLoading || paymentStarted;
+  // ─────────────────────────────────────────────────────────────────────────
+  // Render
+  // ─────────────────────────────────────────────────────────────────────────
 
   return (
     <main className="relative mx-auto w-full max-w-2xl px-4 py-8 sm:py-12">
@@ -653,6 +538,7 @@ const result = await checkout({
         </SectionCard>
       ) : (
         <div className="space-y-3">
+          {/* SECTION 1: ORDER REVIEW */}
           <SectionCard index={0}>
             <SectionHeader
               title="Order Summary"
@@ -666,9 +552,7 @@ const result = await checkout({
                 </Link>
               }
             />
-
             <OrderItemsList items={items} />
-
             <OrderTotals
               subtotalCents={subtotalCents}
               estimatedTaxCents={estimatedTaxCents}
@@ -676,6 +560,7 @@ const result = await checkout({
             />
           </SectionCard>
 
+          {/* SECTION 2: ORDER DETAILS */}
           <SectionCard index={1}>
             <SectionHeader title="Order details" subtitle={orderSummarySubtitle} />
 
@@ -686,7 +571,6 @@ const result = await checkout({
                     <p className="text-xs font-semibold uppercase tracking-wide text-(--color-ink-400)">
                       Fulfillment
                     </p>
-
                     <p className="mt-1 text-sm font-bold text-(--color-ink-900)">
                       {formatOrderTypeLabel(effectiveOrderType)}
                     </p>
@@ -705,6 +589,8 @@ const result = await checkout({
                   </div>
 
                   <div className="flex shrink-0 flex-col items-end gap-2">
+                    {/* Mobile-only: open the bottom sheet so the customer doesn't
+                        have to scroll up to TopBar to change pickup timing. */}
                     <button
                       type="button"
                       onClick={openOrderIntentSheet}
@@ -739,22 +625,19 @@ const result = await checkout({
                     (optional)
                   </span>
                 </label>
-
                 <textarea
                   id="checkout-notes"
                   value={orderDetails.notes}
-                  onChange={(event) => {
-                    clearEmbeddedCheckout();
+                  onChange={(e) =>
                     setOrderDetails((current) => ({
                       ...current,
-                      notes: String(event.target.value).slice(0, CHECKOUT_LIMITS.NOTES_MAX),
-                    }));
-                  }}
+                      notes: String(e.target.value).slice(0, CHECKOUT_LIMITS.NOTES_MAX),
+                    }))
+                  }
                   rows={2}
                   placeholder="No onions, mild salsa, sauce on the side…"
                   className="input w-full resize-none"
                 />
-
                 <div className="mt-1 flex justify-end">
                   <span className="text-[11px] tabular-nums text-(--color-ink-300)">
                     {orderDetails.notes.length}/{CHECKOUT_LIMITS.NOTES_MAX}
@@ -770,7 +653,6 @@ const result = await checkout({
                 >
                   Print / Save PDF
                 </button>
-
                 <button
                   type="button"
                   onClick={() => void copySummary()}
@@ -782,17 +664,18 @@ const result = await checkout({
             </div>
           </SectionCard>
 
+          {/* SECTION 3: CONTACT */}
           <SectionCard index={2}>
             {isGuest ? (
               <>
                 <SectionHeader title="Contact" subtitle="For your receipt and order updates" />
                 <GuestContactStrip
                   email={guestEmail}
-                  onEmailChange={handleGuestEmailChange}
+                  onEmailChange={setGuestEmail}
                   phone={guestPhone}
-                  onPhoneChange={handleGuestPhoneChange}
+                  onPhoneChange={setGuestPhone}
                   smsOptIn={smsOptIn}
-                  onSmsToggle={handleSmsToggle}
+                  onSmsToggle={() => setSmsOptIn((value) => !value)}
                 />
               </>
             ) : (
@@ -802,14 +685,15 @@ const result = await checkout({
                   email={user?.email ?? ''}
                   name={user?.name ?? null}
                   phone={guestPhone}
-                  onPhoneChange={handleGuestPhoneChange}
+                  onPhoneChange={setGuestPhone}
                   smsOptIn={smsOptIn}
-                  onSmsToggle={handleSmsToggle}
+                  onSmsToggle={() => setSmsOptIn((value) => !value)}
                 />
               </>
             )}
           </SectionCard>
 
+          {/* SECTION 4: PROMO */}
           <SectionCard index={3}>
             <SectionHeader title="Promo Code" subtitle="Verified by the server at checkout" />
             <PromoSection
@@ -821,15 +705,14 @@ const result = await checkout({
             />
           </SectionCard>
 
+          {/* SECTION 5: REWARDS (AUTH ONLY) */}
           {!isGuest && (
             <SectionCard index={4}>
               {loyaltyPreview && <LoyaltyEarnBanner preview={loyaltyPreview} />}
-
               <SectionHeader
                 title="Rewards & Credits"
-                subtitle="Applied by the server. Final balance confirmed at payment."
+                subtitle="Applied by the server — final balance confirmed at payment"
               />
-
               <div className="space-y-4 px-5 py-4">
                 {recentlyRedeemed && (
                   <p className="rounded-xl border border-(--color-gold-200) bg-(--color-gold-50) px-3 py-2.5 text-xs text-(--color-gold-700)">
@@ -842,7 +725,7 @@ const result = await checkout({
                     balance={loyaltyBalance}
                     accountId={loyaltyAccountId}
                     subtotalCents={subtotalCents}
-                    onChange={handleLoyaltyChange}
+                    onChange={setLoyaltyIntent}
                   />
                 )}
 
@@ -852,204 +735,84 @@ const result = await checkout({
                   creditsError={creditsError}
                   creditsAvailableCents={creditsAvailableCents}
                   selectedCredit={selectedCredit}
-                  onSelectCredit={handleSelectCredit}
-                  onRemoveCredit={handleRemoveCredit}
+                  onSelectCredit={(id) => setSelectedCredit(id)}
+                  onRemoveCredit={() => setSelectedCredit(null)}
                   onRetry={() => void loadCredits()}
                 />
               </div>
             </SectionCard>
           )}
 
-          <motion.section
-            custom={isGuest ? 4 : 5}
-            variants={fadeUp}
-            initial="hidden"
-            animate="visible"
-            className="rounded-[2rem] bg-[#f4f1ee] px-5 py-6 shadow-sm ring-1 ring-black/5"
+          {/* SECTION 6: PAYMENT CTA */}
+          <SectionCard
+            index={isGuest ? 4 : 5}
+            className="border-(--color-ember-200) bg-linear-to-b from-white to-(--color-cream-50)"
           >
-            <div className="mb-6 grid grid-cols-2 gap-3">
-              <Link
-                to="/menu"
-                onClick={clearEmbeddedCheckout}
-                className="flex min-h-14 items-center justify-center gap-2 rounded-full border-2 border-(--color-ember-500) bg-white px-4 py-3 text-sm font-extrabold text-(--color-ember-700) transition hover:bg-(--color-ember-50)"
-              >
-                <ChefHat className="h-4 w-4" />
-                Add Condiments
-              </Link>
-
-              <Link
-                to="/menu"
-                onClick={clearEmbeddedCheckout}
-                className="flex min-h-14 items-center justify-center gap-2 rounded-full border-2 border-(--color-ember-500) bg-white px-4 py-3 text-sm font-extrabold text-(--color-ember-700) transition hover:bg-(--color-ember-50)"
-              >
-                <ShoppingBag className="h-4 w-4" />
-                Return to Menu
-              </Link>
-            </div>
-
-            <div className="mb-4">
-              <h2 className="text-2xl font-black tracking-tight text-(--color-ink-900)">
-                Recommended for You
-              </h2>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              {RECOMMENDED_ADD_ONS.slice(0, 2).map((item) => (
-                <Link
-                  key={item.name}
-                  to="/menu"
-                  onClick={clearEmbeddedCheckout}
-                  className="group flex min-h-28 items-center justify-between gap-4 rounded-3xl bg-white p-4 text-left shadow-sm ring-1 ring-black/5 transition hover:-translate-y-0.5 hover:shadow-md"
-                >
-                  <div className="flex items-center gap-4">
-                    <div className="grid h-16 w-16 shrink-0 place-items-center rounded-2xl bg-(--color-cream-100)">
-                      <Utensils className="h-7 w-7 text-(--color-ember-600)" />
-                    </div>
-
-                    <div className="min-w-0">
-                      <p className="text-lg font-black leading-tight text-(--color-ink-900)">
-                        {item.name}
-                      </p>
-                      <p className="mt-1 text-sm font-medium text-(--color-ink-400)">{item.meta}</p>
-                    </div>
-                  </div>
-
-                  <Plus className="h-8 w-8 shrink-0 text-(--color-ember-600) transition group-hover:scale-110" />
-                </Link>
-              ))}
-            </div>
-          </motion.section>
-
-          <div ref={paymentSectionRef}>
-            <motion.section
-              custom={paymentSectionIndex}
-              variants={fadeUp}
-              initial="hidden"
-              animate="visible"
-              className="rounded-[2rem] bg-[#f4f1ee] px-5 py-7 shadow-sm ring-1 ring-black/5"
-            >
-              <p className="mx-auto max-w-xl text-center text-base leading-7 text-(--color-ink-800)">
-                By placing an order, you agree to Sofi&apos;s{' '}
-                <Link
-                  to="/privacy"
-                  className="font-bold text-teal-700 underline underline-offset-4"
-                >
-                  Privacy Policy
-                </Link>
-                ,{' '}
-                <Link to="/terms" className="font-bold text-teal-700 underline underline-offset-4">
-                  Mobile Order and Payment Terms
-                </Link>
-                , and{' '}
-                <Link to="/terms" className="font-bold text-teal-700 underline underline-offset-4">
-                  Terms of Service
-                </Link>
-                . No changes to the order can be guaranteed after payment is submitted.
-              </p>
-
-              <div className="mt-8">
-                <div className="mb-4 flex items-center justify-between gap-4">
-                  <h2 className="text-2xl font-black tracking-tight text-(--color-ink-900)">
-                    Select Payment Method
-                  </h2>
-
-                  <div className="rounded-full bg-white px-4 py-2 text-sm font-black text-(--color-ink-900) shadow-sm ring-1 ring-black/5">
-                    {formatCents(estimatedTotalCents)}
-                  </div>
-                </div>
-
-                <AnimatePresence>
-                  {showChallenge && otpChallenge && (
-                    <motion.div
-                      key="otp-challenge"
-                      initial={{ opacity: 0, y: 8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -4 }}
-                      transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-                    >
-                      <CheckoutChallengeModal
-                        key={otpChallenge.nonce}
-                        nonce={otpChallenge.nonce}
-                        expiresAt={otpChallenge.expiresAt}
-                        userId={isAuthenticated && user?.id ? user.id : null}
-                        guestEmail={challengeEmail}
-                        onToken={(token) => void retryWithToken(token)}
-                        onExpired={() => reset()}
-                      />
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
-                <AnimatePresence>
-                  {showBlocked && (
-                    <motion.div
-                      key="blocked"
-                      initial={{ opacity: 0, y: 8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0 }}
-                      transition={{ duration: 0.2 }}
-                    >
-                      <BlockedOrderCard onReset={reset} />
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
-                {!showChallenge && !showBlocked && embeddedClientSecret && (
-                  <div className="space-y-4">
-                    <div className="overflow-hidden rounded-[1.75rem] bg-white p-3 shadow-sm ring-1 ring-black/5">
-                      <EmbeddedStripePayment clientSecret={embeddedClientSecret} />
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={clearEmbeddedCheckout}
-                      className="mx-auto block text-sm font-black text-(--color-ink-800) underline underline-offset-4 transition hover:text-(--color-ember-700)"
-                    >
-                      Edit order details
-                    </button>
-                  </div>
-                )}
-
-                {!showChallenge && !showBlocked && !embeddedClientSecret && (
-                  <div className="space-y-4">
-                    <CheckoutButton
-                      onCheckout={handleCheckout}
-                      isLoading={checkoutButtonLoading}
-                      disabled={!hasItems || paymentStarted}
-                      reviewFirst={false}
-                      className="rounded-full bg-(--color-ember-600) py-5 text-lg font-black hover:bg-(--color-ember-700)"
-                    />
-
-                    <p className="text-center text-xs leading-5 text-(--color-ink-400)">
-                      Click Review Order to securely load available payment methods.
-                    </p>
-                  </div>
-                )}
-
-                {paymentError && !showChallenge && !showBlocked && (
-                  <p
-                    className="mt-4 text-center text-sm font-semibold text-(--color-error)"
-                    role="alert"
+            <div className="space-y-3 px-5 py-5">
+              <AnimatePresence>
+                {showChallenge && otpChallenge && (
+                  <motion.div
+                    key="otp-challenge"
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
                   >
-                    {paymentError}
-                  </p>
+                    <CheckoutChallengeModal
+                      key={otpChallenge.nonce}
+                      nonce={otpChallenge.nonce}
+                      expiresAt={otpChallenge.expiresAt}
+                      userId={isAuthenticated && user?.id ? user.id : null}
+                      guestEmail={challengeEmail}
+                      onToken={(token) => void retryWithToken(token)}
+                      onExpired={() => reset()}
+                    />
+                  </motion.div>
                 )}
+              </AnimatePresence>
 
-                <p className="mt-5 text-center text-[11px] leading-5 text-(--color-ink-400)">
-                  🔒 Secure payment via Stripe. Card details are never stored on Sofi&apos;s
-                  servers.
+              <AnimatePresence>
+                {showBlocked && (
+                  <motion.div
+                    key="blocked"
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <BlockedOrderCard onReset={reset} />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {!showChallenge && !showBlocked && (
+                <CheckoutButton
+                  onCheckout={handleCheckout}
+                  isLoading={isLoading}
+                  disabled={!hasItems}
+                />
+              )}
+
+              {routerError && !showChallenge && !showBlocked && (
+                <p className="text-center text-sm font-medium text-(--color-error)" role="alert">
+                  {routerError}
                 </p>
-              </div>
-            </motion.section>
-          </div>
+              )}
 
+              <p className="text-center text-[11px] text-(--color-ink-300)">
+                🔒 Secure payment via Stripe — card details never stored on our servers
+              </p>
+            </div>
+          </SectionCard>
+
+          {/* GUEST: POST-CTA NUDGE */}
           {isGuest && (
-            <motion.div custom={6} variants={fadeUp} initial="hidden" animate="visible">
+            <motion.div custom={5} variants={fadeUp} initial="hidden" animate="visible">
               <GuestPostCheckoutNudge email={guestEmail} />
             </motion.div>
           )}
 
-          <motion.div custom={7} variants={fadeUp} initial="hidden" animate="visible">
+          <motion.div custom={6} variants={fadeUp} initial="hidden" animate="visible">
             <div className="px-1 py-2 text-center">
               <p className="text-xs text-(--color-ink-400)">
                 Need help?{' '}
@@ -1066,6 +829,7 @@ const result = await checkout({
                 {isAuthenticated && (
                   <>
                     {' · '}
+
                     <Link to="/account/orders" className="underline hover:text-(--color-ink-700)">
                       Order history
                     </Link>
