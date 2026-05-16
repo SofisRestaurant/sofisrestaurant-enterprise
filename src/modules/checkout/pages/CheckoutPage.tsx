@@ -6,16 +6,24 @@
 //           extracted into their checkout-owned files. This file is now the
 //           orchestrator only: state, effects, event handlers, render tree.
 //
-//   [SMS]   handleCheckout now passes guestPhone and smsOptIn to checkout()
-//        [SMS] handleCheckout now passes phone and smsOptIn for both guest and authenticated users when SMS opt-in is enabled. The router validates the phone before any network call.
-//           Dependency array updated accordingly.
+//   [SMS]   handleCheckout passes guestPhone and smsOptIn when SMS opt-in is enabled.
+//           The router validates the phone before any network call.
+//
+//   [ORDER INTENT]
+//           Checkout no longer owns pickup-time selection.
+//           Pickup/delivery intent now comes from useOrderIntentStore, which is
+//           controlled by the top-nav OrderIntentSelector.
+//           This prevents duplicate pickup-time UI and keeps the customer's
+//           order setup consistent before checkout.
 //
 // Security invariants preserved:
-//   - No Stripe URL before verification (button is unmounted during challenge)
-//   - challenge_token lives only in CheckoutChallengeModal state + router memory
-//   - guest_token continuity preserved via sessionStorage (unchanged)
-//   - pendingInputRef in useGuestCheckout preserves cart + phone across OTP cycle
+//   - No Stripe URL before verification.
+//   - CheckoutButton is unmounted during OTP challenge.
+//   - challenge_token lives only in CheckoutChallengeModal state + router memory.
+//   - guest_token continuity preserved via sessionStorage.
+//   - pendingInputRef in useGuestCheckout preserves cart + phone across OTP cycle.
 // =============================================================================
+
 import {
   useEffect,
   useMemo,
@@ -79,7 +87,6 @@ import {
 import { fadeUp } from '@/modules/checkout/components/page/animations';
 import { SectionCard } from '@/modules/checkout/components/page/SectionCard';
 import { SectionHeader } from '@/modules/checkout/components/page/SectionHeader';
-import { PickupTimeSelector } from '@/modules/checkout/components/page/PickupTimeSelector';
 import { BlockedOrderCard } from '@/modules/checkout/components/page/BlockedOrderCard';
 import { GuestContactStrip } from '@/modules/checkout/components/page/GuestContactStrip';
 import { AuthContactStrip } from '@/modules/checkout/components/page/AuthContactStrip';
@@ -91,9 +98,38 @@ import { CreditsSection } from '@/modules/checkout/components/page/CreditsSectio
 import { GuestPostCheckoutNudge } from '@/modules/checkout/components/page/GuestPostCheckoutNudge';
 
 // ── Other modules ──────────────────────────────────────────────────────────────
-import { useCart } from '@/modules/cart/hooks/useCart';
 import { useAuth } from '@/features/auth/hooks/useAuth';
+import { useCart } from '@/modules/cart/hooks/useCart';
 import { formatCents } from '@/modules/cart/utils/cart.utils';
+import {
+  getPickupTimingLabel,
+  useOrderIntentStore,
+  type PickupTimingOption,
+} from '@/modules/orders/store/orderIntent.store';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function pickupTimingToIso(option: PickupTimingOption): string | undefined {
+  const now = Date.now();
+
+  if (option === '15_min') {
+    return new Date(now + 15 * 60_000).toISOString();
+  }
+
+  if (option === '30_min') {
+    return new Date(now + 30 * 60_000).toISOString();
+  }
+
+  if (option === '45_min') {
+    return new Date(now + 45 * 60_000).toISOString();
+  }
+
+  // ASAP and scheduled do not send a concrete pickup time yet.
+  // Server/operations can treat missing pickupTime as ASAP.
+  return undefined;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main Component
@@ -114,6 +150,10 @@ export default function CheckoutPage() {
     isLoading,
     error: routerError,
   } = useCheckoutRouter();
+
+  const fulfillmentType = useOrderIntentStore((state) => state.fulfillmentType);
+  const pickupTiming = useOrderIntentStore((state) => state.pickupTiming);
+  const deliveryAvailability = useOrderIntentStore((state) => state.deliveryAvailability);
 
   const showChallenge = guestPhase.tag === 'otp_required' || guestPhase.tag === 'retrying';
   const showBlocked = guestPhase.tag === 'blocked';
@@ -137,25 +177,50 @@ export default function CheckoutPage() {
     return items.reduce((acc, i) => acc + clampInt(i.quantity, 0, 10_000), 0);
   }, [items, hasItems]);
 
+  const effectiveOrderType = useMemo<OrderType>(() => {
+    if (fulfillmentType === 'delivery' && deliveryAvailability === 'available') {
+      return 'delivery';
+    }
+
+    return 'pickup';
+  }, [fulfillmentType, deliveryAvailability]);
+
+  const pickupTimingLabel = useMemo(() => getPickupTimingLabel(pickupTiming), [pickupTiming]);
+
+  const orderSummarySubtitle = useMemo(() => {
+    if (effectiveOrderType === 'delivery') {
+      return 'Delivery';
+    }
+
+    return `Pickup · ${pickupTimingLabel}`;
+  }, [effectiveOrderType, pickupTimingLabel]);
+
   // ── Order details ──────────────────────────────────────────────────────────
   const [orderDetails, setOrderDetails] = useState<OrderDetailsState>(() => {
     const storedType = safeLocalGet(CHECKOUT_STORAGE.ORDER_TYPE);
     const storedNotes = safeLocalGet(CHECKOUT_STORAGE.NOTES);
-    const t: OrderType =
+
+    const fallbackType: OrderType =
       storedType === 'pickup' || storedType === 'delivery' || storedType === 'dine_in'
         ? storedType
         : 'pickup';
+
     return {
-      orderType: t,
+      orderType: fallbackType,
       notes: typeof storedNotes === 'string' ? storedNotes.slice(0, CHECKOUT_LIMITS.NOTES_MAX) : '',
     };
   });
 
-  const [pickupTime, setPickupTime] = useState<string | null>(null);
-
   useEffect(() => {
-    if (orderDetails.orderType !== 'pickup') setPickupTime(null);
-  }, [orderDetails.orderType]);
+    setOrderDetails((current) =>
+      current.orderType === effectiveOrderType
+        ? current
+        : {
+            ...current,
+            orderType: effectiveOrderType,
+          },
+    );
+  }, [effectiveOrderType]);
 
   useEffect(() => {
     safeLocalSet(CHECKOUT_STORAGE.ORDER_TYPE, orderDetails.orderType);
@@ -194,6 +259,7 @@ export default function CheckoutPage() {
         e.preventDefault();
         onPromoApply();
       }
+
       if (e.key === 'Escape') {
         e.preventDefault();
         onPromoClear();
@@ -208,24 +274,13 @@ export default function CheckoutPage() {
   const [smsOptIn, setSmsOptIn] = useState(false);
 
   // [FIX] Frozen identity email for OTP token binding.
-  //
-  // Captured when the phase enters 'otp_required'. Passed to the modal instead
-  // of the live guestEmail state so that editing the email field while the
-  // modal is open does not cause an identity mismatch on the retry call.
-  //
-  // Both client (buildCheckoutIdentityKey) and server (buildIdentityKey) apply
-  // toLowerCase().trim() before hashing, so the captured value must match
-  // the email in pendingInputRef.current (set by initiateGuestCheckout, which
-  // normalises via `args.guestEmail!.trim().toLowerCase()`).
-  //
-  // Cleared on phase → 'idle' so a subsequent attempt with a different email
-  // starts clean.
   const [challengeEmail, setChallengeEmail] = useState<string | null>(null);
 
   useEffect(() => {
     if (guestPhase.tag === 'otp_required' && challengeEmail === null) {
       setChallengeEmail(guestEmail.trim().toLowerCase() || null);
     }
+
     if (guestPhase.tag === 'idle') {
       setChallengeEmail(null);
     }
@@ -238,8 +293,9 @@ export default function CheckoutPage() {
   );
   const [creditsLoading, setCreditsLoading] = useState(true);
   const [creditsError, setCreditsError] = useState<string | null>(null);
-  const [creditsAvailableCents] = useMemo(
-    () => [credits.reduce((s, c) => s + safeMoneyCents(c.amount_cents), 0)],
+
+  const creditsAvailableCents = useMemo(
+    () => credits.reduce((sum, credit) => sum + safeMoneyCents(credit.amount_cents), 0),
     [credits],
   );
 
@@ -255,19 +311,20 @@ export default function CheckoutPage() {
     loyaltyAccountId: '',
   });
 
-  // ── Auth: phone verification ───────────────────────────────────────────────
-  const [verifiedPhone, setVerifiedPhone] = useState<string | null>(null);
-  const [phoneSkipped, setPhoneSkipped] = useState(false);
-
   // ── Data loading (auth only) ───────────────────────────────────────────────
   const loadCredits = useCallback(async () => {
     setCreditsLoading(true);
     setCreditsError(null);
+
     try {
       const rows = await getAvailableCredits();
-      const clean = (rows ?? []).filter((c) => typeof c?.id === 'string' && c.id.length > 0);
+      const clean = (rows ?? []).filter(
+        (credit) => typeof credit?.id === 'string' && credit.id.length > 0,
+      );
+
       setCredits(clean);
-      if (selectedCredit && !clean.some((c) => c.id === selectedCredit)) {
+
+      if (selectedCredit && !clean.some((credit) => credit.id === selectedCredit)) {
         setSelectedCredit(null);
         safeLocalRemove(CHECKOUT_STORAGE.CREDIT);
       }
@@ -284,10 +341,13 @@ export default function CheckoutPage() {
       setCreditsLoading(false);
       return;
     }
+
     let alive = true;
+
     void loadCredits().finally(() => {
       if (!alive) return;
     });
+
     return () => {
       alive = false;
     };
@@ -295,10 +355,13 @@ export default function CheckoutPage() {
 
   useEffect(() => {
     if (!isAuthenticated) return;
+
     let alive = true;
-    void getLoyaltyProfile().then((p) => {
-      if (alive) setLoyaltyProfile(p);
+
+    void getLoyaltyProfile().then((profile) => {
+      if (alive) setLoyaltyProfile(profile);
     });
+
     return () => {
       alive = false;
     };
@@ -312,16 +375,21 @@ export default function CheckoutPage() {
 
   useEffect(() => {
     if (!isAuthenticated) return;
+
     let alive = true;
-    void getLoyaltyAccount().then((acct) => {
-      if (!alive || !acct) return;
-      setLoyaltyBalance(acct.balance);
-      setLoyaltyAccountId(acct.accountId);
-      if (acct.lastRedeemAt) {
-        const hoursSince = (Date.now() - new Date(acct.lastRedeemAt).getTime()) / 36e5;
+
+    void getLoyaltyAccount().then((account) => {
+      if (!alive || !account) return;
+
+      setLoyaltyBalance(account.balance);
+      setLoyaltyAccountId(account.accountId);
+
+      if (account.lastRedeemAt) {
+        const hoursSince = (Date.now() - new Date(account.lastRedeemAt).getTime()) / 36e5;
         setRecentlyRedeemed(hoursSince < 24);
       }
     });
+
     return () => {
       alive = false;
     };
@@ -338,19 +406,15 @@ export default function CheckoutPage() {
   }, [selectedCredit]);
 
   // ── handleCheckout — single checkout trigger ───────────────────────────────
-  //
-  // [SMS] guestPhone and smsOptIn are passed for guest users only.
-  //       For authenticated users both are explicitly undefined and the router
-  //       ignores them — the auth path is unchanged.
-  //       useCheckoutRouter validates the phone before any network call when
-  //       smsOptIn is true; the resulting routerError displays below the button.
   const handleCheckout = useCallback(async () => {
+    const pickupTime =
+      effectiveOrderType === 'pickup' ? pickupTimingToIso(pickupTiming) : undefined;
+
     const result = await checkout({
       guestEmail: guestEmail || undefined,
-      orderType: orderDetails.orderType,
+      orderType: effectiveOrderType,
       notes: orderDetails.notes || null,
-      pickupTime:
-        orderDetails.orderType === 'pickup' && pickupTime != null ? pickupTime : undefined,
+      pickupTime,
       promoCode: promo.applied ? promo.code : undefined,
       creditId: isGuest ? undefined : (selectedCredit ?? undefined),
       loyalty: loyaltyIntent,
@@ -377,8 +441,9 @@ export default function CheckoutPage() {
     guestEmail,
     guestPhone,
     smsOptIn,
-    orderDetails,
-    pickupTime,
+    effectiveOrderType,
+    pickupTiming,
+    orderDetails.notes,
     promo.applied,
     promo.code,
     selectedCredit,
@@ -389,31 +454,45 @@ export default function CheckoutPage() {
   // ── Copy summary ───────────────────────────────────────────────────────────
   const copySummary = useCallback(async () => {
     if (!hasItems) return;
+
+    const pickupTime =
+      effectiveOrderType === 'pickup' ? pickupTimingToIso(pickupTiming) : undefined;
+
     const lines = [
       `Sofi's — Checkout Summary`,
-      `Type: ${formatOrderTypeLabel(orderDetails.orderType)}`,
+      `Type: ${formatOrderTypeLabel(effectiveOrderType)}`,
     ];
-    if (pickupTime) {
-      lines.push(
-        `Pickup: ${new Date(pickupTime).toLocaleTimeString('en-US', {
-          hour: 'numeric',
-          minute: '2-digit',
-        })}`,
-      );
+
+    if (effectiveOrderType === 'pickup') {
+      lines.push(`Pickup: ${pickupTimingLabel}`);
+
+      if (pickupTime) {
+        lines.push(
+          `Estimated ready time: ${new Date(pickupTime).toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit',
+          })}`,
+        );
+      }
     }
+
     for (const item of items) {
       lines.push(
-        `- ${item.name} x${clampInt(item.quantity, 1, 100)} — ${formatCents(computeDisplayLineTotalCents(item))}`,
+        `- ${item.name} x${clampInt(item.quantity, 1, 100)} — ${formatCents(
+          computeDisplayLineTotalCents(item),
+        )}`,
       );
     }
+
     lines.push(`Subtotal: ${formatCents(subtotalCents)}`);
     lines.push(`Final total confirmed by Stripe.`);
+
     try {
       await navigator.clipboard.writeText(lines.join('\n'));
     } catch {
-      /* */
+      /* clipboard unavailable */
     }
-  }, [hasItems, items, subtotalCents, orderDetails, pickupTime]);
+  }, [hasItems, items, subtotalCents, effectiveOrderType, pickupTiming, pickupTimingLabel]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Render
@@ -434,7 +513,7 @@ export default function CheckoutPage() {
           </div>
         ) : (
           <div>
-            <p className="text-xs font-semibold uppercase tracking-widest text-(--color-ember-500) mb-1">
+            <p className="mb-1 text-xs font-semibold uppercase tracking-widest text-(--color-ember-500)">
               Welcome back{user?.name ? `, ${user.name.split(' ')[0]}` : ''}
             </p>
             <h1 className="text-2xl font-bold tracking-tight text-(--color-ink-900)">Your Order</h1>
@@ -473,7 +552,7 @@ export default function CheckoutPage() {
               right={
                 <Link
                   to="/menu"
-                  className="text-xs text-(--color-ink-400) hover:text-(--color-ink-700) underline"
+                  className="text-xs text-(--color-ink-400) underline hover:text-(--color-ink-700)"
                 >
                   Edit
                 </Link>
@@ -487,72 +566,52 @@ export default function CheckoutPage() {
             />
           </SectionCard>
 
-          {/* SECTION 2: ORDER TYPE + NOTES + PICKUP TIME */}
+          {/* SECTION 2: ORDER DETAILS */}
           <SectionCard index={1}>
-            <SectionHeader title="Order details" />
-            <div className="space-y-5 px-5 py-5">
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wide text-(--color-ink-400) mb-1.5">
-                  Order type
-                </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['pickup', 'delivery', 'dine_in'] as const).map((t) => {
-                    const active = orderDetails.orderType === t;
-                    const comingSoon = t === 'delivery' || t === 'dine_in';
-                    return (
-                      <div key={t} className="relative">
-                        <button
-                          type="button"
-                          disabled={comingSoon}
-                          onClick={() =>
-                            !comingSoon && setOrderDetails((s) => ({ ...s, orderType: t }))
-                          }
-                          className={[
-                            'w-full rounded-xl border px-3 py-2.5 text-sm font-semibold transition-all',
-                            comingSoon
-                              ? 'cursor-not-allowed border-(--color-cream-200) bg-(--color-cream-50) text-(--color-ink-300) select-none'
-                              : active
-                                ? 'border-(--color-ember-500) bg-(--color-ember-600) text-white shadow-sm'
-                                : 'border-(--color-cream-300) bg-white text-(--color-ink-800) hover:border-(--color-ink-300) hover:bg-(--color-cream-50)',
-                          ]
-                            .filter(Boolean)
-                            .join(' ')}
-                          aria-pressed={active}
-                        >
-                          {formatOrderTypeLabel(t)}
-                        </button>
-                        {comingSoon && (
-                          <span className="pointer-events-none absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-(--color-gold-400) px-2 py-px text-[9px] font-bold uppercase text-white shadow-sm tracking-wide">
-                            Soon
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+            <SectionHeader title="Order details" subtitle={orderSummarySubtitle} />
 
-              <AnimatePresence>
-                {orderDetails.orderType === 'pickup' && (
-                  <motion.div
-                    key="pickup-time"
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    transition={{ duration: 0.22 }}
-                    className="overflow-hidden"
+            <div className="space-y-5 px-5 py-5">
+              <div className="rounded-2xl border border-(--color-cream-200) bg-(--color-cream-50) p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-(--color-ink-400)">
+                      Fulfillment
+                    </p>
+                    <p className="mt-1 text-sm font-bold text-(--color-ink-900)">
+                      {formatOrderTypeLabel(effectiveOrderType)}
+                    </p>
+
+                    {effectiveOrderType === 'pickup' && (
+                      <p className="mt-1 text-xs text-(--color-ink-500)">
+                        Pickup time: <span className="font-semibold">{pickupTimingLabel}</span>
+                      </p>
+                    )}
+
+                    {fulfillmentType === 'delivery' && deliveryAvailability !== 'available' && (
+                      <p className="mt-2 text-xs font-medium text-(--color-gold-700)">
+                        Delivery is coming soon. This order will be prepared for pickup.
+                      </p>
+                    )}
+                  </div>
+
+                  <Link
+                    to="/menu"
+                    className="shrink-0 rounded-full border border-(--color-cream-300) bg-white px-3 py-1.5 text-xs font-semibold text-(--color-ink-600) transition-colors hover:bg-(--color-cream-50) hover:text-(--color-ember-700)"
                   >
-                    <div className="rounded-xl border border-(--color-cream-200) bg-(--color-cream-50) p-4">
-                      <PickupTimeSelector value={pickupTime} onChange={setPickupTime} />
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+                    Add more
+                  </Link>
+                </div>
+
+                <p className="mt-3 text-[11px] leading-5 text-(--color-ink-400)">
+                  To change pickup timing, use the order setup selector in the top navigation before
+                  payment.
+                </p>
+              </div>
 
               <div>
                 <label
                   htmlFor="checkout-notes"
-                  className="block text-xs font-semibold uppercase tracking-wide text-(--color-ink-400) mb-1.5"
+                  className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-(--color-ink-400)"
                 >
                   Kitchen notes{' '}
                   <span className="text-[11px] font-normal normal-case text-(--color-ink-300)">
@@ -563,8 +622,8 @@ export default function CheckoutPage() {
                   id="checkout-notes"
                   value={orderDetails.notes}
                   onChange={(e) =>
-                    setOrderDetails((s) => ({
-                      ...s,
+                    setOrderDetails((current) => ({
+                      ...current,
                       notes: String(e.target.value).slice(0, CHECKOUT_LIMITS.NOTES_MAX),
                     }))
                   }
@@ -573,7 +632,7 @@ export default function CheckoutPage() {
                   className="input w-full resize-none"
                 />
                 <div className="mt-1 flex justify-end">
-                  <span className="text-[11px] text-(--color-ink-300) tabular-nums">
+                  <span className="text-[11px] tabular-nums text-(--color-ink-300)">
                     {orderDetails.notes.length}/{CHECKOUT_LIMITS.NOTES_MAX}
                   </span>
                 </div>
@@ -609,7 +668,7 @@ export default function CheckoutPage() {
                   phone={guestPhone}
                   onPhoneChange={setGuestPhone}
                   smsOptIn={smsOptIn}
-                  onSmsToggle={() => setSmsOptIn((v) => !v)}
+                  onSmsToggle={() => setSmsOptIn((value) => !value)}
                 />
               </>
             ) : (
@@ -621,9 +680,8 @@ export default function CheckoutPage() {
                   phone={guestPhone}
                   onPhoneChange={setGuestPhone}
                   smsOptIn={smsOptIn}
-                  onSmsToggle={() => setSmsOptIn((v) => !v)}
+                  onSmsToggle={() => setSmsOptIn((value) => !value)}
                 />
-
               </>
             )}
           </SectionCard>
@@ -654,6 +712,7 @@ export default function CheckoutPage() {
                     ✨ You recently redeemed points. Your balance reflects that.
                   </p>
                 )}
+
                 {loyaltyBalance > 0 && loyaltyAccountId && (
                   <RewardsRedeem
                     balance={loyaltyBalance}
@@ -662,6 +721,7 @@ export default function CheckoutPage() {
                     onChange={setLoyaltyIntent}
                   />
                 )}
+
                 <CreditsSection
                   credits={credits}
                   creditsLoading={creditsLoading}
@@ -676,28 +736,12 @@ export default function CheckoutPage() {
             </SectionCard>
           )}
 
-          {/* SECTION 6: PAYMENT CTA
-           *
-           * Three mutually exclusive states:
-           *
-           *   Normal (idle / initiating):
-           *     CheckoutButton visible, OTP modal absent.
-           *
-           *   Challenge (otp_required / retrying):
-           *     CheckoutChallengeModal visible, CheckoutButton unmounted.
-           *     Modal receives `challengeEmail` — frozen at OTP trigger —
-           *     not the live `guestEmail` form state.
-           *     key={otpChallenge.nonce} forces remount on fresh challenge.
-           *
-           *   Blocked:
-           *     BlockedOrderCard visible, both button and modal absent.
-           */}
+          {/* SECTION 6: PAYMENT CTA */}
           <SectionCard
             index={isGuest ? 4 : 5}
             className="border-(--color-ember-200) bg-linear-to-b from-white to-(--color-cream-50)"
           >
-            <div className="px-5 py-5 space-y-3">
-              {/* OTP challenge */}
+            <div className="space-y-3 px-5 py-5">
               <AnimatePresence>
                 {showChallenge && otpChallenge && (
                   <motion.div
@@ -712,9 +756,6 @@ export default function CheckoutPage() {
                       nonce={otpChallenge.nonce}
                       expiresAt={otpChallenge.expiresAt}
                       userId={isAuthenticated && user?.id ? user.id : null}
-                      // Pass the frozen email captured at OTP challenge start,
-                      // not the live form state — prevents identity hash divergence
-                      // if the user edits the email field while the modal is open.
                       guestEmail={challengeEmail}
                       onToken={(token) => void retryWithToken(token)}
                       onExpired={() => reset()}
@@ -723,7 +764,6 @@ export default function CheckoutPage() {
                 )}
               </AnimatePresence>
 
-              {/* Blocked */}
               <AnimatePresence>
                 {showBlocked && (
                   <motion.div
@@ -738,7 +778,6 @@ export default function CheckoutPage() {
                 )}
               </AnimatePresence>
 
-              {/* Normal checkout button — unmounted during challenge and blocked */}
               {!showChallenge && !showBlocked && (
                 <CheckoutButton
                   onCheckout={handleCheckout}
@@ -748,7 +787,7 @@ export default function CheckoutPage() {
               )}
 
               {routerError && !showChallenge && !showBlocked && (
-                <p className="text-sm text-center font-medium text-(--color-error)" role="alert">
+                <p className="text-center text-sm font-medium text-(--color-error)" role="alert">
                   {routerError}
                 </p>
               )}

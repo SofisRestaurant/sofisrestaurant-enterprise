@@ -3,13 +3,13 @@
 // Floating Cart Pill — mobile-only cart CTA
 // =============================================================================
 // Behavior:
-// - Appears when cart has items.
-// - Stays visible even when BottomNav collapses.
-// - Uses --bottom-nav-offset from BottomNav so both elements move together.
-// - Avoids overlap with BottomNav in visible/collapsed states.
+// - Appears only when cart has items.
+// - Stays above BottomNav using --bottom-nav-offset from BottomNav.
 // - Hidden on checkout/admin/kitchen/expo/auth utility flows.
 // - Hidden while modal is open to avoid z-index conflicts.
-// - Transform/compositor safe for iOS Safari.
+// - Uses transform/compositor-safe styling for iOS Safari.
+// - Clean visual treatment: no heavy glow, no visible corner artifacts,
+//   no backdrop blur, no decorative pseudo-overlays that can bleed at edges.
 // =============================================================================
 
 import { useContext, useMemo } from 'react';
@@ -22,24 +22,37 @@ import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
 const HIDDEN_ON = ['/checkout', '/admin', '/kitchen', '/expo', '/auth', '/update-password'];
 
 /**
- * Extra clearance above BottomNav.
- * BottomNav provides --bottom-nav-offset:
- * - 92px when visible
- * - 34px when collapsed
- * - 0px when hidden
+ * Clearance above BottomNav.
+ *
+ * BottomNav provides:
+ * - --bottom-nav-offset: 92px visible
+ * - --bottom-nav-offset: 34px collapsed
+ * - --bottom-nav-offset: 0px hidden
  */
 const CART_PILL_GAP_PX = 10;
+const DEFAULT_BOTTOM_NAV_OFFSET = '92px';
+
+function cx(...classes: Array<string | false | null | undefined>): string {
+  return classes.filter(Boolean).join(' ');
+}
 
 function formatCurrencyFromCents(cents: number): string {
+  const safeCents = Number.isFinite(cents) ? Math.max(0, Math.round(cents)) : 0;
+
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
     maximumFractionDigits: 2,
-  }).format(Math.max(0, Number.isFinite(cents) ? cents : 0) / 100);
+  }).format(safeCents / 100);
 }
 
 function isHiddenRoute(pathname: string): boolean {
   return HIDDEN_ON.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+}
+
+function readLineTotalCents(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.round(value));
 }
 
 export function FloatingCartPill() {
@@ -55,12 +68,7 @@ export function FloatingCartPill() {
   const subtotalCents = useMemo(
     () =>
       (items ?? []).reduce((sum, item) => {
-        const lineTotalCents =
-          typeof item.lineTotalCents === 'number' && Number.isFinite(item.lineTotalCents)
-            ? Math.max(0, Math.round(item.lineTotalCents))
-            : 0;
-
-        return sum + lineTotalCents;
+        return sum + readLineTotalCents(item.lineTotalCents);
       }, 0),
     [items],
   );
@@ -70,107 +78,91 @@ export function FloatingCartPill() {
   }
 
   const formattedSubtotal = formatCurrencyFromCents(subtotalCents);
+  const itemLabel = `${count} item${count === 1 ? '' : 's'}`;
 
   return (
-    <>
-      {/*
-        Spacer:
-        Prevents page content from being hidden behind the fixed cart pill.
-        It also responds to BottomNav's offset so spacing feels consistent
-        whether the dock is visible or collapsed.
-      */}
-
-      <div
-        className="fixed left-4 right-4 z-40 transform-gpu transition-[bottom,opacity,transform] duration-700 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none md:hidden"
+    <div
+      className={cx(
+        'fixed inset-x-3 z-40 md:hidden min-[390px]:inset-x-4',
+        'transform-gpu',
+        'transition-[bottom,opacity,transform] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]',
+        'motion-reduce:transition-none',
+      )}
+      style={{
+        bottom: `calc(var(--bottom-nav-offset, ${DEFAULT_BOTTOM_NAV_OFFSET}) + env(safe-area-inset-bottom, 0px) + ${CART_PILL_GAP_PX}px)`,
+        transform: 'translate3d(0, 0, 0)',
+        WebkitTransform: 'translate3d(0, 0, 0)',
+        backfaceVisibility: 'hidden',
+        WebkitBackfaceVisibility: 'hidden',
+        contain: 'layout paint style',
+      }}
+      role="region"
+      aria-label="Cart summary"
+    >
+      <button
+        type="button"
+        onClick={openCart}
+        aria-label={`View cart — ${itemLabel}, ${formattedSubtotal}`}
+        className={cx(
+          'relative flex w-full touch-manipulation select-none items-center justify-between gap-3',
+          'overflow-hidden rounded-2xl border px-4 py-3.5 text-left',
+          'transition-[transform,border-color,background-color] duration-200',
+          'active:scale-[0.985]',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)',
+          'focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]',
+        )}
         style={{
-          bottom: `calc(var(--bottom-nav-offset, 92px) + env(safe-area-inset-bottom, 0px) + ${CART_PILL_GAP_PX}px)`,
-          WebkitTransform: 'translate3d(0, 0, 0)',
-          transform: 'translate3d(0, 0, 0)',
-          backfaceVisibility: 'hidden',
-          WebkitBackfaceVisibility: 'hidden',
-          contain: 'layout paint style',
+          background: 'linear-gradient(135deg, #1f1b16 0%, #2a251f 100%)',
+          borderColor: 'rgba(212,175,55,0.24)',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.26)',
         }}
-        role="region"
-        aria-label="Cart summary"
       >
-        <button
-          type="button"
-          onClick={openCart}
-          className="group relative flex w-full touch-manipulation select-none items-center justify-between overflow-hidden rounded-2xl px-5 py-3.5 text-left transition-[transform,box-shadow] duration-200 active:scale-[0.985] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
-          style={{
-            background: 'linear-gradient(135deg, #1c1915 0%, #2e2a24 48%, #171410 100%)',
-            boxShadow:
-              '0 10px 34px rgba(28,25,21,0.46), 0 3px 10px rgba(28,25,21,0.30), inset 0 1px 0 rgba(255,255,255,0.08)',
-          }}
-          aria-label={`View cart — ${count} item${count === 1 ? '' : 's'}, ${formattedSubtotal}`}
-        >
-          {/* Top gold highlight */}
+        <div className="flex min-w-0 items-center gap-3">
           <span
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 top-0 h-px"
+            className="flex h-8 min-w-8 shrink-0 items-center justify-center rounded-xl px-2 text-xs font-black leading-none"
             style={{
-              background: 'linear-gradient(90deg, transparent, rgba(212,175,55,0.8), transparent)',
+              background: '#d4af37',
+              color: '#1c1915',
             }}
-          />
+            aria-hidden="true"
+          >
+            {count > 99 ? '99+' : count}
+          </span>
 
-          {/* Soft gold glow */}
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-bold leading-tight text-white">
+              View Order
+            </span>
+            <span className="block truncate text-[11px] font-medium text-white/55">
+              {itemLabel} in cart
+            </span>
+          </span>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="text-sm font-black tabular-nums text-white">{formattedSubtotal}</span>
+
           <span
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-white/7"
             aria-hidden="true"
-            className="pointer-events-none absolute -left-12 -top-12 h-28 w-28 rounded-full blur-2xl transition-opacity duration-300 group-hover:opacity-100"
-            style={{
-              background: 'rgba(212,175,55,0.12)',
-              opacity: 0.72,
-            }}
-          />
-
-          <div className="relative flex min-w-0 items-center gap-3">
-            <span
-              className="flex h-8 min-w-8 shrink-0 items-center justify-center rounded-xl px-2 text-xs font-black"
-              style={{
-                background: 'linear-gradient(135deg, #f2d36b 0%, #d4af37 100%)',
-                color: '#1c1915',
-                boxShadow: '0 3px 10px rgba(212,175,55,0.28)',
-              }}
-              aria-hidden="true"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="rgba(255,255,255,0.72)"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="transition-transform duration-200 group-hover:translate-x-0.5"
             >
-              {count > 99 ? '99+' : count}
-            </span>
-
-            <span className="min-w-0">
-              <span className="block truncate text-sm font-bold leading-tight text-white">
-                View Order
-              </span>
-              <span className="block truncate text-[11px] font-medium text-white/55">
-                Ready when you are
-              </span>
-            </span>
-          </div>
-
-          <div className="relative flex shrink-0 items-center gap-2">
-            <span className="text-sm font-black tabular-nums text-white">{formattedSubtotal}</span>
-
-            <span
-              className="flex h-7 w-7 items-center justify-center rounded-full transition-colors duration-200 group-hover:bg-white/10"
-              aria-hidden="true"
-            >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="rgba(255,255,255,0.72)"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="transition-transform duration-200 group-hover:translate-x-0.5"
-              >
-                <path d="M9 18l6-6-6-6" />
-              </svg>
-            </span>
-          </div>
-        </button>
-      </div>
-    </>
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          </span>
+        </div>
+      </button>
+    </div>
   );
 }
 

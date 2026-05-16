@@ -9,13 +9,14 @@ import { useCart } from '@/modules/cart/hooks/useCart';
 import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
 import { useModal } from '@/components/ui/useModal';
 import { Button } from '@/components/ui/Button';
+import OrderIntentSelector from '@/modules/orders/components/OrderIntentSelector';
 import { useActiveOrderId } from '@/app/ActiveOrderContext';
 import { canAccessAdmin } from '@/security/permissions';
 import MenuHeaderSearch from '@/modules/menu/components/MenuHeaderSearch';
 import { useMenuUi } from '@/modules/menu/store/menuUi.store';
 import { useTranslation } from '@/i18n/useTranslation';
 
-type NavLinkKey = 'home' | 'menu' | 'about' | 'contact';
+type NavLinkKey = 'home' | 'menu' | 'deals' | 'about' | 'contact';
 type NavLink = { path: string; key: NavLinkKey };
 
 function cx(...c: (string | false | null | undefined)[]): string {
@@ -25,6 +26,7 @@ function cx(...c: (string | false | null | undefined)[]): string {
 const NAV_LINKS: NavLink[] = [
   { path: '/', key: 'home' },
   { path: '/menu', key: 'menu' },
+  { path: '/deals', key: 'deals' },
   { path: '/about', key: 'about' },
   { path: '/contact', key: 'contact' },
 ];
@@ -228,6 +230,9 @@ const handleSignOut = useCallback(async () => {
                 <Search className="h-4 w-4" aria-hidden="true" />
               </button>
             )}
+
+            <OrderIntentSelector />
+
             {!isAuthed && (
               <Link
                 to="/find-order"
