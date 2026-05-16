@@ -260,7 +260,7 @@ const LOYALTY_REDEEM_COOLDOWN_MINUTES = 30;
 // unknown and treat anything non-embedded as hosted for backward compatibility.
 
 function normalizeStripeCheckoutUiMode(value: unknown): CheckoutUiMode {
-  return value === "embedded" ? "embedded" : "hosted";
+  return value === "embedded_page" || value === "embedded" ? "embedded" : "hosted";
 }
 
 function hasHostedSessionUrl(
@@ -1287,7 +1287,7 @@ async function createStripeSession(
   const modeSpecificParams =
     parsed.uiMode === "embedded"
       ? {
-          ui_mode: "embedded",
+          ui_mode: "embedded_page",
           return_url: resolveReturnUrl(parsed.body.success_url),
         }
       : {

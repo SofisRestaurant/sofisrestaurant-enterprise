@@ -96,7 +96,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readStripeSessionUiMode(session: Stripe.Checkout.Session): CheckoutUiMode {
   const rawMode = (session as { readonly ui_mode?: unknown }).ui_mode;
-  return rawMode === "embedded" ? "embedded" : "hosted";
+  return rawMode === "embedded_page" || rawMode === "embedded" ? "embedded" : "hosted";
 }
 
 function hasHostedUrl(session: Stripe.Checkout.Session): boolean {
@@ -204,7 +204,7 @@ function buildModeSpecificStripeParams(
 ): Partial<Stripe.Checkout.SessionCreateParams> {
   if (uiMode === "embedded") {
     return {
-      ui_mode: "embedded",
+      ui_mode: "embedded_page",
       return_url: resolveReturnUrl(suppliedSuccessUrl),
     } as unknown as Partial<Stripe.Checkout.SessionCreateParams>;
   }
