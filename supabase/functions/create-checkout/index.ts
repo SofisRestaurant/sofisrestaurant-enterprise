@@ -1866,7 +1866,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     orderType: parsed.body.order_type,
     pickupTime: parsed.pickupTime ?? null,
     uiMode: parsed.uiMode,
-    ms: Date.now() - start,
+     ms: Date.now() - start,
   });
 
   return successResponse(
