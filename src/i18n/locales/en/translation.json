@@ -18,6 +18,10 @@
         "label": "Menu",
         "aria": "View our menu"
       },
+      "deals": {
+        "label": "Deals",
+        "aria": "View Sofi's deals and specials"
+      },
       "about": {
         "label": "About",
         "aria": "Learn about us"

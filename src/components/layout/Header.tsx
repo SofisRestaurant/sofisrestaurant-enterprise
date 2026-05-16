@@ -1,25 +1,32 @@
 // src/components/layout/Header.tsx
-// Cart state: removed local useState → useCartUiStore (shared store).
-// Cart icon hidden on mobile (md:hidden) — BottomNav Cart tab + FloatingCartPill handle mobile.
-// CartDrawer removed — rendered once in RootLayout.
-// All other logic unchanged from original.
+// =============================================================================
+// Sofi’s Restaurant Header
+// =============================================================================
+// Production notes:
+// - Cart state uses shared useCartUiStore.
+// - Cart icon is desktop/tablet only. Mobile cart entry is BottomNav/FloatingCartPill.
+// - CartDrawer is rendered once in RootLayout.
+// - Deals is a real route: /deals.
+// - No ThemeToggle. App follows system/device theme only.
+// - Header uses semantic app theme variables for light/dark support.
+// =============================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { LogOut, Menu, Search, ShoppingCart, User, X } from 'lucide-react';
 
-import { useModal } from '@/components/ui/useModal';
 import { Button } from '@/components/ui/Button';
+import { useModal } from '@/components/ui/useModal';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useTranslation } from '@/i18n/useTranslation';
-import { useMenuUi } from '@/modules/menu/store/menuUi.store';
-import MenuHeaderSearch from '@/modules/menu/components/MenuHeaderSearch';
 import { useCart } from '@/modules/cart/hooks/useCart';
 import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
+import MenuHeaderSearch from '@/modules/menu/components/MenuHeaderSearch';
+import { useMenuUi } from '@/modules/menu/store/menuUi.store';
 import { useActiveOrder } from '@/modules/orders/hooks/useActiveOrder';
 import { canAccessAdmin } from '@/security/permissions';
 
-type NavLinkKey = 'home' | 'menu' | 'about' | 'contact';
+type NavLinkKey = 'home' | 'menu' | 'deals' | 'about' | 'contact';
 
 type NavLink = {
   path: string;
@@ -33,6 +40,7 @@ function cx(...classes: Array<string | false | null | undefined>) {
 const NAV_LINKS: NavLink[] = [
   { path: '/', key: 'home' },
   { path: '/menu', key: 'menu' },
+  { path: '/deals', key: 'deals' },
   { path: '/about', key: 'about' },
   { path: '/contact', key: 'contact' },
 ];
@@ -42,6 +50,7 @@ const SEARCH_DEBOUNCE_MS = 150;
 export default function Header() {
   const { t } = useTranslation();
   const { pathname } = useLocation();
+
   const isMenu = pathname === '/menu' || pathname.startsWith('/menu/');
 
   const { user, profile, signOut } = useAuth();
@@ -75,11 +84,15 @@ export default function Header() {
   const cartAriaLabel = useMemo(() => {
     const count = itemCount ?? 0;
 
-    return count === 0
-      ? t('header.cart.ariaEmpty')
-      : count === 1
-        ? t('header.cart.ariaSingular')
-        : t('header.cart.ariaPlural', { count });
+    if (count === 0) {
+      return t('header.cart.ariaEmpty');
+    }
+
+    if (count === 1) {
+      return t('header.cart.ariaSingular');
+    }
+
+    return t('header.cart.ariaPlural', { count });
   }, [itemCount, t]);
 
   const isActive = useCallback(
@@ -88,7 +101,9 @@ export default function Header() {
     [pathname],
   );
 
-  const closeMobileMenu = useCallback(() => setMobileMenuOpen(false), []);
+  const closeMobileMenu = useCallback(() => {
+    setMobileMenuOpen(false);
+  }, []);
 
   const toggleMobileMenu = useCallback(() => {
     setMobileMenuOpen((isOpen) => !isOpen);
@@ -251,13 +266,9 @@ export default function Header() {
       }
 
       const activeElement = document.activeElement as HTMLElement | null;
-      const activeTagName = activeElement?.tagName?.toLowerCase();
+      const activeTag = activeElement?.tagName?.toLowerCase();
 
-      if (
-        activeTagName === 'input' ||
-        activeTagName === 'textarea' ||
-        activeElement?.isContentEditable
-      ) {
+      if (activeTag === 'input' || activeTag === 'textarea' || activeElement?.isContentEditable) {
         return;
       }
 
@@ -276,28 +287,28 @@ export default function Header() {
     <>
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-60 focus:rounded-lg focus:bg-[var(--app-surface-elevated)] focus:px-4 focus:py-2 focus:text-[var(--app-text)] focus:shadow-(--shadow-xl) focus:ring-2 focus:ring-(--color-gold-400)"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-60 focus:rounded-xl focus:bg-[var(--app-surface-elevated)] focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-[var(--app-text)] focus:shadow-(--shadow-xl) focus:outline-none focus:ring-2 focus:ring-(--color-gold-400)"
       >
         {t('nav.skipToContent')}
       </a>
 
       <header className="sticky top-0 z-30 border-b border-[var(--app-border)] bg-[var(--app-header)] shadow-sm backdrop-blur-md transition-colors duration-200">
         <nav
-          className="mx-auto max-w-7xl px-4 py-4"
+          className="mx-auto max-w-7xl px-4 py-3.5"
           role="navigation"
           aria-label={t('nav.ariaLabel')}
         >
           <div className="flex items-center justify-between gap-3">
             <Link
               to="/"
-              className="text-script rounded-md px-2 py-1 text-2xl text-(--color-ember-700) transition-colors hover:text-(--color-ember-600) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
+              className="text-script rounded-xl px-2 py-1 text-2xl text-(--color-ember-700) transition-colors hover:text-(--color-ember-600) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
               aria-label={t('header.logo.aria')}
             >
               {t('common.appName')}
             </Link>
 
             <div
-              className="hidden items-center gap-2 md:flex"
+              className="hidden items-center gap-1.5 md:flex"
               role="menubar"
               aria-label="Primary links"
             >
@@ -312,13 +323,20 @@ export default function Header() {
                     aria-label={t(`nav.links.${key}.aria`)}
                     aria-current={active ? 'page' : undefined}
                     className={cx(
-                      'rounded-md px-3 py-2 text-sm font-medium transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]',
+                      'relative rounded-xl px-3 py-2 text-sm font-semibold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]',
                       active
                         ? 'bg-(--color-ember-50) text-(--color-ember-700)'
                         : 'text-[var(--app-text)] hover:bg-[var(--app-surface-hover)] hover:text-(--color-ember-700)',
                     )}
                   >
                     {t(`nav.links.${key}.label`)}
+
+                    {active && (
+                      <span
+                        className="absolute inset-x-3 -bottom-1 h-0.5 rounded-full bg-(--color-ember-500)"
+                        aria-hidden="true"
+                      />
+                    )}
                   </Link>
                 );
               })}
@@ -357,7 +375,7 @@ export default function Header() {
                 type="button"
                 aria-label={cartAriaLabel}
                 className={cx(
-                  'relative rounded-md p-2 text-[var(--app-text)] transition-all hover:bg-[var(--app-surface-hover)] hover:text-(--color-ember-700) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]',
+                  'relative rounded-xl p-2 text-[var(--app-text)] transition-all hover:bg-[var(--app-surface-hover)] hover:text-(--color-ember-700) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]',
                   'hidden md:inline-flex',
                 )}
               >
@@ -378,7 +396,7 @@ export default function Header() {
                     {activeOrderId && (
                       <Link
                         to={`/order-status/${activeOrderId}`}
-                        className="link-line rounded-md px-3 py-2 text-sm font-semibold text-(--color-ember-600) transition-colors hover:text-(--color-ember-500) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
+                        className="rounded-xl px-3 py-2 text-sm font-semibold text-(--color-ember-600) transition-colors hover:bg-[var(--app-surface-hover)] hover:text-(--color-ember-500) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
                       >
                         {t('header.auth.trackOrder')}
                       </Link>
@@ -387,7 +405,7 @@ export default function Header() {
                     {isAdmin && (
                       <Link
                         to="/admin"
-                        className="link-line rounded-md px-3 py-2 text-sm font-semibold text-(--color-gold-600) transition-colors hover:text-(--color-gold-500) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
+                        className="rounded-xl px-3 py-2 text-sm font-semibold text-(--color-gold-600) transition-colors hover:bg-[var(--app-surface-hover)] hover:text-(--color-gold-500) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
                       >
                         {t('header.auth.admin')}
                       </Link>
@@ -396,11 +414,11 @@ export default function Header() {
                     <Link
                       to="/account"
                       aria-label={t('header.auth.account')}
-                      className="flex items-center gap-2 rounded-md bg-[var(--app-surface)] px-3 py-2 transition-all hover:bg-[var(--app-surface-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
+                      className="flex items-center gap-2 rounded-xl border border-[var(--app-border)] bg-[var(--app-surface)] px-3 py-2 transition-all hover:bg-[var(--app-surface-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
                     >
                       <User className="h-4 w-4 text-[var(--app-muted)]" aria-hidden="true" />
                       {displayName && (
-                        <span className="text-sm font-medium text-[var(--app-text)]">
+                        <span className="max-w-32 truncate text-sm font-semibold text-[var(--app-text)]">
                           {t('header.auth.greeting', { name: displayName })}
                         </span>
                       )}
@@ -412,7 +430,7 @@ export default function Header() {
                       size="sm"
                       type="button"
                       aria-label={t('header.auth.signOut')}
-                      className="flex items-center gap-2"
+                      className="flex items-center gap-2 rounded-xl"
                     >
                       <LogOut className="h-4 w-4" aria-hidden="true" />
                       {t('header.auth.signOut')}
@@ -425,6 +443,7 @@ export default function Header() {
                       variant="secondary"
                       size="sm"
                       type="button"
+                      className="rounded-xl"
                     >
                       {t('header.auth.logIn')}
                     </Button>
@@ -434,6 +453,7 @@ export default function Header() {
                       variant="primary"
                       size="sm"
                       type="button"
+                      className="rounded-xl"
                     >
                       {t('header.auth.signUp')}
                     </Button>
@@ -448,7 +468,7 @@ export default function Header() {
                 aria-label={mobileMenuOpen ? t('header.auth.closeMenu') : t('header.auth.openMenu')}
                 aria-expanded={mobileMenuOpen}
                 aria-controls="mobile-menu"
-                className="rounded-md p-2 text-[var(--app-text)] transition-all hover:bg-[var(--app-surface-hover)] hover:text-(--color-ember-700) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)] md:hidden"
+                className="rounded-xl p-2 text-[var(--app-text)] transition-all hover:bg-[var(--app-surface-hover)] hover:text-(--color-ember-700) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)] md:hidden"
               >
                 {mobileMenuOpen ? (
                   <X className="h-6 w-6" aria-hidden="true" />
@@ -464,7 +484,7 @@ export default function Header() {
               ref={mobileMenuRef}
               id="mobile-menu"
               role="menu"
-              className="mt-4 rounded-(--radius-card) border border-[var(--app-border)] bg-[var(--app-card)] p-3 shadow-(--shadow-xl) transition-colors md:hidden"
+              className="mt-4 overflow-hidden rounded-[1.5rem] border border-[var(--app-border)] bg-[var(--app-card)] p-3 shadow-(--shadow-xl) transition-colors md:hidden"
               style={{ transform: 'none' }}
             >
               <div className="flex flex-col gap-2">
@@ -481,7 +501,7 @@ export default function Header() {
                         aria-label={t(`nav.links.${key}.aria`)}
                         aria-current={active ? 'page' : undefined}
                         className={cx(
-                          'rounded-xl px-4 py-3 text-sm font-medium transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)',
+                          'rounded-2xl px-4 py-3 text-sm font-semibold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)',
                           active
                             ? 'bg-(--color-ember-50) text-(--color-ember-700)'
                             : 'text-[var(--app-text)] hover:bg-[var(--app-surface-hover)] hover:text-(--color-ember-700)',
@@ -501,7 +521,7 @@ export default function Header() {
                       <Link
                         to={`/order-status/${activeOrderId}`}
                         onClick={closeMobileMenu}
-                        className="block rounded-xl bg-(--color-ember-50) px-4 py-3 text-sm font-semibold text-(--color-ember-700) transition-colors hover:bg-(--color-ember-100) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)"
+                        className="block rounded-2xl bg-(--color-ember-50) px-4 py-3 text-sm font-semibold text-(--color-ember-700) transition-colors hover:bg-(--color-ember-100) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)"
                       >
                         {t('header.auth.trackOrder')}
                       </Link>
@@ -511,7 +531,7 @@ export default function Header() {
                       <Link
                         to="/admin"
                         onClick={closeMobileMenu}
-                        className="block rounded-xl bg-(--color-gold-50) px-4 py-3 text-sm font-semibold text-(--color-gold-600) transition-colors hover:bg-(--color-gold-100) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)"
+                        className="block rounded-2xl bg-(--color-gold-50) px-4 py-3 text-sm font-semibold text-(--color-gold-600) transition-colors hover:bg-(--color-gold-100) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)"
                       >
                         {t('header.auth.adminPanel')}
                       </Link>
@@ -521,7 +541,7 @@ export default function Header() {
                       to="/account"
                       onClick={closeMobileMenu}
                       aria-label={t('header.auth.account')}
-                      className="block rounded-xl bg-[var(--app-surface)] px-4 py-3 transition-all hover:bg-[var(--app-surface-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)"
+                      className="block rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface)] px-4 py-3 transition-all hover:bg-[var(--app-surface-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)"
                     >
                       <div className="mb-1 flex items-center gap-2">
                         <User className="h-4 w-4 text-[var(--app-muted)]" aria-hidden="true" />
@@ -529,7 +549,6 @@ export default function Header() {
                           {displayName}
                         </span>
                       </div>
-
                       {user.email && (
                         <p className="text-xs text-[var(--app-muted)]">{user.email}</p>
                       )}
@@ -539,7 +558,7 @@ export default function Header() {
                       onClick={handleSignOut}
                       variant="secondary"
                       type="button"
-                      className="mt-1 w-full"
+                      className="mt-1 w-full rounded-2xl"
                     >
                       <span className="flex items-center justify-center gap-2">
                         <LogOut className="h-4 w-4" aria-hidden="true" />
@@ -553,7 +572,7 @@ export default function Header() {
                       onClick={() => openModalSafe('login')}
                       variant="secondary"
                       type="button"
-                      className="w-full"
+                      className="w-full rounded-2xl"
                     >
                       {t('header.auth.logIn')}
                     </Button>
@@ -562,7 +581,7 @@ export default function Header() {
                       onClick={() => openModalSafe('signup')}
                       variant="primary"
                       type="button"
-                      className="w-full"
+                      className="w-full rounded-2xl"
                     >
                       {t('header.auth.signUp')}
                     </Button>
@@ -586,7 +605,7 @@ export default function Header() {
           <div className="absolute inset-x-0 top-0 p-3">
             <div
               ref={mobileSearchPanelRef}
-              className="mx-auto max-w-2xl overflow-hidden rounded-(--radius-card) border border-[var(--app-border)] bg-[var(--app-card)] text-[var(--app-text)] shadow-(--shadow-2xl)"
+              className="mx-auto max-w-2xl overflow-hidden rounded-[1.5rem] border border-[var(--app-border)] bg-[var(--app-card)] text-[var(--app-text)] shadow-(--shadow-2xl)"
             >
               <div className="flex items-center gap-2 border-b border-[var(--app-border)] px-4 py-3">
                 <div className="min-w-0 flex-1">
@@ -601,7 +620,7 @@ export default function Header() {
                       value={draftSearch}
                       onChange={(event) => setDraftSearch(event.target.value)}
                       placeholder={t('header.search.placeholder')}
-                      className="h-11 w-full rounded-xl border border-[var(--app-input-border)] bg-[var(--app-input)] pl-10 pr-10 text-[var(--app-text)] outline-none transition focus:ring-2 focus:ring-(--color-gold-400)/40"
+                      className="h-11 w-full rounded-2xl border border-[var(--app-input-border)] bg-[var(--app-input)] pl-10 pr-10 text-[var(--app-text)] outline-none transition focus:ring-2 focus:ring-(--color-gold-400)/40"
                       type="search"
                       inputMode="search"
                       autoComplete="off"
@@ -612,7 +631,7 @@ export default function Header() {
                       <button
                         type="button"
                         onClick={() => setDraftSearch('')}
-                        className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg border border-[var(--app-border)] bg-[var(--app-surface)] text-[var(--app-muted)] transition-colors hover:bg-[var(--app-surface-hover)] hover:text-[var(--app-text)] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40"
+                        className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-xl border border-[var(--app-border)] bg-[var(--app-surface)] text-[var(--app-muted)] transition-colors hover:bg-[var(--app-surface-hover)] hover:text-[var(--app-text)] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40"
                         aria-label={t('header.search.clear')}
                       >
                         <X className="h-4 w-4" aria-hidden="true" />
@@ -624,7 +643,7 @@ export default function Header() {
                 <button
                   type="button"
                   onClick={closeMobileSearch}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-[var(--app-border)] bg-[var(--app-surface)] text-[var(--app-text)] transition-colors hover:bg-[var(--app-surface-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40"
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--app-border)] bg-[var(--app-surface)] text-[var(--app-text)] transition-colors hover:bg-[var(--app-surface-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40"
                   aria-label={t('header.search.close')}
                 >
                   <X className="h-5 w-5" aria-hidden="true" />
@@ -632,14 +651,14 @@ export default function Header() {
               </div>
 
               <div className="px-4 py-3">
-                <p className="text-label text-[var(--app-muted)]">{t('header.search.tip')}</p>
+                <p className="text-xs text-[var(--app-muted)]">{t('header.search.tip')}</p>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* CartDrawer is in RootLayout — not here */}
+      {/* CartDrawer is rendered once in RootLayout — not here */}
     </>
   );
 }

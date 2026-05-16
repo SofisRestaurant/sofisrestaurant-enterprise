@@ -246,7 +246,7 @@ export function campaignToDealCard(campaign: CampaignLike): DealCard {
   };
 }
 
-export function campaignsToDealCards(campaigns: CampaignLike[]): DealCard[] {
+export function campaignsToDeals(campaigns: CampaignLike[]): DealCard[] {
   return campaigns.map(campaignToDealCard);
 }
 

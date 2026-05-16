@@ -1,29 +1,37 @@
 // src/components/layout/BottomNav.tsx
 // =============================================================================
-// Mobile bottom navigation
+// Premium floating dock — 5-tab mobile navigation
+// =============================================================================
+// 2026-ready architecture:
+// - useBottomDockState.ts owns route hiding, active-tab detection, smart scroll
+//   collapse behavior, reduced-motion handling, safe-area offsets, and root CSS API.
+// - BottomNav.tsx owns only visual dock rendering and live cart/account state.
 //
-// Professional behavior:
-// 1. Hidden on admin/kitchen/expo/checkout/auth utility routes.
-// 2. Auto-hides only after intentional downward scrolling, not immediately.
-// 3. Reappears when scrolling up, near the top of the page, after resize, or
-//    when route changes.
-// 4. Exposes --bottom-nav-offset so FloatingCartPill can move with it.
-// 5. Keeps iOS Safari performance stable:
-//    - no backdrop-blur on the fixed nav
-//    - translate3d compositor isolation
-//    - transition only transform/colors
-// 6. Respects safe-area inset for modern iPhones.
+// Mobile behavior:
+// - Floating pill dock, not edge-to-edge.
+// - Cart stays centered as the primary action.
+// - Dock movement is transform-only for smooth iOS Safari performance.
+// - No backdrop-blur to avoid GPU stutter.
+// - Keeps the dock stable when cart has items so the cart CTA and FloatingCartPill
+//   do not visually fight each other.
+//
+// Offset API exposed by useBottomDockState:
+// - --bottom-nav-offset: visible/collapsed/hidden
+// - data-bottom-nav="visible" | "collapsed" | "hidden"
 // =============================================================================
 
-import { useEffect, useMemo, useRef, useState, type ElementType } from 'react';
+import { memo, useMemo, type CSSProperties, type ElementType } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, ShoppingBag, User, UtensilsCrossed } from 'lucide-react';
+import { Home, ShoppingBag, Tag, User, UtensilsCrossed } from 'lucide-react';
 
 import { useActiveOrderId } from '@/app/ActiveOrderContext';
+import { useBottomDockState, type BottomDockTabId } from '@/components/layout/useBottomDockState';
 import { useCart } from '@/modules/cart/hooks/useCart';
 import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
 
-type TabId = 'home' | 'menu' | 'cart' | 'account';
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+type TabId = BottomDockTabId;
 
 type Tab = {
   id: TabId;
@@ -33,185 +41,107 @@ type Tab = {
   isButton?: boolean;
 };
 
-type TabButtonProps = {
-  tab: Tab;
+type ResolvedTab = Tab & {
   isActive: boolean;
-  badge?: number | null;
-  hasLivePulse?: boolean;
-  onCartClick?: () => void;
+  badge: number | null;
+  hasLivePulse: boolean;
 };
 
-function cx(...classes: Array<string | false | null | undefined>) {
+type StandardTabProps = {
+  tab: ResolvedTab;
+};
+
+type CartButtonProps = {
+  badge: number | null;
+  onCartClick: () => void;
+};
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function cx(...classes: Array<string | false | null | undefined>): string {
   return classes.filter(Boolean).join(' ');
 }
 
-const TABS: Tab[] = [
+function formatCartLabel(count: number | null): string {
+  if (count == null || count <= 0) return 'Cart';
+  return `Cart — ${count} item${count === 1 ? '' : 's'}`;
+}
+
+// ── Config ────────────────────────────────────────────────────────────────────
+
+const TABS = [
   { id: 'home', path: '/', label: 'Home', icon: Home },
   { id: 'menu', path: '/menu', label: 'Menu', icon: UtensilsCrossed },
   { id: 'cart', path: '', label: 'Cart', icon: ShoppingBag, isButton: true },
+  { id: 'deals', path: '/deals', label: 'Deals', icon: Tag },
   { id: 'account', path: '/account', label: 'Account', icon: User },
-];
+] as const satisfies readonly Tab[];
 
-const HIDDEN_ON = [
-  '/admin',
-  '/kitchen',
-  '/expo',
-  '/checkout',
-  '/update-password',
-  '/auth/callback',
-];
+const DOCK_TRANSITION =
+  'transition-[transform,opacity] duration-700 ease-[cubic-bezier(0.16,1,0.3,1)]';
 
-const TOP_LOCK_THRESHOLD_PX = 140;
-const INTENTIONAL_DOWN_SCROLL_PX = 72;
-const SCROLL_DELTA_THRESHOLD_PX = 6;
-const MIN_VISIBLE_TIME_MS = 420;
+const FOCUS_RING =
+  'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)] focus-visible:ring-inset';
 
-const BOTTOM_NAV_VISIBLE_OFFSET = '56px';
-const BOTTOM_NAV_COLLAPSED_OFFSET = '18px';
+const TAB_BASE = cx(
+  'group relative flex min-h-[56px] min-w-0 flex-col items-center justify-center gap-1',
+  'touch-manipulation select-none rounded-[1.75rem] px-1.5 py-2',
+  '[-webkit-tap-highlight-color:transparent]',
+);
 
-function useIsNavHidden(pathname: string) {
-  return HIDDEN_ON.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
-}
+const DOCK_SHELL_STYLE: CSSProperties = {
+  boxShadow:
+    '0 8px 32px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.10), inset 0 1px 0 rgba(255,255,255,0.08)',
+};
 
-function useActiveTab(pathname: string): TabId | null {
-  if (pathname === '/') return 'home';
-  if (pathname.startsWith('/menu')) return 'menu';
-  if (pathname.startsWith('/account') || pathname.startsWith('/order')) return 'account';
+const CART_BUTTON_STYLE: CSSProperties = {
+  boxShadow: '0 4px 16px rgba(212,175,55,0.42), 0 1px 4px rgba(0,0,0,0.22)',
+};
 
-  return null;
-}
+// ── Standard tab ──────────────────────────────────────────────────────────────
 
-function useAutoHideBottomNav(isRouteHidden: boolean, pathname: string) {
-  const [isAutoHidden, setIsAutoHidden] = useState(false);
-
-  const lastScrollYRef = useRef(0);
-  const accumulatedDownScrollRef = useRef(0);
-  const lastShownAtRef = useRef(Date.now());
-  const tickingRef = useRef(false);
-
-  useEffect(() => {
-    setIsAutoHidden(false);
-    accumulatedDownScrollRef.current = 0;
-    lastScrollYRef.current = Math.max(window.scrollY, 0);
-    lastShownAtRef.current = Date.now();
-  }, [isRouteHidden, pathname]);
-
-  useEffect(() => {
-    if (isRouteHidden) {
-      return;
-    }
-
-    function showNav(currentScrollY: number) {
-      setIsAutoHidden(false);
-      accumulatedDownScrollRef.current = 0;
-      lastShownAtRef.current = Date.now();
-      lastScrollYRef.current = currentScrollY;
-    }
-
-    function updateNavVisibility() {
-      const currentScrollY = Math.max(window.scrollY, 0);
-      const previousScrollY = lastScrollYRef.current;
-      const delta = currentScrollY - previousScrollY;
-
-      tickingRef.current = false;
-
-      if (currentScrollY < TOP_LOCK_THRESHOLD_PX) {
-        showNav(currentScrollY);
-        return;
-      }
-
-      if (Math.abs(delta) < SCROLL_DELTA_THRESHOLD_PX) {
-        return;
-      }
-
-      if (delta < 0) {
-        showNav(currentScrollY);
-        return;
-      }
-
-      accumulatedDownScrollRef.current += delta;
-
-      const hasScrolledWithIntent = accumulatedDownScrollRef.current >= INTENTIONAL_DOWN_SCROLL_PX;
-
-      const hasStayedVisibleLongEnough = Date.now() - lastShownAtRef.current >= MIN_VISIBLE_TIME_MS;
-
-      if (hasScrolledWithIntent && hasStayedVisibleLongEnough) {
-        setIsAutoHidden(true);
-      }
-
-      lastScrollYRef.current = currentScrollY;
-    }
-
-    function handleScroll() {
-      if (tickingRef.current) {
-        return;
-      }
-
-      tickingRef.current = true;
-      window.requestAnimationFrame(updateNavVisibility);
-    }
-
-    function handleResize() {
-      setIsAutoHidden(false);
-      accumulatedDownScrollRef.current = 0;
-      lastScrollYRef.current = Math.max(window.scrollY, 0);
-      lastShownAtRef.current = Date.now();
-    }
-
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    window.addEventListener('resize', handleResize);
-
-    return () => {
-      window.removeEventListener('scroll', handleScroll);
-      window.removeEventListener('resize', handleResize);
-    };
-  }, [isRouteHidden]);
-
-  return isAutoHidden;
-}
-
-function TabButton({ tab, isActive, badge, hasLivePulse, onCartClick }: TabButtonProps) {
+const StandardTab = memo(function StandardTab({ tab }: StandardTabProps) {
   const Icon = tab.icon;
 
-  const inner = (
-    <>
-      <div
+  return (
+    <Link
+      to={tab.path}
+      aria-label={tab.label}
+      aria-current={tab.isActive ? 'page' : undefined}
+      prefetch="intent"
+      className={cx(TAB_BASE, 'transition-colors duration-200 active:scale-95', FOCUS_RING)}
+    >
+      <span
         className={cx(
-          'relative flex h-7 w-7 shrink-0 items-center justify-center rounded-xl',
+          'relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
           'transition-colors duration-200',
-          isActive ? 'bg-(--color-ember-50)' : 'bg-transparent',
+          tab.isActive
+            ? 'bg-(--color-ember-50)'
+            : 'bg-transparent group-hover:bg-[var(--app-surface-hover)]',
         )}
       >
         <Icon
           className={cx(
-            'h-5 w-5 shrink-0 transition-colors duration-200',
-            isActive ? 'text-(--color-ember-600)' : 'text-[var(--app-muted)]',
+            'h-5 w-5 transition-colors duration-200',
+            tab.isActive ? 'text-(--color-ember-600)' : 'text-[var(--app-muted)]',
           )}
-          strokeWidth={isActive ? 2.2 : 1.75}
+          strokeWidth={tab.isActive ? 2.25 : 1.8}
           aria-hidden="true"
         />
 
-        {badge != null && badge > 0 && (
-          <span
-            className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-(--color-ember-600) px-1 text-[9px] font-bold leading-none text-white shadow-(--shadow-xs)"
-            aria-hidden="true"
-          >
-            {badge > 99 ? '99+' : badge}
-          </span>
-        )}
-
-        {hasLivePulse && (
-          <span className="absolute -right-0.5 -top-0.5 flex h-2 w-2" aria-hidden="true">
+        {tab.hasLivePulse && (
+          <span className="absolute -right-0.5 -top-0.5 flex h-2.5 w-2.5" aria-hidden="true">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-(--color-ember-400) opacity-75" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-(--color-ember-500)" />
+            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-(--color-ember-500)" />
           </span>
         )}
-      </div>
+      </span>
 
       <span
         className={cx(
-          'text-[10px] font-medium leading-none tracking-wide transition-colors duration-200',
-          isActive ? 'text-(--color-ember-600)' : 'text-[var(--app-muted)]',
+          'max-w-full truncate text-[10px] font-semibold leading-none tracking-wide',
+          'transition-colors duration-200',
+          tab.isActive ? 'text-(--color-ember-600)' : 'text-[var(--app-muted)]',
         )}
       >
         {tab.label}
@@ -219,46 +149,66 @@ function TabButton({ tab, isActive, badge, hasLivePulse, onCartClick }: TabButto
 
       <span
         className={cx(
-          'absolute bottom-0 left-1/2 h-px -translate-x-1/2 rounded-full transition-[width,opacity] duration-200',
-          isActive ? 'w-6 bg-(--color-ember-500) opacity-100' : 'w-0 opacity-0',
+          'absolute bottom-1 left-1/2 h-0.5 -translate-x-1/2 rounded-full',
+          'transition-[width,opacity] duration-200',
+          tab.isActive ? 'w-6 bg-(--color-ember-500) opacity-100' : 'w-0 opacity-0',
         )}
         aria-hidden="true"
       />
-    </>
-  );
-
-  const baseClass = cx(
-    'relative flex min-h-[56px] min-w-0 flex-col items-center justify-center gap-0.5',
-    'rounded-lg px-1 py-2',
-    'text-[var(--app-muted)] transition-colors duration-200',
-    'active:scale-95',
-    'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-inset',
-  );
-
-  if (tab.isButton) {
-    return (
-      <button
-        type="button"
-        onClick={onCartClick}
-        aria-label={`${tab.label}${badge ? ` (${badge})` : ''}`}
-        className={baseClass}
-      >
-        {inner}
-      </button>
-    );
-  }
-
-  return (
-    <Link
-      to={tab.path}
-      aria-label={tab.label}
-      aria-current={isActive ? 'page' : undefined}
-      className={baseClass}
-    >
-      {inner}
     </Link>
   );
-}
+});
+
+// ── Center cart button ────────────────────────────────────────────────────────
+
+const CartButton = memo(function CartButton({ badge, onCartClick }: CartButtonProps) {
+  const hasItems = badge != null && badge > 0;
+
+  return (
+    <button
+      type="button"
+      onClick={onCartClick}
+      aria-label={formatCartLabel(badge)}
+      className={cx(TAB_BASE, 'transition-transform duration-150 active:scale-95', FOCUS_RING)}
+    >
+      <span
+        className={cx(
+          'relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full',
+          'bg-gradient-to-br from-[var(--color-gold-300)] via-[var(--color-gold-400)] to-[var(--color-ember-600)]',
+          'transition-[box-shadow,transform] duration-200',
+          'group-hover:scale-[1.03]',
+        )}
+        style={CART_BUTTON_STYLE}
+      >
+        <ShoppingBag
+          className="h-5 w-5 text-[var(--color-stone-900)]"
+          strokeWidth={2.25}
+          aria-hidden="true"
+        />
+
+        {hasItems && (
+          <span
+            className={cx(
+              'absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center',
+              'rounded-full bg-(--color-ember-600) px-1',
+              'text-[9px] font-bold leading-none text-white',
+              'ring-2 ring-[var(--app-header)]',
+            )}
+            aria-hidden="true"
+          >
+            {badge > 99 ? '99+' : badge}
+          </span>
+        )}
+      </span>
+
+      <span className="max-w-full truncate text-[10px] font-bold leading-none tracking-wide text-[var(--color-gold-500)]">
+        Cart
+      </span>
+    </button>
+  );
+});
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export default function BottomNav() {
   const { pathname } = useLocation();
@@ -266,90 +216,86 @@ export default function BottomNav() {
   const activeOrderId = useActiveOrderId();
   const openCart = useCartUiStore((state) => state.open);
 
-  const isRouteHidden = useIsNavHidden(pathname);
-  const isAutoHidden = useAutoHideBottomNav(isRouteHidden, pathname);
-  const activeTab = useActiveTab(pathname);
-
-  const hasLiveOrder = Boolean(activeOrderId);
   const cartCount = itemCount ?? 0;
+  const hasCartItems = cartCount > 0;
+  const hasLiveOrder = Boolean(activeOrderId);
 
-  useEffect(() => {
-    const root = document.documentElement;
+  const { isRouteHidden, dockState, isCollapsed, activeTab, dockTranslateY, dockOpacity } =
+    useBottomDockState({
+      pathname,
 
-    if (isRouteHidden) {
-      root.style.setProperty('--bottom-nav-offset', '0px');
-      root.dataset.bottomNav = 'hidden';
-      return;
-    }
+      // Keeps the dock stable when the customer has an active cart.
+      // This protects the highest-conversion action from moving while ordering.
+      keepVisible: hasCartItems,
+    });
 
-    if (isAutoHidden) {
-      root.style.setProperty('--bottom-nav-offset', BOTTOM_NAV_COLLAPSED_OFFSET);
-      root.dataset.bottomNav = 'collapsed';
-      return;
-    }
+  const dockStyle = useMemo<CSSProperties>(
+    () => ({
+      transform: `translate3d(0, ${dockTranslateY}, 0)`,
+      WebkitTransform: `translate3d(0, ${dockTranslateY}, 0)`,
+      opacity: dockOpacity,
+      willChange: isCollapsed ? 'transform, opacity' : 'auto',
+      backfaceVisibility: 'hidden',
+      WebkitBackfaceVisibility: 'hidden',
+      contain: 'layout paint style',
+    }),
+    [dockOpacity, dockTranslateY, isCollapsed],
+  );
 
-    root.style.setProperty('--bottom-nav-offset', BOTTOM_NAV_VISIBLE_OFFSET);
-    root.dataset.bottomNav = 'visible';
-
-    return () => {
-      root.style.removeProperty('--bottom-nav-offset');
-      delete root.dataset.bottomNav;
-    };
-  }, [isRouteHidden, isAutoHidden]);
-
-  const resolvedTabs = useMemo(
+  const resolvedTabs = useMemo<ResolvedTab[]>(
     () =>
       TABS.map((tab) => ({
         ...tab,
-        isActive: activeTab === tab.id,
-        badge: tab.id === 'cart' ? (cartCount > 0 ? cartCount : null) : null,
+        isActive: tab.id !== 'cart' && activeTab === tab.id,
+        badge: tab.id === 'cart' && hasCartItems ? cartCount : null,
         hasLivePulse: tab.id === 'account' && hasLiveOrder,
       })),
-    [activeTab, cartCount, hasLiveOrder],
+    [activeTab, cartCount, hasCartItems, hasLiveOrder],
   );
 
-  if (isRouteHidden) {
-    return null;
-  }
+  if (isRouteHidden) return null;
 
   return (
     <>
       <div
-        className="h-[calc(56px+env(safe-area-inset-bottom,0px))] shrink-0 md:hidden"
+        className="h-[calc(76px+env(safe-area-inset-bottom,0px))] shrink-0 md:hidden"
         aria-hidden="true"
       />
 
-      <nav
-        role="navigation"
-        aria-label="App navigation"
-        data-state={isAutoHidden ? 'collapsed' : 'visible'}
+      <div
+        data-bottom-nav-dock="true"
+        data-state={dockState}
         className={cx(
           'fixed bottom-0 left-0 right-0 z-30 md:hidden',
-          'border-t border-[var(--app-divider)] bg-[var(--app-header)]',
-          'pb-[env(safe-area-inset-bottom,0px)]',
-          'transition-[transform,background-color,border-color] duration-700 ease-[cubic-bezier(0.16,1,0.3,1)]',
+          DOCK_TRANSITION,
           'motion-reduce:transition-none',
         )}
-        style={{
-          transform: isAutoHidden
-            ? 'translate3d(0, calc(92% + env(safe-area-inset-bottom, 0px)), 0)'
-            : 'translate3d(0, 0, 0)',
-          willChange: 'transform',
-        }}
+        style={dockStyle}
       >
-        <div className="grid grid-cols-4">
-          {resolvedTabs.map((tab) => (
-            <TabButton
-              key={tab.id}
-              tab={tab}
-              isActive={tab.isActive}
-              badge={tab.badge}
-              hasLivePulse={tab.hasLivePulse}
-              onCartClick={openCart}
-            />
-          ))}
+        <div className="px-3 pb-[max(env(safe-area-inset-bottom,0px),12px)] pt-2 min-[390px]:px-4">
+          <nav
+            role="navigation"
+            aria-label="App navigation"
+            className={cx(
+              'grid grid-cols-5',
+              'rounded-[2.5rem]',
+              'border border-[var(--app-divider)] bg-[var(--app-header)]',
+              'px-1 py-1',
+              'transition-colors duration-200',
+              'motion-reduce:transition-none',
+            )}
+            style={DOCK_SHELL_STYLE}
+          >
+            {resolvedTabs.map((tab) =>
+              tab.isButton ? (
+                <CartButton key={tab.id} badge={tab.badge} onCartClick={openCart} />
+              ) : (
+                <StandardTab key={tab.id} tab={tab} />
+              ),
+            )}
+          </nav>
         </div>
-      </nav>
+      </div>
     </>
   );
 }
