@@ -1,113 +1,104 @@
 // src/modules/checkout/pages/CheckoutPage.tsx
 // =============================================================================
-// CHANGES FROM PRIOR VERSION:
+// CheckoutPage
+// =============================================================================
+// Current ownership:
+// - CheckoutPage orchestrates checkout state, loyalty/rewards, contact,
+//   promo, order summary, and payment CTA.
+// - Order intent is owned by useOrderIntentStore and controlled from TopBar /
+//   MobileOrderIntentSheet.
+// - Embedded Stripe is supported without deleting the hosted redirect flow.
 //
-//   [SPLIT] All helpers, sub-components, and the loyalty API call have been
-//           extracted into their checkout-owned files. This file is now the
-//           orchestrator only: state, effects, event handlers, render tree.
-//
-//   [SMS]   handleCheckout passes guestPhone and smsOptIn when SMS opt-in is enabled.
-//           The router validates the phone before any network call.
-//
-//   [ORDER INTENT]
-//           Checkout no longer owns pickup-time selection.
-//           Pickup/delivery intent now comes from useOrderIntentStore, which is
-//           controlled by the top-nav OrderIntentSelector and the mobile
-//           bottom sheet. This prevents duplicate pickup-time UI and keeps the
-//           customer's order setup consistent before checkout.
-//
-//           The local `pickupTimingToIso` helper has been replaced by the
-//           shared `getPickupTimingDate` helper exported from the store so the
-//           selector, the sheet, the checkout payload, and the copy-summary
-//           all agree on what a given timing means.
-//
-//           A mobile-only "Change" button in the Order Details card now opens
-//           MobileOrderIntentSheet (the same one rendered by TopBar) via the
-//           store, so the customer doesn't have to scroll up to change pickup
-//           timing on mobile.
+// Embedded Stripe behavior:
+// - Hosted mode: server returns url, then we redirect with window.location.assign.
+// - Embedded mode: server returns clientSecret, then this page renders
+//   <EmbeddedStripePayment /> inside the payment section.
+// - OTP challenge and blocked states still take priority.
+// - No Stripe URL is used before the router/server finishes verification.
 //
 // Security invariants preserved:
-//   - No Stripe URL before verification.
-//   - CheckoutButton is unmounted during OTP challenge.
-//   - challenge_token lives only in CheckoutChallengeModal state + router memory.
-//   - guest_token continuity preserved via sessionStorage.
-//   - pendingInputRef in useGuestCheckout preserves cart + phone across OTP cycle.
+// - Stripe payment finalization remains webhook-owned.
+// - CheckoutButton is unmounted during OTP challenge and blocked state.
+// - challenge_token lives only in CheckoutChallengeModal state + router memory.
+// - guest_token continuity remains inside useGuestCheckout.
+// - Client never calculates authoritative totals.
 // =============================================================================
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useState,
-  useCallback,
   type ChangeEvent,
   type KeyboardEvent,
 } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import { Link, useNavigate } from 'react-router-dom';
+import { AnimatePresence, motion } from 'framer-motion';
 
-// ── Checkout module ────────────────────────────────────────────────────────────
+// ── Checkout module ───────────────────────────────────────────────────────────
 import CheckoutButton from '@/modules/checkout/components/CheckoutButton';
 import { CheckoutChallengeModal } from '@/modules/checkout/components/CheckoutChallengeModal';
+import EmbeddedStripePayment from '@/modules/checkout/components/EmbeddedStripePayment';
 import {
   RewardsRedeem,
   type LoyaltyRedeemValue,
 } from '@/modules/checkout/components/RewardsRedeem';
 import { useCheckoutRouter } from '@/modules/checkout/hooks/useCheckoutRouter';
 import {
+  calculatePointsPreview,
   getAvailableCredits,
   getLoyaltyProfile,
-  calculatePointsPreview,
-  type UserCredit,
-  type LoyaltyProfile,
   type LoyaltyPreview,
+  type LoyaltyProfile,
+  type UserCredit,
 } from '@/modules/checkout/api/checkout.api';
 import { getLoyaltyAccount } from '@/modules/checkout/api/loyalty-account.api';
 import {
+  isCheckoutBlocked,
   isCheckoutSuccess,
   isOtpRequired,
-  isCheckoutBlocked,
 } from '@/modules/checkout/types/checkout.types';
 
-// ── Page types ─────────────────────────────────────────────────────────────────
+// ── Page types ────────────────────────────────────────────────────────────────
 import type {
-  PromoState,
-  OrderType,
   OrderDetailsState,
+  OrderType,
+  PromoState,
 } from '@/modules/checkout/types/checkout-page.types';
 
-// ── Page storage ───────────────────────────────────────────────────────────────
+// ── Page storage ──────────────────────────────────────────────────────────────
 import {
-  CHECKOUT_STORAGE,
   CHECKOUT_LIMITS,
+  CHECKOUT_STORAGE,
   safeLocalGet,
-  safeLocalSet,
   safeLocalRemove,
+  safeLocalSet,
 } from '@/modules/checkout/utils/checkoutPageStorage';
 
-// ── Page formatters ────────────────────────────────────────────────────────────
+// ── Page formatters ───────────────────────────────────────────────────────────
 import {
   clampInt,
-  normalizePromo,
-  safeMoneyCents,
   computeDisplayLineTotalCents,
   formatOrderTypeLabel,
+  normalizePromo,
+  safeMoneyCents,
 } from '@/modules/checkout/utils/checkoutPageFormatters';
 
-// ── Page sub-components ────────────────────────────────────────────────────────
+// ── Page sub-components ───────────────────────────────────────────────────────
 import { fadeUp } from '@/modules/checkout/components/page/animations';
-import { SectionCard } from '@/modules/checkout/components/page/SectionCard';
-import { SectionHeader } from '@/modules/checkout/components/page/SectionHeader';
-import { BlockedOrderCard } from '@/modules/checkout/components/page/BlockedOrderCard';
-import { GuestContactStrip } from '@/modules/checkout/components/page/GuestContactStrip';
 import { AuthContactStrip } from '@/modules/checkout/components/page/AuthContactStrip';
+import { BlockedOrderCard } from '@/modules/checkout/components/page/BlockedOrderCard';
+import { CreditsSection } from '@/modules/checkout/components/page/CreditsSection';
+import { GuestContactStrip } from '@/modules/checkout/components/page/GuestContactStrip';
+import { GuestPostCheckoutNudge } from '@/modules/checkout/components/page/GuestPostCheckoutNudge';
 import { LoyaltyEarnBanner } from '@/modules/checkout/components/page/LoyaltyEarnBanner';
 import { OrderItemsList } from '@/modules/checkout/components/page/OrderItemsList';
 import { OrderTotals } from '@/modules/checkout/components/page/OrderTotals';
 import { PromoSection } from '@/modules/checkout/components/page/PromoSection';
-import { CreditsSection } from '@/modules/checkout/components/page/CreditsSection';
-import { GuestPostCheckoutNudge } from '@/modules/checkout/components/page/GuestPostCheckoutNudge';
+import { SectionCard } from '@/modules/checkout/components/page/SectionCard';
+import { SectionHeader } from '@/modules/checkout/components/page/SectionHeader';
 
-// ── Other modules ──────────────────────────────────────────────────────────────
+// ── Other modules ─────────────────────────────────────────────────────────────
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useCart } from '@/modules/cart/hooks/useCart';
 import { formatCents } from '@/modules/cart/utils/cart.utils';
@@ -116,10 +107,6 @@ import {
   getPickupTimingLabel,
   useOrderIntentStore,
 } from '@/modules/orders/store/orderIntent.store';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Main Component
-// ─────────────────────────────────────────────────────────────────────────────
 
 export default function CheckoutPage() {
   const navigate = useNavigate();
@@ -142,6 +129,9 @@ export default function CheckoutPage() {
   const deliveryAvailability = useOrderIntentStore((state) => state.deliveryAvailability);
   const openOrderIntentSheet = useOrderIntentStore((state) => state.openMobileSheet);
 
+  const [embeddedClientSecret, setEmbeddedClientSecret] = useState<string | null>(null);
+  const [checkoutContractError, setCheckoutContractError] = useState<string | null>(null);
+
   const showChallenge = guestPhase.tag === 'otp_required' || guestPhase.tag === 'retrying';
   const showBlocked = guestPhase.tag === 'blocked';
 
@@ -149,7 +139,7 @@ export default function CheckoutPage() {
 
   const subtotalCents = useMemo(() => {
     if (!hasItems) return 0;
-    return items.reduce((sum, i) => sum + computeDisplayLineTotalCents(i), 0);
+    return items.reduce((sum, item) => sum + computeDisplayLineTotalCents(item), 0);
   }, [items, hasItems]);
 
   const estimatedTaxCents = useMemo(() => Math.round(subtotalCents * 0.095), [subtotalCents]);
@@ -161,12 +151,9 @@ export default function CheckoutPage() {
 
   const itemCount = useMemo(() => {
     if (!hasItems) return 0;
-    return items.reduce((acc, i) => acc + clampInt(i.quantity, 0, 10_000), 0);
+    return items.reduce((sum, item) => sum + clampInt(item.quantity, 0, 10_000), 0);
   }, [items, hasItems]);
 
-  // Effective order type: only "delivery" if delivery is BOTH selected AND
-  // actually available. Otherwise we submit pickup. Defensive double-lock
-  // alongside the store-level guard in setFulfillmentType.
   const effectiveOrderType = useMemo<OrderType>(() => {
     if (fulfillmentType === 'delivery' && deliveryAvailability === 'available') {
       return 'delivery';
@@ -178,10 +165,7 @@ export default function CheckoutPage() {
   const pickupTimingLabel = useMemo(() => getPickupTimingLabel(pickupTiming), [pickupTiming]);
 
   const orderSummarySubtitle = useMemo(() => {
-    if (effectiveOrderType === 'delivery') {
-      return 'Delivery';
-    }
-
+    if (effectiveOrderType === 'delivery') return 'Delivery';
     return `Pickup · ${pickupTimingLabel}`;
   }, [effectiveOrderType, pickupTimingLabel]);
 
@@ -227,43 +211,79 @@ export default function CheckoutPage() {
     return { code: stored ? normalizePromo(stored) : '', applied: false, error: null };
   });
 
-  const onPromoChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
-    const code = normalizePromo(e.target.value);
-    setPromo({ code, applied: false, error: null });
-    if (code) safeLocalSet(CHECKOUT_STORAGE.PROMO, code);
-    else safeLocalRemove(CHECKOUT_STORAGE.PROMO);
+  const clearEmbeddedCheckout = useCallback(() => {
+    setEmbeddedClientSecret(null);
+    setCheckoutContractError(null);
   }, []);
+
+  const onPromoChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      clearEmbeddedCheckout();
+
+      const code = normalizePromo(event.target.value);
+      setPromo({ code, applied: false, error: null });
+
+      if (code) safeLocalSet(CHECKOUT_STORAGE.PROMO, code);
+      else safeLocalRemove(CHECKOUT_STORAGE.PROMO);
+    },
+    [clearEmbeddedCheckout],
+  );
 
   const onPromoApply = useCallback(() => {
-    if (promo.code.trim()) setPromo((p) => ({ ...p, applied: true, error: null }));
-  }, [promo.code]);
+    if (!promo.code.trim()) return;
+
+    clearEmbeddedCheckout();
+    setPromo((current) => ({ ...current, applied: true, error: null }));
+  }, [promo.code, clearEmbeddedCheckout]);
 
   const onPromoClear = useCallback(() => {
+    clearEmbeddedCheckout();
     setPromo({ code: '', applied: false, error: null });
     safeLocalRemove(CHECKOUT_STORAGE.PROMO);
-  }, []);
+  }, [clearEmbeddedCheckout]);
 
   const onPromoKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
+    (event: KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
         onPromoApply();
       }
 
-      if (e.key === 'Escape') {
-        e.preventDefault();
+      if (event.key === 'Escape') {
+        event.preventDefault();
         onPromoClear();
       }
     },
     [onPromoApply, onPromoClear],
   );
 
-  // ── Guest state ────────────────────────────────────────────────────────────
+  // ── Guest/contact state ────────────────────────────────────────────────────
   const [guestEmail, setGuestEmail] = useState('');
   const [guestPhone, setGuestPhone] = useState('');
   const [smsOptIn, setSmsOptIn] = useState(false);
 
-  // [FIX] Frozen identity email for OTP token binding.
+  const handleGuestEmailChange = useCallback(
+    (value: string) => {
+      clearEmbeddedCheckout();
+      setGuestEmail(value);
+    },
+    [clearEmbeddedCheckout],
+  );
+
+  const handleGuestPhoneChange = useCallback(
+    (value: string) => {
+      clearEmbeddedCheckout();
+      setGuestPhone(value);
+    },
+    [clearEmbeddedCheckout],
+  );
+
+  const handleSmsToggle = useCallback(() => {
+    clearEmbeddedCheckout();
+    setSmsOptIn((current) => !current);
+  }, [clearEmbeddedCheckout]);
+
+  // Frozen identity email for OTP token binding.
   const [challengeEmail, setChallengeEmail] = useState<string | null>(null);
 
   useEffect(() => {
@@ -289,6 +309,19 @@ export default function CheckoutPage() {
     [credits],
   );
 
+  const handleSelectCredit = useCallback(
+    (id: string) => {
+      clearEmbeddedCheckout();
+      setSelectedCredit(id);
+    },
+    [clearEmbeddedCheckout],
+  );
+
+  const handleRemoveCredit = useCallback(() => {
+    clearEmbeddedCheckout();
+    setSelectedCredit(null);
+  }, [clearEmbeddedCheckout]);
+
   // ── Auth: loyalty ──────────────────────────────────────────────────────────
   const [loyaltyProfile, setLoyaltyProfile] = useState<LoyaltyProfile | null>(null);
   const [loyaltyPreview, setLoyaltyPreview] = useState<LoyaltyPreview | null>(null);
@@ -301,7 +334,20 @@ export default function CheckoutPage() {
     loyaltyAccountId: '',
   });
 
-  // ── Data loading (auth only) ───────────────────────────────────────────────
+  const handleLoyaltyChange = useCallback(
+    (next: LoyaltyRedeemValue) => {
+      clearEmbeddedCheckout();
+      setLoyaltyIntent(next);
+    },
+    [clearEmbeddedCheckout],
+  );
+
+  // Clear embedded session when cart or fulfillment inputs change.
+  useEffect(() => {
+    clearEmbeddedCheckout();
+  }, [items, effectiveOrderType, pickupTiming, clearEmbeddedCheckout]);
+
+  // ── Data loading: credits ──────────────────────────────────────────────────
   const loadCredits = useCallback(async () => {
     setCreditsLoading(true);
     setCreditsError(null);
@@ -343,6 +389,7 @@ export default function CheckoutPage() {
     };
   }, [isAuthenticated, loadCredits]);
 
+  // ── Data loading: loyalty ──────────────────────────────────────────────────
   useEffect(() => {
     if (!isAuthenticated) return;
 
@@ -387,7 +434,7 @@ export default function CheckoutPage() {
 
   useEffect(() => {
     if (!loyaltyAccountId) return;
-    setLoyaltyIntent((prev) => ({ ...prev, loyaltyAccountId }));
+    setLoyaltyIntent((current) => ({ ...current, loyaltyAccountId }));
   }, [loyaltyAccountId]);
 
   useEffect(() => {
@@ -395,8 +442,11 @@ export default function CheckoutPage() {
     else safeLocalSet(CHECKOUT_STORAGE.CREDIT, selectedCredit);
   }, [selectedCredit]);
 
-  // ── handleCheckout — single checkout trigger ───────────────────────────────
+  // ── Checkout trigger ───────────────────────────────────────────────────────
   const handleCheckout = useCallback(async () => {
+    setCheckoutContractError(null);
+    setEmbeddedClientSecret(null);
+
     const pickupTime =
       effectiveOrderType === 'pickup'
         ? (getPickupTimingDate(pickupTiming) ?? undefined)
@@ -415,14 +465,26 @@ export default function CheckoutPage() {
     });
 
     if (isCheckoutSuccess(result)) {
-      window.location.assign(result.url);
+      if (result.clientSecret) {
+        setEmbeddedClientSecret(result.clientSecret);
+        return;
+      }
+
+      if (result.url) {
+        window.location.assign(result.url);
+        return;
+      }
+
+      setCheckoutContractError(
+        'Checkout started, but the payment session was missing. Please try again.',
+      );
       return;
     }
 
     if (!isOtpRequired(result) && !isCheckoutBlocked(result)) {
       if (result.code === 'promo_invalid' || result.code === 'promo_not_found') {
-        setPromo((prev) => ({
-          ...prev,
+        setPromo((current) => ({
+          ...current,
           applied: false,
           error: result.error || 'Invalid promo code.',
         }));
@@ -484,13 +546,11 @@ export default function CheckoutPage() {
     try {
       await navigator.clipboard.writeText(lines.join('\n'));
     } catch {
-      /* clipboard unavailable */
+      // Clipboard is optional.
     }
   }, [hasItems, items, subtotalCents, effectiveOrderType, pickupTiming, pickupTimingLabel]);
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Render
-  // ─────────────────────────────────────────────────────────────────────────
+  const paymentError = checkoutContractError ?? routerError;
 
   return (
     <main className="relative mx-auto w-full max-w-2xl px-4 py-8 sm:py-12">
@@ -538,7 +598,6 @@ export default function CheckoutPage() {
         </SectionCard>
       ) : (
         <div className="space-y-3">
-          {/* SECTION 1: ORDER REVIEW */}
           <SectionCard index={0}>
             <SectionHeader
               title="Order Summary"
@@ -552,7 +611,9 @@ export default function CheckoutPage() {
                 </Link>
               }
             />
+
             <OrderItemsList items={items} />
+
             <OrderTotals
               subtotalCents={subtotalCents}
               estimatedTaxCents={estimatedTaxCents}
@@ -560,7 +621,6 @@ export default function CheckoutPage() {
             />
           </SectionCard>
 
-          {/* SECTION 2: ORDER DETAILS */}
           <SectionCard index={1}>
             <SectionHeader title="Order details" subtitle={orderSummarySubtitle} />
 
@@ -571,6 +631,7 @@ export default function CheckoutPage() {
                     <p className="text-xs font-semibold uppercase tracking-wide text-(--color-ink-400)">
                       Fulfillment
                     </p>
+
                     <p className="mt-1 text-sm font-bold text-(--color-ink-900)">
                       {formatOrderTypeLabel(effectiveOrderType)}
                     </p>
@@ -589,8 +650,6 @@ export default function CheckoutPage() {
                   </div>
 
                   <div className="flex shrink-0 flex-col items-end gap-2">
-                    {/* Mobile-only: open the bottom sheet so the customer doesn't
-                        have to scroll up to TopBar to change pickup timing. */}
                     <button
                       type="button"
                       onClick={openOrderIntentSheet}
@@ -625,19 +684,22 @@ export default function CheckoutPage() {
                     (optional)
                   </span>
                 </label>
+
                 <textarea
                   id="checkout-notes"
                   value={orderDetails.notes}
-                  onChange={(e) =>
+                  onChange={(event) => {
+                    clearEmbeddedCheckout();
                     setOrderDetails((current) => ({
                       ...current,
-                      notes: String(e.target.value).slice(0, CHECKOUT_LIMITS.NOTES_MAX),
-                    }))
-                  }
+                      notes: String(event.target.value).slice(0, CHECKOUT_LIMITS.NOTES_MAX),
+                    }));
+                  }}
                   rows={2}
                   placeholder="No onions, mild salsa, sauce on the side…"
                   className="input w-full resize-none"
                 />
+
                 <div className="mt-1 flex justify-end">
                   <span className="text-[11px] tabular-nums text-(--color-ink-300)">
                     {orderDetails.notes.length}/{CHECKOUT_LIMITS.NOTES_MAX}
@@ -653,6 +715,7 @@ export default function CheckoutPage() {
                 >
                   Print / Save PDF
                 </button>
+
                 <button
                   type="button"
                   onClick={() => void copySummary()}
@@ -664,18 +727,17 @@ export default function CheckoutPage() {
             </div>
           </SectionCard>
 
-          {/* SECTION 3: CONTACT */}
           <SectionCard index={2}>
             {isGuest ? (
               <>
                 <SectionHeader title="Contact" subtitle="For your receipt and order updates" />
                 <GuestContactStrip
                   email={guestEmail}
-                  onEmailChange={setGuestEmail}
+                  onEmailChange={handleGuestEmailChange}
                   phone={guestPhone}
-                  onPhoneChange={setGuestPhone}
+                  onPhoneChange={handleGuestPhoneChange}
                   smsOptIn={smsOptIn}
-                  onSmsToggle={() => setSmsOptIn((value) => !value)}
+                  onSmsToggle={handleSmsToggle}
                 />
               </>
             ) : (
@@ -685,15 +747,14 @@ export default function CheckoutPage() {
                   email={user?.email ?? ''}
                   name={user?.name ?? null}
                   phone={guestPhone}
-                  onPhoneChange={setGuestPhone}
+                  onPhoneChange={handleGuestPhoneChange}
                   smsOptIn={smsOptIn}
-                  onSmsToggle={() => setSmsOptIn((value) => !value)}
+                  onSmsToggle={handleSmsToggle}
                 />
               </>
             )}
           </SectionCard>
 
-          {/* SECTION 4: PROMO */}
           <SectionCard index={3}>
             <SectionHeader title="Promo Code" subtitle="Verified by the server at checkout" />
             <PromoSection
@@ -705,14 +766,15 @@ export default function CheckoutPage() {
             />
           </SectionCard>
 
-          {/* SECTION 5: REWARDS (AUTH ONLY) */}
           {!isGuest && (
             <SectionCard index={4}>
               {loyaltyPreview && <LoyaltyEarnBanner preview={loyaltyPreview} />}
+
               <SectionHeader
                 title="Rewards & Credits"
-                subtitle="Applied by the server — final balance confirmed at payment"
+                subtitle="Applied by the server. Final balance confirmed at payment."
               />
+
               <div className="space-y-4 px-5 py-4">
                 {recentlyRedeemed && (
                   <p className="rounded-xl border border-(--color-gold-200) bg-(--color-gold-50) px-3 py-2.5 text-xs text-(--color-gold-700)">
@@ -725,7 +787,7 @@ export default function CheckoutPage() {
                     balance={loyaltyBalance}
                     accountId={loyaltyAccountId}
                     subtotalCents={subtotalCents}
-                    onChange={setLoyaltyIntent}
+                    onChange={handleLoyaltyChange}
                   />
                 )}
 
@@ -735,15 +797,14 @@ export default function CheckoutPage() {
                   creditsError={creditsError}
                   creditsAvailableCents={creditsAvailableCents}
                   selectedCredit={selectedCredit}
-                  onSelectCredit={(id) => setSelectedCredit(id)}
-                  onRemoveCredit={() => setSelectedCredit(null)}
+                  onSelectCredit={handleSelectCredit}
+                  onRemoveCredit={handleRemoveCredit}
                   onRetry={() => void loadCredits()}
                 />
               </div>
             </SectionCard>
           )}
 
-          {/* SECTION 6: PAYMENT CTA */}
           <SectionCard
             index={isGuest ? 4 : 5}
             className="border-(--color-ember-200) bg-linear-to-b from-white to-(--color-cream-50)"
@@ -785,7 +846,26 @@ export default function CheckoutPage() {
                 )}
               </AnimatePresence>
 
-              {!showChallenge && !showBlocked && (
+              {!showChallenge && !showBlocked && embeddedClientSecret && (
+                <div className="space-y-3">
+                  <div className="rounded-2xl border border-(--color-cream-200) bg-white p-3">
+                    <p className="mb-3 text-sm font-bold text-(--color-ink-900)">
+                      Select payment method
+                    </p>
+                    <EmbeddedStripePayment clientSecret={embeddedClientSecret} />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={clearEmbeddedCheckout}
+                    className="w-full rounded-xl border border-(--color-cream-300) bg-white px-4 py-2.5 text-sm font-semibold text-(--color-ink-600) transition-colors hover:bg-(--color-cream-50) hover:text-(--color-ember-700)"
+                  >
+                    Edit order details
+                  </button>
+                </div>
+              )}
+
+              {!showChallenge && !showBlocked && !embeddedClientSecret && (
                 <CheckoutButton
                   onCheckout={handleCheckout}
                   isLoading={isLoading}
@@ -793,19 +873,18 @@ export default function CheckoutPage() {
                 />
               )}
 
-              {routerError && !showChallenge && !showBlocked && (
+              {paymentError && !showChallenge && !showBlocked && (
                 <p className="text-center text-sm font-medium text-(--color-error)" role="alert">
-                  {routerError}
+                  {paymentError}
                 </p>
               )}
 
               <p className="text-center text-[11px] text-(--color-ink-300)">
-                🔒 Secure payment via Stripe — card details never stored on our servers
+                🔒 Secure payment via Stripe. Card details are never stored on our servers.
               </p>
             </div>
           </SectionCard>
 
-          {/* GUEST: POST-CTA NUDGE */}
           {isGuest && (
             <motion.div custom={5} variants={fadeUp} initial="hidden" animate="visible">
               <GuestPostCheckoutNudge email={guestEmail} />
@@ -829,7 +908,6 @@ export default function CheckoutPage() {
                 {isAuthenticated && (
                   <>
                     {' · '}
-
                     <Link to="/account/orders" className="underline hover:text-(--color-ink-700)">
                       Order history
                     </Link>

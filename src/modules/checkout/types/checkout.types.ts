@@ -3,38 +3,18 @@
 // CHECKOUT DOMAIN — intent layer types
 // =============================================================================
 //
-// CHANGES FROM PRIOR VERSION:
+// Purpose:
+// - Domain-level checkout inputs used by hooks/components.
+// - Wire serializers that convert safe domain fields into Edge Function payloads.
+// - Runtime guards/parsers for checkout responses.
 //
-//   [1] parseCheckoutPricingResponse rewritten — TS2339 fix. (unchanged)
-//
-//   [2] Both helper predicates are module-private. (unchanged)
-//
-//   [3] SMS fields added to GuestCheckoutInput, GuestCheckoutWireBody,
-//       and serialiseGuestCheckoutInput(). (unchanged)
-//
-//   [4] SMS fields added to AuthCheckoutInput, AuthCheckoutWireBody,
-//       and serialiseAuthCheckoutInput().
-//
-//       AuthCheckoutInput gains:
-//         smsPhone?:  E164UsPhone  — branded phone from useCheckoutRouter
-//         smsOptIn?:  true         — narrowed to literal true (never false;
-//                                    false intent = field absent)
-//
-//       AuthCheckoutWireBody gains:
-//         sms_phone_e164?: E164UsPhone  — present only when opted in + valid phone
-//         sms_opt_in?:     true         — always true when present; absent otherwise
-//
-//       serialiseAuthCheckoutInput() emits both wire fields when smsOptIn is
-//       true and smsPhone is present. When smsOptIn is absent or false the
-//       output is byte-for-byte identical to the previous version — no
-//       regression for callers that don't pass SMS fields.
-//
-//       On the server, create-checkout independently validates sms_phone_e164
-//       against the same E.164 regex before writing the fields to Stripe
-//       metadata. The webhook reads the metadata and persists sms_opt_in and
-//       guest_phone_e164 on the order so send-sms can dispatch.
-//
-// All other types, guards, and serializers are unchanged.
+// Rules:
+// - No `any`.
+// - No raw phone strings in SMS-enabled checkout inputs.
+// - UI mode is camelCase in domain types, snake_case on the wire.
+// - SMS opt-in is represented as literal `true` when present, never `false`.
+// - Optional fields are omitted from the wire body instead of being sent as
+//   empty strings, false, or null sentinels.
 // =============================================================================
 
 import {
@@ -44,8 +24,10 @@ import {
   ASAP_PICKUP,
   scheduledPickup,
 } from '@/domain/adapters/pickup-schedule.adapter';
-
-import type { E164UsPhone } from './checkout-wire.types';
+import type {
+  CheckoutUiMode,
+  E164UsPhone,
+} from '@/modules/checkout/types/checkout-wire.types';
 
 export type { E164UsPhone };
 export type { PickupSchedule, IsoTimestamp };
@@ -67,8 +49,8 @@ export type FulfillmentType = 'pickup' | 'delivery' | 'dine_in';
  * Narrows unknown to Record<string, unknown>.
  * Apply at every response.json() boundary before accessing properties.
  */
-export function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 // =============================================================================
@@ -76,16 +58,16 @@ export function isRecord(v: unknown): v is Record<string, unknown> {
 // =============================================================================
 
 export type GuestCheckoutPricingResponse = {
-  readonly subtotalCents:         number;
+  readonly subtotalCents: number;
   readonly campaignDiscountCents: number;
-  readonly taxCents:              number;
-  readonly totalCents:            number;
-  readonly currency:              string;
+  readonly taxCents: number;
+  readonly totalCents: number;
+  readonly currency: string;
 };
 
 export type AuthCheckoutPricingResponse = GuestCheckoutPricingResponse & {
   readonly promoDiscountCents: number;
-  readonly creditCents:        number;
+  readonly creditCents: number;
 };
 
 export type CheckoutPricingResponse =
@@ -93,76 +75,103 @@ export type CheckoutPricingResponse =
   | AuthCheckoutPricingResponse;
 
 export function isAuthPricingResponse(
-  r: CheckoutPricingResponse,
-): r is AuthCheckoutPricingResponse {
-  return 'promoDiscountCents' in r;
+  response: CheckoutPricingResponse,
+): response is AuthCheckoutPricingResponse {
+  return 'promoDiscountCents' in response;
 }
 
 // =============================================================================
 // PRICING RESPONSE PARSER
 // =============================================================================
 
-function isAuthPricingShape(v: unknown): v is AuthCheckoutPricingResponse {
-  if (!isRecord(v)) return false;
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isGuestPricingShape(value: unknown): value is GuestCheckoutPricingResponse {
+  if (!isRecord(value)) return false;
+
   return (
-    typeof v['subtotalCents']         === 'number' &&
-    typeof v['campaignDiscountCents'] === 'number' &&
-    typeof v['taxCents']              === 'number' &&
-    typeof v['totalCents']            === 'number' &&
-    typeof v['currency']              === 'string' && v['currency'].length > 0 &&
-    typeof v['promoDiscountCents']    === 'number' &&
-    typeof v['creditCents']           === 'number'
+    isFiniteNumber(value.subtotalCents) &&
+    isFiniteNumber(value.campaignDiscountCents) &&
+    isFiniteNumber(value.taxCents) &&
+    isFiniteNumber(value.totalCents) &&
+    isNonEmptyString(value.currency)
   );
 }
 
-function isGuestPricingShape(v: unknown): v is GuestCheckoutPricingResponse {
-  if (!isRecord(v)) return false;
+function isAuthPricingShape(value: unknown): value is AuthCheckoutPricingResponse {
+  if (!isRecord(value)) return false;
+
   return (
-    typeof v['subtotalCents']         === 'number' &&
-    typeof v['campaignDiscountCents'] === 'number' &&
-    typeof v['taxCents']              === 'number' &&
-    typeof v['totalCents']            === 'number' &&
-    typeof v['currency']              === 'string' && v['currency'].length > 0
+    isFiniteNumber(value.subtotalCents) &&
+    isFiniteNumber(value.campaignDiscountCents) &&
+    isFiniteNumber(value.taxCents) &&
+    isFiniteNumber(value.totalCents) &&
+    isNonEmptyString(value.currency) &&
+    isFiniteNumber(value.promoDiscountCents) &&
+    isFiniteNumber(value.creditCents)
   );
 }
 
 export function parseCheckoutPricingResponse(
-  v: unknown,
+  value: unknown,
 ): CheckoutPricingResponse | undefined {
-  if (isAuthPricingShape(v)) return v;
-  if (isGuestPricingShape(v)) return v;
+  if (isAuthPricingShape(value)) return value;
+  if (isGuestPricingShape(value)) return value;
   return undefined;
 }
 
 // =============================================================================
-// CHECKOUT RESULT — discriminated union
+// CHECKOUT RESULT — DISCRIMINATED UNION
 // =============================================================================
 
 export type CheckoutResultSuccess = {
-  readonly ok:           true;
-  readonly url:          string;
-  readonly sessionId?:   string;
+  readonly ok: true;
+
+  /**
+   * Hosted Stripe Checkout redirect URL.
+   * Present when uiMode is hosted.
+   */
+  readonly url?: string;
+
+  /**
+   * Embedded Stripe Checkout client secret.
+   * Present when uiMode is embedded.
+   */
+  readonly clientSecret?: string;
+
+  /**
+   * Explicit Stripe UI mode echo when available.
+   */
+  readonly uiMode?: CheckoutUiMode;
+
+  readonly sessionId?: string;
   readonly pricingHash?: string;
-  readonly pricing?:     CheckoutPricingResponse;
+  readonly pricing?: CheckoutPricingResponse;
 };
 
 export type CheckoutResultOtpRequired = {
-  readonly ok:        false;
-  readonly code:      'otp_required';
-  readonly error:     string;
-  readonly nonce:     string;
+  readonly ok: false;
+  readonly code: 'otp_required';
+  readonly error: string;
+  readonly nonce: string;
   readonly expiresAt: string;
 };
 
 export type CheckoutResultBlocked = {
-  readonly ok:    false;
-  readonly code:  'checkout_blocked';
+  readonly ok: false;
+  readonly code: 'checkout_blocked';
   readonly error: string;
 };
 
 export type CheckoutResultFailure = {
-  readonly ok:    false;
-  readonly code:  string | null | undefined;
+  readonly ok: false;
+  readonly code: string | null | undefined;
   readonly error: string;
 };
 
@@ -172,193 +181,214 @@ export type CheckoutResult =
   | CheckoutResultBlocked
   | CheckoutResultFailure;
 
-export function isCheckoutSuccess(r: CheckoutResult): r is CheckoutResultSuccess {
-  return r.ok === true;
+export function isCheckoutSuccess(result: CheckoutResult): result is CheckoutResultSuccess {
+  return result.ok === true;
 }
 
-export function isOtpRequired(r: CheckoutResult): r is CheckoutResultOtpRequired {
-  return r.ok === false && r.code === 'otp_required';
+export function isOtpRequired(result: CheckoutResult): result is CheckoutResultOtpRequired {
+  return result.ok === false && result.code === 'otp_required';
 }
 
-export function isCheckoutBlocked(r: CheckoutResult): r is CheckoutResultBlocked {
-  return r.ok === false && r.code === 'checkout_blocked';
+export function isCheckoutBlocked(result: CheckoutResult): result is CheckoutResultBlocked {
+  return result.ok === false && result.code === 'checkout_blocked';
 }
 
-export function isCheckoutFailure(r: CheckoutResult): r is CheckoutResultFailure {
-  return r.ok === false && r.code !== 'otp_required' && r.code !== 'checkout_blocked';
+export function isCheckoutFailure(result: CheckoutResult): result is CheckoutResultFailure {
+  return result.ok === false && result.code !== 'otp_required' && result.code !== 'checkout_blocked';
 }
 
 // =============================================================================
-// CHECKOUT INPUT TYPES
+// CHECKOUT INPUT TYPES — DOMAIN LAYER
 // =============================================================================
 
 export type GuestCheckoutInput = {
-  readonly orderType:       FulfillmentType;
-  readonly guestEmail:      string;
-  readonly notes?:          string;
+  readonly orderType: FulfillmentType;
+  readonly guestEmail: string;
+  readonly notes?: string;
   readonly pickupSchedule?: PickupSchedule;
+
+  /**
+   * Stripe Checkout mode.
+   * Domain layer uses camelCase. Serializer emits ui_mode.
+   */
+  readonly uiMode?: CheckoutUiMode;
+
   /**
    * Validated E.164 US phone number (+1XXXXXXXXXX).
-   * Only ever populated when smsOptIn is true and the number passed
-   * toE164UsPhone() in useCheckoutRouter. The branded type enforces this at
-   * compile time: a raw string cannot be assigned here.
+   * Must come from toE164UsPhone().
    */
-  readonly guestPhone?:     E164UsPhone;
+  readonly guestPhone?: E164UsPhone;
+
   /**
-   * Narrowed to literal `true` — never `false`. Absent field = no opt-in.
-   * When true, guestPhone must also be present for serialiseGuestCheckoutInput
-   * to emit the SMS wire fields.
+   * Literal true only. Absence means no SMS opt-in.
    */
-  readonly smsOptIn?:       true;
+  readonly smsOptIn?: true;
 };
 
 export type AuthCheckoutInput = {
-  readonly orderType:            FulfillmentType;
-  readonly notes?:               string;
-  readonly promoCode?:           string;
-  readonly promoId?:             string;
-  readonly creditId?:            string;
+  readonly orderType: FulfillmentType;
+  readonly notes?: string;
+  readonly promoCode?: string;
+  readonly promoId?: string;
+  readonly creditId?: string;
   readonly loyaltyRedeemPoints?: number;
-  readonly loyaltyAccountId?:    string;
-  readonly loyaltyRewardId?:     string;
+  readonly loyaltyAccountId?: string;
+  readonly loyaltyRewardId?: string;
   readonly loyaltyRedemptionId?: string;
   readonly clientIntegrityHash?: string;
-  readonly pickupSchedule?:      PickupSchedule;
+  readonly pickupSchedule?: PickupSchedule;
+
+  /**
+   * Stripe Checkout mode.
+   * Domain layer uses camelCase. Serializer emits ui_mode.
+   */
+  readonly uiMode?: CheckoutUiMode;
+
   /**
    * Validated E.164 US phone for transactional SMS order updates.
-   * Branded via toE164UsPhone() in useCheckoutRouter — a raw string cannot
-   * be assigned here. Only populated when smsOptIn is true.
+   * Must come from toE164UsPhone().
    */
-  readonly smsPhone?:            E164UsPhone;
+  readonly smsPhone?: E164UsPhone;
+
   /**
-   * Narrowed to literal `true` — never `false`. Absent field = no opt-in.
-   * Mirrors the semantics of GuestCheckoutInput.smsOptIn.
-   * When true, smsPhone must also be present for serialiseAuthCheckoutInput
-   * to emit the SMS wire fields.
+   * Literal true only. Absence means no SMS opt-in.
    */
-  readonly smsOptIn?:            true;
+  readonly smsOptIn?: true;
 };
 
 // =============================================================================
-// WIRE BODY SHAPES
+// WIRE BODY SHAPES — EDGE FUNCTION PAYLOADS
 // =============================================================================
 
 export type GuestCheckoutWireBody = {
-  readonly order_type:   FulfillmentType;
-  readonly guest_email:  string;
-  readonly notes?:       string;
+  readonly order_type: FulfillmentType;
+  readonly guest_email: string;
+  readonly notes?: string;
   readonly pickup_time?: string;
+
   /**
-   * Validated E.164 US phone. Present only when the guest opted in and the
-   * number passed toE164UsPhone(). Never a null or empty-string sentinel —
-   * the field is absent entirely when SMS is off.
+   * Stripe Checkout mode.
+   * Wire layer uses snake_case.
+   */
+  readonly ui_mode?: CheckoutUiMode;
+
+  /**
+   * Guest Edge Function SMS field.
+   *
+   * Keep this aligned with create-checkout-guest. If your guest Edge Function
+   * expects guest_phone_e164 instead, rename this field and the serializer
+   * output together.
    */
   readonly guest_phone?: E164UsPhone;
+
   /**
-   * Explicit SMS opt-in flag for the backend. Always `true` when present;
-   * omitted entirely when the guest has not opted in.
+   * Explicit SMS opt-in. Always true when present.
    */
-  readonly sms_opt_in?:  true;
+  readonly sms_opt_in?: true;
 };
 
 export type AuthCheckoutWireBody = {
-  readonly order_type:             FulfillmentType;
-  readonly notes?:                 string;
-  readonly promo_code?:            string;
-  readonly promo_id?:              string;
-  readonly credit_id?:             string;
+  readonly order_type: FulfillmentType;
+  readonly notes?: string;
+  readonly promo_code?: string;
+  readonly promo_id?: string;
+  readonly credit_id?: string;
   readonly loyalty_redeem_points?: number;
-  readonly loyalty_account_id?:    string;
-  readonly loyalty_reward_id?:     string;
+  readonly loyalty_account_id?: string;
+  readonly loyalty_reward_id?: string;
   readonly loyalty_redemption_id?: string;
   readonly client_integrity_hash?: string;
-  readonly pickup_time?:           string;
+  readonly pickup_time?: string;
+
   /**
-   * Validated E.164 US phone for opted-in SMS order updates.
-   * Present only when sms_opt_in is true. Never a null or empty-string
-   * sentinel — the field is absent entirely when SMS is off.
-   * create-checkout re-validates this server-side before writing to Stripe
-   * metadata. The webhook reads the metadata and persists to guest_phone_e164.
+   * Stripe Checkout mode.
+   * Wire layer uses snake_case.
    */
-  readonly sms_phone_e164?:        E164UsPhone;
+  readonly ui_mode?: CheckoutUiMode;
+
   /**
-   * Explicit SMS opt-in flag. Always `true` when present; omitted otherwise.
-   * Mirrors the guest wire field sms_opt_in; both land on the same DB column.
+   * Auth Edge Function SMS field.
+   * Server create-checkout reads sms_phone_e164.
    */
-  readonly sms_opt_in?:            true;
+  readonly sms_phone_e164?: E164UsPhone;
+
+  /**
+   * Explicit SMS opt-in. Always true when present.
+   */
+  readonly sms_opt_in?: true;
 };
 
 // =============================================================================
 // SERIALISERS
 // =============================================================================
 
+function hasText(value: string | undefined): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function getPickupTime(pickupSchedule: PickupSchedule | undefined): IsoTimestamp | undefined {
+  return pickupSchedule ? toTransport(pickupSchedule) : undefined;
+}
+
 /**
- * Converts a validated GuestCheckoutInput into the flat wire body sent to
- * create-checkout-guest. This is the single place that maps domain field names
- * to snake_case wire names for the guest path.
- *
- * SMS fields (guest_phone, sms_opt_in) are emitted only when both smsOptIn
- * is true AND guestPhone is present. Either condition alone is insufficient —
- * this mirrors the validation gate in useCheckoutRouter that guarantees the
- * pair is always populated together when SMS opt-in is active.
- *
- * When smsOptIn is absent or false the output is identical to the pre-SMS
- * version of this function.
+ * Converts GuestCheckoutInput into create-checkout-guest wire body.
  */
 export function serialiseGuestCheckoutInput(
   input: GuestCheckoutInput,
 ): GuestCheckoutWireBody {
-  const pickupTime: IsoTimestamp | undefined = input.pickupSchedule
-    ? toTransport(input.pickupSchedule)
-    : undefined;
+  const pickupTime = getPickupTime(input.pickupSchedule);
 
   return {
-    order_type:  input.orderType,
+    order_type: input.orderType,
     guest_email: input.guestEmail,
-    ...(input.notes      ? { notes:       input.notes  } : {}),
-    ...(pickupTime       ? { pickup_time: pickupTime   } : {}),
+    ...(hasText(input.notes) ? { notes: input.notes } : {}),
+    ...(pickupTime ? { pickup_time: pickupTime } : {}),
+    ...(input.uiMode ? { ui_mode: input.uiMode } : {}),
     ...(input.smsOptIn === true && input.guestPhone !== undefined
-      ? { guest_phone: input.guestPhone, sms_opt_in: true as const }
+      ? {
+          guest_phone: input.guestPhone,
+          sms_opt_in: true as const,
+        }
       : {}),
   };
 }
 
 /**
- * Converts a validated AuthCheckoutInput into the flat wire body sent to
- * create-checkout. This is the single place that maps domain field names to
- * snake_case wire names for the auth path.
- *
- * SMS fields (sms_phone_e164, sms_opt_in) are emitted only when both smsOptIn
- * is true AND smsPhone is present. The server independently re-validates the
- * phone before writing it to Stripe metadata.
- *
- * When smsOptIn is absent or false the output is byte-for-byte identical to
- * the pre-SMS version of this function — no regression for existing callers.
+ * Converts AuthCheckoutInput into create-checkout wire body.
  */
 export function serialiseAuthCheckoutInput(
   input: AuthCheckoutInput,
 ): AuthCheckoutWireBody {
-  const pickupTime: IsoTimestamp | undefined = input.pickupSchedule
-    ? toTransport(input.pickupSchedule)
-    : undefined;
+  const pickupTime = getPickupTime(input.pickupSchedule);
 
   return {
     order_type: input.orderType,
-    ...(input.notes               ? { notes:                input.notes                } : {}),
-    ...(input.promoCode           ? { promo_code:           input.promoCode            } : {}),
-    ...(input.promoId             ? { promo_id:             input.promoId              } : {}),
-    ...(input.creditId            ? { credit_id:            input.creditId             } : {}),
-    ...(input.loyaltyRedeemPoints ? { loyalty_redeem_points: input.loyaltyRedeemPoints } : {}),
-    ...(input.loyaltyAccountId    ? { loyalty_account_id:   input.loyaltyAccountId     } : {}),
-    ...(input.loyaltyRewardId     ? { loyalty_reward_id:    input.loyaltyRewardId      } : {}),
-    ...(input.loyaltyRedemptionId ? { loyalty_redemption_id: input.loyaltyRedemptionId } : {}),
-    ...(input.clientIntegrityHash ? { client_integrity_hash: input.clientIntegrityHash } : {}),
-    ...(pickupTime                ? { pickup_time:          pickupTime                 } : {}),
-    // Emit SMS fields only when both conditions are satisfied. smsPhone is
-    // E164UsPhone (branded) so TypeScript enforces it was validated upstream.
-    // create-checkout re-validates server-side — defense in depth.
+    ...(hasText(input.notes) ? { notes: input.notes } : {}),
+    ...(hasText(input.promoCode) ? { promo_code: input.promoCode } : {}),
+    ...(hasText(input.promoId) ? { promo_id: input.promoId } : {}),
+    ...(hasText(input.creditId) ? { credit_id: input.creditId } : {}),
+    ...(typeof input.loyaltyRedeemPoints === 'number' && input.loyaltyRedeemPoints > 0
+      ? { loyalty_redeem_points: input.loyaltyRedeemPoints }
+      : {}),
+    ...(hasText(input.loyaltyAccountId)
+      ? { loyalty_account_id: input.loyaltyAccountId }
+      : {}),
+    ...(hasText(input.loyaltyRewardId)
+      ? { loyalty_reward_id: input.loyaltyRewardId }
+      : {}),
+    ...(hasText(input.loyaltyRedemptionId)
+      ? { loyalty_redemption_id: input.loyaltyRedemptionId }
+      : {}),
+    ...(hasText(input.clientIntegrityHash)
+      ? { client_integrity_hash: input.clientIntegrityHash }
+      : {}),
+    ...(pickupTime ? { pickup_time: pickupTime } : {}),
+    ...(input.uiMode ? { ui_mode: input.uiMode } : {}),
     ...(input.smsOptIn === true && input.smsPhone !== undefined
-      ? { sms_phone_e164: input.smsPhone, sms_opt_in: true as const }
+      ? {
+          sms_phone_e164: input.smsPhone,
+          sms_opt_in: true as const,
+        }
       : {}),
   };
 }

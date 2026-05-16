@@ -1,13 +1,19 @@
 // supabase/functions/create-checkout/types.ts
+// =============================================================================
+// Authenticated checkout Edge Function types.
+// =============================================================================
+
 import { createServiceClient } from "../_shared/supabase.ts";
 import type { Database, Json } from "../_shared/database.types.ts";
 import type { OrderType } from "../_shared/pricing.ts";
+import type { CheckoutUiMode } from "../_shared/checkout-ui-mode.ts";
 
 export type Db = Database;
 export type DbClient = ReturnType<typeof createServiceClient>;
 
 export type CheckoutRateLimitInsert =
   Db["public"]["Tables"]["checkout_rate_limits"]["Insert"];
+
 export type CheckoutRateLimitUpdate =
   Db["public"]["Tables"]["checkout_rate_limits"]["Update"];
 
@@ -18,7 +24,6 @@ export type PendingCartInsert =
     pricing_hash?: string | null;
     currency?: string | null;
     consumed_at?: string | null;
-    // Guest checkout columns (added by migration 001_guest_checkout.sql)
     guest_email?: string | null;
     guest_token?: string | null;
     pickup_time?: string | null;
@@ -31,16 +36,11 @@ export type PendingCartUpdate =
     pricing_hash?: string | null;
     currency?: string | null;
     consumed_at?: string | null;
-    // Loyalty reservation columns added by loyalty_checkout_reserve migration
     loyalty_account_id?: string | null;
     loyalty_reserved_points?: number | null;
     loyalty_discount_cents?: number | null;
-    // Guest checkout columns (added by migration 001_guest_checkout.sql)
     guest_email?: string | null;
     guest_token?: string | null;
-    // NOTE: `status` is intentionally omitted — the DB generated type does not
-    // include a status column on pending_carts and rejects it as `never`.
-    // Do not add status here.
   };
 
 export type FraudLogInsert = Db["public"]["Tables"]["fraud_logs"]["Insert"];
@@ -125,9 +125,6 @@ export type RequestBody = {
   items: RequestCartItemInput[];
   order_type: OrderType;
   notes: string | null;
-  // Normalized ISO 8601 (seconds precision) or null for ASAP orders.
-  // Optional here so that existing callers that do not yet send the field
-  // are not affected — validateAuthBody sets it to null when absent.
   pickup_time?: string | null;
   promo_code: string | null;
   promo_id: string | null;
@@ -139,13 +136,16 @@ export type RequestBody = {
   loyalty_reward_id: string | null;
   loyalty_redemption_id: string | null;
   loyalty_account_id: string | null;
-  // ── Pre-checkout risk gate fields (added 2026-05) ────────────────────────
-  // challenge_token: issued by verify-phone after successful OTP; supplied on
-  //   checkout retry. Absent on the initial request.
   challenge_token?: string | null;
-  // guest_email: forwarded from GuestCheckoutInput for identity key derivation
-  //   and guest-email velocity checking in the risk gate.
   guest_email?: string | null;
+
+  /**
+   * Stripe Checkout UI mode.
+   *
+   * Absent or null means the server defaults to hosted mode.
+   * Only "hosted" and "embedded" are accepted by request validation.
+   */
+  ui_mode?: CheckoutUiMode | null;
 };
 
 export type RateLimitResult = {
@@ -177,13 +177,14 @@ export type ErrorCode =
   | "authorization_required"
   | "body_read_failed"
   | "body_too_large"
-  | "checkout_blocked"        // ← added: pre-checkout risk gate hard block
+  | "checkout_blocked"
   | "credit_invalid"
   | "discount_conflict"
   | "empty_body"
   | "internal_error"
   | "invalid_json"
   | "invalid_token"
+  | "invalid_ui_mode"
   | "line_items_failed"
   | "loyalty_cooldown"
   | "loyalty_daily_limit"
@@ -191,7 +192,7 @@ export type ErrorCode =
   | "loyalty_reserve_conflict"
   | "method_not_allowed"
   | "origin_not_allowed"
-  | "otp_required"            // ← added: pre-checkout risk gate OTP challenge
+  | "otp_required"
   | "pending_cart_persist_failed"
   | "pricing_failed"
   | "pricing_hash_failed"

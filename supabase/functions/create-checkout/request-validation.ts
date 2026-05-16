@@ -1,7 +1,7 @@
 // path: supabase/functions/create-checkout/request-validation.ts
 
 import type Stripe from "stripe";
-
+import { isCheckoutUiMode } from "../_shared/checkout-ui-mode.ts";
 import type { Json } from "../_shared/database.types.ts";
 import {
   ALLOWED_ORDER_TYPES,
@@ -685,10 +685,24 @@ export function validateGuestBody(raw: unknown): ValidationResult<GuestRequestBo
 // ─── validateAuthBody (renamed from validateBody) ─────────────────────────────
 
 export function validateAuthBody(raw: unknown): ValidationResult<RequestBody> {
+  
   if (!isRecord(raw)) {
     return { ok: false, error: "Request body must be a JSON object" };
   }
-
+// ── ui_mode (optional) ─────────────────────────────────────────────────
+  // Absent → null on the wire → server defaults to 'hosted'.
+  // Any value other than 'hosted' | 'embedded' is a hard 422.
+  const uiModeRaw = raw["ui_mode"];
+  let uiMode: import("../_shared/checkout-ui-mode.ts").CheckoutUiMode | null = null;
+  if (uiModeRaw !== undefined && uiModeRaw !== null) {
+    if (!isCheckoutUiMode(uiModeRaw)) {
+      return {
+        ok: false,
+        error: "'ui_mode' must be 'hosted' or 'embedded'",
+      };
+    }
+    uiMode = uiModeRaw;
+  }
   // Reject guest-only fields on the auth endpoint
   for (const field of AUTH_FORBIDDEN_FIELDS) {
     if (raw[field] !== undefined && raw[field] !== null) {
@@ -897,6 +911,7 @@ export function validateAuthBody(raw: unknown): ValidationResult<RequestBody> {
       loyalty_account_id: typeof loyaltyAccountIdRaw === "string"
         ? loyaltyAccountIdRaw.trim()
         : null,
+      ui_mode: uiMode,        // ← ADDED
     },
   };
 }

@@ -1,32 +1,19 @@
 // src/modules/checkout/hooks/useCheckoutRouter.ts
 // =============================================================================
 // CHECKOUT ROUTER — the single routing layer (auth vs guest)
-// =============================================================================
 //
-// CHANGES FROM PRIOR VERSION:
+// CHANGES (2026-05 embedded checkout migration):
+//   • Reads VITE_CHECKOUT_UI_MODE via readCheckoutUiModeFromEnv() and passes
+//     it into both AuthCheckoutInput and GuestCheckoutInput (as `uiMode`).
+//   • CheckoutRouterArgs.uiMode lets callers override the env default per-call
+//     (used by redirectToCheckout below to force 'hosted' for the legacy path).
+//   • redirectToCheckout forces uiMode='hosted' so the legacy CheckoutButton
+//     internal-mode flow never returns a clientSecret that it can't handle.
+//   • redirectToCheckout now handles BOTH success shapes: url → assign;
+//     clientSecret → throw (legacy redirect path does not render embedded).
 //
-//   [1–9] unchanged — see prior changelog.
-//
-//  [10] Auth path gains SMS opt-in support (mirrors the guest path exactly).
-//
-//       checkout() now validates guestPhone / smsOptIn for BOTH paths before
-//       constructing the input type. The early-return error gate ('phone_incomplete')
-//       fires for auth users who toggle SMS on but leave the field incomplete.
-//
-//       validatedPhone is spread into AuthCheckoutInput as { smsPhone, smsOptIn }
-//       (distinct field names from the guest input). TypeScript narrows the
-//       branded E164UsPhone type without a cast in both branches.
-//
-//  [11] CheckoutRouterArgs.guestPhone / smsOptIn JSDoc updated.
-//       These fields now serve both guest AND authenticated checkout.
-//       The "guestPhone" naming reflects the original guest-only scope;
-//       it is not renamed to avoid a breaking change at the call site
-//       (CheckoutPage passes a single state variable for both paths).
-//
-// Import rules (unchanged):
-//   ✅ ASAP_PICKUP, scheduledPickup, PickupSchedule
-//        → from '@/domain/adapters/pickup-schedule.adapter'
-//   ❌ NEVER import from '@/modules/shared/domain/pickup' (deleted)
+// All prior fixes preserved: SMS phone validation for both auth and guest
+// paths, OTP handling, blocked-state passthrough, derived state.
 // =============================================================================
 
 import { useCallback, useMemo, useState } from 'react';
@@ -43,7 +30,11 @@ import {
   type PickupSchedule,
 } from '@/domain/adapters/pickup-schedule.adapter';
 
-import { toE164UsPhone } from '@/modules/checkout/types/checkout-wire.types';
+import {
+  toE164UsPhone,
+  type CheckoutUiMode,
+  readCheckoutUiModeFromEnv,
+} from '@/modules/checkout/types/checkout-wire.types';
 
 import type {
   AuthCheckoutInput,
@@ -58,10 +49,7 @@ export type CheckoutRouterArgs = {
   customer_uid?: string;
   guestEmail?: string;
   pickupSchedule?: PickupSchedule;
-  /**
-   * @deprecated Use pickupSchedule. Accepted for backward compat.
-   * "asap", "now", empty, and unparseable values → ASAP_PICKUP silently.
-   */
+  /** @deprecated Use pickupSchedule. */
   pickupTime?: string;
   orderType?: FulfillmentType;
   notes?: string | null;
@@ -76,20 +64,14 @@ export type CheckoutRouterArgs = {
     loyaltyRedemptionId?: string;
   };
   clientIntegrityHash?: string;
-  /**
-   * Raw phone string from the form (PhoneNumberInput output).
-   * Validated and branded to E164UsPhone inside checkout() via toE164UsPhone().
-   * Used by BOTH guest and authenticated checkout paths when smsOptIn is true.
-   * No-op when smsOptIn is false or absent.
-   */
   guestPhone?: string;
-  /**
-   * SMS order-updates opt-in flag. Applies to both guest and authenticated
-   * checkout paths. When true, guestPhone must be a valid E.164 US number or
-   * checkout is blocked with a clear error before the network call.
-   * Defaults to absent / false — no phone fields are sent to the server.
-   */
   smsOptIn?: boolean;
+  /**
+   * Override the env-default checkout UI mode for this single call.
+   * Absent → uses readCheckoutUiModeFromEnv() (VITE_CHECKOUT_UI_MODE).
+   * `redirectToCheckout` forces 'hosted' regardless of env.
+   */
+  uiMode?: CheckoutUiMode;
 };
 
 export type CheckoutRouterReturn = {
@@ -118,9 +100,6 @@ function isValidEmail(value: unknown): boolean {
   const s = value.trim().toLowerCase();
   return s.length > 0 && s.length <= 320 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 }
-
-// isValidE164UsPhone has been removed.
-// Use toE164UsPhone() from checkout-wire.types.ts instead.
 
 function normOrderType(v: unknown): FulfillmentType {
   return v === 'delivery' || v === 'dine_in' || v === 'pickup' ? v : 'pickup';
@@ -166,6 +145,9 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
 
   const [routerError, setRouterError] = useState<string | null>(null);
 
+  // Read once per mount. To toggle modes at runtime, hard-refresh.
+  const envUiMode = useMemo<CheckoutUiMode>(() => readCheckoutUiModeFromEnv(), []);
+
   const mode: CheckoutRouterReturn['mode'] = isAuthenticated ? 'auth' : 'guest';
 
   const reset = useCallback(() => {
@@ -179,25 +161,10 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
       setRouterError(null);
 
       const pickupSchedule = resolvePickupSchedule(args);
+      const effectiveUiMode: CheckoutUiMode = args.uiMode ?? envUiMode;
 
       // ── Authenticated path ────────────────────────────────────────────────
       if (isAuthenticated) {
-        // ── SMS phone validation (auth path) ──────────────────────────────
-        //
-        // Identical gate to the guest path below. toE164UsPhone() is called
-        // once; the result is stored in validatedPhone and reused in both the
-        // error guard and the input spread — no double evaluation.
-        //
-        // When smsOptIn is false or absent, validatedPhone is null and no SMS
-        // fields are included in the request — existing auth behavior preserved.
-        //
-        // When smsOptIn is true:
-        //   - validatedPhone null        → early return, error shown under button
-        //   - validatedPhone E164UsPhone → spread into AuthCheckoutInput
-        //
-        // TypeScript narrows validatedPhone to E164UsPhone inside the spread
-        // condition without a cast (toE164UsPhone returns E164UsPhone | null).
-
         const validatedPhone = args.smsOptIn ? toE164UsPhone(args.guestPhone) : null;
 
         if (args.smsOptIn && validatedPhone === null) {
@@ -214,6 +181,7 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
           promoId:      trimOrUndefined(args.promoId),
           creditId:     trimOrUndefined(args.creditId),
           pickupSchedule,
+          uiMode:       effectiveUiMode,
           ...(args.loyalty?.loyaltyAccountId
             ? { loyaltyAccountId: args.loyalty.loyaltyAccountId }
             : {}),
@@ -227,10 +195,6 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
               }
             : {}),
           clientIntegrityHash: trimOrUndefined(args.clientIntegrityHash),
-          // validatedPhone is E164UsPhone (branded) when non-null.
-          // TypeScript narrows without a cast inside the truthy branch.
-          // Absent when smsOptIn is false/unset — wire body is byte-identical
-          // to the pre-SMS auth checkout in that case.
           ...(validatedPhone !== null
             ? { smsPhone: validatedPhone, smsOptIn: true as const }
             : {}),
@@ -247,19 +211,6 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
         return { ok: false, error: err, code: 'email_invalid' };
       }
 
-      // ── SMS phone validation ────────────────────────────────────────────────
-      //
-      // toE164UsPhone() is called once. The result is stored in validatedPhone
-      // so the regex runs exactly once regardless of how many times the value
-      // is referenced below.
-      //
-      // When smsOptIn is false or absent, validatedPhone is null and the SMS
-      // fields are not included in the input — existing behavior is preserved.
-      //
-      // When smsOptIn is true:
-      //   - validatedPhone null   → early return, routerError shown under button
-      //   - validatedPhone E164UsPhone → spread into GuestCheckoutInput
-
       const validatedPhone = args.smsOptIn ? toE164UsPhone(args.guestPhone) : null;
 
       if (args.smsOptIn && validatedPhone === null) {
@@ -274,6 +225,7 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
         orderType:     normOrderType(args.orderType),
         notes:         trimOrUndefined(args.notes),
         pickupSchedule,
+        uiMode:        effectiveUiMode,
         ...(validatedPhone !== null
           ? { guestPhone: validatedPhone, smsOptIn: true as const }
           : {}),
@@ -281,25 +233,38 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
 
       return initiateGuestCheckout(input);
     },
-    [isAuthenticated, initiateAuthCheckout, initiateGuestCheckout],
+    [isAuthenticated, initiateAuthCheckout, initiateGuestCheckout, envUiMode],
   );
 
+  // ── Legacy redirect-only path (CheckoutButton internal mode) ──────────────
+  // Forces hosted mode so the redirect contract (window.location.assign(url))
+  // is always satisfied. If a legacy caller ever ends up here while the env
+  // is set to embedded, we throw a clear error rather than navigate to nowhere.
   const redirectToCheckout = useCallback(
     async (args: CheckoutRouterArgs): Promise<void> => {
-      const result = await checkout(args);
+      const result = await checkout({ ...args, uiMode: 'hosted' });
 
       if (!result.ok && (result.code === 'otp_required' || result.code === 'checkout_blocked')) {
         return;
       }
 
       if (!result.ok) throw new Error(result.error ?? 'Checkout failed');
-      if (!result.url) throw new Error('Checkout failed: missing session URL.');
-      window.location.assign(result.url);
+
+      if (result.url) {
+        window.location.assign(result.url);
+        return;
+      }
+
+      if (result.clientSecret) {
+        throw new Error(
+          'Embedded Checkout returned via legacy redirect path. Use CheckoutPage embedded flow instead.',
+        );
+      }
+
+      throw new Error('Checkout failed: missing session URL.');
     },
     [checkout],
   );
-
-  // ── OTP retry ──────────────────────────────────────────────────────────────
 
   const retryWithToken = useCallback(
     async (challengeToken: string): Promise<void> => {
@@ -310,8 +275,6 @@ export function useCheckoutRouter(): CheckoutRouterReturn {
     },
     [retryWithChallengeToken],
   );
-
-  // ── Derived state ──────────────────────────────────────────────────────────
 
   const activeError     = isAuthenticated ? authError     : guestError;
   const activeIsLoading = isAuthenticated ? authIsLoading : guestIsLoading;
