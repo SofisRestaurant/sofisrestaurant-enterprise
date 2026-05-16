@@ -1,58 +1,96 @@
 // src/modules/orders/components/MobileOrderIntentSheet.tsx
 // =============================================================================
-// Mobile Order Intent Sheet — iOS / Android friendly order setup
-// =============================================================================
-// Purpose:
-// - Gives mobile customers a proper bottom-sheet experience.
-// - Avoids tiny dropdowns on touch screens.
-// - Owns pickup timing + delivery coming-soon UI.
-// - Uses existing orderIntent.store.ts so checkout/header can share intent.
+// Mobile Order Intent Sheet — iOS / Android bottom-sheet for order setup.
+//
+// Behavior change vs. previous version:
+//   - This component is no longer prop-controlled. It reads its open state
+//     directly from useOrderIntentStore (`mobileSheetOpen`) and closes itself
+//     via `closeMobileSheet`. This lets TopBar render it ONCE and lets any
+//     other surface (e.g. the checkout "Change" button) open it without
+//     prop-drilling.
+//   - z-index is `z-[60]` so the sheet sits above TopBar (z-30), the TopBar
+//     mobile search dialog (z-40), BottomNav, and FloatingCartPill.
+//
+// Mobile-friendly details:
+//   - Locks body scroll while open.
+//   - Safe-area bottom padding inside the scroll region.
+//   - touch-manipulation + active:scale on tappable cards.
+//   - md:hidden — desktop uses OrderIntentSelector's dropdown instead.
 // =============================================================================
 
-import { useEffect, useId, useRef } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef } from 'react';
 import { Check, Clock3, MapPin, Truck, X } from 'lucide-react';
 
 import {
+  getPickupTimingHelper,
   getPickupTimingLabel,
   useOrderIntentStore,
   type PickupTimingOption,
 } from '@/modules/orders/store/orderIntent.store';
 
-type MobileOrderIntentSheetProps = {
-  open: boolean;
-  onClose: () => void;
-};
-
 type PickupOption = {
   value: PickupTimingOption;
   label: string;
   helper: string;
+  disabled?: boolean;
 };
-
-const PICKUP_OPTIONS: PickupOption[] = [
-  { value: 'asap', label: 'ASAP', helper: 'Fastest available pickup' },
-  { value: '15_min', label: '15 min', helper: 'Pickup in about 15 minutes' },
-  { value: '30_min', label: '30 min', helper: 'Pickup in about 30 minutes' },
-  { value: '45_min', label: '45 min', helper: 'Pickup in about 45 minutes' },
-  { value: 'scheduled', label: 'Schedule later', helper: 'Coming soon' },
-];
 
 function cx(...classes: Array<string | false | null | undefined>): string {
   return classes.filter(Boolean).join(' ');
 }
 
-export default function MobileOrderIntentSheet({ open, onClose }: MobileOrderIntentSheetProps) {
+const PICKUP_OPTIONS: PickupOption[] = [
+  { value: 'asap', label: getPickupTimingLabel('asap'), helper: getPickupTimingHelper('asap') },
+  {
+    value: '15_min',
+    label: getPickupTimingLabel('15_min'),
+    helper: getPickupTimingHelper('15_min'),
+  },
+  {
+    value: '30_min',
+    label: getPickupTimingLabel('30_min'),
+    helper: getPickupTimingHelper('30_min'),
+  },
+  {
+    value: '45_min',
+    label: getPickupTimingLabel('45_min'),
+    helper: getPickupTimingHelper('45_min'),
+  },
+  {
+    value: 'scheduled',
+    label: getPickupTimingLabel('scheduled'),
+    helper: getPickupTimingHelper('scheduled'),
+    disabled: true,
+  },
+];
+
+export default function MobileOrderIntentSheet() {
   const titleId = useId();
   const sheetRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
-  const fulfillmentType = useOrderIntentStore((state) => state.fulfillmentType);
-  const pickupTiming = useOrderIntentStore((state) => state.pickupTiming);
-  const deliveryAvailability = useOrderIntentStore((state) => state.deliveryAvailability);
-  const setFulfillmentType = useOrderIntentStore((state) => state.setFulfillmentType);
-  const setPickupTiming = useOrderIntentStore((state) => state.setPickupTiming);
+  const open = useOrderIntentStore((s) => s.mobileSheetOpen);
+  const close = useOrderIntentStore((s) => s.closeMobileSheet);
+  const fulfillmentType = useOrderIntentStore((s) => s.fulfillmentType);
+  const pickupTiming = useOrderIntentStore((s) => s.pickupTiming);
+  const deliveryAvailability = useOrderIntentStore((s) => s.deliveryAvailability);
+  const setFulfillmentType = useOrderIntentStore((s) => s.setFulfillmentType);
+  const setPickupTiming = useOrderIntentStore((s) => s.setPickupTiming);
 
   const deliveryComingSoon = deliveryAvailability !== 'available';
+
+  const currentTimingLabel = useMemo(() => getPickupTimingLabel(pickupTiming), [pickupTiming]);
+
+  const handlePickupSelect = useCallback(
+    (option: PickupOption) => {
+      if (option.disabled) return;
+      setFulfillmentType('pickup');
+      setPickupTiming(option.value);
+      // Close immediately on a valid selection — simpler/cleaner than a Done button.
+      close();
+    },
+    [setFulfillmentType, setPickupTiming, close],
+  );
 
   useEffect(() => {
     if (!open) return undefined;
@@ -62,21 +100,18 @@ export default function MobileOrderIntentSheet({ open, onClose }: MobileOrderInt
 
     queueMicrotask(() => closeButtonRef.current?.focus());
 
-    function handleKeyDown(event: KeyboardEvent) {
+    const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-
       event.preventDefault();
-      onClose();
-    }
+      close();
+    };
 
-    function handlePointerDown(event: PointerEvent) {
+    const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
       if (!target) return;
-
       if (sheetRef.current?.contains(target)) return;
-
-      onClose();
-    }
+      close();
+    };
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('pointerdown', handlePointerDown);
@@ -86,13 +121,13 @@ export default function MobileOrderIntentSheet({ open, onClose }: MobileOrderInt
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('pointerdown', handlePointerDown);
     };
-  }, [open, onClose]);
+  }, [open, close]);
 
   if (!open) return null;
 
   return (
     <div
-      className="fixed inset-0 z-50 md:hidden"
+      className="fixed inset-0 z-[60] md:hidden"
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
@@ -104,21 +139,21 @@ export default function MobileOrderIntentSheet({ open, onClose }: MobileOrderInt
           ref={sheetRef}
           className={cx(
             'mx-auto max-h-[88svh] max-w-lg overflow-hidden rounded-t-[2rem]',
-            'border border-[var(--app-border)] bg-[var(--app-card)] text-[var(--app-text)]',
+            'border border-(--color-cream-200) bg-white text-(--color-ink-800)',
             'shadow-[0_-18px_60px_rgba(0,0,0,0.24)]',
           )}
         >
-          <div className="mx-auto mt-3 h-1.5 w-12 rounded-full bg-[var(--app-divider)]" />
+          <div className="mx-auto mt-3 h-1.5 w-12 rounded-full bg-(--color-cream-200)" />
 
-          <div className="flex items-start justify-between gap-3 border-b border-[var(--app-border)] px-5 pb-4 pt-4">
+          <div className="flex items-start justify-between gap-3 border-b border-(--color-cream-200) px-5 pb-4 pt-4">
             <div className="min-w-0">
-              <p className="text-[11px] font-black uppercase tracking-[0.16em] text-[var(--app-muted)]">
+              <p className="text-[11px] font-black uppercase tracking-[0.16em] text-(--color-ink-400)">
                 Start your order
               </p>
               <h2 id={titleId} className="mt-1 text-xl font-black tracking-tight">
                 Pickup details
               </h2>
-              <p className="mt-1 text-sm leading-5 text-[var(--app-muted)]">
+              <p className="mt-1 text-sm leading-5 text-(--color-ink-400)">
                 Choose how you want to receive your order before checkout.
               </p>
             </div>
@@ -126,12 +161,12 @@ export default function MobileOrderIntentSheet({ open, onClose }: MobileOrderInt
             <button
               ref={closeButtonRef}
               type="button"
-              onClick={onClose}
+              onClick={close}
               aria-label="Close order setup"
               className={cx(
                 'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full',
-                'border border-[var(--app-border)] bg-[var(--app-surface)] text-[var(--app-text)]',
-                'transition-colors hover:bg-[var(--app-surface-hover)]',
+                'border border-(--color-cream-300) bg-white text-(--color-ink-700)',
+                'transition-colors hover:bg-(--color-ink-50)',
                 'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40',
               )}
             >
@@ -144,12 +179,13 @@ export default function MobileOrderIntentSheet({ open, onClose }: MobileOrderInt
               <button
                 type="button"
                 onClick={() => setFulfillmentType('pickup')}
+                aria-pressed={fulfillmentType === 'pickup'}
                 className={cx(
                   'flex w-full touch-manipulation items-center gap-3 rounded-2xl border px-4 py-4 text-left',
                   'transition-colors active:scale-[0.99]',
                   fulfillmentType === 'pickup'
                     ? 'border-(--color-gold-400) bg-(--color-ember-50)'
-                    : 'border-[var(--app-border)] bg-[var(--app-surface)] hover:bg-[var(--app-surface-hover)]',
+                    : 'border-(--color-cream-300) bg-white hover:bg-(--color-ink-50)',
                 )}
               >
                 <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white shadow-sm">
@@ -158,7 +194,7 @@ export default function MobileOrderIntentSheet({ open, onClose }: MobileOrderInt
 
                 <span className="min-w-0 flex-1">
                   <span className="block text-base font-black">Pickup</span>
-                  <span className="mt-0.5 block text-sm text-[var(--app-muted)]">
+                  <span className="mt-0.5 block text-sm text-(--color-ink-400)">
                     Available today
                   </span>
                 </span>
@@ -171,6 +207,7 @@ export default function MobileOrderIntentSheet({ open, onClose }: MobileOrderInt
               <button
                 type="button"
                 disabled={deliveryComingSoon}
+                aria-disabled={deliveryComingSoon}
                 onClick={() => {
                   if (!deliveryComingSoon) setFulfillmentType('delivery');
                 }}
@@ -178,19 +215,19 @@ export default function MobileOrderIntentSheet({ open, onClose }: MobileOrderInt
                   'flex w-full touch-manipulation items-center gap-3 rounded-2xl border px-4 py-4 text-left',
                   'transition-colors active:scale-[0.99]',
                   deliveryComingSoon
-                    ? 'cursor-not-allowed border-[var(--app-border)] bg-[var(--app-surface)] opacity-60'
+                    ? 'cursor-not-allowed border-(--color-cream-300) bg-white opacity-60'
                     : fulfillmentType === 'delivery'
                       ? 'border-(--color-gold-400) bg-(--color-ember-50)'
-                      : 'border-[var(--app-border)] bg-[var(--app-surface)] hover:bg-[var(--app-surface-hover)]',
+                      : 'border-(--color-cream-300) bg-white hover:bg-(--color-ink-50)',
                 )}
               >
                 <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white shadow-sm">
-                  <Truck className="h-5 w-5 text-[var(--app-muted)]" aria-hidden="true" />
+                  <Truck className="h-5 w-5 text-(--color-ink-400)" aria-hidden="true" />
                 </span>
 
                 <span className="min-w-0 flex-1">
                   <span className="block text-base font-black">Delivery</span>
-                  <span className="mt-0.5 block text-sm text-[var(--app-muted)]">
+                  <span className="mt-0.5 block text-sm text-(--color-ink-400)">
                     {deliveryComingSoon ? 'Coming soon' : 'Available'}
                   </span>
                 </span>
@@ -203,47 +240,42 @@ export default function MobileOrderIntentSheet({ open, onClose }: MobileOrderInt
               </button>
             </div>
 
-            <div className="mt-5 rounded-3xl border border-[var(--app-border)] bg-[var(--app-surface)] p-3">
+            <div className="mt-5 rounded-3xl border border-(--color-cream-200) bg-(--color-cream-50) p-3">
               <div className="mb-3 flex items-center gap-2 px-1">
                 <span className="flex h-8 w-8 items-center justify-center rounded-full bg-(--color-ember-50)">
                   <Clock3 className="h-4 w-4 text-(--color-ember-600)" aria-hidden="true" />
                 </span>
                 <div>
                   <p className="text-sm font-black">Pickup time</p>
-                  <p className="text-xs text-[var(--app-muted)]">
-                    Current: {getPickupTimingLabel(pickupTiming)}
-                  </p>
+                  <p className="text-xs text-(--color-ink-400)">Current: {currentTimingLabel}</p>
                 </div>
               </div>
 
-              <div className="grid gap-1.5">
+              <div role="radiogroup" aria-label="Pickup time" className="grid gap-1.5">
                 {PICKUP_OPTIONS.map((option) => {
                   const selected = pickupTiming === option.value;
-                  const disabled = option.value === 'scheduled';
+                  const disabled = option.disabled === true;
 
                   return (
                     <button
                       key={option.value}
                       type="button"
+                      role="radio"
+                      aria-checked={selected}
                       disabled={disabled}
-                      onClick={() => {
-                        if (disabled) return;
-                        setPickupTiming(option.value);
-                        setFulfillmentType('pickup');
-                        onClose();
-                      }}
+                      onClick={() => handlePickupSelect(option)}
                       className={cx(
                         'flex w-full touch-manipulation items-center justify-between gap-3 rounded-2xl px-3 py-3 text-left',
                         'transition-colors active:scale-[0.99]',
                         disabled && 'cursor-not-allowed opacity-55',
                         selected
                           ? 'bg-(--color-ember-50) text-(--color-ember-700)'
-                          : 'hover:bg-[var(--app-surface-hover)]',
+                          : 'hover:bg-(--color-ink-50)',
                       )}
                     >
                       <span className="min-w-0">
                         <span className="block text-sm font-black">{option.label}</span>
-                        <span className="mt-0.5 block text-xs text-[var(--app-muted)]">
+                        <span className="mt-0.5 block text-xs text-(--color-ink-400)">
                           {option.helper}
                         </span>
                       </span>
@@ -255,7 +287,7 @@ export default function MobileOrderIntentSheet({ open, onClose }: MobileOrderInt
               </div>
             </div>
 
-            <p className="px-2 pb-[max(env(safe-area-inset-bottom,0px),16px)] pt-4 text-center text-xs leading-5 text-[var(--app-muted)]">
+            <p className="px-2 pb-[max(env(safe-area-inset-bottom,0px),16px)] pt-4 text-center text-xs leading-5 text-(--color-ink-400)">
               Final availability is confirmed at checkout.
             </p>
           </div>

@@ -1,15 +1,22 @@
 // src/components/layout/TopBar.tsx
 // Cart state: removed local useState → useCartUiStore (shared store).
 // CartDrawer removed from here — rendered once in RootLayout.
+// Order intent: desktop selector + mobile pill trigger. MobileOrderIntentSheet
+// is rendered once here and is controlled by useOrderIntentStore.
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { ShoppingCart, X, Search, User, LogOut } from 'lucide-react';
+import { Clock3, ShoppingCart, X, Search, User, LogOut } from 'lucide-react';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useCart } from '@/modules/cart/hooks/useCart';
 import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
 import { useModal } from '@/components/ui/useModal';
 import { Button } from '@/components/ui/Button';
 import OrderIntentSelector from '@/modules/orders/components/OrderIntentSelector';
+import MobileOrderIntentSheet from '@/modules/orders/components/MobileOrderIntentSheet';
+import {
+  getPickupTimingLabel,
+  useOrderIntentStore,
+} from '@/modules/orders/store/orderIntent.store';
 import { useActiveOrderId } from '@/app/ActiveOrderContext';
 import { canAccessAdmin } from '@/security/permissions';
 import MenuHeaderSearch from '@/modules/menu/components/MenuHeaderSearch';
@@ -44,6 +51,17 @@ export default function TopBar() {
   const openCart = useCartUiStore((s) => s.open);
   const menuSearchText = useMenuUi((s) => s.searchText);
   const setMenuSearchText = useMenuUi((s) => s.setSearchText);
+
+  // Order intent — used only for the compact mobile trigger pill.
+  const pickupTiming = useOrderIntentStore((s) => s.pickupTiming);
+  const fulfillmentType = useOrderIntentStore((s) => s.fulfillmentType);
+  const deliveryAvailability = useOrderIntentStore((s) => s.deliveryAvailability);
+  const openOrderIntentSheet = useOrderIntentStore((s) => s.openMobileSheet);
+  const mobileTriggerLabel = useMemo(() => {
+    if (fulfillmentType === 'delivery' && deliveryAvailability === 'available') return 'Delivery';
+    return getPickupTimingLabel(pickupTiming);
+  }, [fulfillmentType, deliveryAvailability, pickupTiming]);
+
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const mobileSearchBtnRef = useRef<HTMLButtonElement | null>(null);
   const mobileSearchPanelRef = useRef<HTMLDivElement | null>(null);
@@ -69,13 +87,13 @@ export default function TopBar() {
     [pathname],
   );
   const isHidden = HIDDEN_ON.some((p) => pathname === p || pathname.startsWith(`${p}/`));
-const handleSignOut = useCallback(async () => {
-  try {
-    await signOut();
-  } catch (error) {
-    console.warn('[TopBar] Sign out failed', error);
-  }
-}, [signOut]);
+  const handleSignOut = useCallback(async () => {
+    try {
+      await signOut();
+    } catch (error) {
+      console.warn('[TopBar] Sign out failed', error);
+    }
+  }, [signOut]);
   const openModalSafe = useCallback(
     (type: 'login' | 'signup') => {
       modal?.openModal?.(type);
@@ -231,6 +249,36 @@ const handleSignOut = useCallback(async () => {
               </button>
             )}
 
+            {/* Mobile-only order-intent trigger: opens MobileOrderIntentSheet via store.
+                Desktop users see OrderIntentSelector's dropdown instead (md:block). */}
+            <button
+              type="button"
+              onClick={openOrderIntentSheet}
+              aria-label="Open order setup"
+              aria-haspopup="dialog"
+              className={cx(
+                'inline-flex h-9 max-w-[8.5rem] touch-manipulation items-center gap-1.5 rounded-full',
+                'border border-(--color-cream-300) bg-white px-2.5 text-(--color-ink-700) shadow-(--shadow-xs)',
+                'transition-colors hover:bg-(--color-ink-50) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40',
+                'md:hidden',
+              )}
+            >
+              <span
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-(--color-ember-50)"
+                aria-hidden="true"
+              >
+                <Clock3 className="h-3.5 w-3.5 text-(--color-ember-600)" />
+              </span>
+              <span className="min-w-0 flex-1 text-left">
+                <span className="block text-[8px] font-black uppercase leading-none tracking-[0.14em] text-(--color-ink-400)">
+                  Pickup
+                </span>
+                <span className="mt-0.5 block truncate text-[11px] font-black leading-none">
+                  {mobileTriggerLabel}
+                </span>
+              </span>
+            </button>
+
             <OrderIntentSelector />
 
             {!isAuthed && (
@@ -384,6 +432,11 @@ const handleSignOut = useCallback(async () => {
           </div>
         </div>
       )}
+
+      {/* Mobile bottom-sheet for order setup. Rendered once here so any surface
+          (TopBar mobile pill, CheckoutPage "Change" button, etc.) can open it
+          via useOrderIntentStore.openMobileSheet(). Hidden on md+. */}
+      <MobileOrderIntentSheet />
     </>
   );
 }

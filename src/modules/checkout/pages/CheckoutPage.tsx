@@ -12,9 +12,19 @@
 //   [ORDER INTENT]
 //           Checkout no longer owns pickup-time selection.
 //           Pickup/delivery intent now comes from useOrderIntentStore, which is
-//           controlled by the top-nav OrderIntentSelector.
-//           This prevents duplicate pickup-time UI and keeps the customer's
-//           order setup consistent before checkout.
+//           controlled by the top-nav OrderIntentSelector and the mobile
+//           bottom sheet. This prevents duplicate pickup-time UI and keeps the
+//           customer's order setup consistent before checkout.
+//
+//           The local `pickupTimingToIso` helper has been replaced by the
+//           shared `getPickupTimingDate` helper exported from the store so the
+//           selector, the sheet, the checkout payload, and the copy-summary
+//           all agree on what a given timing means.
+//
+//           A mobile-only "Change" button in the Order Details card now opens
+//           MobileOrderIntentSheet (the same one rendered by TopBar) via the
+//           store, so the customer doesn't have to scroll up to change pickup
+//           timing on mobile.
 //
 // Security invariants preserved:
 //   - No Stripe URL before verification.
@@ -102,34 +112,10 @@ import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useCart } from '@/modules/cart/hooks/useCart';
 import { formatCents } from '@/modules/cart/utils/cart.utils';
 import {
+  getPickupTimingDate,
   getPickupTimingLabel,
   useOrderIntentStore,
-  type PickupTimingOption,
 } from '@/modules/orders/store/orderIntent.store';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-function pickupTimingToIso(option: PickupTimingOption): string | undefined {
-  const now = Date.now();
-
-  if (option === '15_min') {
-    return new Date(now + 15 * 60_000).toISOString();
-  }
-
-  if (option === '30_min') {
-    return new Date(now + 30 * 60_000).toISOString();
-  }
-
-  if (option === '45_min') {
-    return new Date(now + 45 * 60_000).toISOString();
-  }
-
-  // ASAP and scheduled do not send a concrete pickup time yet.
-  // Server/operations can treat missing pickupTime as ASAP.
-  return undefined;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main Component
@@ -154,6 +140,7 @@ export default function CheckoutPage() {
   const fulfillmentType = useOrderIntentStore((state) => state.fulfillmentType);
   const pickupTiming = useOrderIntentStore((state) => state.pickupTiming);
   const deliveryAvailability = useOrderIntentStore((state) => state.deliveryAvailability);
+  const openOrderIntentSheet = useOrderIntentStore((state) => state.openMobileSheet);
 
   const showChallenge = guestPhase.tag === 'otp_required' || guestPhase.tag === 'retrying';
   const showBlocked = guestPhase.tag === 'blocked';
@@ -177,6 +164,9 @@ export default function CheckoutPage() {
     return items.reduce((acc, i) => acc + clampInt(i.quantity, 0, 10_000), 0);
   }, [items, hasItems]);
 
+  // Effective order type: only "delivery" if delivery is BOTH selected AND
+  // actually available. Otherwise we submit pickup. Defensive double-lock
+  // alongside the store-level guard in setFulfillmentType.
   const effectiveOrderType = useMemo<OrderType>(() => {
     if (fulfillmentType === 'delivery' && deliveryAvailability === 'available') {
       return 'delivery';
@@ -408,7 +398,9 @@ export default function CheckoutPage() {
   // ── handleCheckout — single checkout trigger ───────────────────────────────
   const handleCheckout = useCallback(async () => {
     const pickupTime =
-      effectiveOrderType === 'pickup' ? pickupTimingToIso(pickupTiming) : undefined;
+      effectiveOrderType === 'pickup'
+        ? (getPickupTimingDate(pickupTiming) ?? undefined)
+        : undefined;
 
     const result = await checkout({
       guestEmail: guestEmail || undefined,
@@ -456,7 +448,9 @@ export default function CheckoutPage() {
     if (!hasItems) return;
 
     const pickupTime =
-      effectiveOrderType === 'pickup' ? pickupTimingToIso(pickupTiming) : undefined;
+      effectiveOrderType === 'pickup'
+        ? (getPickupTimingDate(pickupTiming) ?? undefined)
+        : undefined;
 
     const lines = [
       `Sofi's — Checkout Summary`,
@@ -573,7 +567,7 @@ export default function CheckoutPage() {
             <div className="space-y-5 px-5 py-5">
               <div className="rounded-2xl border border-(--color-cream-200) bg-(--color-cream-50) p-4">
                 <div className="flex items-start justify-between gap-4">
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-xs font-semibold uppercase tracking-wide text-(--color-ink-400)">
                       Fulfillment
                     </p>
@@ -594,15 +588,28 @@ export default function CheckoutPage() {
                     )}
                   </div>
 
-                  <Link
-                    to="/menu"
-                    className="shrink-0 rounded-full border border-(--color-cream-300) bg-white px-3 py-1.5 text-xs font-semibold text-(--color-ink-600) transition-colors hover:bg-(--color-cream-50) hover:text-(--color-ember-700)"
-                  >
-                    Add more
-                  </Link>
+                  <div className="flex shrink-0 flex-col items-end gap-2">
+                    {/* Mobile-only: open the bottom sheet so the customer doesn't
+                        have to scroll up to TopBar to change pickup timing. */}
+                    <button
+                      type="button"
+                      onClick={openOrderIntentSheet}
+                      className="rounded-full border border-(--color-cream-300) bg-white px-3 py-1.5 text-xs font-semibold text-(--color-ink-600) transition-colors hover:bg-(--color-cream-50) hover:text-(--color-ember-700) md:hidden"
+                      aria-label="Change pickup timing"
+                    >
+                      Change
+                    </button>
+
+                    <Link
+                      to="/menu"
+                      className="rounded-full border border-(--color-cream-300) bg-white px-3 py-1.5 text-xs font-semibold text-(--color-ink-600) transition-colors hover:bg-(--color-cream-50) hover:text-(--color-ember-700)"
+                    >
+                      Add more
+                    </Link>
+                  </div>
                 </div>
 
-                <p className="mt-3 text-[11px] leading-5 text-(--color-ink-400)">
+                <p className="mt-3 hidden text-[11px] leading-5 text-(--color-ink-400) md:block">
                   To change pickup timing, use the order setup selector in the top navigation before
                   payment.
                 </p>
@@ -822,6 +829,7 @@ export default function CheckoutPage() {
                 {isAuthenticated && (
                   <>
                     {' · '}
+
                     <Link to="/account/orders" className="underline hover:text-(--color-ink-700)">
                       Order history
                     </Link>
