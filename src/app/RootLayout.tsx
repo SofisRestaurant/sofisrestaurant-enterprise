@@ -17,25 +17,30 @@
 //   min-h-dvh fills the viewport without either of those side effects.
 // =============================================================================
 
+import { lazy, Suspense } from 'react';
 import { Outlet } from 'react-router-dom';
 import { LazyMotion, domAnimation, MotionConfig } from 'framer-motion';
-
+import { LazyCartDrawer } from '@/modules/cart/components/LazyCartDrawer';
 import { ActiveOrderProvider } from '@/app/ActiveOrderContext';
 
 import TopBar from '@/components/layout/TopBar';
 import BottomNav from '@/components/layout/BottomNav';
-import Footer from '@/components/layout/Footer';
-
-import AuthModals from '@/features/auth/components/AuthModals';
-import SessionExpiryWarning from '@/components/auth/SessionExpiryWarning';
-import ModalRenderer from '@/components/ui/ModalRenderer';
 
 import AppBoot from './AppBoot';
 import ScrollSafety from '@/components/app/ScrollSafety';
 
-import { CartDrawer } from '@/modules/cart/components/CartDrawer';
 import { FloatingCartPill } from '@/modules/cart/components/FloatingCartPill';
 
+const Footer = lazy(() => import('@/components/layout/Footer'));
+const AuthModals = lazy(() => import('@/features/auth/components/AuthModals'));
+const SessionExpiryWarning = lazy(() => import('@/components/auth/SessionExpiryWarning'));
+const ModalRenderer = lazy(() => import('@/components/ui/ModalRenderer'));
+
+const CartDrawer = lazy(() =>
+  import('@/modules/cart/components/CartDrawer').then((mod) => ({
+    default: mod.CartDrawer,
+  })),
+);
 export default function RootLayout() {
   return (
     <LazyMotion features={domAnimation} strict>
@@ -58,7 +63,10 @@ export default function RootLayout() {
 
                 {/* Desktop footer lives inside the scroll (standard UX) */}
                 <div className="hidden md:block">
-                  <Footer />
+                  <Suspense fallback={null}>
+                    <LazyCartDrawer />
+                    <Footer />
+                  </Suspense>
                 </div>
               </main>
 
@@ -76,11 +84,14 @@ export default function RootLayout() {
                 Portal-based. Rendered in ascending priority order so
                 later portals naturally stack above earlier ones.
               */}
-              <SessionExpiryWarning />
-              <AuthModals />
-              <ModalRenderer />
-              <ScrollSafety />
+              <Suspense fallback={null}>
+                <SessionExpiryWarning />
+                <AuthModals />
+                <ModalRenderer />
+                <CartDrawer />
+              </Suspense>
 
+              <ScrollSafety />
               {/*
                 ── 5. Cart — must be the last child ─────────────────────
                 CartDrawer calls createPortal → document.body at z-9999.

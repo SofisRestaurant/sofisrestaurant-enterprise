@@ -273,7 +273,7 @@ export const router = createBrowserRouter([
       },
       {
         path: 'menu',
-        element: <MenuPage />,
+        lazy: lazyRoute(() => import('@/modules/menu/pages/MenuPage')),
       },
       {
         path: 'deals',

@@ -1,15 +1,19 @@
 // =============================================================================
-// src/hooks/useCart.ts
-// useCart — ergonomic consumer hook over useCartStore (production hardened)
-// Upgrades:
-//  - SessionId is validated (UUID) before any remote write/delete
-//  - Uses stable refs for uid/sid to avoid stale closures during async ops
-//  - Sync effect depends on items+promo+credit and guards with shouldSyncCart()
-//  - Exposes promoMessage + promoErrorMessage (as before)
-//  - Keeps store as source of truth; hook does not recompute totals
+// src/modules/cart/hooks/useCart.ts
+// useCart — ergonomic consumer hook over useCartStore
+// =============================================================================
+// Production upgrades:
+// - Store remains the single source of truth.
+// - Avoids whole-store subscription for actions.
+// - SessionId is validated before remote write/delete.
+// - Uses stable refs for uid/sid to avoid stale closures during async ops.
+// - Sync effect depends on items + promo + credit and guards with shouldSyncCart().
+// - Exposes promoMessage + promoErrorMessage.
+// - Keeps display helpers memoized.
 // =============================================================================
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
+
 import {
   useCartStore,
   selectItems,
@@ -54,9 +58,14 @@ import { requireSessionId, isUuid } from '@/security/auth/sessionId';
 
 interface UseCartOptions {
   userId?: string | null;
-  // IMPORTANT: this must be the Supabase session UUID (session_id claim),
-  // not the access_token tail and not Stripe session id.
+
+  /**
+   * IMPORTANT:
+   * This must be the Supabase session UUID/session_id claim,
+   * not the access_token tail and not a Stripe session id.
+   */
   sessionId?: string | null;
+
   taxRate?: number;
 }
 
@@ -110,6 +119,7 @@ export interface UseCartReturn {
 
 function safeRequireSessionId(sessionId: string | null | undefined): string | null {
   if (!sessionId) return null;
+
   try {
     return requireSessionId(sessionId);
   } catch {
@@ -133,20 +143,22 @@ export function useCart(options: UseCartOptions = {}): UseCartReturn {
   const isEmpty = useCartStore(selectIsEmpty);
 
   // ── Store actions
-  const {
-    addItem,
-    removeItem,
-    updateQuantity,
-    updateNotes,
-    clearCart,
-    applyPromoCode: storeApplyPromo,
-    removePromo,
-    applyCredit: storeApplyCredit,
-    removeCredit,
-    syncToSupabase,
-    hydrateFromSupabase,
-    clearSupabaseCart,
-  } = useCartStore();
+  // Do not call useCartStore() without a selector here.
+  // That subscribes this hook to the entire store and causes unnecessary renders.
+  const addItem = useCartStore((state) => state.addItem);
+  const removeItem = useCartStore((state) => state.removeItem);
+  const updateQuantity = useCartStore((state) => state.updateQuantity);
+  const updateNotes = useCartStore((state) => state.updateNotes);
+  const clearCart = useCartStore((state) => state.clearCart);
+
+  const storeApplyPromo = useCartStore((state) => state.applyPromoCode);
+  const removePromo = useCartStore((state) => state.removePromo);
+  const storeApplyCredit = useCartStore((state) => state.applyCredit);
+  const removeCredit = useCartStore((state) => state.removeCredit);
+
+  const syncToSupabase = useCartStore((state) => state.syncToSupabase);
+  const hydrateFromSupabase = useCartStore((state) => state.hydrateFromSupabase);
+  const clearSupabaseCart = useCartStore((state) => state.clearSupabaseCart);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Stable refs to avoid stale closures in callbacks
@@ -160,18 +172,13 @@ export function useCart(options: UseCartOptions = {}): UseCartReturn {
     sessionIdRef.current = sessionId;
   }, [userId, sessionId]);
 
-  // Pre-validated session UUID for effects/callbacks
   const validatedSessionId = useMemo(() => safeRequireSessionId(sessionId), [sessionId]);
 
-  // Auto-sync on relevant changes (items/promo/credit)
+  // Auto-sync on relevant changes.
   useEffect(() => {
-    // Must have both identifiers and a valid UUID session id
     if (!userId || !validatedSessionId) return;
-
-    // Local policy for when we sync (you already have this helper)
     if (!shouldSyncCart(items, userId)) return;
 
-    // Store will debounce + best-effort write
     syncToSupabase(userId, validatedSessionId);
   }, [items, promotion, credit, userId, validatedSessionId, syncToSupabase]);
 
@@ -197,7 +204,7 @@ export function useCart(options: UseCartOptions = {}): UseCartReturn {
     const sidRaw = sessionIdRef.current;
 
     if (!uid || !sidRaw) return;
-    if (!isUuid(sidRaw)) return; // do not throw inside UI callback
+    if (!isUuid(sidRaw)) return;
     if (!shouldSyncCart(items, uid)) return;
 
     syncToSupabase(uid, sidRaw);
@@ -227,10 +234,12 @@ export function useCart(options: UseCartOptions = {}): UseCartReturn {
 
   // ── Derived / display values
   const totalsDisplay = useMemo(() => formatCartTotals(rawTotals), [rawTotals]);
+
   const subtotalFormatted = useMemo(
     () => formatCents(rawTotals.subtotalCents),
     [rawTotals.subtotalCents],
   );
+
   const totalFormatted = useMemo(() => formatCents(rawTotals.totalCents), [rawTotals.totalCents]);
 
   const promoMessage = useMemo(
@@ -242,11 +251,15 @@ export function useCart(options: UseCartOptions = {}): UseCartReturn {
 
   // ── Query helpers
   const findItem = useCallback(
-    (menuItemId: string, mods: Pick<CartModifier, 'id'>[]) => findCartItem(items, menuItemId, mods),
+    (menuItemId: string, mods: Pick<CartModifier, 'id'>[]) =>
+      findCartItem(items, menuItemId, mods),
     [items],
   );
 
-  const isInCart = useCallback((menuItemId: string) => isItemInCart(items, menuItemId), [items]);
+  const isInCart = useCallback(
+    (menuItemId: string) => isItemInCart(items, menuItemId),
+    [items],
+  );
 
   const quantityInCart = useCallback(
     (menuItemId: string) => itemQuantityInCart(items, menuItemId),
@@ -299,8 +312,15 @@ export function useCart(options: UseCartOptions = {}): UseCartReturn {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Convenience sub-hooks
+// Lightweight convenience sub-hooks
 // ─────────────────────────────────────────────────────────────────────────────
+// These are safe for small UI like badges, nav counters, and simple summaries.
+// For global layout components, prefer these or direct store selectors over
+// importing useCart().
+
+export function useCartItems(): CartItem[] {
+  return useCartStore(selectItems);
+}
 
 export function useCartItemCount(): number {
   return useCartStore(selectItemCount);
@@ -312,7 +332,7 @@ export function useCartIsEmpty(): boolean {
 
 export function useCartTotals() {
   const totals = useCartStore(selectTotals);
-  return formatCartTotals(totals);
+  return useMemo(() => formatCartTotals(totals), [totals]);
 }
 
 export { promoErrorMessage };
