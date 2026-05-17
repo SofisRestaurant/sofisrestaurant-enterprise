@@ -5,6 +5,12 @@
 // Pure renderer — no side-effects, no state leakage.
 //
 // Performance contracts (2026):
+//   Image source:
+//     getModalImageProps() from supabaseImage.ts provides the transformed URL.
+//     Raw Supabase object URLs (/storage/v1/object/...) are converted to
+//     render/image URLs at 960px width, q78 — typically 80-120KB vs 2-4MB.
+//     Non-Supabase URLs pass through unchanged.
+//
 //   loading="eager"          Modal image is ALWAYS immediately visible on tap.
 //                            lazy would defer the fetch on a fixed-position element.
 //   fetchPriority="high"     Elevates this request above other queued resources.
@@ -14,16 +20,17 @@
 //   width/height             Intrinsic-size hints for the browser resource scheduler.
 //   will-change conditional  GPU compositor layer only while the image is loading.
 //                            Released once imageVisible=true — no leaked layers.
+//   srcSet + sizes           Responsive breakpoints from supabaseImageSrcSet.
+//                            Browser picks appropriate width for modal viewport.
 //
 // Bug fixes vs previous version:
-//   · loading="eager"  (was "lazy" — modal image was loading late, shimmer persisted)
-//   · fetchPriority="high"  (was absent — image queued at default priority)
+//   · Raw image URL was used directly (2-4MB per modal open) — now transformed
+//   · No srcSet — browser always downloaded single width — now has 4 breakpoints
+//   · No sizes attribute — browser guessed layout width — now explicit
 //   · transition-[opacity,transform]  (was transition-opacity + transition-transform
 //     as two separate classes — each overwrites the other's transition-property,
 //     so opacity was transitioning instantly with no fade-in)
 //   · will-change conditional  (was permanent — GPU layer held for modal lifetime)
-//   · referrerPolicy="no-referrer"  (was absent — inconsistent with rest of app)
-//   · width/height attributes  (were absent — no intrinsic dimension hint)
 //   · Responsive image height h-48 sm:h-60  (was h-56 fixed — pinched on wide modals)
 //   · group-hover:scale removed  (hover zoom is a browse signal, wrong on a
 //     conversion surface; hover never fires on mobile where modal is primary)
@@ -37,7 +44,7 @@
 // Zero breaking changes to external contracts:
 //   - Props shape (ModalImageProps) unchanged
 //   - MODAL_TAG_DISPLAY_LIMIT still enforced
-//   - No new dependencies beyond existing utils
+//   - No new dependencies beyond existing utils + supabaseImage helper
 //   - Tag categorisation, overlay layers, and placeholder design intact
 // =============================================================================
 
@@ -45,6 +52,7 @@ import { useId, useReducer } from 'react';
 import type { ModalImageProps } from '@/domain/menu/menu-modal.types';
 import { MODAL_TAG_DISPLAY_LIMIT } from '../../constants/menuItemModal.constants';
 import { cx } from '../../utils/uiHelpers';
+import { getModalImageProps } from '@/lib/images/supabaseImage';
 
 // ─── Image load FSM ──────────────────────────────────────────────────────────
 
@@ -253,6 +261,21 @@ export function MenuItemModalImage({ imageUrl, name, description, tags }: ModalI
 
   const visibleTags = tags.slice(0, MODAL_TAG_DISPLAY_LIMIT);
 
+  // ── Transformed image props ────────────────────────────────────────────────
+  //
+  // getModalImageProps converts raw Supabase Storage object URLs into
+  // render/image transform URLs at 960px width, q78. This typically reduces
+  // payload from 2-4MB (raw upload) to 80-120KB (transformed).
+  //
+  // The helper also provides:
+  //   - srcSet with 320w/480w/640w/800w responsive breakpoints
+  //   - sizes="(max-width: 640px) 100vw, 540px" for correct viewport selection
+  //   - loading="eager", fetchPriority="high" (modal is intentionally opened)
+  //   - width/height intrinsic hints for the browser resource scheduler
+  //
+  // Non-Supabase URLs pass through unchanged — no breakage for external images.
+  const modalImgProps = getModalImageProps(imageUrl, name);
+
   // Description fade mask: only applies when the description is long enough to
   // potentially overflow line-clamp-4 (~280+ chars). Short descriptions render
   // cleanly without fading their own last word to nothing.
@@ -284,21 +307,24 @@ export function MenuItemModalImage({ imageUrl, name, description, tags }: ModalI
             {!imageVisible && <ImageSkeleton />}
 
             <img
-              src={imageUrl!}
-              alt={name}
-              // ── Performance attributes ──────────────────────────────────
-              // eager: modal image is ALWAYS immediately visible on tap —
-              //        lazy would defer the fetch on a fixed-position element.
-              loading="eager"
-              // high: elevates this request in the browser's fetch queue.
-              //       The hero image is the primary content of the modal.
-              fetchPriority="high"
-              decoding="async"
-              referrerPolicy="no-referrer"
-              // Intrinsic-size hints for the browser's resource scheduler.
-              // CSS controls actual render size; these inform early prioritisation.
-              width={800}
-              height={450}
+              // ── Transformed image props from supabaseImage.ts ──────────
+              // src:           /storage/v1/render/image/... at 960px q78
+              // srcSet:        320w, 480w, 640w, 800w responsive breakpoints
+              // sizes:         (max-width: 640px) 100vw, 540px
+              // loading:       eager (modal is intentionally opened)
+              // fetchPriority: high  (hero image is primary modal content)
+              // decoding:      async (offload decode to worker thread)
+              // width/height:  intrinsic hints for browser scheduler
+              src={modalImgProps.src}
+              srcSet={modalImgProps.srcSet}
+              sizes={modalImgProps.sizes}
+              alt={modalImgProps.alt}
+              loading={modalImgProps.loading}
+              fetchPriority={modalImgProps.fetchPriority}
+              decoding={modalImgProps.decoding}
+              referrerPolicy={modalImgProps.referrerPolicy}
+              width={modalImgProps.width}
+              height={modalImgProps.height}
               // ── Layout + transition ─────────────────────────────────────
               // h-48/sm:h-60: responsive — proportional to the modal's max-w-xl
               // container rather than a fixed 224px on all widths.

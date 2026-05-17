@@ -73,6 +73,14 @@ export default defineConfig(({ command, mode }) => {
            * Vendor splitting is safe because vendor chunk contents change
            * rarely (only on dep upgrades), and the HTML always references
            * the correct hashed vendor chunk URLs.
+           *
+           * MENU MODULE: The menu chunk contains only the always-loaded
+           * menu page shell (MenuPage, MenuGrid, MenuItemCard, CategoryTabs,
+           * PopularRail, store, mappers). Lazy-loaded components (MenuItemModal,
+           * MenuFilters, and their sub-trees) are EXCLUDED so Vite creates
+           * separate chunks at the dynamic import boundaries. This keeps
+           * ~600 lines of modal JS + useCart + modifier hooks out of the
+           * initial menu page bundle.
            */
           manualChunks(id) {
             // ── Vendor splitting ──────────────────────────────────────────
@@ -94,7 +102,42 @@ export default defineConfig(({ command, mode }) => {
             if (id.includes('/features/admin/ui')) return 'admin-ui'
             if (id.includes('/features/admin/dashboard')) return 'dashboard'
             if (id.includes('LoyaltyScan')) return 'loyalty'
-            if (id.includes('/modules/menu')) return 'menu'
+
+            if (id.includes('/modules/menu')) {
+              // ── Lazy-loaded modal tree ────────────────────────────────
+              // MenuItemModal is imported via lazy() in MenuGrid and MenuPage.
+              // MenuFilters is imported via lazy() in MenuPage.
+              // Returning undefined lets Vite create separate chunks at
+              // each dynamic import boundary, keeping the initial menu
+              // bundle lean.
+              //
+              // Excluded paths (all resolve to their own async chunk):
+              //   /components/MenuItemModal.tsx   — modal orchestrator
+              //   /components/MenuFilters.tsx      — filter panel
+              //   /components/modal/*              — modal sub-components
+              //   /hooks/modal/*                   — modal-specific hooks
+              //   /hooks/useMenuItemPreflight.ts   — modal-only preflight
+              //   /hooks/useMenuItemModifiers.ts   — modal-only modifiers
+              //   /hooks/useMenuItemQty.ts         — modal-only quantity
+              //   /utils/modal/*                   — modal-only utilities
+              //   /types/modal/*                   — modal-only types
+              if (
+                id.includes('MenuItemModal') ||
+                id.includes('MenuFilters') ||
+                id.includes('/components/modal/') ||
+                id.includes('/hooks/modal/') ||
+                id.includes('/hooks/useMenuItemPreflight') ||
+                id.includes('/hooks/useMenuItemModifiers') ||
+                id.includes('/hooks/useMenuItemQty') ||
+                id.includes('/utils/modal/') ||
+                id.includes('/types/modal/')
+              ) {
+                return undefined
+              }
+
+              return 'menu'
+            }
+
             if (id.includes('/modules/checkout')) return 'checkout'
           },
 

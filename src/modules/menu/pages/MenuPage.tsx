@@ -7,8 +7,16 @@
 //    - MenuPage shell + CategoryTabs + MenuGrid skeleton only
 //    - MenuFilters: lazy (Suspense) — panel JS deferred until opened
 //    - MenuItemModal: lazy (Suspense) — modal JS deferred until first tap
-//    - No stagger/variant wrappers that hold children at opacity:0 on mount
-//    - PopularRail animates directly on mount because it sits above the fold
+//    - Above-fold wrappers render immediately (no opacity:0 entrance)
+//    - PopularRail renders directly — no wrapper animation blocking LCP
+//    - LCP preload <link> injected as soon as first item image URL is known
+//
+//  PROGRESSIVE RENDERING:
+//    - INITIAL_VISIBLE_ITEMS (12) rendered on first paint
+//    - LOAD_MORE_ITEMS (12) appended when sentinel enters viewport
+//    - IntersectionObserver with rootMargin="600px" for seamless scroll
+//    - visibleCount resets on category/filter/search change
+//    - resultsCountText always shows TOTAL filtered count
 //
 //  FILTER INTERACTION PATH:
 //    - Filter/sort/category/search state changes wrapped in startTransition
@@ -27,7 +35,7 @@
 //
 // DealsRail has been intentionally removed from this file.
 // Dedicated deals now live on /deals.
-// MenuPage keeps only the “Promo only” filter via menu item flags/tags.
+// MenuPage keeps only the "Promo only" filter via menu item flags/tags.
 // =============================================================================
 
 import {
@@ -50,23 +58,30 @@ import { MenuGrid } from '@/modules/menu/components/MenuGrid';
 import { PopularRail } from '@/modules/menu/components/PopularRail';
 import { useMenuUi } from '@/modules/menu/store/menuUi.store';
 import type { MenuPriceRangeKey, MenuSortKey, MenuTagKey } from '@/types/menu-ui.types';
+import { getLcpPreloadAttrs } from '@/lib/images/supabaseImage';
 
 const MenuFilters = lazy(() => import('@/modules/menu/components/MenuFilters'));
 const MenuItemModal = lazy(() => import('@/modules/menu/components/MenuItemModal'));
 
+// ─── Animation constants ──────────────────────────────────────────────────────
+
 const EL = [0.16, 1, 0.3, 1] as const;
 
-const BELOW_FOLD_VP = { once: true, amount: 0.08 } as const;
+// ─── Progressive rendering constants ──────────────────────────────────────────
 
-const fadeUp = {
-  hidden: { opacity: 0, y: 18 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.6, ease: EL } },
-};
+/** Items rendered on initial paint. Matches a 3-col × 4-row grid. */
+const INITIAL_VISIBLE_ITEMS = 12;
 
-const fadeIn = {
-  hidden: { opacity: 0 },
-  visible: { opacity: 1, transition: { duration: 0.45, ease: EL } },
-};
+/** Items appended per IntersectionObserver trigger. */
+const LOAD_MORE_ITEMS = 12;
+
+/** IO rootMargin — start loading 600px before the sentinel enters the viewport. */
+const LOAD_MORE_ROOT_MARGIN = '600px';
+
+/** Unique id for the LCP preload <link> element in document.head. */
+const LCP_PRELOAD_ID = 'sofi-lcp-preload';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -80,6 +95,8 @@ type FilterState = {
 type ModalState = { open: false } | { open: true; item: MenuItemPublic };
 
 const MENU_OPEN_FILTERS_EVENT = 'menu:open-filters';
+
+// ─── Utilities ────────────────────────────────────────────────────────────────
 
 function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(' ');
@@ -365,6 +382,8 @@ function stableSorted(items: MenuItemPublic[], sort: MenuSortKey): MenuItemPubli
 
 const NULL_FALLBACK = null;
 
+// ─── Component ────────────────────────────────────────────────────────────────
+
 function MenuPage() {
   const [items, setItems] = useState<MenuItemPublic[]>([]);
   const [loading, setLoading] = useState(true);
@@ -386,9 +405,15 @@ function MenuPage() {
   const [modal, setModal] = useState<ModalState>({ open: false });
   const [isPending, startTransition] = useTransition();
 
+  // ── Progressive rendering state ──────────────────────────────────────────
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ITEMS);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
   const lastFocusForFiltersRef = useRef<HTMLElement | null>(null);
   const lastFocusForModalRef = useRef<HTMLElement | null>(null);
   const filtersBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  // ── Data fetch ───────────────────────────────────────────────────────────
 
   const loadMenu = useCallback(async (signal?: AbortSignal) => {
     setError(null);
@@ -447,6 +472,8 @@ function MenuPage() {
       window.removeEventListener(MENU_OPEN_FILTERS_EVENT, handleOpenFilters);
     };
   }, []);
+
+  // ── Derived data ─────────────────────────────────────────────────────────
 
   const categoriesWithItems = useMemo<Set<MenuCategory>>(() => {
     const next = new Set<MenuCategory>();
@@ -527,7 +554,91 @@ function MenuPage() {
     selectedCategory,
   ]);
 
+  // ── Progressive rendering ────────────────────────────────────────────────
+  //
+  // Reset visible count whenever the filtered list identity changes.
+  // This ensures that switching categories or applying a filter resets
+  // the infinite scroll to show only the first batch.
+
+  useEffect(() => {
+    setVisibleCount(INITIAL_VISIBLE_ITEMS);
+  }, [filteredSortedItems]);
+
+  const visibleItems = useMemo(
+    () => filteredSortedItems.slice(0, visibleCount),
+    [filteredSortedItems, visibleCount],
+  );
+
+  const hasMore = visibleCount < filteredSortedItems.length;
+
+  // IntersectionObserver for load-more sentinel.
+  // rootMargin="600px" starts loading the next batch before the user scrolls
+  // to the bottom, creating a seamless infinite scroll experience.
+  useEffect(() => {
+    if (!hasMore) return;
+
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisibleCount((prev) => Math.min(prev + LOAD_MORE_ITEMS, filteredSortedItems.length));
+        }
+      },
+      { rootMargin: LOAD_MORE_ROOT_MARGIN },
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, filteredSortedItems.length]);
+
+  // ── LCP preload ──────────────────────────────────────────────────────────
+  //
+  // After data loads and the first visible item is known, inject a
+  // <link rel="preload" as="image"> into <head> so the browser can start
+  // fetching the LCP candidate image before React renders the <img> tag.
+  //
+  // The preload uses the same transformed URL + srcSet that MenuItemCard
+  // will request, so it's a cache hit when the component renders.
+
+  const firstVisibleImageUrl = useMemo(() => {
+    for (const item of filteredSortedItems) {
+      const url = readImageUrl(item);
+      if (url) return url;
+    }
+    return null;
+  }, [filteredSortedItems]);
+
+  useEffect(() => {
+    if (loading || !firstVisibleImageUrl) return;
+
+    const attrs = getLcpPreloadAttrs(firstVisibleImageUrl);
+    if (!attrs) return;
+
+    // Remove previous preload if it exists (filter change scenario).
+    const existing = document.getElementById(LCP_PRELOAD_ID);
+    if (existing) existing.remove();
+
+    const link = document.createElement('link');
+    link.id = LCP_PRELOAD_ID;
+
+    for (const [key, value] of Object.entries(attrs)) {
+      link.setAttribute(key, value);
+    }
+
+    document.head.appendChild(link);
+
+    return () => {
+      const el = document.getElementById(LCP_PRELOAD_ID);
+      if (el) el.remove();
+    };
+  }, [loading, firstVisibleImageUrl]);
+
+  // ── Derived UI ───────────────────────────────────────────────────────────
+
   const resultsCountText = useMemo(() => {
+    // Always shows TOTAL filtered count, not the visible progressive count.
     const count = filteredSortedItems.length;
     const hasSearch = searchText.trim().length > 0;
     const hasCategory = selectedCategory !== 'all';
@@ -542,6 +653,8 @@ function MenuPage() {
 
     return `Showing ${count} match${count === 1 ? '' : 'es'}`;
   }, [filteredSortedItems.length, searchText, selectedCategory, filters]);
+
+  // ── Stable callbacks ─────────────────────────────────────────────────────
 
   const getPriceCents = useCallback((item: MenuItemPublic): number => readPriceCents(item), []);
   const getAvailable = useCallback((item: MenuItemPublic): boolean => readAvailable(item), []);
@@ -648,6 +761,8 @@ function MenuPage() {
     [startTransition],
   );
 
+  // ── Render ───────────────────────────────────────────────────────────────
+
   return (
     <main className="mx-auto w-full max-w-7xl px-4 pb-10 pt-4">
       <AnimatePresence>
@@ -695,12 +810,14 @@ function MenuPage() {
 
       {!loading && !error && (
         <>
-          <m.div
-            initial={{ opacity: 0, y: 14 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.55, ease: EL }}
-            className="mt-6"
-          >
+          {/* ── PopularRail ─────────────────────────────────────────────
+            PERFORMANCE: Plain <div> — no entrance animation.
+            Previously <m.div initial={{ opacity: 0, y: 14 }} animate={...}>
+            held this section at opacity 0 for 550ms, blocking LCP if the
+            LCP candidate image was inside the rail.
+            PopularRail has its own internal card animations.
+          */}
+          <div className="mt-6">
             <PopularRail
               items={popular}
               onOpenItem={openItem}
@@ -709,14 +826,15 @@ function MenuPage() {
               emptyHintActionLabel="Clear all"
               onEmptyHintAction={clearAll}
             />
-          </m.div>
+          </div>
 
-          <m.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.45, ease: EL, delay: 0.08 }}
-            className="mt-8 flex items-center justify-between gap-3"
-          >
+          {/* ── Browse categories header + filter buttons ───────────────
+            PERFORMANCE: Plain <div> — no entrance animation.
+            Previously <m.div initial={{ opacity: 0, y: 10 }} delay={0.08}>
+            delayed this text by 530ms. Interaction animations on buttons
+            (whileHover/whileTap) are kept — they're not entrance-blocking.
+          */}
+          <div className="mt-8 flex items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="text-sm font-semibold text-gray-900">Browse categories</p>
               <p className="mt-0.5 text-xs text-gray-500">
@@ -769,15 +887,20 @@ function MenuPage() {
                 Deals
               </m.button>
             </div>
-          </m.div>
+          </div>
 
-          <m.div variants={fadeIn} initial="hidden" animate="visible" className="mt-6">
+          {/* ── CategoryTabs ────────────────────────────────────────────
+            PERFORMANCE: Plain <div> — no entrance animation.
+            Previously used fadeIn variant (initial: opacity 0) for 450ms.
+            CategoryTabs has its own internal scroll/selection animations.
+          */}
+          <div className="mt-6">
             <CategoryTabs
               selectedCategory={selectedCategory}
               onSelectCategory={handleSelectCategory}
               availableCategories={categoriesWithItems}
             />
-          </m.div>
+          </div>
 
           <AnimatePresence>
             {resultsCountText ? (
@@ -794,25 +917,46 @@ function MenuPage() {
             ) : null}
           </AnimatePresence>
 
-          <m.div
-            variants={fadeUp}
-            initial="hidden"
-            whileInView="visible"
-            viewport={BELOW_FOLD_VP}
+          {/* ── MenuGrid ────────────────────────────────────────────────
+            PERFORMANCE: Plain <div> — no entrance animation.
+
+            Previously: <m.div variants={fadeUp} initial="hidden"
+            whileInView="visible" viewport={{ once: true, amount: 0.08 }}>
+            This held the ENTIRE GRID at opacity:0 until an
+            IntersectionObserver fired AND a 600ms animation completed.
+            The LCP image (first card) was invisible for 600ms+ after
+            render. This was the single biggest LCP blocker.
+
+            Now: renders immediately. The isPending opacity transition
+            is kept for filter interaction feedback (not entrance).
+
+            Progressive rendering: only visibleItems (≤12 initially)
+            are passed to MenuGrid. A sentinel div below triggers
+            IntersectionObserver to load more batches.
+          */}
+          <div
             className={cx(
               'mt-5 transition-opacity duration-300',
               isPending ? 'opacity-60' : 'opacity-100',
             )}
           >
             <MenuGrid
-              items={filteredSortedItems}
+              items={visibleItems}
               loading={loading}
               getPriceCents={getPriceCents}
               getAvailable={getAvailable}
               emptyHintActionLabel="Clear all"
               onEmptyHintAction={clearAll}
             />
-          </m.div>
+          </div>
+
+          {/* ── Load-more sentinel ──────────────────────────────────────
+            Invisible 1px div observed by IntersectionObserver.
+            rootMargin="600px" triggers the next batch 600px before the
+            user reaches the end, creating seamless infinite scroll.
+            Only rendered when there are more items to show.
+          */}
+          {hasMore && <div ref={sentinelRef} className="h-px w-full" aria-hidden="true" />}
 
           <Suspense fallback={NULL_FALLBACK}>
             {filtersOpen && (

@@ -96,15 +96,24 @@
       including scripts loaded before the HTML parser reaches <meta> tags.
     -->
 
-    <!-- ── DNS prefetch for API and CDN domains ─────────────────────────── -->
-    <!--
-      Initiates DNS resolution early for domains the app connects to.
-      Costs nothing if the connection isn't ultimately needed.
-    -->
-    <link rel="dns-prefetch" href="https://api.stripe.com" />
-    <!-- Supabase storage bucket (images uploaded via dashboard) -->
-    <link rel="dns-prefetch" href="https://images.pexels.com" />
+<!-- ── DNS / connection hints ─────────────────────────────────────────── -->
+<link rel="dns-prefetch" href="https://api.stripe.com" />
 
+<!-- Supabase Storage — menu images are served from this origin -->
+<link rel="dns-prefetch" href="https://veqcsijavjrygvogsqos.supabase.co" />
+<link rel="preconnect" href="https://veqcsijavjrygvogsqos.supabase.co" crossorigin />
+
+<!-- Optional external image source -->
+<link rel="dns-prefetch" href="https://images.pexels.com" />
+
+<!-- Primary display font — above-fold headings/logo -->
+<link
+  rel="preload"
+  as="font"
+  type="font/woff2"
+  href="/fonts/display/SofiDisplay-Regular.woff2"
+  crossorigin
+/>
     <!-- ── Performance: LCP image preload ────────────────────── -->
     <!--
       OMITTED INTENTIONALLY.

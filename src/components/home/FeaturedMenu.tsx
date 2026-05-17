@@ -1,3 +1,4 @@
+// path:src/components/home/FeaturedMenu.tsx
 'use client';
 
 import { useEffect, useState } from 'react';
