@@ -11,13 +11,13 @@
 //   - Manual focus trap + scroll lock, no Headless UI dependencies
 //
 // Transform ownership contract:
-//   OPEN:   CSS data-state="open" owns transform (inline styles cleared)
-//   DRAG:   useCartDrawerDrag owns transform (inline style set directly)
-//   DISMISS:drag hook clears inline style BEFORE calling onClose, so React's
-//           next render starts clean — no race condition on Chrome or Safari
+//   OPEN:    CSS data-state="open" owns transform (inline styles cleared)
+//   DRAG:    useCartDrawerDrag owns transform (inline style set directly)
+//   DISMISS: drag hook clears inline style BEFORE calling onClose, so React's
+//            next render starts clean — no race condition on Chrome or Safari
 // =============================================================================
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { X } from 'lucide-react';
@@ -37,8 +37,6 @@ import { CartLineItem } from '@/modules/cart/components/CartLineItem';
 import { CartFooter } from '@/modules/cart/components/CartFooter';
 
 // ─── Inject CSS transition rules once ─────────────────────────────────────────
-// Kept in JS so this file is self-contained and the rules are guaranteed to
-// load regardless of CSS bundle splitting or SSR hydration order.
 
 const CART_CSS = `
 .cart-backdrop {
@@ -69,8 +67,16 @@ const CART_CSS = `
 `;
 
 let cssInjected = false;
+
 function injectCSS() {
   if (cssInjected || typeof document === 'undefined') return;
+
+  const existing = document.head.querySelector('style[data-cart-drawer]');
+  if (existing) {
+    cssInjected = true;
+    return;
+  }
+
   const el = document.createElement('style');
   el.setAttribute('data-cart-drawer', '');
   el.textContent = CART_CSS;
@@ -95,11 +101,34 @@ const sc = (n: unknown): number => {
 type SummaryTotals = ReturnType<typeof useCartSummary>['totals'];
 type SummaryFlags = ReturnType<typeof useCartSummary>['flags'];
 
+type ScrollLockSnapshot = {
+  bodyOverflow: string;
+  bodyTouchAction: string;
+};
+
+// ─── Global scroll unlock safety ──────────────────────────────────────────────
+
+function releaseCartScrollLock() {
+  if (typeof document === 'undefined') return;
+
+  const body = document.body;
+  const html = document.documentElement;
+
+  body.style.overflow = '';
+  body.style.touchAction = '';
+  body.removeAttribute('data-cart-scroll-lock');
+
+  // Defensive cleanup for any previous bad builds that locked <html>.
+  html.style.overflow = '';
+  html.style.touchAction = '';
+}
+
 // ─── DragHandle ───────────────────────────────────────────────────────────────
 
 function DragHandle({ onClose }: { onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const handlers = useCartDrawerDrag({ onClose, handleRef: ref });
+
   return (
     <div
       ref={ref}
@@ -107,7 +136,6 @@ function DragHandle({ onClose }: { onClose: () => void }) {
       className="flex cursor-grab touch-none select-none flex-col items-center justify-center gap-1 pb-2 pt-3 active:cursor-grabbing"
       aria-hidden="true"
     >
-      {/* h-1.25 = 5px in Tailwind v4 spacing scale */}
       <div className="h-1.25 w-10 rounded-full bg-[rgba(28,25,21,0.2)]" />
       <span className="text-[9px] uppercase tracking-[0.12em] text-stone-900 opacity-30">
         swipe down to close
@@ -131,6 +159,7 @@ function PricingRow({
 }) {
   const labelCls = green ? 'text-[#4a7a5a]' : muted ? 'text-[#a89080]' : 'text-[#8a7a6a]';
   const valueCls = green ? 'text-[#2a6a3a]' : muted ? 'text-[#a89080]' : 'text-[#1c1915]';
+
   return (
     <div className="flex justify-between text-sm">
       <span className={labelCls}>{label}</span>
@@ -143,9 +172,9 @@ function PricingRow({
 
 function LoyaltyBanner({ pts }: { pts: number }) {
   if (pts <= 0) return null;
+
   return (
     <div className="relative mx-4 mb-3 flex shrink-0 items-center justify-between overflow-hidden rounded-xl px-4 py-2 bg-[linear-gradient(90deg,#c9a42e_0%,#e8c46a_50%,#d4af37_100%)]">
-      {/* Shimmer sweep — animation references @keyframes cart-shimmer injected above */}
       <span
         aria-hidden="true"
         className="pointer-events-none absolute inset-y-0 -left-full w-1/3 bg-[linear-gradient(90deg,transparent,rgba(255,255,255,0.3),transparent)]"
@@ -194,14 +223,17 @@ function CartContent({
             <path d="M16 10a4 4 0 01-8 0" />
           </svg>
         </div>
+
         <h3 className="mb-2 font-semibold text-xl text-[#1c1915] font-(family-name:--font-display,serif)">
           Your cart is empty
         </h3>
+
         <p className="mb-7 text-sm leading-relaxed text-[#8a7a6a]">
           Fresh plates, made to order.
           <br />
           Add something delicious.
         </p>
+
         <button
           type="button"
           onClick={closeCart}
@@ -223,12 +255,15 @@ function CartContent({
 
       <div className="space-y-1.5 rounded-2xl bg-white p-4 border border-[#ede0ce]">
         <PricingRow label="Subtotal" value={fmt(totals.subtotalCents)} />
+
         {totals.hasDiscount && (
           <PricingRow label="Promo discount" value={`−${fmt(totals.discountCents)}`} green />
         )}
+
         {totals.hasCredit && (
           <PricingRow label="Account credit" value={`−${fmt(totals.creditCents)}`} green />
         )}
+
         <PricingRow label="Est. tax (9.5%)" value={fmt(totals.taxCents)} muted />
 
         <div className="flex justify-between border-t border-[#ede0ce] pt-2">
@@ -243,6 +278,7 @@ function CartContent({
             ⚠ Pricing inconsistent — confirmed at checkout.
           </p>
         )}
+
         <p className="pt-0.5 text-[10px] leading-snug text-[#c0b0a0]">
           Final total confirmed at secure checkout via Stripe.
         </p>
@@ -256,10 +292,11 @@ function CartContent({
 function useFocusTrap(ref: React.RefObject<HTMLElement | null>, active: boolean) {
   useEffect(() => {
     if (!active) return;
+
     const el = ref.current;
     if (!el) return;
 
-    const sel = [
+    const selector = [
       'a[href]',
       'button:not([disabled])',
       'input:not([disabled])',
@@ -268,26 +305,33 @@ function useFocusTrap(ref: React.RefObject<HTMLElement | null>, active: boolean)
       '[tabindex]:not([tabindex="-1"])',
     ].join(',');
 
-    const focusable = () => Array.from(el.querySelectorAll<HTMLElement>(sel));
-    focusable()[0]?.focus();
+    const getFocusable = () => Array.from(el.querySelectorAll<HTMLElement>(selector));
 
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Tab') return;
-      const els = focusable();
-      const first = els[0];
-      const last = els[els.length - 1];
+    getFocusable()[0]?.focus();
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return;
+
+      const focusable = getFocusable();
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
       if (!first) return;
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
+
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
         last?.focus();
+        return;
       }
-      if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
+
+      if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
         first.focus();
       }
     };
 
     document.addEventListener('keydown', onKey);
+
     return () => {
       document.removeEventListener('keydown', onKey);
     };
@@ -297,38 +341,55 @@ function useFocusTrap(ref: React.RefObject<HTMLElement | null>, active: boolean)
 // ─── useScrollLock ────────────────────────────────────────────────────────────
 
 function useScrollLock(active: boolean) {
+  const snapshotRef = useRef<ScrollLockSnapshot | null>(null);
+
   useEffect(() => {
     if (typeof document === 'undefined') return;
 
     const body = document.body;
-    const html = document.documentElement;
 
-    if (!active) return;
+    if (!active) {
+      releaseCartScrollLock();
+      snapshotRef.current = null;
+      return;
+    }
 
-    const previousBodyOverflow = body.style.overflow;
-    const previousBodyTouchAction = body.style.touchAction;
-    const previousHtmlOverflow = html.style.overflow;
+    if (!snapshotRef.current) {
+      snapshotRef.current = {
+        bodyOverflow: body.style.overflow,
+        bodyTouchAction: body.style.touchAction,
+      };
+    }
 
+    body.setAttribute('data-cart-scroll-lock', 'true');
     body.style.overflow = 'hidden';
     body.style.touchAction = 'none';
-    html.style.overflow = 'hidden';
 
     return () => {
-      body.style.overflow = previousBodyOverflow;
-      body.style.touchAction = previousBodyTouchAction;
-      html.style.overflow = previousHtmlOverflow;
+      const snapshot = snapshotRef.current;
+
+      if (snapshot) {
+        body.style.overflow = snapshot.bodyOverflow;
+        body.style.touchAction = snapshot.bodyTouchAction;
+      } else {
+        releaseCartScrollLock();
+      }
+
+      body.removeAttribute('data-cart-scroll-lock');
+      snapshotRef.current = null;
     };
   }, [active]);
 }
+
 // ─── CartDrawer ───────────────────────────────────────────────────────────────
 
 export function CartDrawer() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const isOpen = useCartUiStore((s) => s.isOpen);
-  const closeCart = useCartUiStore((s) => s.close);
-  const clearFn = useCartStore((s) => s.clearCart);
+  const isOpen = useCartUiStore((state) => state.isOpen);
+  const closeCart = useCartUiStore((state) => state.close);
+  const clearFn = useCartStore((state) => state.clearCart);
 
   const { user, session } = useAuth();
 
@@ -348,26 +409,40 @@ export function CartDrawer() {
     injectCSS();
   }, []);
 
+  // Route-level safety net:
+  // any successful route change should never leave the app scroll-locked.
+  useEffect(() => {
+    releaseCartScrollLock();
+  }, [location.pathname]);
+
+  const closeCartSafely = useCallback(() => {
+    releaseCartScrollLock();
+    closeCart();
+  }, [closeCart]);
+
   const items: CartItem[] = useMemo(() => {
     if (!Array.isArray(cart.items)) return [];
 
     return cart.items.filter(
-      (v): v is CartItem =>
-        typeof v === 'object' && v !== null && typeof (v as CartItem).menuItemId === 'string',
+      (value): value is CartItem =>
+        typeof value === 'object' &&
+        value !== null &&
+        typeof (value as CartItem).menuItemId === 'string',
     );
   }, [cart.items]);
 
-  const count = typeof cart.itemCount === 'number' ? cart.itemCount : 0;
+  const count = typeof cart.itemCount === 'number' ? Math.max(0, cart.itemCount) : 0;
   const hasItems = items.length > 0;
   const pts = Math.max(0, Math.floor(sc(totals.subtotalCents) / 100));
 
-  // Reset clear confirmation whenever the drawer closes.
   useEffect(() => {
-    if (!isOpen) setConfirmClear(false);
+    if (!isOpen) {
+      setConfirmClear(false);
+    }
   }, [isOpen]);
 
-  // Close on actual route changes only.
-  // Important for lazy-loaded CartDrawer:
+  // Close only on real route changes.
+  // Critical for lazy-loaded CartDrawer:
   // on first open, the drawer mounts while isOpen is already true.
   // A plain pathname effect would run on mount and immediately close it.
   useEffect(() => {
@@ -377,16 +452,17 @@ export function CartDrawer() {
     previousPathnameRef.current = location.pathname;
 
     if (pathnameChanged && isOpen) {
-      closeCart();
+      closeCartSafely();
     }
-  }, [location.pathname, isOpen, closeCart]);
+  }, [location.pathname, isOpen, closeCartSafely]);
 
-  // Escape key.
   useEffect(() => {
     if (!isOpen) return;
 
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeCart();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeCartSafely();
+      }
     };
 
     document.addEventListener('keydown', onKey);
@@ -394,16 +470,23 @@ export function CartDrawer() {
     return () => {
       document.removeEventListener('keydown', onKey);
     };
-  }, [isOpen, closeCart]);
+  }, [isOpen, closeCartSafely]);
 
   useLayoutEffect(() => {
     if (!isOpen) return;
 
-    const el = mobileRef.current;
-    if (!el) return;
+    const mobileEl = mobileRef.current;
+    const desktopEl = desktopRef.current;
 
-    el.style.transform = '';
-    el.style.transition = '';
+    if (mobileEl) {
+      mobileEl.style.transform = '';
+      mobileEl.style.transition = '';
+    }
+
+    if (desktopEl) {
+      desktopEl.style.transform = '';
+      desktopEl.style.transition = '';
+    }
   }, [isOpen]);
 
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
@@ -412,6 +495,7 @@ export function CartDrawer() {
   useScrollLock(isOpen);
 
   const handleCheckout = useCallback(() => {
+    releaseCartScrollLock();
     closeCart();
     void navigate('/checkout');
   }, [closeCart, navigate]);
@@ -425,7 +509,14 @@ export function CartDrawer() {
       </span>
     ) : null;
 
-  const contentProps = { items, hasItems, totals, flags, closeCart };
+  const contentProps = {
+    items,
+    hasItems,
+    totals,
+    flags,
+    closeCart: closeCartSafely,
+  };
+
   const footerProps = {
     totals,
     pts,
@@ -439,15 +530,13 @@ export function CartDrawer() {
 
   return createPortal(
     <>
-      {/* ── Backdrop ──────────────────────────────────────────────────── */}
       <div
         className="cart-backdrop pointer-events-none fixed inset-0 z-9998 bg-black/50 opacity-0 backdrop-blur-[2px] transition-opacity duration-200 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100"
         data-state={state}
-        onClick={isOpen ? closeCart : undefined}
+        onClick={isOpen ? closeCartSafely : undefined}
         aria-hidden="true"
       />
 
-      {/* ── MOBILE: bottom sheet (< md) ───────────────────────────────── */}
       <div
         ref={mobileRef}
         data-cart-sheet
@@ -457,16 +546,16 @@ export function CartDrawer() {
         aria-modal="true"
         aria-label="Your cart"
       >
-        <DragHandle onClose={closeCart} />
+        <DragHandle onClose={closeCartSafely} />
 
-        {/* Header row */}
         <div className="flex shrink-0 items-center justify-between px-5 pb-3">
           <h2 className="flex items-center gap-2 text-lg font-bold text-[#1c1915] font-(family-name:--font-display,serif)">
             Your Order {badge}
           </h2>
+
           <button
             type="button"
-            onClick={closeCart}
+            onClick={closeCartSafely}
             className="flex h-8 w-8 items-center justify-center rounded-full bg-[rgba(28,25,21,0.07)] text-[#8a7a6a] transition-colors active:scale-95"
             aria-label="Close cart"
           >
@@ -476,7 +565,6 @@ export function CartDrawer() {
 
         {hasItems && <LoyaltyBanner pts={pts} />}
 
-        {/* Scroll body — touch-pan-y prevents iOS from cancelling button taps */}
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y">
           <CartContent {...contentProps} />
         </div>
@@ -484,30 +572,30 @@ export function CartDrawer() {
         {hasItems && <CartFooter {...footerProps} />}
       </div>
 
-      {/* ── DESKTOP: right panel (md+) ────────────────────────────────── */}
       <div
         ref={desktopRef}
         data-state={state}
-        className="cart-panel pointer-events-none fixed inset-y-0 right-0 z-absolute hidden w-full max-w-md translate-x-full flex-col bg-[#faf8f4] transition-transform duration-300 ease-out data-[state=open]:pointer-events-auto data-[state=open]:translate-x-0 md:flex"
+        className="cart-panel pointer-events-none fixed inset-y-0 right-0 z-9999 hidden w-full max-w-md translate-x-full flex-col bg-[#faf8f4] transition-transform duration-300 ease-out data-[state=open]:pointer-events-auto data-[state=open]:translate-x-0 md:flex"
         role="dialog"
         aria-modal="true"
         aria-label="Your cart"
       >
-        {/* Dark frosted header */}
         <div className="flex shrink-0 items-center justify-between border-b border-[rgba(212,175,55,0.2)] px-5 py-4 backdrop-blur-xl bg-[linear-gradient(135deg,rgba(28,25,21,0.97)_0%,rgba(46,42,36,0.97)_100%)]">
           <div>
             <h2 className="flex items-center gap-2 text-base font-bold text-white">
               Your Order {badge}
             </h2>
+
             {hasItems && (
               <p className="mt-0.5 text-xs text-white/45">
                 {count} item{count !== 1 ? 's' : ''} · {fmt(totals.subtotalCents)} subtotal
               </p>
             )}
           </div>
+
           <button
             type="button"
-            onClick={closeCart}
+            onClick={closeCartSafely}
             className="flex h-8 w-8 items-center justify-center rounded-full bg-white/80 text-white/65 transition-colors hover:bg-white/15"
             aria-label="Close cart"
           >
