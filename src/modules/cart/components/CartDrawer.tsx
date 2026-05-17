@@ -337,10 +337,6 @@ const cart = useCart({
   const hasItems = items.length > 0;
   const pts = Math.max(0, Math.floor(sc(totals.subtotalCents) / 100));
 
-  // Inject CSS rules on first render
-  useEffect(() => {
-    injectCSS();
-  }, []);
 
   // Reset clear confirm when drawer closes
   useEffect(() => {
@@ -420,7 +416,7 @@ const cart = useCart({
     <>
       {/* ── Backdrop ──────────────────────────────────────────────────── */}
       <div
-        className="cart-backdrop fixed inset-0 z-9998 bg-black/50 backdrop-blur-[2px]"
+        className="cart-backdrop pointer-events-none fixed inset-0 z-9998 bg-black/50 opacity-0 backdrop-blur-[2px] transition-opacity duration-200 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100"
         data-state={state}
         onClick={closeCart}
         aria-hidden="true"
@@ -431,7 +427,7 @@ const cart = useCart({
         ref={mobileRef}
         data-cart-sheet
         data-state={state}
-        className="cart-sheet fixed inset-x-0 bottom-0 z-9999 flex max-h-[92dvh] flex-col rounded-t-3xl bg-[#faf8f4] shadow-[0_-2px_0_rgba(212,175,55,0.18),0_-8px_40px_rgba(28,25,21,0.18)] touch-pan-y md:hidden"
+        className="cart-sheet pointer-events-none fixed inset-x-0 bottom-0 z-9999 flex max-h-[92dvh] translate-y-full flex-col rounded-t-3xl bg-[#faf8f4] shadow-[0_-2px_0_rgba(212,175,55,0.18),0_-8px_40px_rgba(28,25,21,0.18)] transition-transform duration-300 ease-out touch-pan-y data-[state=open]:pointer-events-auto data-[state=open]:translate-y-0 md:hidden"
         role="dialog"
         aria-modal="true"
         aria-label="Your cart"
@@ -467,7 +463,7 @@ const cart = useCart({
       <div
         ref={desktopRef}
         data-state={state}
-        className="cart-panel fixed inset-y-0 right-0 z-9999 hidden w-full max-w-md flex-col bg-[#faf8f4] md:flex"
+        className="cart-panel pointer-events-none fixed inset-y-0 right-0 z-absolute hidden w-full max-w-md translate-x-full flex-col bg-[#faf8f4] transition-transform duration-300 ease-out data-[state=open]:pointer-events-auto data-[state=open]:translate-x-0 md:flex"
         role="dialog"
         aria-modal="true"
         aria-label="Your cart"
