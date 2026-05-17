@@ -1,222 +1,263 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <!-- ── Character encoding (must be first) ────────────────── -->
+    <!-- Character encoding must stay first -->
     <meta charset="UTF-8" />
 
-    <!--
-      ── No-flash theme script ─────────────────────────────────
-      Runs synchronously before any CSS is parsed or the first
-      frame is painted. Sets data-theme + colorScheme on <html>
-      so the correct CSS variables are active from frame zero.
-      No localStorage. No manual override. System-only.
-    -->
+    <!-- No-flash theme script -->
     <script>
       (function () {
         var d = document.documentElement;
         var t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
         d.dataset.theme = t;
         d.style.colorScheme = t;
-      }());
+      })();
     </script>
 
-    <!-- ── Viewport ──────────────────────────────────────────── -->
-    <!-- viewport-fit=cover: content extends under notches on iPhone -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Viewport -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 
-    <!-- ── Title & SEO ───────────────────────────────────────── -->
-    <title>Sofi's Restaurant | Crafted With Intention · Surprise, Arizona</title>
+    <!-- Primary SEO -->
+    <title>Sofi's Restaurant | Mexican-American Food in Surprise, AZ</title>
     <meta
       name="description"
-      content="Sofi's Restaurant — seasonal ingredients, honest technique, and unforgettable evenings in Surprise, Arizona. Reserve your table or order online."
+      content="Visit Sofi's Restaurant in Surprise, AZ for fresh Mexican-American food, handmade tortillas, breakfast all day, tacos, burritos, family meals, and warm local hospitality."
     />
     <meta name="author" content="Sofi's Restaurant" />
-    <meta name="robots" content="index, follow" />
-    <link rel="canonical" href="https://sofisrestaurant.com" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <link rel="canonical" href="https://www.sofislegacy.com/" />
 
-    <!-- Prevent iOS from auto-linking phone numbers found in meta text -->
+    <!-- Helpful local search signals -->
+    <meta name="geo.region" content="US-AZ" />
+    <meta name="geo.placename" content="Surprise, Arizona" />
+    <meta name="ICBM" content="33.6292, -112.3679" />
+
+    <!-- Prevent iOS auto-linking random numbers -->
     <meta name="format-detection" content="telephone=no" />
 
-    <!-- ── Theme & color scheme ──────────────────────────────── -->
-    <!--
-      Two theme-color entries — browsers that support media queries
-      on theme-color (Chrome 93+, Safari 15+) will pick the correct
-      one automatically. Older browsers fall back to the first entry.
-    -->
+    <!-- Theme / browser chrome -->
     <meta name="theme-color" content="#faf6ef" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#1c1915" media="(prefers-color-scheme: dark)" />
-    <!--
-      Declares both schemes so the browser renders its own chrome
-      (scrollbars, inputs, form controls) in the correct mode.
-    -->
     <meta name="color-scheme" content="light dark" />
+    <meta name="msapplication-TileColor" content="#1c1915" />
 
-    <!-- ── Favicon & touch icons ─────────────────────────────── -->
+    <!-- Icons -->
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
-    <!-- Windows tile -->
-    <meta name="msapplication-TileColor" content="#1c1915" />
 
-    <!-- ── Open Graph ────────────────────────────────────────── -->
-    <!-- og:type "website" is the correct value; "restaurant.restaurant" is non-standard -->
-    <meta property="og:type"               content="website" />
-    <meta property="og:site_name"          content="Sofi's Restaurant" />
-    <meta property="og:title"              content="Sofi's Restaurant — Crafted With Intention" />
-    <meta property="og:description"        content="Seasonal ingredients, honest technique, unforgettable evenings. Reserve your table today." />
-    <meta property="og:image"             content="https://sofisrestaurant.com/images/og-cover.jpg" />
-    <meta property="og:image:width"        content="1200" />
-    <meta property="og:image:height"       content="630" />
-    <meta property="og:image:alt"          content="Interior of Sofi's Restaurant with warm candlelight and seasonal table settings" />
-    <meta property="og:url"               content="https://sofisrestaurant.com" />
-    <!-- Primary locale + bilingual alternate for Spanish speakers -->
-    <meta property="og:locale"            content="en_US" />
-    <meta property="og:locale:alternate"  content="es_MX" />
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Sofi's Restaurant" />
+    <meta property="og:title" content="Sofi's Restaurant | Mexican-American Food in Surprise, AZ" />
+    <meta
+      property="og:description"
+      content="Fresh Mexican-American food in Surprise, AZ. Handmade tortillas, breakfast all day, tacos, burritos, and family favorites served with local hospitality."
+    />
+    <meta property="og:url" content="https://www.sofislegacy.com/" />
+    <meta property="og:image" content="https://www.sofislegacy.com/images/og-cover.jpg" />
+    <meta property="og:image:secure_url" content="https://www.sofislegacy.com/images/og-cover.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="Fresh Mexican-American food from Sofi's Restaurant in Surprise, Arizona"
+    />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:locale:alternate" content="es_MX" />
 
-    <!-- ── Twitter / X Card ──────────────────────────────────── -->
-    <meta name="twitter:card"        content="summary_large_image" />
-    <meta name="twitter:site"        content="@sofisrestaurant" />
-    <meta name="twitter:title"       content="Sofi's Restaurant — Crafted With Intention" />
-    <meta name="twitter:description" content="Seasonal ingredients, honest technique, unforgettable evenings." />
-    <meta name="twitter:image"       content="https://sofisrestaurant.com/images/og-cover.jpg" />
-    <meta name="twitter:image:alt"   content="Interior of Sofi's Restaurant" />
+    <!-- Twitter / X -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Sofi's Restaurant | Mexican-American Food in Surprise, AZ" />
+    <meta
+      name="twitter:description"
+      content="Fresh Mexican-American food, handmade tortillas, breakfast all day, tacos, burritos, and family favorites in Surprise, AZ."
+    />
+    <meta name="twitter:image" content="https://www.sofislegacy.com/images/og-cover.jpg" />
+    <meta
+      name="twitter:image:alt"
+      content="Fresh Mexican-American food from Sofi's Restaurant"
+    />
 
-    <!-- ── Security ──────────────────────────────────────────── -->
-    <!--
-      Referrer policy: sends full URL only to same-origin requests;
-      strips to origin for cross-origin navigations (analytics-friendly,
-      privacy-respecting).
-    -->
+    <!-- Security / privacy -->
     <meta name="referrer" content="strict-origin-when-cross-origin" />
-    <!--
-      Content-Security-Policy and all other security headers are set via
-      real HTTP headers in public/_headers (and mirrored in netlify.toml).
-      HTTP headers take precedence over meta tags and apply to ALL resources
-      including scripts loaded before the HTML parser reaches <meta> tags.
-    -->
 
-<!-- ── DNS / connection hints ─────────────────────────────────────────── -->
-<link rel="dns-prefetch" href="https://api.stripe.com" />
+    <!-- DNS / connection hints -->
+    <link rel="dns-prefetch" href="https://api.stripe.com" />
+    <link rel="dns-prefetch" href="https://veqcsijavjrygvogsqos.supabase.co" />
+    <link rel="preconnect" href="https://veqcsijavjrygvogsqos.supabase.co" crossorigin />
 
-<!-- Supabase Storage — menu images are served from this origin -->
-<link rel="dns-prefetch" href="https://veqcsijavjrygvogsqos.supabase.co" />
-<link rel="preconnect" href="https://veqcsijavjrygvogsqos.supabase.co" crossorigin />
+    <!-- Keep this only if the font file really exists -->
+    <link
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      href="/fonts/display/SofiDisplay-Regular.woff2"
+      crossorigin
+    />
 
-<!-- Optional external image source -->
-<link rel="dns-prefetch" href="https://images.pexels.com" />
-
-<!-- Primary display font — above-fold headings/logo -->
-<link
-  rel="preload"
-  as="font"
-  type="font/woff2"
-  href="/fonts/display/SofiDisplay-Regular.woff2"
-  crossorigin
-/>
-    <!-- ── Performance: LCP image preload ────────────────────── -->
-    <!--
-      OMITTED INTENTIONALLY.
-      HeroSection.tsx imports hero images through Vite's asset pipeline, which
-      rewrites the path to a content-hashed URL (e.g. /assets/hero1-Bx3kP9mQ.webp).
-      A <link rel="preload"> with a hardcoded /images/hero/hero1.webp points to a
-      DIFFERENT URL — the browser loads two copies and warns "preload not used."
-      Vite automatically injects <link rel="modulepreload"> for JS chunks at build
-      time; no manual hint needed for the entry point either.
-
-      To add an LCP preload: move hero images to /public/images/ and reference
-      them as plain string paths in JS instead of ESM imports, then add:
-        <link rel="preload" as="image" href="/images/hero/hero1.webp"
-              fetchpriority="high" type="image/webp" />
-    -->
-
-    <!-- ── Structured Data (JSON-LD) ─────────────────────────── -->
+    <!-- Structured Data: Restaurant / Local SEO -->
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
         "@type": "Restaurant",
+        "@id": "https://www.sofislegacy.com/#restaurant",
         "name": "Sofi's Restaurant",
-        "url": "https://sofisrestaurant.com",
-        "description": "Seasonal ingredients, honest technique, unforgettable evenings in Surprise, Arizona.",
-        "image": "https://sofisrestaurant.com/images/og-cover.jpg",
-        "telephone": "+16235550000",
-        "email": "hello@sofisrestaurant.com",
-        "servesCuisine": ["Mexican", "Latin American", "Contemporary", "Seasonal"],
-        "priceRange": "$$$",
+        "url": "https://www.sofislegacy.com/",
+        "image": [
+          "https://www.sofislegacy.com/images/og-cover.jpg"
+        ],
+        "logo": "https://www.sofislegacy.com/apple-touch-icon.png",
+        "description": "Sofi's Restaurant is a local Mexican-American restaurant in Surprise, Arizona serving fresh comfort food, handmade tortillas, breakfast all day, tacos, burritos, and family favorites.",
+        "servesCuisine": [
+          "Mexican",
+          "Mexican-American",
+          "Breakfast",
+          "Tacos",
+          "Burritos"
+        ],
+        "priceRange": "$$",
         "currenciesAccepted": "USD",
         "paymentAccepted": "Cash, Credit Card",
+        "telephone": "TODO_REPLACE_WITH_REAL_PHONE_E164",
+        "email": "sofisrestaurant2022@gmail.com",
         "address": {
           "@type": "PostalAddress",
+          "streetAddress": "TODO_REPLACE_WITH_REAL_STREET_ADDRESS",
           "addressLocality": "Surprise",
           "addressRegion": "AZ",
+          "postalCode": "TODO_REPLACE_WITH_ZIP",
           "addressCountry": "US"
         },
         "geo": {
           "@type": "GeoCoordinates",
-          "latitude": "33.6292",
-          "longitude": "-112.3679"
+          "latitude": "TODO_REPLACE_WITH_EXACT_LATITUDE",
+          "longitude": "TODO_REPLACE_WITH_EXACT_LONGITUDE"
         },
+        "areaServed": [
+          {
+            "@type": "City",
+            "name": "Surprise"
+          },
+          {
+            "@type": "State",
+            "name": "Arizona"
+          }
+        ],
         "openingHoursSpecification": [
           {
             "@type": "OpeningHoursSpecification",
-            "dayOfWeek": ["Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
-            "opens": "17:30",
-            "closes": "22:00"
+            "dayOfWeek": [
+              "Monday",
+              "Tuesday",
+              "Wednesday",
+              "Thursday",
+              "Friday",
+              "Saturday"
+            ],
+            "opens": "07:00",
+            "closes": "20:00"
+          },
+          {
+            "@type": "OpeningHoursSpecification",
+            "dayOfWeek": "Sunday",
+            "opens": "07:00",
+            "closes": "14:00"
           }
         ],
-        "hasMenu": "https://sofisrestaurant.com/menu",
-        "acceptsReservations": "True",
+        "hasMenu": "https://www.sofislegacy.com/menu",
+        "acceptsReservations": false,
         "sameAs": [
-          "https://www.instagram.com/sofisrestaurante/",
-          "https://www.tiktok.com/@Sofisrestaurant"
+          "TODO_REPLACE_WITH_GOOGLE_BUSINESS_PROFILE_URL",
+          "TODO_REPLACE_WITH_INSTAGRAM_URL",
+          "TODO_REPLACE_WITH_FACEBOOK_URL",
+          "TODO_REPLACE_WITH_TIKTOK_URL"
+        ],
+        "makesOffer": [
+          {
+            "@type": "Offer",
+            "name": "$2 Taco Tuesdays and Thursdays",
+            "description": "$2 tacos available Tuesdays and Thursdays from 11 AM to 8 PM for dine-in guests.",
+            "availability": "https://schema.org/InStoreOnly"
+          },
+          {
+            "@type": "Offer",
+            "name": "Breakfast All Day",
+            "description": "Breakfast favorites served all day at Sofi's Restaurant in Surprise, AZ."
+          }
         ]
+      }
+    </script>
+
+    <!-- Structured Data: Website Search / Brand Entity -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "@id": "https://www.sofislegacy.com/#website",
+        "url": "https://www.sofislegacy.com/",
+        "name": "Sofi's Restaurant",
+        "publisher": {
+          "@id": "https://www.sofislegacy.com/#restaurant"
+        },
+        "inLanguage": "en-US"
       }
     </script>
   </head>
 
   <body>
-    <!-- React mounts here -->
     <div id="root"></div>
 
-    <!-- Application entry point -->
     <script type="module" src="/src/main.tsx"></script>
 
-    <!--
-      Noscript fallback — shown only when JavaScript is fully disabled.
-      Provides minimal but actionable content: phone number and address
-      so users can still reach the restaurant.
-    -->
     <noscript>
-      <div style="
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        min-height: 100vh;
-        font-family: Georgia, 'Times New Roman', serif;
-        color: #1c1c1c;
-        background: #faf6ef;
-        padding: 2rem;
-        text-align: center;
-      ">
-        <div style="max-width: 480px;">
-          <h1 style="font-size: 2rem; margin: 0 0 0.5rem; letter-spacing: -0.02em;">
+      <div
+        style="
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 100vh;
+          font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+          color: #1c1c1c;
+          background: #faf6ef;
+          padding: 2rem;
+          text-align: center;
+        "
+      >
+        <div style="max-width: 520px;">
+          <h1 style="font-size: 2rem; margin: 0 0 0.5rem; letter-spacing: -0.03em;">
             Sofi's Restaurant
           </h1>
-          <p style="color: #8a7a6a; margin: 0 0 1.5rem; font-size: 0.95rem; line-height: 1.6;">
-            Surprise, Arizona &nbsp;·&nbsp; Est. 2022
+
+          <p style="color: #8a7a6a; margin: 0 0 1rem; font-size: 1rem; line-height: 1.6;">
+            Mexican-American food in Surprise, Arizona.
           </p>
-          <p style="color: #4e3e34; margin: 0 0 1rem; font-size: 0.9rem;">
-            Please enable JavaScript to experience our full website,<br />
-            or reach us directly:
+
+          <p style="color: #4e3e34; margin: 0 0 1.25rem; font-size: 0.95rem; line-height: 1.6;">
+            Handmade tortillas, breakfast all day, tacos, burritos, and family favorites.
           </p>
+
           <p style="margin: 0 0 0.5rem;">
-            <a href="tel:+16235550000" style="color: #a96840; font-size: 1.05rem; text-decoration: none;">
-              (623) 555-0000
+            <a
+              href="tel:TODO_REPLACE_WITH_REAL_PHONE_E164"
+              style="color: #a96840; font-size: 1.05rem; font-weight: 700; text-decoration: none;"
+            >
+              TODO_REPLACE_WITH_DISPLAY_PHONE
             </a>
           </p>
-          <p style="margin: 0;">
-            <a href="mailto:hello@sofisrestaurant.com" style="color: #a96840; font-size: 0.9rem; text-decoration: none;">
-              hello@sofisrestaurant.com
+
+          <p style="margin: 0 0 0.5rem; color: #4e3e34; font-size: 0.9rem;">
+            TODO_REPLACE_WITH_REAL_STREET_ADDRESS<br />
+            Surprise, AZ TODO_REPLACE_WITH_ZIP
+          </p>
+
+          <p style="margin: 1rem 0 0;">
+            <a
+              href="mailto:sofisrestaurant2022@gmail.com"
+              style="color: #a96840; font-size: 0.9rem; text-decoration: none;"
+            >
+              sofisrestaurant2022@gmail.com
             </a>
           </p>
         </div>
