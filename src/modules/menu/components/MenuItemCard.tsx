@@ -259,12 +259,15 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
 
   // ── Supabase image optimization ────────────────────────────────────────────
   // Converts raw Storage object URLs into transformed render/image URLs.
-  // This prevents large original files from loading in menu cards.
+  // If Supabase render/image fails, falls back once to the original public URL.
   const displayImageUrl = rawImageUrl
     ? supabaseImageUrl(rawImageUrl, isAboveFold ? 640 : 480, isAboveFold ? 74 : 72)
     : null;
 
   const displaySrcSet = rawImageUrl ? supabaseImageSrcSet(rawImageUrl) : undefined;
+
+  const finalImageUrl = imgErrored && rawImageUrl ? rawImageUrl : displayImageUrl;
+  const finalSrcSet = imgErrored ? undefined : displaySrcSet;
   // These call external engines or produce new arrays — useMemo is justified.
   const availState = useMemo(() => resolveAvailability(item, getAvailable), [item, getAvailable]);
   const priceLabel = useMemo(() => resolvePrice(item, getPriceCents), [item, getPriceCents]);
@@ -272,7 +275,7 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
 
   const isAvailable = availState !== 'unavailable';
   const isLowStock = availState === 'low_stock';
-  const showImage = displayImageUrl !== null && !imgErrored;
+  const showImage = finalImageUrl !== null;
 
   // ── Entrance animation props ───────────────────────────────────────────────
   // Above-fold (LCP candidates): initial={false} tells Framer Motion to render
@@ -354,8 +357,8 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
 
         {showImage && (
           <img
-            src={displayImageUrl}
-            srcSet={displaySrcSet}
+            src={finalImageUrl}
+            srcSet={finalSrcSet}
             sizes="(max-width: 640px) 92vw, (max-width: 1024px) 45vw, 360px"
             alt={name}
             // Stable intrinsic dimensions prevent the browser from treating
@@ -374,7 +377,15 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
                       ease-luxury group-hover:scale-[1.05]"
             style={{ opacity: imgLoaded ? 1 : 0 }}
             onLoad={() => setImgLoaded(true)}
-            onError={() => setImgErrored(true)}
+            onError={() => {
+              if (!imgErrored && rawImageUrl) {
+                setImgLoaded(false);
+                setImgErrored(true);
+                return;
+              }
+
+              setImgErrored(true);
+            }}
           />
         )}
 
