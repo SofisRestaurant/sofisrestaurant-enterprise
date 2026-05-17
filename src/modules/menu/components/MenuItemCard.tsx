@@ -36,6 +36,7 @@ import { m, AnimatePresence } from 'framer-motion';
 import type { MenuItemBase } from '@/domain/menu/menu.types';
 import { PricingEngine } from '@/domain/pricing/pricing.engine';
 import { formatCurrency } from '@/utils/currency';
+import { supabaseImageSrcSet, supabaseImageUrl } from '@/lib/images/supabaseImage';
 
 // ─── Performance constants ────────────────────────────────────────────────────
 
@@ -249,23 +250,29 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
   const id = readId(item);
   const name = readName(item);
   const description = readDescription(item);
-  const imageUrl = readImageUrl(item);
-
-  // These call external engines or produce new arrays — useMemo is justified.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const availState = useMemo(() => resolveAvailability(item, getAvailable), [item, getAvailable]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const priceLabel = useMemo(() => resolvePrice(item, getPriceCents), [item, getPriceCents]);
-  const dietBadges = useMemo(() => resolveDietBadges(item), [item]);
-
-  const isAvailable = availState !== 'unavailable';
-  const isLowStock = availState === 'low_stock';
-  const showImage = imageUrl !== null && !imgErrored;
+  const rawImageUrl = readImageUrl(item);
 
   // ── Above-fold performance flags ───────────────────────────────────────────
   const isAboveFold = index <= ABOVE_FOLD_THRESHOLD;
   const staggerSlot = Math.min(index, STAGGER_MAX_SLOTS);
   const entranceDelay = isAboveFold ? 0 : staggerSlot * STAGGER_STEP;
+
+  // ── Supabase image optimization ────────────────────────────────────────────
+  // Converts raw Storage object URLs into transformed render/image URLs.
+  // This prevents large original files from loading in menu cards.
+  const displayImageUrl = rawImageUrl
+    ? supabaseImageUrl(rawImageUrl, isAboveFold ? 640 : 480, isAboveFold ? 74 : 72)
+    : null;
+
+  const displaySrcSet = rawImageUrl ? supabaseImageSrcSet(rawImageUrl) : undefined;
+  // These call external engines or produce new arrays — useMemo is justified.
+  const availState = useMemo(() => resolveAvailability(item, getAvailable), [item, getAvailable]);
+  const priceLabel = useMemo(() => resolvePrice(item, getPriceCents), [item, getPriceCents]);
+  const dietBadges = useMemo(() => resolveDietBadges(item), [item]);
+
+  const isAvailable = availState !== 'unavailable';
+  const isLowStock = availState === 'low_stock';
+  const showImage = displayImageUrl !== null && !imgErrored;
 
   // ── Entrance animation props ───────────────────────────────────────────────
   // Above-fold (LCP candidates): initial={false} tells Framer Motion to render
@@ -322,7 +329,7 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
       whileTap={isAvailable ? { scale: 0.985, transition: { duration: 0.1 } } : undefined}
       className="group relative flex flex-col overflow-hidden rounded-2xl bg-white
                  shadow-[0_2px_12px_rgba(26,18,9,0.07),0_1px_3px_rgba(26,18,9,0.04)]
-                 ring-1 ring-zinc-900/[0.06] transition-shadow duration-300"
+                 ring-1 ring-zinc-900/6 transition-shadow duration-300"
       aria-label={name}
       data-available={isAvailable}
     >
@@ -332,7 +339,7 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
         will occupy, preventing layout shift (CLS = 0) regardless of whether
         the image has loaded.
       */}
-      <div className="relative aspect-[4/3] overflow-hidden">
+      <div className="relative aspect-4/3 overflow-hidden">
         {/* Warm gradient placeholder — always present, gives CLS-safe dimensions. */}
         <div
           className="absolute inset-0"
@@ -347,7 +354,9 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
 
         {showImage && (
           <img
-            src={imageUrl}
+            src={displayImageUrl}
+            srcSet={displaySrcSet}
+            sizes="(max-width: 640px) 92vw, (max-width: 1024px) 45vw, 360px"
             alt={name}
             // Stable intrinsic dimensions prevent the browser from treating
             // this as an unknown-size resource. CSS controls the actual render size.
@@ -362,7 +371,7 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
             referrerPolicy="no-referrer"
             className="absolute inset-0 h-full w-full object-cover
                        transition-[opacity,transform] duration-700
-                       ease-[cubic-bezier(0.16,1,0.3,1)] group-hover:scale-[1.05]"
+                      ease-luxury group-hover:scale-[1.05]"
             style={{ opacity: imgLoaded ? 1 : 0 }}
             onLoad={() => setImgLoaded(true)}
             onError={() => setImgErrored(true)}
@@ -383,7 +392,7 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
               <span
                 key={b.key}
                 className="inline-flex items-center rounded-full px-2 py-0.5
-                           text-[10px] font-bold leading-none tracking-wide shadow-sm"
+                           text-2xs font-bold leading-none tracking-wide shadow-sm"
                 style={{ color: b.fg, background: b.bg }}
               >
                 {b.label}
@@ -481,9 +490,7 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
           <button
             type="button"
             // min-h-[44px] satisfies WCAG 2.5.5 minimum touch target on mobile.
-            className={`min-h-[44px] w-full ${
-              isAvailable ? 'btn btn-primary' : 'btn btn-ghost-dark'
-            }`}
+            className={`min-h-11 w-full ${isAvailable ? 'btn btn-primary' : 'btn btn-ghost-dark'}`}
             onClick={handleOpen}
             disabled={!isAvailable || isOpening}
             aria-label={!isAvailable ? `${name} is currently unavailable` : `Customize ${name}`}
