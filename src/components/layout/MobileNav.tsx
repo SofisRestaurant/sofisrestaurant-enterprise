@@ -1,11 +1,21 @@
+// src/components/layout/MobileNav.tsx
+// =============================================================================
+// PERF FIX:
+//   - Removed `useCart` import → replaced with `useCartUiStore` selector.
+//     This removes cart.store.ts / Supabase / auth from the initial shell bundle.
+//   - All other behavior preserved exactly.
+// =============================================================================
+
 import { Link, useLocation } from 'react-router-dom';
 import { useAuthState } from '@/features/auth/hooks/useAuthState';
-import { useCart } from '@/modules/cart/hooks/useCart';
+import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
 
 export function MobileNav() {
   const location = useLocation();
   const { user } = useAuthState();
-  const { itemCount } = useCart();
+
+  // PERF: Read itemCount from lightweight UI store instead of heavy useCart hook
+  const itemCount = useCartUiStore((s) => s.itemCount);
 
   const isActive = (path: string) => location.pathname === path;
 

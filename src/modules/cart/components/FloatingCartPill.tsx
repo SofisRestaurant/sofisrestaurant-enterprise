@@ -2,33 +2,23 @@
 // =============================================================================
 // Floating Cart Pill — mobile-only cart CTA
 // =============================================================================
-// Behavior:
-// - Appears only when cart has items.
-// - Stays above BottomNav using --bottom-nav-offset from BottomNav.
-// - Hidden on checkout/admin/kitchen/expo/auth utility flows.
-// - Hidden while modal is open to avoid z-index conflicts.
-// - Uses transform/compositor-safe styling for iOS Safari.
-// - Clean visual treatment: no heavy glow, no visible corner artifacts,
-//   no backdrop blur, no decorative pseudo-overlays that can bleed at edges.
+// PERF FIX:
+//   - Removed `useCart` import → replaced with `useCartUiStore` selectors.
+//     Reads `itemCount` and `subtotalCents` from the lightweight UI store.
+//     This removes cart.store.ts / Supabase / auth from the initial shell bundle.
+//   - subtotalCents is DISPLAY-ONLY — never used for payment. Server-authoritative
+//     pricing via Stripe Checkout is unchanged.
+//   - All other behavior preserved exactly.
 // =============================================================================
 
 import { useCallback, useContext, useMemo } from 'react';
 import { useLocation } from 'react-router-dom';
 
 import { ModalContext } from '@/components/ui/ModalContext';
-import { useCart } from '@/modules/cart/hooks/useCart';
 import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
 
 const HIDDEN_ON = ['/checkout', '/admin', '/kitchen', '/expo', '/auth', '/update-password'];
 
-/**
- * Clearance above BottomNav.
- *
- * BottomNav provides:
- * - --bottom-nav-offset: 92px visible
- * - --bottom-nav-offset: 34px collapsed
- * - --bottom-nav-offset: 0px hidden
- */
 const CART_PILL_GAP_PX = 10;
 const DEFAULT_BOTTOM_NAV_OFFSET = '92px';
 
@@ -50,11 +40,6 @@ function isHiddenRoute(pathname: string): boolean {
   return HIDDEN_ON.some((path) => pathname === path || pathname.startsWith(`${path}/`));
 }
 
-function readLineTotalCents(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
-  return Math.max(0, Math.round(value));
-}
-
 function readCount(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
   return Math.max(0, Math.round(value));
@@ -62,21 +47,17 @@ function readCount(value: unknown): number {
 
 export function FloatingCartPill() {
   const { pathname } = useLocation();
-  const { itemCount, items } = useCart();
+
+  // PERF: Read from lightweight UI store instead of heavy useCart hook
+  const itemCount = useCartUiStore((s) => s.itemCount);
+  const subtotalCents = useCartUiStore((s) => s.subtotalCents);
   const openCart = useCartUiStore((state) => state.open);
+
   const modalContext = useContext(ModalContext);
 
   const hiddenRoute = isHiddenRoute(pathname);
   const count = readCount(itemCount);
   const modalIsOpen = Boolean(modalContext?.activeModal);
-
-  const subtotalCents = useMemo(
-    () =>
-      (items ?? []).reduce((sum, item) => {
-        return sum + readLineTotalCents(item.lineTotalCents);
-      }, 0),
-    [items],
-  );
 
   const formattedSubtotal = useMemo(() => formatCurrencyFromCents(subtotalCents), [subtotalCents]);
 

@@ -1,34 +1,27 @@
 /* =============================================================================
    SOFIS — fonts.css
-   Self-hosted typefaces: SofiDisplay, SofiBody (variable), SofiHand.
-
-   Font family aliases are declared here as :root vars so they are available
-   before app.css @theme is processed. The @theme --font-* tokens in app.css
-   mirror these values so Tailwind generates font-display, font-sans, etc.
-   utilities correctly.
+   Critical font loading optimized for faster FCP/LCP.
    ============================================================================= */
 
-/* ── Display Face (SofiDisplay) ───────────────────────────────────────────── */
+/* ── Display Face ─────────────────────────────────────────────────────────── */
 
 @font-face {
   font-family: 'SofiDisplay';
-  src: url('/fonts/display/SofiDisplay-Regular.woff2') format('woff2'),
-       url('/fonts/display/SofiDisplay-Regular.woff')  format('woff');
-  font-weight:  400;
-  font-style:   normal;
+  src: url('/fonts/display/SofiDisplay-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
   font-display: swap;
 }
 
 @font-face {
   font-family: 'SofiDisplay';
-  src: url('/fonts/display/SofiDisplay-Bold.woff2') format('woff2'),
-       url('/fonts/display/SofiDisplay-Bold.woff')  format('woff');
-  font-weight:  700;
-  font-style:   normal;
+  src: url('/fonts/display/SofiDisplay-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
   font-display: swap;
 }
 
-/* ── Body Face (DM Sans — Variable Font) ─────────────────────────────────── */
+/* ── Body Face ────────────────────────────────────────────────────────────── */
 
 @font-face {
   font-family: 'SofiBody';
@@ -38,46 +31,35 @@
   font-display: swap;
 }
 
-@font-face {
-  font-family: 'SofiBody';
-  src: url('/fonts/body/DMSans-Italic-Variable.ttf') format('truetype');
-  font-weight: 100 900;
-  font-style: italic;
-  font-display: swap;
-}
+/*
+  Do not load DMSans-Italic-Variable.ttf globally.
+  Lighthouse showed it in the critical path at 133KB+.
+  Browser synthetic italic is acceptable for first paint.
+*/
 
-/* ── Hand / Script Face (SofiHand) ────────────────────────────────────────── */
-
-@font-face {
-  font-family: 'SofiHand';
-  src: url('/fonts/hand/SofiHand-Regular.woff2') format('woff2'),
-       url('/fonts/hand/SofiHand-Regular.woff')  format('woff');
-  font-weight:  400;
-  font-style:   normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'SofiHand';
-  src: url('/fonts/hand/SofiHand-Bold.woff2') format('woff2'),
-       url('/fonts/hand/SofiHand-Bold.woff')  format('woff');
-  font-weight:  700;
-  font-style:   normal;
-  font-display: swap;
-}
+/*
+  Do not load SofiHand globally.
+  It was also showing in the critical path.
+  Load it later only if a specific below-fold component truly needs it.
+*/
 
 /* ── Utility classes ─────────────────────────────────────────────────────── */
-/* These are CSS-class aliases; Tailwind generates font-display/sans/etc.    */
-/* from @theme --font-* tokens. These extras cover .font-body and .font-accent. */
 
-.font-body   { font-family: var(--font-sans); }
-.font-accent { font-family: var(--font-display); font-style: italic; font-weight: 400; }
+.font-body {
+  font-family: var(--font-sans);
+}
+
+.font-accent {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+}
 
 /* ── Global rendering quality ─────────────────────────────────────────────── */
 
 html {
-  -webkit-font-smoothing:  antialiased;
+  -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  text-rendering:          optimizeLegibility;
-  font-feature-settings:   'kern' 1, 'liga' 1, 'calt' 1;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: 'kern' 1, 'liga' 1, 'calt' 1;
 }

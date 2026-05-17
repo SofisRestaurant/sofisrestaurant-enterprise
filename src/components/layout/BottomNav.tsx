@@ -2,22 +2,10 @@
 // =============================================================================
 // Premium floating dock — 5-tab mobile navigation
 // =============================================================================
-// 2026-ready architecture:
-// - useBottomDockState.ts owns route hiding, active-tab detection, smart scroll
-//   collapse behavior, reduced-motion handling, safe-area offsets, and root CSS API.
-// - BottomNav.tsx owns only visual dock rendering and live cart/account state.
-//
-// Mobile behavior:
-// - Floating pill dock, not edge-to-edge.
-// - Cart stays centered as the primary action.
-// - Dock movement is transform-only for smooth iOS Safari performance.
-// - No backdrop-blur to avoid GPU stutter.
-// - Keeps the dock stable when cart has items so the cart CTA and FloatingCartPill
-//   do not visually fight each other.
-//
-// Offset API exposed by useBottomDockState:
-// - --bottom-nav-offset: visible/collapsed/hidden
-// - data-bottom-nav="visible" | "collapsed" | "hidden"
+// PERF FIX:
+//   - Removed `useCart` import → replaced with `useCartUiStore` selector.
+//     This removes cart.store.ts / Supabase / auth from the initial shell bundle.
+//   - All other behavior preserved exactly.
 // =============================================================================
 
 import { memo, useMemo, type CSSProperties, type ElementType } from 'react';
@@ -26,7 +14,6 @@ import { Home, ShoppingBag, Tag, User, UtensilsCrossed } from 'lucide-react';
 
 import { useActiveOrderId } from '@/app/ActiveOrderContext';
 import { useBottomDockState, type BottomDockTabId } from '@/components/layout/useBottomDockState';
-import { useCart } from '@/modules/cart/hooks/useCart';
 import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -212,9 +199,12 @@ const CartButton = memo(function CartButton({ badge, onCartClick }: CartButtonPr
 
 export default function BottomNav() {
   const { pathname } = useLocation();
-  const { itemCount } = useCart();
-  const activeOrderId = useActiveOrderId();
+
+  // PERF: Read itemCount from lightweight UI store instead of heavy useCart hook
+  const itemCount = useCartUiStore((s) => s.itemCount);
   const openCart = useCartUiStore((state) => state.open);
+
+  const activeOrderId = useActiveOrderId();
 
   const cartCount = itemCount ?? 0;
   const hasCartItems = cartCount > 0;
@@ -223,9 +213,6 @@ export default function BottomNav() {
   const { isRouteHidden, dockState, isCollapsed, activeTab, dockTranslateY, dockOpacity } =
     useBottomDockState({
       pathname,
-
-      // Keeps the dock stable when the customer has an active cart.
-      // This protects the highest-conversion action from moving while ordering.
       keepVisible: hasCartItems,
     });
 

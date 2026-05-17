@@ -41,9 +41,6 @@ import RootLayout from '@/app/RootLayout';
 import { Providers } from '@/app/Providers';
 import { AuthGuard, RoleGuard } from '@/components/auth/AuthGuard';
 
-// ✅ /menu kept synchronous — highest-traffic route, no lazy penalty
-import MenuPage from '@/modules/menu/pages/MenuPage';
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Chunk-staleness recovery
 // ─────────────────────────────────────────────────────────────────────────────
@@ -61,13 +58,16 @@ function handleStaleChunk(err: unknown): boolean {
     err instanceof Error &&
     (err.message.includes('Failed to fetch dynamically imported module') ||
       err.message.includes('Importing a module script failed') ||
-      // Safari phrasing
       err.message.includes('error loading dynamically imported module'));
 
   if (!isChunkError) return false;
 
+  if (typeof window === 'undefined' || typeof sessionStorage === 'undefined') {
+    return false;
+  }
+
   const alreadyReloaded = sessionStorage.getItem(STALE_RELOAD_KEY) === '1';
-  if (alreadyReloaded) return false; // don't loop
+  if (alreadyReloaded) return false;
 
   sessionStorage.setItem(STALE_RELOAD_KEY, '1');
   window.location.reload();
@@ -387,23 +387,19 @@ export const router = createBrowserRouter([
       {
         path: 'kitchen',
         lazy: async () => {
-          const mod = await import('@/modules/orders/components/KitchenScreen').catch((err) => {
-            if (handleStaleChunk(err)) return null;
-            throw err;
-          });
-          if (!mod) return { Component: () => null };
-          return { Component: withRole(['admin', 'staff'], mod.default) };
+          const route = await lazyRoute(
+            () => import('@/modules/orders/components/KitchenScreen'),
+          )();
+          return { Component: withRole(['admin', 'staff'], route.Component) };
         },
       },
       {
         path: 'expo',
         lazy: async () => {
-          const mod = await import('@/modules/orders/components/ExpoCommandCenter').catch((err) => {
-            if (handleStaleChunk(err)) return null;
-            throw err;
-          });
-          if (!mod) return { Component: () => null };
-          return { Component: withRole(['admin', 'staff'], mod.default) };
+          const route = await lazyRoute(
+            () => import('@/modules/orders/components/ExpoCommandCenter'),
+          )();
+          return { Component: withRole(['admin', 'staff'], route.Component) };
         },
       },
 

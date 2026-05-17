@@ -1,4 +1,15 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+// src/modules/cart/components/LazyCartDrawer.tsx
+// =============================================================================
+// LAZY CART DRAWER
+// =============================================================================
+// Performance contract:
+//   - CartDrawer is NOT in the initial route render.
+//   - CartDrawer JS is only requested when the drawer opens.
+//   - When closed, the heavy drawer tree unmounts.
+//   - cartUi.store remains the single source of truth.
+// =============================================================================
+
+import { lazy, Suspense } from 'react';
 import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
 
 const CartDrawer = lazy(() =>
@@ -9,13 +20,8 @@ const CartDrawer = lazy(() =>
 
 export function LazyCartDrawer() {
   const isOpen = useCartUiStore((s) => s.isOpen);
-  const [shouldMount, setShouldMount] = useState(false);
 
-  useEffect(() => {
-    if (isOpen) setShouldMount(true);
-  }, [isOpen]);
-
-  if (!shouldMount) return null;
+  if (!isOpen) return null;
 
   return (
     <Suspense fallback={null}>
@@ -23,3 +29,5 @@ export function LazyCartDrawer() {
     </Suspense>
   );
 }
+
+export default LazyCartDrawer;

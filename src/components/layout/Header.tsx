@@ -1,14 +1,11 @@
 // src/components/layout/Header.tsx
 // =============================================================================
-// Sofi’s Restaurant Header
+// Sofi's Restaurant Header
 // =============================================================================
-// Production notes:
-// - Cart state uses shared useCartUiStore.
-// - Cart icon is desktop/tablet only. Mobile cart entry is BottomNav/FloatingCartPill.
-// - CartDrawer is rendered once in RootLayout.
-// - Deals is a real route: /deals.
-// - No ThemeToggle. App follows system/device theme only.
-// - Header uses semantic app theme variables for light/dark support.
+// PERF FIX:
+//   - Removed `useCart` import → replaced with `useCartUiStore` selector.
+//     This removes cart.store.ts / Supabase / auth from the initial shell bundle.
+//   - All other behavior preserved exactly.
 // =============================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -19,7 +16,6 @@ import { Button } from '@/components/ui/Button';
 import { useModal } from '@/components/ui/useModal';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useTranslation } from '@/i18n/useTranslation';
-import { useCart } from '@/modules/cart/hooks/useCart';
 import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
 import MenuHeaderSearch from '@/modules/menu/components/MenuHeaderSearch';
 import { useMenuUi } from '@/modules/menu/store/menuUi.store';
@@ -54,10 +50,13 @@ export default function Header() {
   const isMenu = pathname === '/menu' || pathname.startsWith('/menu/');
 
   const { user, profile, signOut } = useAuth();
-  const { itemCount } = useCart();
+
+  // PERF: Read itemCount from lightweight UI store instead of heavy useCart hook
+  const itemCount = useCartUiStore((s) => s.itemCount);
+  const openCart = useCartUiStore((s) => s.open);
+
   const modal = useModal();
   const activeOrderId = useActiveOrder(user?.id ?? null);
-  const openCart = useCartUiStore((state) => state.open);
 
   const menuSearchText = useMenuUi((state) => state.searchText);
   const setMenuSearchText = useMenuUi((state) => state.setSearchText);
@@ -657,8 +656,6 @@ export default function Header() {
           </div>
         </div>
       )}
-
-      {/* CartDrawer is rendered once in RootLayout — not here */}
     </>
   );
 }

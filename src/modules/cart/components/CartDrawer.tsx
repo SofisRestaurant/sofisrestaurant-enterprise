@@ -137,7 +137,7 @@ function DragHandle({ onClose }: { onClose: () => void }) {
       aria-hidden="true"
     >
       <div className="h-1.25 w-10 rounded-full bg-[rgba(28,25,21,0.2)]" />
-      <span className="text-[9px] uppercase tracking-[0.12em] text-stone-900 opacity-30">
+      <span className="text-[9px] uppercase label text-stone-900 opacity-30">
         swipe down to close
       </span>
     </div>
@@ -157,7 +157,7 @@ function PricingRow({
   green?: boolean;
   muted?: boolean;
 }) {
-  const labelCls = green ? 'text-[#4a7a5a]' : muted ? 'text-[#a89080]' : 'text-[#8a7a6a]';
+  const labelCls = green ? 'text-[#4a7a5a]' : muted ? 'text-[#a89080]' : 'text-ink-500';
   const valueCls = green ? 'text-[#2a6a3a]' : muted ? 'text-[#a89080]' : 'text-[#1c1915]';
 
   return (
@@ -183,7 +183,7 @@ function LoyaltyBanner({ pts }: { pts: number }) {
       <p className="relative text-xs font-semibold text-[#1c1915]">
         ✨ Earn <strong>+{pts} pts</strong> on this order
       </p>
-      <p className="relative text-[10px] font-medium text-[rgba(28,25,21,0.55)]">$1 = 1 pt</p>
+      <p className="relative text-2xs font-medium text-[rgba(28,25,21,0.55)]">$1 = 1 pt</p>
     </div>
   );
 }
@@ -228,7 +228,7 @@ function CartContent({
           Your cart is empty
         </h3>
 
-        <p className="mb-7 text-sm leading-relaxed text-[#8a7a6a]">
+        <p className="mb-7 text-sm leading-relaxed text-absolute">
           Fresh plates, made to order.
           <br />
           Add something delicious.
@@ -247,13 +247,13 @@ function CartContent({
 
   return (
     <div className="space-y-3 px-4 pb-4 pt-1">
-      <div className="divide-y rounded-2xl bg-white px-3 border border-[#ede0ce]">
+      <div className="divide-y rounded-2xl bg-white px-3 border cream-300">
         {items.map((item) => (
           <CartLineItem key={cartItemKey(item.menuItemId, item.modifiers)} item={item} />
         ))}
       </div>
 
-      <div className="space-y-1.5 rounded-2xl bg-white p-4 border border-[#ede0ce]">
+      <div className="space-y-1.5 rounded-2xl bg-white p-4 border border-cream-300">
         <PricingRow label="Subtotal" value={fmt(totals.subtotalCents)} />
 
         {totals.hasDiscount && (
@@ -266,7 +266,7 @@ function CartContent({
 
         <PricingRow label="Est. tax (9.5%)" value={fmt(totals.taxCents)} muted />
 
-        <div className="flex justify-between border-t border-[#ede0ce] pt-2">
+        <div className="flex justify-between border-t border-cream-300 pt-2">
           <span className="font-bold text-[#1c1915]">Total</span>
           <span className="text-base font-black tabular-nums text-[#1c1915]">
             {fmt(totals.totalCents)}
@@ -279,7 +279,7 @@ function CartContent({
           </p>
         )}
 
-        <p className="pt-0.5 text-[10px] leading-snug text-[#c0b0a0]">
+        <p className="pt-0.5 text-label leading-snug text-[#c0b0a0]">
           Final total confirmed at secure checkout via Stripe.
         </p>
       </div>
@@ -380,7 +380,12 @@ function useScrollLock(active: boolean) {
     };
   }, [active]);
 }
+function isCartItem(value: unknown): value is CartItem {
+  if (typeof value !== 'object' || value === null) return false;
 
+  const record = value as Record<string, unknown>;
+  return typeof record.menuItemId === 'string';
+}
 // ─── CartDrawer ───────────────────────────────────────────────────────────────
 
 export function CartDrawer() {
@@ -389,6 +394,7 @@ export function CartDrawer() {
 
   const isOpen = useCartUiStore((state) => state.isOpen);
   const closeCart = useCartUiStore((state) => state.close);
+  const syncDisplayData = useCartUiStore((state) => state.syncDisplayData);
   const clearFn = useCartStore((state) => state.clearCart);
 
   const { user, session } = useAuth();
@@ -419,21 +425,20 @@ export function CartDrawer() {
     releaseCartScrollLock();
     closeCart();
   }, [closeCart]);
-
   const items: CartItem[] = useMemo(() => {
     if (!Array.isArray(cart.items)) return [];
-
-    return cart.items.filter(
-      (value): value is CartItem =>
-        typeof value === 'object' &&
-        value !== null &&
-        typeof (value as CartItem).menuItemId === 'string',
-    );
+    return cart.items.filter(isCartItem);
   }, [cart.items]);
 
   const count = typeof cart.itemCount === 'number' ? Math.max(0, cart.itemCount) : 0;
   const hasItems = items.length > 0;
   const pts = Math.max(0, Math.floor(sc(totals.subtotalCents) / 100));
+
+  // Keep lightweight shell cart display synced while the real drawer is mounted.
+  // This is display-only and does not affect checkout/payment totals.
+  useEffect(() => {
+    syncDisplayData(count, sc(totals.subtotalCents));
+  }, [count, totals.subtotalCents, syncDisplayData]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -504,7 +509,7 @@ export function CartDrawer() {
 
   const badge =
     count > 0 ? (
-      <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[#d4af37] px-1.5 text-[11px] font-black text-[#1c1915]">
+      <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-gold-400 px-1.5 text-[11px] font-black text-[#1c1915]">
         {count > 99 ? '99+' : count}
       </span>
     ) : null;
@@ -541,7 +546,7 @@ export function CartDrawer() {
         ref={mobileRef}
         data-cart-sheet
         data-state={state}
-        className="cart-sheet pointer-events-none fixed inset-x-0 bottom-0 z-9999 flex max-h-[92dvh] translate-y-full flex-col rounded-t-3xl bg-[#faf8f4] shadow-[0_-2px_0_rgba(212,175,55,0.18),0_-8px_40px_rgba(28,25,21,0.18)] transition-transform duration-300 ease-out touch-pan-y data-[state=open]:pointer-events-auto data-[state=open]:translate-y-0 md:hidden"
+        className="cart-sheet pointer-events-none fixed inset-x-0 bottom-0 z-absolute flex max-h-[92dvh] translate-y-full flex-col rounded-t-3xl bg-[#faf8f4] shadow-[0_-2px_0_rgba(212,175,55,0.18),0_-8px_40px_rgba(28,25,21,0.18)] transition-transform duration-300 ease-out touch-pan-y data-[state=open]:pointer-events-auto data-[state=open]:translate-y-0 md:hidden"
         role="dialog"
         aria-modal="true"
         aria-label="Your cart"
@@ -556,7 +561,7 @@ export function CartDrawer() {
           <button
             type="button"
             onClick={closeCartSafely}
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-[rgba(28,25,21,0.07)] text-[#8a7a6a] transition-colors active:scale-95"
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-[rgba(28,25,21,0.07)] text-ink-500 transition-colors active:scale-95"
             aria-label="Close cart"
           >
             <X className="h-4 w-4" />
@@ -575,7 +580,7 @@ export function CartDrawer() {
       <div
         ref={desktopRef}
         data-state={state}
-        className="cart-panel pointer-events-none fixed inset-y-0 right-0 z-9999 hidden w-full max-w-md translate-x-full flex-col bg-[#faf8f4] transition-transform duration-300 ease-out data-[state=open]:pointer-events-auto data-[state=open]:translate-x-0 md:flex"
+        className="cart-panel pointer-events-none fixed inset-y-0 right-0 z-absolute hidden w-full max-w-md translate-x-full flex-col bg-[#faf8f4] transition-transform duration-300 ease-out data-[state=open]:pointer-events-auto data-[state=open]:translate-x-0 md:flex"
         role="dialog"
         aria-modal="true"
         aria-label="Your cart"

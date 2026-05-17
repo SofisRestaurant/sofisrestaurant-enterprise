@@ -29,20 +29,19 @@
    ============================================================================= */
 
 @theme {
-
   /* ── Typefaces ──────────────────────────────────────────────────────────── */
-  --font-display: 'SofiDisplay', 'Cormorant Garamond', Georgia, 'Times New Roman', serif;
-  --font-serif:   'Cormorant Garamond', Georgia, 'Times New Roman', serif;
-  --font-sans:    'SofiBody', 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-  --font-mono:    'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace;
-  --font-hand:    'SofiHand', cursive;
+  --font-display: 'SofiDisplay', Georgia, 'Times New Roman', serif;
+  --font-serif: Georgia, 'Times New Roman', serif;
+  --font-sans: 'SofiBody', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace;
+  --font-hand: 'SofiHand', cursive;
 
   /* ── Gold / Accent — Richer warm spectrum ───────────────────────────────── */
-  --color-gold-50:  #fef9e8;
+  --color-gold-50: #fef9e8;
   --color-gold-100: #fbf0c0;
   --color-gold-200: #f5de84;
   --color-gold-300: #ecc84a;
-  --color-gold-400: #d4af37;   /* canonical brand gold */
+  --color-gold-400: #d4af37;
   --color-gold-500: #b8961f;
   --color-gold-600: #9a7a0e;
   --color-gold-700: #7a5f08;
@@ -58,7 +57,7 @@
   --color-amber-500: #f59e0b;
 
   /* ── Ember / Copper ─────────────────────────────────────────────────────── */
-  --color-ember-50:  #fdf4ef;
+  --color-ember-50: #fdf4ef;
   --color-ember-100: #f8e2d4;
   --color-ember-200: #eebfa0;
   --color-ember-300: #d9906a;
@@ -76,7 +75,7 @@
   --color-crimson-600: #8c3418;
 
   /* ── Ink / Text — warm neutral ──────────────────────────────────────────── */
-  --color-ink-50:  #faf8f5;
+  --color-ink-50: #faf8f5;
   --color-ink-100: #f0ebe4;
   --color-ink-200: #ddd4c8;
   --color-ink-300: #c8b8a8;
@@ -88,7 +87,7 @@
   --color-ink-900: #1c1a18;
 
   /* ── Cream / Light surfaces ─────────────────────────────────────────────── */
-  --color-cream-50:  #fefdf9;
+  --color-cream-50: #fefdf9;
   --color-cream-100: #faf6ef;
   --color-cream-200: #f5ede0;
   --color-cream-300: #ede0ce;
@@ -120,138 +119,138 @@
   --color-zinc-100: #f4f4f5;
 
   /* ── Semantic surfaces ──────────────────────────────────────────────────── */
-  --color-surface:       #ffffff;
-  --color-surface-warm:  #faf6ef;
-  --color-surface-dark:  #1a1814;
+  --color-surface: #ffffff;
+  --color-surface-warm: #faf6ef;
+  --color-surface-dark: #1a1814;
 
   /* ── Status ─────────────────────────────────────────────────────────────── */
-  --color-success:     #1f5c1f;
-  --color-success-bg:  #f0f6f0;
-  --color-success-50:  #f0fdf4;
+  --color-success: #1f5c1f;
+  --color-success-bg: #f0f6f0;
+  --color-success-50: #f0fdf4;
   --color-success-300: #86efac;
   --color-success-400: #4ade80;
-  --color-error:       #c0392b;
-  --color-error-bg:    #fdf2f2;
-  --color-error-300:   #fca5a5;
-  --color-warning:     #d4aa40;
-  --color-warning-bg:  #fffbeb;
+  --color-error: #c0392b;
+  --color-error-bg: #fdf2f2;
+  --color-error-300: #fca5a5;
+  --color-warning: #d4aa40;
+  --color-warning-bg: #fffbeb;
 
   /* ── Border radius ──────────────────────────────────────────────────────── */
-  --radius-xs:    0.25rem;
-  --radius-sm:    0.375rem;
-  --radius-md:    0.5rem;
-  --radius-lg:    0.75rem;
-  --radius-xl:    1rem;
-  --radius-2xl:   1.25rem;
-  --radius-3xl:   1.75rem;
-  --radius-4xl:   2.25rem;
-  --radius-pill:  9999px;
-  --radius-card:  1.25rem;
+  --radius-xs: 0.25rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+  --radius-3xl: 1.75rem;
+  --radius-4xl: 2.25rem;
+  --radius-pill: 9999px;
+  --radius-card: 1.25rem;
   --radius-modal: 1.5rem;
   --radius-badge: 9999px;
   --radius-input: 0.625rem;
-  --radius-sheet: 1.75rem;  /* bottom sheet top corners */
+  --radius-sheet: 1.75rem;
 
   /* ── Shadows — warmer, more dimensional ────────────────────────────────── */
-  --shadow-xs:       0 1px 2px rgb(20 14 4 / 0.06);
-  --shadow-sm:       0 2px 6px rgb(20 14 4 / 0.08), 0 1px 3px rgb(20 14 4 / 0.05);
-  --shadow-md:       0 4px 16px rgb(20 14 4 / 0.10);
-  --shadow-lg:       0 8px 32px rgb(20 14 4 / 0.14);
-  --shadow-xl:       0 16px 56px rgb(20 14 4 / 0.18);
-  --shadow-2xl:      0 28px 80px rgb(20 14 4 / 0.24);
-  --shadow-3xl:      0 40px 120px rgb(20 14 4 / 0.32);
-  --shadow-card-sm:  0 2px 12px rgb(20 14 4 / 0.07), 0 1px 3px rgb(20 14 4 / 0.04);
-  --shadow-card-lg:  0 12px 40px rgb(20 14 4 / 0.16), 0 4px 12px rgb(20 14 4 / 0.08);
-  --shadow-popover:  0 24px 48px rgb(20 14 4 / 0.16), 0 8px 16px rgb(20 14 4 / 0.08);
-  --shadow-modal:    0 32px 100px rgb(0 0 0 / 0.55), 0 8px 24px rgb(0 0 0 / 0.25);
-  --shadow-gold:     0 0 32px rgb(212 175 55 / 0.24), 0 4px 16px rgb(212 175 55 / 0.16);
-  --shadow-gold-lg:  0 0 64px rgb(212 175 55 / 0.30), 0 8px 32px rgb(212 175 55 / 0.20);
-  --shadow-gold-sm:  0 0 16px rgb(212 175 55 / 0.18);
-  --shadow-brand:    0 8px 24px rgb(169 104 64 / 0.28);
+  --shadow-xs: 0 1px 2px rgb(20 14 4 / 0.06);
+  --shadow-sm: 0 2px 6px rgb(20 14 4 / 0.08), 0 1px 3px rgb(20 14 4 / 0.05);
+  --shadow-md: 0 4px 16px rgb(20 14 4 / 0.10);
+  --shadow-lg: 0 8px 32px rgb(20 14 4 / 0.14);
+  --shadow-xl: 0 16px 56px rgb(20 14 4 / 0.18);
+  --shadow-2xl: 0 28px 80px rgb(20 14 4 / 0.24);
+  --shadow-3xl: 0 40px 120px rgb(20 14 4 / 0.32);
+  --shadow-card-sm: 0 2px 12px rgb(20 14 4 / 0.07), 0 1px 3px rgb(20 14 4 / 0.04);
+  --shadow-card-lg: 0 12px 40px rgb(20 14 4 / 0.16), 0 4px 12px rgb(20 14 4 / 0.08);
+  --shadow-popover: 0 24px 48px rgb(20 14 4 / 0.16), 0 8px 16px rgb(20 14 4 / 0.08);
+  --shadow-modal: 0 32px 100px rgb(0 0 0 / 0.55), 0 8px 24px rgb(0 0 0 / 0.25);
+  --shadow-gold: 0 0 32px rgb(212 175 55 / 0.24), 0 4px 16px rgb(212 175 55 / 0.16);
+  --shadow-gold-lg: 0 0 64px rgb(212 175 55 / 0.30), 0 8px 32px rgb(212 175 55 / 0.20);
+  --shadow-gold-sm: 0 0 16px rgb(212 175 55 / 0.18);
+  --shadow-brand: 0 8px 24px rgb(169 104 64 / 0.28);
   --shadow-brand-lg: 0 16px 56px rgb(169 104 64 / 0.38);
-  --shadow-inner:    inset 0 1px 4px rgb(0 0 0 / 0.12);
+  --shadow-inner: inset 0 1px 4px rgb(0 0 0 / 0.12);
   --shadow-inner-lg: inset 0 2px 12px rgb(0 0 0 / 0.20);
 
   /* ── Easing — cinematic motion system ──────────────────────────────────── */
-  --ease-luxury:      cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-out:         cubic-bezier(0.0, 0, 0.2, 1);
-  --ease-spring:      cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-luxury: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --ease-spring-soft: cubic-bezier(0.22, 1, 0.36, 1);
-  --ease-standard:    cubic-bezier(0.4, 0, 0.2, 1);
-  --ease-in-out:      cubic-bezier(0.45, 0, 0.55, 1);
-  --ease-cinematic:   cubic-bezier(0.12, 0, 0.39, 0);
-  --ease-bounce:      cubic-bezier(0.68, -0.55, 0.27, 1.55);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.45, 0, 0.55, 1);
+  --ease-cinematic: cubic-bezier(0.12, 0, 0.39, 0);
+  --ease-bounce: cubic-bezier(0.68, -0.55, 0.27, 1.55);
 
   /* ── Duration ───────────────────────────────────────────────────────────── */
   --duration-instant: 80ms;
-  --duration-fast:    140ms;
-  --duration-base:    220ms;
-  --duration-slow:    380ms;
-  --duration-enter:   520ms;
-  --duration-scene:   800ms;
-  --duration-epic:    1200ms;
+  --duration-fast: 140ms;
+  --duration-base: 220ms;
+  --duration-slow: 380ms;
+  --duration-enter: 520ms;
+  --duration-scene: 800ms;
+  --duration-epic: 1200ms;
 
   /* ── Typography scale — editorial ───────────────────────────────────────── */
-  --text-2xs:  0.625rem;
-  --text-xs:   0.75rem;
-  --text-sm:   0.875rem;
+  --text-2xs: 0.625rem;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
   --text-base: 1rem;
-  --text-lg:   1.125rem;
-  --text-xl:   1.25rem;
-  --text-2xl:  1.5rem;
-  --text-3xl:  2rem;
-  --text-4xl:  2.5rem;
-  --text-5xl:  3.25rem;
-  --text-6xl:  4rem;
-  --text-7xl:  5rem;
-  --text-8xl:  6.5rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5rem;
+  --text-3xl: 2rem;
+  --text-4xl: 2.5rem;
+  --text-5xl: 3.25rem;
+  --text-6xl: 4rem;
+  --text-7xl: 5rem;
+  --text-8xl: 6.5rem;
 
   /* ── Letter spacing ─────────────────────────────────────────────────────── */
   --tracking-tightest: -0.04em;
-  --tracking-tighter:  -0.03em;
-  --tracking-tight:    -0.02em;
-  --tracking-normal:   0em;
-  --tracking-wide:     0.04em;
-  --tracking-wider:    0.08em;
-  --tracking-label:    0.12em;
-  --tracking-caps:     0.18em;
-  --tracking-loose:    0.22em;
-  --tracking-ultra:    0.30em;
+  --tracking-tighter: -0.03em;
+  --tracking-tight: -0.02em;
+  --tracking-normal: 0em;
+  --tracking-wide: 0.04em;
+  --tracking-wider: 0.08em;
+  --tracking-label: 0.12em;
+  --tracking-caps: 0.18em;
+  --tracking-loose: 0.22em;
+  --tracking-ultra: 0.30em;
 
   /* ── Line height ────────────────────────────────────────────────────────── */
-  --leading-none:      1;
-  --leading-tight:     1.2;
-  --leading-snug:      1.35;
-  --leading-base:      1.55;
-  --leading-relaxed:   1.72;
-  --leading-loose:     1.9;
+  --leading-none: 1;
+  --leading-tight: 1.2;
+  --leading-snug: 1.35;
+  --leading-base: 1.55;
+  --leading-relaxed: 1.72;
+  --leading-loose: 1.9;
   --leading-editorial: 1.08;
 
   /* ── Z-index scale ──────────────────────────────────────────────────────── */
-  --z-index-base:     0;
-  --z-index-raised:   10;
-  --z-index-overlay:  20;
-  --z-index-sticky:   30;
-  --z-index-drawer:   35;
-  --z-index-modal:    40;
-  --z-index-toast:    50;
-  --z-index-cursor:   60;
+  --z-index-base: 0;
+  --z-index-raised: 10;
+  --z-index-overlay: 20;
+  --z-index-sticky: 30;
+  --z-index-drawer: 35;
+  --z-index-modal: 40;
+  --z-index-toast: 50;
+  --z-index-cursor: 60;
   --z-index-absolute: 9999;
 
   /* ── Space scale — generous luxury rhythm ───────────────────────────────── */
-  --space-1:   0.25rem;
-  --space-2:   0.5rem;
-  --space-3:   0.75rem;
-  --space-4:   1rem;
-  --space-5:   1.25rem;
-  --space-6:   1.5rem;
-  --space-8:   2rem;
-  --space-10:  2.5rem;
-  --space-12:  3rem;
-  --space-16:  4rem;
-  --space-20:  5rem;
-  --space-24:  6rem;
-  --space-32:  8rem;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+  --space-20: 5rem;
+  --space-24: 6rem;
+  --space-32: 8rem;
 }
 
 /* =============================================================================

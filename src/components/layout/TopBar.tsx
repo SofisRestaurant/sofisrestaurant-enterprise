@@ -1,18 +1,19 @@
 // src/components/layout/TopBar.tsx
-// Cart state: removed local useState → useCartUiStore (shared store).
-// CartDrawer removed from here — rendered once in RootLayout.
-// Order intent: desktop selector + mobile pill trigger. MobileOrderIntentSheet
-// is rendered once here and is controlled by useOrderIntentStore.
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+// =============================================================================
+// PERF FIX:
+//   - Removed `useCart` import → replaced with `useCartUiStore` selector.
+//     This removes cart.store.ts / Supabase / auth from the initial shell bundle.
+//   - Lazy-loaded OrderIntentSelector and MobileOrderIntentSheet.
+//     These pull in order fulfillment logic that doesn't need to load on first paint.
+//   - All other behavior preserved exactly.
+// =============================================================================
+import { lazy, Suspense, useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Clock3, ShoppingCart, X, Search, User, LogOut } from 'lucide-react';
 import { useAuth } from '@/features/auth/hooks/useAuth';
-import { useCart } from '@/modules/cart/hooks/useCart';
 import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
 import { useModal } from '@/components/ui/useModal';
 import { Button } from '@/components/ui/Button';
-import OrderIntentSelector from '@/modules/orders/components/OrderIntentSelector';
-import MobileOrderIntentSheet from '@/modules/orders/components/MobileOrderIntentSheet';
 import {
   getPickupTimingLabel,
   useOrderIntentStore,
@@ -22,6 +23,10 @@ import { canAccessAdmin } from '@/security/permissions';
 import MenuHeaderSearch from '@/modules/menu/components/MenuHeaderSearch';
 import { useMenuUi } from '@/modules/menu/store/menuUi.store';
 import { useTranslation } from '@/i18n/useTranslation';
+
+// Lazy-load order intent components — they pull in fulfillment logic
+const OrderIntentSelector = lazy(() => import('@/modules/orders/components/OrderIntentSelector'));
+const MobileOrderIntentSheet = lazy(() => import('@/modules/orders/components/MobileOrderIntentSheet'));
 
 type NavLinkKey = 'home' | 'menu' | 'deals' | 'about' | 'contact';
 type NavLink = { path: string; key: NavLinkKey };
@@ -45,10 +50,13 @@ export default function TopBar() {
   const { pathname } = useLocation();
   const isMenu = pathname === '/menu' || pathname.startsWith('/menu/');
   const { user, profile, signOut } = useAuth();
-  const { itemCount } = useCart();
+
+  // PERF: Read itemCount from lightweight UI store instead of heavy useCart hook
+  const itemCount = useCartUiStore((s) => s.itemCount);
+  const openCart = useCartUiStore((s) => s.open);
+
   const modal = useModal();
   const activeOrderId = useActiveOrderId();
-  const openCart = useCartUiStore((s) => s.open);
   const menuSearchText = useMenuUi((s) => s.searchText);
   const setMenuSearchText = useMenuUi((s) => s.setSearchText);
 
@@ -249,8 +257,7 @@ export default function TopBar() {
               </button>
             )}
 
-            {/* Mobile-only order-intent trigger: opens MobileOrderIntentSheet via store.
-                Desktop users see OrderIntentSelector's dropdown instead (md:block). */}
+            {/* Mobile-only order-intent trigger */}
             <button
               type="button"
               onClick={openOrderIntentSheet}
@@ -279,7 +286,10 @@ export default function TopBar() {
               </span>
             </button>
 
-            <OrderIntentSelector />
+            {/* PERF: Lazy-loaded — defers order fulfillment JS until needed */}
+            <Suspense fallback={null}>
+              <OrderIntentSelector />
+            </Suspense>
 
             {!isAuthed && (
               <Link
@@ -433,10 +443,10 @@ export default function TopBar() {
         </div>
       )}
 
-      {/* Mobile bottom-sheet for order setup. Rendered once here so any surface
-          (TopBar mobile pill, CheckoutPage "Change" button, etc.) can open it
-          via useOrderIntentStore.openMobileSheet(). Hidden on md+. */}
-      <MobileOrderIntentSheet />
+      {/* PERF: Lazy-loaded — defers MobileOrderIntentSheet JS until needed */}
+      <Suspense fallback={null}>
+        <MobileOrderIntentSheet />
+      </Suspense>
     </>
   );
 }

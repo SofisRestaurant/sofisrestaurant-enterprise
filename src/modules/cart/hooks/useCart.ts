@@ -1,7 +1,20 @@
 // =============================================================================
-// src/hooks/useCart.ts
+// src/modules/cart/hooks/useCart.ts
 // useCart — ergonomic consumer hook over useCartStore (production hardened)
-// Upgrades:
+// =============================================================================
+//
+// PERF FIX (2026):
+//   Added sync bridge to cartUi.store. Whenever itemCount or subtotalCents
+//   changes, this hook pushes display-only values to the lightweight UI store.
+//   Shell components (TopBar, Header, BottomNav, FloatingCartPill) read from
+//   cartUi.store instead of importing this hook — keeping Supabase/auth/cart
+//   persistence OUT of the initial app shell bundle.
+//
+//   This in-hook sync is belt-and-suspenders alongside CartDisplaySync.
+//   CartDisplaySync handles the lazy-load hydration case (items from previous
+//   session). This hook handles instant updates during active cart operations.
+//
+// Upgrades (unchanged from original):
 //  - SessionId is validated (UUID) before any remote write/delete
 //  - Uses stable refs for uid/sid to avoid stale closures during async ops
 //  - Sync effect depends on items+promo+credit and guards with shouldSyncCart()
@@ -47,6 +60,9 @@ import type {
 } from '@/modules/cart/types/cart.types';
 
 import { requireSessionId, isUuid } from '@/security/auth/sessionId';
+
+// Lightweight UI store — safe import, no Supabase/auth chain
+import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hook params
@@ -147,6 +163,19 @@ export function useCart(options: UseCartOptions = {}): UseCartReturn {
     hydrateFromSupabase,
     clearSupabaseCart,
   } = useCartStore();
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PERF: Sync display data to lightweight cartUi.store
+  // Shell components read from cartUi.store instead of this hook.
+  // Uses getState() to avoid subscribing to the UI store (no extra re-render).
+  // ─────────────────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    useCartUiStore.getState().syncDisplayData(
+      itemCount ?? 0,
+      rawTotals?.subtotalCents ?? 0,
+    );
+  }, [itemCount, rawTotals?.subtotalCents]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Stable refs to avoid stale closures in callbacks
