@@ -11,6 +11,15 @@
 //     - loading="lazy"   fetchPriority="auto"
 //     - Staggered entrance, capped at STAGGER_MAX_SLOTS slots
 //
+// Image delivery contract:
+//   - Supabase /storage/v1/render/image is feature-flagged.
+//   - Default behavior uses public object URLs because this project returned
+//     403 Forbidden on render/image.
+//   - To enable transforms after Supabase allows them, set:
+//       VITE_ENABLE_SUPABASE_IMAGE_TRANSFORMS=true
+//   - If transforms are enabled and fail, the card falls back once to the
+//     public object URL so images never disappear in production.
+//
 // Price contracts:
 //   getPriceCents(item) → CENTS    → PricingEngine.formatPrice(cents)
 //   item.price          → DOLLARS  → formatCurrency(item.price)   (fallback)
@@ -26,49 +35,32 @@
 //   This card has NO direct modal/auth coupling.
 //
 // Animation: uses `m` from framer-motion — requires <LazyMotion> in RootLayout.
-// AnimatePresence is reserved for genuinely conditional elements (availability
-// overlay, low-stock badge) — not for elements present on initial render.
+// AnimatePresence is reserved for genuinely conditional elements.
 // =============================================================================
 
 import { memo, useCallback, useMemo, useRef, useState } from 'react';
-import { m, AnimatePresence } from 'framer-motion';
+import { AnimatePresence, m } from 'framer-motion';
 
 import type { MenuItemBase } from '@/domain/menu/menu.types';
 import { PricingEngine } from '@/domain/pricing/pricing.engine';
-import { formatCurrency } from '@/utils/currency';
 import { supabaseImageSrcSet, supabaseImageUrl } from '@/lib/images/supabaseImage';
+import { formatCurrency } from '@/utils/currency';
 
 // ─── Performance constants ────────────────────────────────────────────────────
 
-/**
- * Cards at or below this index are treated as above-the-fold LCP candidates.
- * They receive eager loading, fetchPriority="high", and skip entrance animations
- * so the browser compositor is not blocked on first paint.
- *
- * Set to 1 → index 0 and 1 (first two cards, visible on all device widths).
- */
 const ABOVE_FOLD_THRESHOLD = 1;
-
-/** Stagger delay increment per card slot (seconds). */
 const STAGGER_STEP = 0.055;
-
-/**
- * Maximum stagger slots. Cards beyond this index receive the same max delay.
- * Prevents absurdly long waits in grids with 20+ items.
- */
 const STAGGER_MAX_SLOTS = 8;
-
-/**
- * CTA debounce window (ms). onOpen is called immediately; the button stays
- * in "Opening" state for this duration to prevent double-tap on touchscreens.
- */
 const CTA_DEBOUNCE_MS = 400;
+
+// Supabase render/image currently returned 403 on this project.
+// Keep this disabled by default so production images never disappear.
+const ENABLE_SUPABASE_IMAGE_TRANSFORMS =
+  import.meta.env.VITE_ENABLE_SUPABASE_IMAGE_TRANSFORMS === 'true';
 
 // ─── Easing curves ────────────────────────────────────────────────────────────
 
-/** Luxury deceleration — entrances, lifts, image zoom. */
 const EL = [0.16, 1, 0.3, 1] as const;
-/** Spring overshoot — badges, pops, small interactive elements. */
 const ES = [0.34, 1.56, 0.64, 1] as const;
 
 // ─── Internal types ───────────────────────────────────────────────────────────
@@ -82,43 +74,19 @@ type DietBadge = {
   bg: string;
 };
 
+type ImageMode = 'optimized' | 'raw' | 'none';
+
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 export type MenuItemCardProps<TItem extends MenuItemBase = MenuItemBase> = {
   item: TItem;
-  /**
-   * Optional price override. Receives item, must return integer CENTS.
-   * When provided, PricingEngine.formatPrice(cents) is used.
-   * When omitted, item.price (dollars) is formatted via formatCurrency.
-   */
   getPriceCents?: (item: TItem) => number;
-  /**
-   * Optional availability override. Receives item, must return boolean.
-   * When provided, supersedes PricingEngine stock status entirely.
-   * When omitted, PricingEngine.getStockStatus provides granular state.
-   */
   getAvailable?: (item: TItem) => boolean;
-  /**
-   * Called immediately when the user presses the CTA button on an available item.
-   * Debounced via ref to block double-tap; no artificial latency added.
-   * If omitted, the button renders but is inert after the visual feedback.
-   */
   onOpen?: (item: TItem) => void;
-  /**
-   * Stagger index for entrance animation delay (0-based).
-   * Index ≤ ABOVE_FOLD_THRESHOLD → above-fold treatment (eager img, no entrance anim).
-   * Capped at STAGGER_MAX_SLOTS to prevent excessive delays in long grids.
-   */
   index?: number;
 };
 
 // ─── Safe field readers ───────────────────────────────────────────────────────
-// All field access goes through coercion helpers. No raw property access in JSX.
-// Typed against MenuItemBase (the constraint) — safe for any TItem.
-//
-// NOTE: These are intentionally NOT memoised in the component.
-// They are O(1) string/number reads. The useMemo machinery (weak-map lookup,
-// dep comparison, cache entry) costs more than the computation itself.
 
 function safeStr(v: unknown, fallback = ''): string {
   return typeof v === 'string' && v.trim().length > 0 ? v.trim() : fallback;
@@ -146,7 +114,6 @@ function readDescription(item: MenuItemBase): string {
 }
 
 function readImageUrl(item: MenuItemBase): string | null {
-  // MenuItemBase only has image_url (snake_case) — confirmed by TS errors 2551/2339
   const s = safeStr(item.image_url, '');
   return s.length > 0 ? s : null;
 }
@@ -156,13 +123,10 @@ function readPriceDollars(item: MenuItemBase): number {
 }
 
 function readSpicyLevel(item: MenuItemBase): number {
-  // MenuItemBase only has spicy_level (snake_case) — confirmed by TS error 2551
   return Math.max(0, Math.min(3, Math.round(safeNum(item.spicy_level, 0))));
 }
 
 // ─── Domain helpers ───────────────────────────────────────────────────────────
-// Generic over TItem to avoid contravariance errors.
-// These DO benefit from useMemo: they call external engines or produce new arrays.
 
 function resolveAvailability<TItem extends MenuItemBase>(
   item: TItem,
@@ -171,6 +135,7 @@ function resolveAvailability<TItem extends MenuItemBase>(
   if (typeof getAvailable === 'function') {
     return getAvailable(item) ? 'available' : 'unavailable';
   }
+
   try {
     const status = PricingEngine.getStockStatus(item);
     if (status === 'out_of_stock') return 'unavailable';
@@ -188,29 +153,41 @@ function resolvePrice<TItem extends MenuItemBase>(
   if (typeof getPriceCents === 'function') {
     return PricingEngine.formatPrice(getPriceCents(item));
   }
+
   return formatCurrency(readPriceDollars(item));
 }
 
 function resolveDietBadges(item: MenuItemBase): DietBadge[] {
   const badges: DietBadge[] = [];
-  // MenuItemBase only has snake_case fields — confirmed by TS errors 2551
+
   if (safeBool(item.is_vegetarian)) {
     badges.push({ key: 'v', label: 'V', fg: '#166534', bg: '#dcfce7' });
   }
+
   if (safeBool(item.is_vegan)) {
     badges.push({ key: 'vg', label: 'VG', fg: '#14532d', bg: '#bbf7d0' });
   }
+
   if (safeBool(item.is_gluten_free)) {
     badges.push({ key: 'gf', label: 'GF', fg: '#78350f', bg: '#fef3c7' });
   }
+
   const spicy = readSpicyLevel(item);
+
   if (spicy > 0) {
-    badges.push({ key: 'spicy', label: '\u{1F336}'.repeat(spicy), fg: '#7f1d1d', bg: '#fee2e2' });
+    badges.push({
+      key: 'spicy',
+      label: '\u{1F336}'.repeat(spicy),
+      fg: '#7f1d1d',
+      bg: '#fee2e2',
+    });
   }
+
   return badges;
 }
 
-/** Deterministic warm-dark gradient per item id — shown while the image loads. */
+// ─── Placeholder gradient ─────────────────────────────────────────────────────
+
 const GRADIENTS = [
   'radial-gradient(ellipse at 40% 35%, #3e2c20 0%, #1c1208 100%)',
   'radial-gradient(ellipse at 60% 40%, #1a2a1a 0%, #0c160c 100%)',
@@ -221,9 +198,37 @@ const GRADIENTS = [
 
 function pickGradient(id: string): string {
   if (!id) return GRADIENTS[0];
+
   let h = 0;
-  for (let i = 0; i < id.length; i++) h = ((h << 5) - h + id.charCodeAt(i)) | 0;
+
+  for (let i = 0; i < id.length; i++) {
+    h = ((h << 5) - h + id.charCodeAt(i)) | 0;
+  }
+
   return GRADIENTS[Math.abs(h) % GRADIENTS.length];
+}
+
+function resolveImageSrc({
+  rawImageUrl,
+  isAboveFold,
+  imageMode,
+}: {
+  rawImageUrl: string | null;
+  isAboveFold: boolean;
+  imageMode: ImageMode;
+}): { src: string | null; srcSet: string | undefined } {
+  if (!rawImageUrl || imageMode === 'none') {
+    return { src: null, srcSet: undefined };
+  }
+
+  if (imageMode === 'raw' || !ENABLE_SUPABASE_IMAGE_TRANSFORMS) {
+    return { src: rawImageUrl, srcSet: undefined };
+  }
+
+  return {
+    src: supabaseImageUrl(rawImageUrl, isAboveFold ? 640 : 480, isAboveFold ? 74 : 72),
+    srcSet: supabaseImageSrcSet(rawImageUrl),
+  };
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -236,51 +241,36 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
   index = 0,
 }: MenuItemCardProps<TItem>) {
   const [imgLoaded, setImgLoaded] = useState(false);
-  const [imgErrored, setImgErrored] = useState(false);
+  const [imageMode, setImageMode] = useState<ImageMode>(
+    ENABLE_SUPABASE_IMAGE_TRANSFORMS ? 'optimized' : 'raw',
+  );
   const [isOpening, setIsOpening] = useState(false);
 
-  // Ref-based debounce for the CTA.
-  // isOpeningRef is the guard; isOpening state is cosmetic (button label only).
-  // Removing isOpening from useCallback deps prevents a new callback on each
-  // state flip, which would have made the debounce pointless.
   const isOpeningRef = useRef(false);
 
-  // ── Derived values ─────────────────────────────────────────────────────────
-  // O(1) reads — computed inline, not memoised (see note on field readers above).
   const id = readId(item);
   const name = readName(item);
   const description = readDescription(item);
   const rawImageUrl = readImageUrl(item);
 
-  // ── Above-fold performance flags ───────────────────────────────────────────
   const isAboveFold = index <= ABOVE_FOLD_THRESHOLD;
   const staggerSlot = Math.min(index, STAGGER_MAX_SLOTS);
   const entranceDelay = isAboveFold ? 0 : staggerSlot * STAGGER_STEP;
 
-  // ── Supabase image optimization ────────────────────────────────────────────
-  // Converts raw Storage object URLs into transformed render/image URLs.
-  // If Supabase render/image fails, falls back once to the original public URL.
-  const displayImageUrl = rawImageUrl
-    ? supabaseImageUrl(rawImageUrl, isAboveFold ? 640 : 480, isAboveFold ? 74 : 72)
-    : null;
+  const { src: displayImageUrl, srcSet: displaySrcSet } = resolveImageSrc({
+    rawImageUrl,
+    isAboveFold,
+    imageMode,
+  });
 
-  const displaySrcSet = rawImageUrl ? supabaseImageSrcSet(rawImageUrl) : undefined;
-
-  const finalImageUrl = imgErrored && rawImageUrl ? rawImageUrl : displayImageUrl;
-  const finalSrcSet = imgErrored ? undefined : displaySrcSet;
-  // These call external engines or produce new arrays — useMemo is justified.
   const availState = useMemo(() => resolveAvailability(item, getAvailable), [item, getAvailable]);
   const priceLabel = useMemo(() => resolvePrice(item, getPriceCents), [item, getPriceCents]);
   const dietBadges = useMemo(() => resolveDietBadges(item), [item]);
 
   const isAvailable = availState !== 'unavailable';
   const isLowStock = availState === 'low_stock';
-  const showImage = finalImageUrl !== null;
+  const showImage = displayImageUrl !== null;
 
-  // ── Entrance animation props ───────────────────────────────────────────────
-  // Above-fold (LCP candidates): initial={false} tells Framer Motion to render
-  // the final state immediately, skipping mount animation entirely.
-  // This is the official FM pattern for SSR / LCP-sensitive elements.
   const articleAnim = isAboveFold
     ? { initial: false as const }
     : {
@@ -289,8 +279,6 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
         transition: { duration: 0.55, ease: EL, delay: entranceDelay },
       };
 
-  // Child element entrance (price label, badge group).
-  // Also skipped above-fold: no point animating inside an already-visible card.
   const childAnim = (extraDelay: number) =>
     isAboveFold
       ? {}
@@ -300,22 +288,30 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
           transition: { duration: 0.38, ease: EL, delay: entranceDelay + extraDelay },
         };
 
-  // ── CTA handler ────────────────────────────────────────────────────────────
-  // onOpen is called synchronously — no artificial delay.
-  // The 110 ms wait that existed previously added dead time before every modal
-  // open, which is noticeable on mobile and inexcusable on slow devices.
   const handleOpen = useCallback(() => {
     if (!isAvailable || isOpeningRef.current) return;
+
     isOpeningRef.current = true;
     setIsOpening(true);
+
     onOpen?.(item);
-    setTimeout(() => {
+
+    window.setTimeout(() => {
       isOpeningRef.current = false;
       setIsOpening(false);
     }, CTA_DEBOUNCE_MS);
   }, [isAvailable, onOpen, item]);
-  // NOTE: isOpening (state) is intentionally absent from deps.
-  // The ref is the guard; reading stale isOpening state here is harmless.
+
+  const handleImageError = useCallback(() => {
+    setImgLoaded(false);
+
+    if (imageMode === 'optimized' && rawImageUrl) {
+      setImageMode('raw');
+      return;
+    }
+
+    setImageMode('none');
+  }, [imageMode, rawImageUrl]);
 
   return (
     <m.article
@@ -336,67 +332,45 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
       aria-label={name}
       data-available={isAvailable}
     >
-      {/* ── Image block ─────────────────────────────────────────────────── */}
-      {/*
-        The outer div has aspect-[4/3] which reserves the exact space the image
-        will occupy, preventing layout shift (CLS = 0) regardless of whether
-        the image has loaded.
-      */}
       <div className="relative aspect-4/3 overflow-hidden">
-        {/* Warm gradient placeholder — always present, gives CLS-safe dimensions. */}
         <div
           className="absolute inset-0"
           style={{ background: pickGradient(id) }}
           aria-hidden="true"
         />
 
-        {/* Pulse while in-flight. Uses standard animate-pulse (no custom keyframe). */}
         {showImage && !imgLoaded && (
           <div className="absolute inset-0 animate-pulse bg-zinc-200/20" aria-hidden="true" />
         )}
 
         {showImage && (
           <img
-            src={finalImageUrl}
-            srcSet={finalSrcSet}
+            key={`${displayImageUrl}-${imageMode}`}
+            src={displayImageUrl}
+            srcSet={displaySrcSet}
             sizes="(max-width: 640px) 92vw, (max-width: 1024px) 45vw, 360px"
             alt={name}
-            // Stable intrinsic dimensions prevent the browser from treating
-            // this as an unknown-size resource. CSS controls the actual render size.
             width={400}
             height={300}
-            // Above-fold LCP images: load eagerly with high browser priority.
-            // fetchPriority signals the preload scanner before the image tag is parsed.
-            // Available in React 18.3+ types; works as a DOM attribute in all versions.
             loading={isAboveFold ? 'eager' : 'lazy'}
             fetchPriority={isAboveFold ? 'high' : 'auto'}
             decoding="async"
             referrerPolicy="no-referrer"
             className="absolute inset-0 h-full w-full object-cover
                        transition-[opacity,transform] duration-700
-                      ease-luxury group-hover:scale-[1.05]"
+                       ease-luxury group-hover:scale-[1.05]"
             style={{ opacity: imgLoaded ? 1 : 0 }}
             onLoad={() => setImgLoaded(true)}
-            onError={() => {
-              if (!imgErrored && rawImageUrl) {
-                setImgLoaded(false);
-                setImgErrored(true);
-                return;
-              }
-
-              setImgErrored(true);
-            }}
+            onError={handleImageError}
           />
         )}
 
-        {/* Bottom vignette for text legibility on image cards. */}
         <div
           className="pointer-events-none absolute inset-x-0 bottom-0 h-12"
           style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.28), transparent)' }}
           aria-hidden="true"
         />
 
-        {/* Diet / spice badges. */}
         {dietBadges.length > 0 && (
           <m.div {...childAnim(0.16)} className="absolute left-2.5 top-2.5 flex flex-wrap gap-1">
             {dietBadges.map((b) => (
@@ -412,17 +386,11 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
           </m.div>
         )}
 
-        {/*
-          Unavailability overlay.
-          AnimatePresence is appropriate here: this element is conditionally
-          mounted/unmounted, not just animated on first render.
-        */}
         <AnimatePresence>
           {!isAvailable && (
             <m.div
               key="overlay"
-              className="absolute inset-0 flex items-center justify-center
-                         bg-black/45 backdrop-blur-[2px]"
+              className="absolute inset-0 flex items-center justify-center bg-black/45 backdrop-blur-[2px]"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -440,7 +408,6 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
         </AnimatePresence>
       </div>
 
-      {/* ── Text body ───────────────────────────────────────────────────── */}
       <div className="flex flex-1 flex-col gap-2 p-4">
         <div className="flex items-start justify-between gap-2">
           <h3
@@ -450,11 +417,6 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
             {name}
           </h3>
 
-          {/*
-            Price label.
-            Above-fold: plain span, no animation cost on initial paint.
-            Below-fold: slides in from right with staggered delay.
-          */}
           <m.span
             {...childAnim(0.1)}
             className="shrink-0 whitespace-nowrap font-bold tabular-nums"
@@ -470,11 +432,6 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
           </p>
         )}
 
-        {/*
-          Low-stock badge.
-          AnimatePresence is appropriate here: conditionally mounted,
-          not present on initial render of most items.
-        */}
         <AnimatePresence>
           {isLowStock && (
             <m.p
@@ -500,7 +457,6 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
         >
           <button
             type="button"
-            // min-h-[44px] satisfies WCAG 2.5.5 minimum touch target on mobile.
             className={`min-h-11 w-full ${isAvailable ? 'btn btn-primary' : 'btn btn-ghost-dark'}`}
             onClick={handleOpen}
             disabled={!isAvailable || isOpening}
