@@ -430,7 +430,9 @@ export function OrderPaymentPanel({
             <div>
               <div className="flex items-center gap-2">
                 <CardBrandIcon brand={detail.cardBrand} />
-                <span className="font-mono text-sm text-slate-300">•••• {detail.cardLast4}</span>
+                <span className="font-mono text-base md:text-sm text-slate-300">
+                  •••• {detail.cardLast4}
+                </span>
                 <span className="text-xs text-slate-500">
                   {String(detail.cardExpMonth).padStart(2, '0')}/{detail.cardExpYear}
                 </span>
@@ -446,7 +448,9 @@ export function OrderPaymentPanel({
           {typeof detail.billingName === 'string' && detail.billingName.trim().length > 0 ? (
             <div className="space-y-1 border-t border-white/6 pt-2">
               <p className="text-xs text-slate-300">{detail.billingName}</p>
-              {billingAddress ? <p className="text-[11px] text-slate-500">{billingAddress}</p> : null}
+              {billingAddress ? (
+                <p className="text-[11px] text-slate-500">{billingAddress}</p>
+              ) : null}
             </div>
           ) : null}
         </div>

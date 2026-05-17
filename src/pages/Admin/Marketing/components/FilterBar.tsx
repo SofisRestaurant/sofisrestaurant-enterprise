@@ -59,7 +59,7 @@ export function FilterBar({
                 ].join(' ')}
               >
                 {chip.label}{' '}
-                <span className="ml-1 font-mono text-[10px]">{quickCounts[chip.value]}</span>
+                <span className="ml-1 font-mono text-10px">{quickCounts[chip.value]}</span>
               </button>
             );
           })}
@@ -79,7 +79,7 @@ export function FilterBar({
             placeholder="Search code, name, type, or status…"
             autoComplete="off"
             spellCheck={false}
-            className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus-visible:border-amber-500/60"
+            className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-base md:text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus-visible:border-amber-500/60"
           />
         </div>
 

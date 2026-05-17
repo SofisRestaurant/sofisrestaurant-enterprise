@@ -637,7 +637,7 @@ export default function OrderStatusPage() {
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
                 <div>
                   <p className="text-xs text-neutral-500">Order ID</p>
-                  <p className="mt-1 font-mono text-sm font-semibold text-neutral-900">
+                  <p className="mt-1 font-mono text-base md:text-sm font-semibold text-neutral-900">
                     {order.id.slice(0, 8)}
                   </p>
                 </div>

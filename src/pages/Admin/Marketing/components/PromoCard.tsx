@@ -79,7 +79,7 @@ export function PromoCard({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-mono text-sm font-bold tracking-wide text-amber-400">
+            <span className="font-mono text-base md:text-sm font-bold tracking-wide text-amber-400">
               {promo.codeSafe}
             </span>
             <Badge tone={lifecycleTone(promo.lifecycle)}>{lifecycleLabel(promo.lifecycle)}</Badge>

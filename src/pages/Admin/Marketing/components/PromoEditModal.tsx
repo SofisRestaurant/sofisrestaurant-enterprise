@@ -62,17 +62,16 @@ export function PromoEditModal({
       onClick={saving ? undefined : onClose}
     >
       <div
-        className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-t-2xl border border-zinc-800 bg-[#09090b] shadow-2xl sm:rounded-2xl"
+        className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-t-2xl border border-zinc-800 bg-#09090b shadow-2xl sm:rounded-2xl"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-zinc-800 bg-[#09090b] px-5 py-4">
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-zinc-800 bg-#09090b px-5 py-4">
           <div>
             <h2 id="edit-promo-title" className="text-lg font-black tracking-tight text-white">
               Edit Promo
             </h2>
-            <p className="mt-1 text-sm text-zinc-500">
-              Editing{' '}
-              <span className="font-mono text-zinc-300">{promo.code}</span>. Changes are
+            <p className="mt-1 text-base md:text-sm text-zinc-500">
+              Editing <span className="font-mono text-zinc-300">{promo.code}</span>. Changes are
               server-validated before update.
             </p>
           </div>
@@ -93,7 +92,7 @@ export function PromoEditModal({
             <div
               role="alert"
               aria-live="assertive"
-              className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400"
+              className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-base md:text-sm text-red-400"
             >
               {submitError}
             </div>
@@ -111,7 +110,7 @@ export function PromoEditModal({
                 autoComplete="off"
                 spellCheck={false}
                 maxLength={50}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 font-mono text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus-visible:border-amber-500/60"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 font-mono text-base md:text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus-visible:border-amber-500/60"
               />
             </label>
 
@@ -122,7 +121,7 @@ export function PromoEditModal({
               <select
                 value={form.type}
                 onChange={onTextChange('type')}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 outline-none focus-visible:border-amber-500/60"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-base md:text-sm text-zinc-100 outline-none focus-visible:border-amber-500/60"
               >
                 {PROMO_TYPE_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -144,7 +143,7 @@ export function PromoEditModal({
                 onChange={onTextChange('value')}
                 inputMode="decimal"
                 placeholder={form.type === 'percent' ? '10' : '500'}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus-visible:border-amber-500/60"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-base md:text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus-visible:border-amber-500/60"
               />
             </label>
 
@@ -156,7 +155,7 @@ export function PromoEditModal({
                 value={form.channel}
                 onChange={onTextChange('channel')}
                 placeholder="all"
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus-visible:border-amber-500/60"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-base md:text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus-visible:border-amber-500/60"
               />
             </label>
 
@@ -168,7 +167,7 @@ export function PromoEditModal({
                 type="datetime-local"
                 value={form.startsAt}
                 onChange={onTextChange('startsAt')}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 outline-none focus-visible:border-amber-500/60"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-base md:text-sm text-zinc-100 outline-none focus-visible:border-amber-500/60"
               />
             </label>
 
@@ -180,7 +179,7 @@ export function PromoEditModal({
                 type="datetime-local"
                 value={form.endsAt}
                 onChange={onTextChange('endsAt')}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 outline-none focus-visible:border-amber-500/60"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-base md:text-sm text-zinc-100 outline-none focus-visible:border-amber-500/60"
               />
             </label>
 
@@ -192,7 +191,7 @@ export function PromoEditModal({
                 type="datetime-local"
                 value={form.expiresAt}
                 onChange={onTextChange('expiresAt')}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 outline-none focus-visible:border-amber-500/60"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-base md:text-sm text-zinc-100 outline-none focus-visible:border-amber-500/60"
               />
             </label>
 
@@ -209,7 +208,7 @@ export function PromoEditModal({
                   }
                   className="h-4 w-4 rounded border-zinc-700 bg-zinc-900 text-amber-500 focus:ring-amber-500/40"
                 />
-                <span className="text-sm text-zinc-200">Active</span>
+                <span className="text-base md:text-sm text-zinc-200">Active</span>
               </label>
             </div>
 
@@ -222,7 +221,7 @@ export function PromoEditModal({
                 onChange={onTextChange('minOrderCents')}
                 inputMode="numeric"
                 placeholder="0"
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus-visible:border-amber-500/60"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-base md:text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus-visible:border-amber-500/60"
               />
             </label>
 
@@ -235,7 +234,7 @@ export function PromoEditModal({
                 onChange={onTextChange('maxUses')}
                 inputMode="numeric"
                 placeholder="Leave blank for unlimited"
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus-visible:border-amber-500/60"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-base md:text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus-visible:border-amber-500/60"
               />
             </label>
 
@@ -248,7 +247,7 @@ export function PromoEditModal({
                 onChange={onTextChange('perUserLimit')}
                 inputMode="numeric"
                 placeholder="0"
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus-visible:border-amber-500/60"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-base md:text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus-visible:border-amber-500/60"
               />
             </label>
           </div>

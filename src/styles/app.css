@@ -219,12 +219,12 @@
   --tracking-ultra:    0.30em;
 
   /* ── Line height ────────────────────────────────────────────────────────── */
-  --leading-none:     1;
-  --leading-tight:    1.2;
-  --leading-snug:     1.35;
-  --leading-base:     1.55;
-  --leading-relaxed:  1.72;
-  --leading-loose:    1.9;
+  --leading-none:      1;
+  --leading-tight:     1.2;
+  --leading-snug:      1.35;
+  --leading-base:      1.55;
+  --leading-relaxed:   1.72;
+  --leading-loose:     1.9;
   --leading-editorial: 1.08;
 
   /* ── Z-index scale ──────────────────────────────────────────────────────── */
@@ -277,19 +277,6 @@ body {
     transition: none;
   }
 }
-body {
-  background-color: var(--app-bg);
-  color: var(--app-text);
-  transition:
-    background-color 220ms ease,
-    color 220ms ease;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  body {
-    transition: none;
-  }
-}
 
 /* =============================================================================
    FORM CONTROLS — iOS Safari zoom prevention
@@ -305,9 +292,6 @@ body {
   }
 }
 
-#root {
-  min-height: 100vh;
-}
 #root {
   min-height: 100vh;
 }

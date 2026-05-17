@@ -919,7 +919,7 @@ export default function AdminOrders() {
                   setSearch(event.currentTarget.value);
                 }}
                 placeholder="Order #, customer name, email, or phone"
-                className="w-full rounded-2xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-amber-500/50 focus:ring-2 focus:ring-amber-500/20"
+                className="w-full rounded-2xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 text-base md:text-sm text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-amber-500/50 focus:ring-2 focus:ring-amber-500/20"
                 aria-label="Search orders"
               />
             </label>
@@ -954,7 +954,7 @@ export default function AdminOrders() {
 
       {loading ? (
         <Panel title="Loading orders">
-          <div className="flex items-center gap-3 text-sm text-zinc-400">
+          <div className="flex items-center gap-3 text-base md:text-sm text-zinc-400">
             <LoadingSpinner />
             <span>Fetching the latest orders and metrics…</span>
           </div>
@@ -1003,7 +1003,7 @@ export default function AdminOrders() {
                         ) : null}
                       </div>
 
-                      <div className="space-y-1 text-sm text-zinc-300">
+                      <div className="space-y-1 text-base md:text-sm text-zinc-300">
                         <p>{getCustomerLabel(order)}</p>
                         <p className="text-zinc-500">
                           {new Date(order.created_at).toLocaleString()} •{' '}
@@ -1016,7 +1016,7 @@ export default function AdminOrders() {
 
                       {items.length > 0 ? (
                         <div className="space-y-2">
-                          <ul className="space-y-1 text-sm text-zinc-400">
+                          <ul className="space-y-1 text-base md:text-sm text-zinc-400">
                             {items.slice(0, isExpanded ? items.length : 2).map((item) => (
                               <li
                                 key={`${order.id}:${item.key}`}
@@ -1108,7 +1108,7 @@ export default function AdminOrders() {
                         <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
                           Customer
                         </h3>
-                        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-sm">
+                        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-base md:text-sm">
                           <dt className="text-zinc-500">Name</dt>
                           <dd className="text-zinc-200">{order.customer_name ?? '—'}</dd>
                           <dt className="text-zinc-500">Email</dt>

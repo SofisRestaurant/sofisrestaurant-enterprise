@@ -479,11 +479,11 @@ export default function OrderSuccess() {
                     </h1>
 
                     {order.order_number ? (
-                      <p className="mt-1 font-mono text-sm text-neutral-400">
+                      <p className="mt-1 font-mono text-base md:text-sm text-neutral-400">
                         #{String(order.order_number).padStart(4, '0')}
                       </p>
                     ) : (
-                      <p className="mt-1 font-mono text-sm text-neutral-500">
+                      <p className="mt-1 font-mono text-base md:text-sm text-neutral-500">
                         {order.id.slice(0, 8).toUpperCase()}
                       </p>
                     )}
@@ -505,7 +505,7 @@ export default function OrderSuccess() {
                     className="rounded-xl border border-white/8 bg-white/3 p-4"
                     variants={itemVariants}
                   >
-                    <div className="space-y-2 font-mono text-sm">
+                    <div className="space-y-2 font-mono text-base md:text-sm">
                       <div className="flex justify-between text-neutral-500">
                         <span>Subtotal</span>
                         <span>${cents(order.amount_subtotal)}</span>

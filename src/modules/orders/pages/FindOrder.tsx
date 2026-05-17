@@ -504,7 +504,7 @@ function StatusCard({
           </AnimatePresence>
         </div>
 
-        <span className="font-mono text-sm font-bold text-white/70">
+        <span className="font-mono text-base md:text-sm font-bold text-white/70">
           #{formatOrderNumber(order.order_number)}
         </span>
       </div>

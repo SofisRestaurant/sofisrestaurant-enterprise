@@ -450,7 +450,9 @@ const MarketingDashboard = memo(function MarketingDashboard() {
                     className="flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-2.5"
                   >
                     <div className="flex items-center gap-3">
-                      <span className="font-mono text-sm font-bold text-amber-400">{p.code}</span>
+                      <span className="font-mono text-base md:text-sm font-bold text-amber-400">
+                        {p.code}
+                      </span>
                       <Badge tone="info">
                         {p.type === 'percent'
                           ? `${p.value}% off`

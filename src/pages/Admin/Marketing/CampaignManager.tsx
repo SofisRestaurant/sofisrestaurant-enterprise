@@ -564,7 +564,7 @@ function CampaignModal({
                 ref={firstInputRef}
                 value={draft.campaign_name}
                 onChange={(e) => setDraft((p) => ({ ...p, campaign_name: e.target.value }))}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500/50"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-base md:text-sm text-zinc-100 outline-none focus:border-amber-500/50"
                 placeholder="Chilaquiles Deal"
                 disabled={busy}
               />
@@ -575,7 +575,7 @@ function CampaignModal({
               <input
                 value={draft.placement}
                 onChange={(e) => setDraft((p) => ({ ...p, placement: e.target.value }))}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500/50"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-base md:text-sm text-zinc-100 outline-none focus:border-amber-500/50"
                 placeholder="menu_deals_rail"
                 disabled={busy}
               />
@@ -586,7 +586,7 @@ function CampaignModal({
               <input
                 value={draft.menu_item_id}
                 onChange={(e) => setDraft((p) => ({ ...p, menu_item_id: e.target.value.trim() }))}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500/50"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-base md:text-sm text-zinc-100 outline-none focus:border-amber-500/50"
                 placeholder="e.g. eb428883-5539-4dc5-afd0-bdef9516791b"
                 disabled={busy}
               />
@@ -600,7 +600,7 @@ function CampaignModal({
               <input
                 value={draft.hero_title}
                 onChange={(e) => setDraft((p) => ({ ...p, hero_title: e.target.value }))}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500/50"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-base md:text-sm text-zinc-100 outline-none focus:border-amber-500/50"
                 placeholder="Chilaquiles Special"
                 disabled={busy}
               />
@@ -611,7 +611,7 @@ function CampaignModal({
               <input
                 value={draft.hero_subtitle}
                 onChange={(e) => setDraft((p) => ({ ...p, hero_subtitle: e.target.value }))}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500/50"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-base md:text-sm text-zinc-100 outline-none focus:border-amber-500/50"
                 placeholder="Tap to see details"
                 disabled={busy}
               />
@@ -622,7 +622,7 @@ function CampaignModal({
               <input
                 value={draft.badge}
                 onChange={(e) => setDraft((p) => ({ ...p, badge: e.target.value }))}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500/50"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-base md:text-sm text-zinc-100 outline-none focus:border-amber-500/50"
                 placeholder="DEAL"
                 disabled={busy}
               />
@@ -633,7 +633,7 @@ function CampaignModal({
               <input
                 value={draft.cta_label}
                 onChange={(e) => setDraft((p) => ({ ...p, cta_label: e.target.value }))}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500/50"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-base md:text-sm text-zinc-100 outline-none focus:border-amber-500/50"
                 placeholder="See deal"
                 disabled={busy}
               />
@@ -644,7 +644,7 @@ function CampaignModal({
               <input
                 value={draft.deep_link}
                 onChange={(e) => setDraft((p) => ({ ...p, deep_link: e.target.value }))}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500/50"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-base md:text-sm text-zinc-100 outline-none focus:border-amber-500/50"
                 placeholder="/menu"
                 disabled={busy}
               />
@@ -656,7 +656,7 @@ function CampaignModal({
                 type="datetime-local"
                 value={draft.starts_at_local}
                 onChange={(e) => setDraft((p) => ({ ...p, starts_at_local: e.target.value }))}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500/50"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-base md:text-sm text-zinc-100 outline-none focus:border-amber-500/50"
                 disabled={busy}
               />
               {draft.starts_at_local ? (
@@ -672,7 +672,7 @@ function CampaignModal({
                 type="datetime-local"
                 value={draft.ends_at_local}
                 onChange={(e) => setDraft((p) => ({ ...p, ends_at_local: e.target.value }))}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500/50"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-base md:text-sm text-zinc-100 outline-none focus:border-amber-500/50"
                 disabled={busy}
               />
               {draft.ends_at_local ? (
@@ -690,7 +690,7 @@ function CampaignModal({
                 onChange={(e) =>
                   setDraft((p) => ({ ...p, priority: clampInt(e.target.value, 0, 1_000_000) }))
                 }
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500/50"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-base md:text-sm text-zinc-100 outline-none focus:border-amber-500/50"
                 disabled={busy}
               />
               <p className="text-[11px] text-zinc-600">
@@ -706,7 +706,7 @@ function CampaignModal({
                 onChange={(e) =>
                   setDraft((p) => ({ ...p, weight: clampInt(e.target.value, 0, 1_000_000) }))
                 }
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500/50"
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-base md:text-sm text-zinc-100 outline-none focus:border-amber-500/50"
                 disabled={busy}
               />
               <p className="text-[11px] text-zinc-600">Higher weight increases rotation odds.</p>
@@ -1455,7 +1455,7 @@ export const CampaignManager = memo(function CampaignManager() {
                 type="number"
                 value={autoRefreshSec}
                 onChange={(e) => setAutoRefreshSec(clampInt(e.target.value, 10, 300))}
-                className="w-24 rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-zinc-100 outline-none focus:border-amber-500/50"
+                className="w-24 rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-base md:text-xs text-zinc-100 outline-none focus:border-amber-500/50"
                 disabled={!autoRefresh}
                 aria-label="Auto refresh seconds"
                 title="Auto refresh interval (seconds)"
@@ -1483,13 +1483,13 @@ export const CampaignManager = memo(function CampaignManager() {
               value={filters.q}
               onChange={(e) => setFilters((p) => ({ ...p, q: e.target.value }))}
               placeholder="Search name / placement / hero / badge…"
-              className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500/50"
+              className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-base md:text-sm text-zinc-100 outline-none focus:border-amber-500/50"
             />
 
             <select
               value={filters.placement}
               onChange={(e) => setFilters((p) => ({ ...p, placement: e.target.value }))}
-              className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500/50"
+              className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-base md:text-sm text-zinc-100 outline-none focus:border-amber-500/50"
               aria-label="Placement filter"
             >
               <option value="">All placements</option>
@@ -1505,7 +1505,7 @@ export const CampaignManager = memo(function CampaignManager() {
               onChange={(e) =>
                 setFilters((p) => ({ ...p, schedule: e.target.value as typeof filters.schedule }))
               }
-              className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500/50"
+              className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-base md:text-sm text-zinc-100 outline-none focus:border-amber-500/50"
               aria-label="Schedule filter"
             >
               <option value="all">All schedule</option>
@@ -1552,7 +1552,7 @@ export const CampaignManager = memo(function CampaignManager() {
                 ];
                 setSort({ key, dir });
               }}
-              className="rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-zinc-100 outline-none focus:border-amber-500/50"
+              className="rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-base md:text-xs text-zinc-100 outline-none focus:border-amber-500/50"
             >
               <option value="schedule:asc">Schedule (soonest)</option>
               <option value="schedule:desc">Schedule (latest)</option>
