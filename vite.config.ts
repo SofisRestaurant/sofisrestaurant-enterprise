@@ -1,168 +1,120 @@
-import { defineConfig, loadEnv } from 'vite'
-import react from '@vitejs/plugin-react'
-import viteCompression from 'vite-plugin-compression'
-import { imagetools } from 'vite-imagetools'
-import path from 'path'
+// =============================================================================
+// vite.config.ts — Sofi's Restaurant (production 2026)
+// =============================================================================
+//
+// CHUNK SPLITTING STRATEGY:
+//   vendor-react    — react, react-dom, react-router-dom, scheduler
+//                     Changes rarely. Cached across deploys.
+//   vendor-motion   — framer-motion
+//                     ~33 KB min. Used on menu page. Separate so pages
+//                     that don't animate can skip it.
+//   vendor-supabase — @supabase/supabase-js and sub-packages
+//                     Auth + realtime + storage client.
+//   vendor-stripe   — @stripe/stripe-js, @stripe/react-stripe-js
+//                     Only loaded on checkout. Separate chunk.
+//   vendor-i18n     — i18next, react-i18next, i18next-browser-languagedetector
+//                     Internationalization runtime.
+//   vendor-icons    — lucide-react
+//                     Icon library, tree-shaken but still significant.
+//
+//   All other node_modules → vendor (default bucket).
+//   App code → split per route by React Router lazy loading.
+//
+// IMPORTANT:
+//   Do not add more than ~8 manual chunks. Over-splitting creates too many
+//   HTTP/2 requests and hurts cold-load performance.
+// =============================================================================
 
-export default defineConfig(({ command, mode }) => {
-  const env = loadEnv(mode, process.cwd(), '')
-  const isDev = command === 'serve'
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { resolve } from 'path';
 
-  return {
-    plugins: [
-      react(),
+export default defineConfig({
+  plugins: [react()],
 
-      // Production compression (Brotli + Gzip)
-      !isDev &&
-        viteCompression({
-          algorithm: 'brotliCompress',
-          ext: '.br',
-        }),
-      !isDev &&
-        viteCompression({
-          algorithm: 'gzip',
-          ext: '.gz',
-        }),
-
-      imagetools(),
-    ].filter(Boolean),
-
-    define: {
-      __APP_ENV__: JSON.stringify(env.APP_ENV || 'development'),
-      __FEATURE_FLAG__: JSON.stringify(true),
+  resolve: {
+    alias: {
+      '@': resolve(__dirname, 'src'),
     },
+  },
 
-    resolve: {
-      alias: {
-        '@': path.resolve(__dirname, 'src'),
-      },
-    },
+  build: {
+    // Target modern browsers — drops legacy polyfills
+    target: 'es2020',
 
-    server: {
-      port: env.APP_PORT ? Number(env.APP_PORT) : 5173,
-      open: true,
-      strictPort: true,
-    },
+    // Generate source maps for production debugging (Vercel serves them
+    // only when the request includes the sourcemap header)
+    sourcemap: true,
 
-    preview: {
-      port: 4173,
-      strictPort: true,
-    },
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          // ── React core ────────────────────────────────────────────
+          if (
+            id.includes('node_modules/react/') ||
+            id.includes('node_modules/react-dom/') ||
+            id.includes('node_modules/react-router-dom/') ||
+            id.includes('node_modules/react-router/') ||
+            id.includes('node_modules/scheduler/') ||
+            id.includes('node_modules/@remix-run/')
+          ) {
+            return 'vendor-react';
+          }
 
-    build: {
-      target: 'esnext',
-      outDir: 'dist',
-      sourcemap: false,
-      minify: 'oxc',
-      cssCodeSplit: true,
-      reportCompressedSize: false,
-      chunkSizeWarningLimit: 800,
+          // ── Framer Motion ─────────────────────────────────────────
+          if (id.includes('node_modules/framer-motion/')) {
+            return 'vendor-motion';
+          }
 
-      rollupOptions: {
-        output: {
-          /**
-           * manualChunks strategy
-           * ─────────────────────────────────────────────────────────────────
-           * IMPORTANT: Do NOT put admin page components into shared chunks.
-           * Each admin page should be its own chunk so that:
-           *   1. A stale hash for one page doesn't break others
-           *   2. Bundle analysis is per-page (easier to spot regressions)
-           *   3. The reload-on-stale-chunk strategy only triggers for the
-           *      specific page being navigated to, not the whole admin
-           *
-           * Vendor splitting is safe because vendor chunk contents change
-           * rarely (only on dep upgrades), and the HTML always references
-           * the correct hashed vendor chunk URLs.
-           *
-           * MENU MODULE: The menu chunk contains only the always-loaded
-           * menu page shell (MenuPage, MenuGrid, MenuItemCard, CategoryTabs,
-           * PopularRail, store, mappers). Lazy-loaded components (MenuItemModal,
-           * MenuFilters, and their sub-trees) are EXCLUDED so Vite creates
-           * separate chunks at the dynamic import boundaries. This keeps
-           * ~600 lines of modal JS + useCart + modifier hooks out of the
-           * initial menu page bundle.
-           */
-          manualChunks(id) {
-            // ── Vendor splitting ──────────────────────────────────────────
-            if (id.includes('node_modules')) {
-              if (id.includes('react-dom')) return 'react-dom'
-              if (id.includes('react')) return 'react-vendor'
-              if (id.includes('framer-motion')) return 'motion'
-              if (id.includes('@tanstack')) return 'query'
-              if (id.includes('lucide-react')) return 'icons'
-              if (id.includes('stripe')) return 'payments'
-              if (id.includes('@supabase')) return 'supabase'
-              return 'vendor'
-            }
+          // ── Supabase ──────────────────────────────────────────────
+          if (id.includes('node_modules/@supabase/')) {
+            return 'vendor-supabase';
+          }
 
-            // ── App feature splitting ─────────────────────────────────────
-            // Each named chunk here maps to one or more related files.
-            // Admin pages are NOT chunked here — they are split automatically
-            // by Vite's dynamic import boundaries in the router.
-            if (id.includes('/features/admin/ui')) return 'admin-ui'
-            if (id.includes('/features/admin/dashboard')) return 'dashboard'
-            if (id.includes('LoyaltyScan')) return 'loyalty'
+          // ── Stripe ────────────────────────────────────────────────
+          if (
+            id.includes('node_modules/@stripe/') ||
+            id.includes('node_modules/stripe/')
+          ) {
+            return 'vendor-stripe';
+          }
 
-            if (id.includes('/modules/menu')) {
-              // ── Lazy-loaded modal tree ────────────────────────────────
-              // MenuItemModal is imported via lazy() in MenuGrid and MenuPage.
-              // MenuFilters is imported via lazy() in MenuPage.
-              // Returning undefined lets Vite create separate chunks at
-              // each dynamic import boundary, keeping the initial menu
-              // bundle lean.
-              //
-              // Excluded paths (all resolve to their own async chunk):
-              //   /components/MenuItemModal.tsx   — modal orchestrator
-              //   /components/MenuFilters.tsx      — filter panel
-              //   /components/modal/*              — modal sub-components
-              //   /hooks/modal/*                   — modal-specific hooks
-              //   /hooks/useMenuItemPreflight.ts   — modal-only preflight
-              //   /hooks/useMenuItemModifiers.ts   — modal-only modifiers
-              //   /hooks/useMenuItemQty.ts         — modal-only quantity
-              //   /utils/modal/*                   — modal-only utilities
-              //   /types/modal/*                   — modal-only types
-              if (
-                id.includes('MenuItemModal') ||
-                id.includes('MenuFilters') ||
-                id.includes('/components/modal/') ||
-                id.includes('/hooks/modal/') ||
-                id.includes('/hooks/useMenuItemPreflight') ||
-                id.includes('/hooks/useMenuItemModifiers') ||
-                id.includes('/hooks/useMenuItemQty') ||
-                id.includes('/utils/modal/') ||
-                id.includes('/types/modal/')
-              ) {
-                return undefined
-              }
+          // ── i18n ──────────────────────────────────────────────────
+          if (
+            id.includes('node_modules/i18next') ||
+            id.includes('node_modules/react-i18next')
+          ) {
+            return 'vendor-i18n';
+          }
 
-              return 'menu'
-            }
+          // ── Icons ─────────────────────────────────────────────────
+          if (id.includes('node_modules/lucide-react/')) {
+            return 'vendor-icons';
+          }
 
-            if (id.includes('/modules/checkout')) return 'checkout'
-          },
+          // ── Everything else from node_modules ─────────────────────
+          if (id.includes('node_modules/')) {
+            return 'vendor';
+          }
 
-          // Stable filename pattern — hash is content-based (Rollup default)
-          entryFileNames: 'assets/[name]-[hash].js',
-          chunkFileNames: 'assets/[name]-[hash].js',
-          assetFileNames: 'assets/[name]-[hash].[ext]',
+          // App code: let Vite split by route (dynamic imports)
+          return undefined;
         },
       },
     },
 
-    optimizeDeps: {
-      include: [
-        'react',
-        'react-dom',
-        'react-router-dom',
-        'framer-motion',
-        '@tanstack/react-query',
-        'zustand',
-      ],
-    },
+    // Warn if any chunk exceeds 350 KB (gzipped is usually ~30% of this)
+    chunkSizeWarningLimit: 350,
+  },
 
-    // esbuild only used for console stripping in production
-    esbuild: {
-      drop: isDev ? [] : ['console', 'debugger'],
-    },
-  }
-})
+  // ── Dev server ────────────────────────────────────────────────────────────
+  server: {
+    port: 5173,
+    strictPort: false,
+  },
+
+  // ── Preview server (npm run preview) ──────────────────────────────────────
+  preview: {
+    port: 4173,
+  },
+});

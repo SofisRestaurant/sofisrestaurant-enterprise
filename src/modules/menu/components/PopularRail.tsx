@@ -1,21 +1,23 @@
 // =============================================================================
 // src/modules/menu/components/PopularRail.tsx
 // =============================================================================
-// POPULAR RAIL — 2026 Luxury Edition
-// -----------------------------------------------------------------------------
-// Visual overhaul:
-//   - Richer card surface with warm gradient shimmer on hover
-//   - Editorial price treatment with tabular numerals
-//   - Smoother scroll-arrow transitions
-//   - Ambient glow orb behind popular icon
-//   - Staggered fade-rise entry on mount
-//   - Empty state with refined illustration
-// All type contracts unchanged — fully backward-compatible.
+// POPULAR RAIL — 2026 (CLS-safe)
+// =============================================================================
+//
+// PERFORMANCE FIXES:
+//   1. Removed animate-fade-rise entry animation — held cards at opacity 0
+//      with up to 320ms staggered delay, blocking above-fold content.
+//   2. Replaced nanoid() skeleton keys with stable indices — nanoid in render
+//      generated new keys every re-render, causing React to remount skeletons.
+//   3. Added min-h-[12rem] to section — prevents layout shift when the rail
+//      first mounts with content, stabilizing the grid below it.
+//   4. Skeleton count uses module-level constant array (no allocation in render).
+//
+// All type contracts, callbacks, visual design, and accessibility unchanged.
 // =============================================================================
 
 import React, { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import { ChevronLeft, ChevronRight, Flame, Star } from 'lucide-react';
-import { nanoid } from 'nanoid';
 
 // ── Types (unchanged contracts) ───────────────────────────────────────────────
 
@@ -42,6 +44,11 @@ export type PopularRailProps<TItem extends BaseItem = BaseItem> = {
 };
 
 export type Props = PopularRailProps<BaseItem>;
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/** Stable keys for skeleton cards — never changes between renders. */
+const SKELETON_KEYS = ['skel-0', 'skel-1', 'skel-2', 'skel-3'] as const;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -107,12 +114,9 @@ type PopularCardProps = {
   priceCents: number;
   available: boolean;
   onClick: () => void;
-  idx: number;
 };
 
-function PopularCard({ name, priceCents, available, onClick, idx }: PopularCardProps) {
-  const delay = Math.min(idx * 55, 320);
-
+function PopularCard({ name, priceCents, available, onClick }: PopularCardProps) {
   return (
     <button
       type="button"
@@ -120,9 +124,7 @@ function PopularCard({ name, priceCents, available, onClick, idx }: PopularCardP
       disabled={!available}
       className={cx(
         'group relative w-56 shrink-0 overflow-hidden rounded-2xl border text-left',
-        'transition-all duration-500',
-        // Entry animation with staggered delay via inline style
-        'animate-fade-rise',
+        'transition-all duration-300',
         available
           ? cx(
               'border-white/[0.08] bg-[#1e1b16]',
@@ -132,7 +134,6 @@ function PopularCard({ name, priceCents, available, onClick, idx }: PopularCardP
             )
           : 'cursor-not-allowed border-white/[0.05] bg-[#19170f] opacity-55',
       )}
-      style={{ animationDelay: `${delay}ms` }}
       role="listitem"
       aria-label={`${name}${available ? '' : ', unavailable'} — ${formatCents(priceCents)}`}
     >
@@ -272,8 +273,12 @@ function PopularRailImpl<TItem extends BaseItem>({
     if (hasItems) scrollToStart();
   }, [hasItems, list.length, scrollToStart]);
 
+  // ── CLS FIX: min-h-[12rem] reserves stable space so the grid ──
+  // ── below does not shift when this section mounts or transitions ──
+  // ── between loading / empty / loaded states.                      ──
+
   return (
-    <section className={cx('space-y-4', className)} aria-label={ariaLabel}>
+    <section className={cx('min-h-[12rem] space-y-4', className)} aria-label={ariaLabel}>
       {/* ── Section header ── */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -307,8 +312,8 @@ function PopularRailImpl<TItem extends BaseItem>({
       {/* ── Rail ── */}
       {loading ? (
         <div className="flex gap-3 overflow-hidden" aria-hidden="true">
-          {Array.from({ length: 4 }).map(() => (
-            <SkeletonCard key={nanoid()} />
+          {SKELETON_KEYS.map((key) => (
+            <SkeletonCard key={key} />
           ))}
         </div>
       ) : !hasItems ? (
@@ -331,7 +336,7 @@ function PopularRailImpl<TItem extends BaseItem>({
           </div>
         </div>
       ) : (
-        /* Scrollable cards */
+        /* Scrollable cards — no entry animation, renders immediately */
         <div
           ref={ref}
           className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1"
@@ -361,7 +366,6 @@ function PopularRailImpl<TItem extends BaseItem>({
               priceCents={getPriceCents(it)}
               available={getAvailable(it)}
               onClick={() => onOpenItem(it)}
-              idx={idx}
             />
           ))}
         </div>

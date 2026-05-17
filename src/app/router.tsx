@@ -1,37 +1,14 @@
 // src/app/router.tsx — 2026 Enterprise Router (production-hardened v2)
 // =============================================================================
 //
-// CHUNK STALENESS STRATEGY
-// ─────────────────────────────────────────────────────────────────────────────
-// Problem: Vite hashes chunk filenames on every build. Users with stale app
-// shells (old HTML/JS in browser cache or CDN) try to fetch old chunk URLs
-// that no longer exist on the CDN → "Failed to fetch dynamically imported module".
+// PERFORMANCE FIX (2026):
+//   AuthGuard and RoleGuard are NO LONGER eagerly imported at the top level.
+//   They are co-loaded inside the lazy handlers of routes that need them
+//   (/admin, /kitchen, /expo). A /menu visitor never pays for auth-guard JS.
 //
-// Solution implemented here:
-//   1. `resilientLazy()` — catches chunk-fetch 404s and triggers a hard reload
-//      once per session (stored in sessionStorage). After reload the fresh HTML
-//      shell references the new chunk hashes. Prevents infinite reload loops.
-//
-//   2. `lazyRoute()` — standard pattern replacing the ad-hoc inline `async()`
-//      functions. Accepts a typed importer + optional named export key. All
-//      routes go through this so the staleness recovery is universal.
-//
-//   3. `lazyPick()` retained for named-export pages that don't use default.
-//
-// DEPLOYMENT NOTE (Vercel)
-// ─────────────────────────────────────────────────────────────────────────────
-// Add to vercel.json:
-//   { "headers": [{ "source": "/assets/(.*)", "headers": [
-//       { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
-//   ]}]}
-//
-// And ensure your HTML is NOT cached aggressively:
-//   { "source": "/(.*).html", "headers": [
-//       { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
-//   ]}
-//
-// This combination means: HTML always fresh (so chunk references are current),
-// but hashed JS/CSS assets are cached forever (immutable).
+// CHUNK STALENESS STRATEGY (unchanged):
+//   resilientLazy() catches chunk-fetch 404s and triggers a hard reload once
+//   per session. See handleStaleChunk() below.
 // =============================================================================
 
 import React from 'react';
@@ -39,7 +16,10 @@ import { createBrowserRouter, Navigate } from 'react-router-dom';
 
 import RootLayout from '@/app/RootLayout';
 import { Providers } from '@/app/Providers';
-import { AuthGuard, RoleGuard } from '@/components/auth/AuthGuard';
+
+// NOTE: AuthGuard and RoleGuard are intentionally NOT imported here.
+// They are co-loaded inside the lazy route handlers that need them
+// to keep them out of the initial bundle for public routes like /menu.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Chunk-staleness recovery
@@ -47,12 +27,6 @@ import { AuthGuard, RoleGuard } from '@/components/auth/AuthGuard';
 
 const STALE_RELOAD_KEY = 'chunk_stale_reload';
 
-/**
- * Detects a chunk-fetch failure (stale deployment) and performs a single
- * hard reload per session to pick up the fresh asset manifest.
- *
- * Returns true if a reload was triggered (caller should bail out).
- */
 function handleStaleChunk(err: unknown): boolean {
   const isChunkError =
     err instanceof Error &&
@@ -123,11 +97,6 @@ function pickExport(mod: AnyModule, prefer: string[]): React.ComponentType | nul
 // Core lazy loader — used by ALL routes
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Standard route lazy loader.
- * - Handles default export (most pages)
- * - Recovers from stale-chunk 404s with a single session reload
- */
 function lazyRoute(importer: () => Promise<{ default: React.ComponentType }>) {
   return async (): Promise<{ Component: React.ComponentType }> => {
     try {
@@ -135,7 +104,6 @@ function lazyRoute(importer: () => Promise<{ default: React.ComponentType }>) {
       return { Component: mod.default };
     } catch (err) {
       if (handleStaleChunk(err)) {
-        // Reload in flight — return a no-op component, browser will reload
         return { Component: () => null };
       }
       const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
@@ -148,10 +116,6 @@ function lazyRoute(importer: () => Promise<{ default: React.ComponentType }>) {
   };
 }
 
-/**
- * Named-export lazy loader — for pages that use named exports instead of default.
- * Maintains the staleness recovery + graceful error display.
- */
 function lazyPick(
   importer: () => Promise<AnyModule>,
   prefer: string[],
@@ -187,28 +151,75 @@ function lazyPick(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Auth / Role wrappers
+// Lazy auth wrappers — co-loaded with the routes that need them
 // ─────────────────────────────────────────────────────────────────────────────
+// AuthGuard and RoleGuard are imported INSIDE these functions, not at the
+// module top level. This keeps them (and their Supabase auth dependency tree)
+// out of the initial bundle. They only load when a user navigates to a
+// protected route like /admin, /kitchen, or /expo.
 
-const withAuth = (Cmp: React.ComponentType) => () => (
-  <AuthGuard requireAuth>
-    <Cmp />
-  </AuthGuard>
-);
+function lazyWithAdmin(pageImporter: () => Promise<{ default: React.ComponentType }>) {
+  return async (): Promise<{ Component: React.ComponentType }> => {
+    try {
+      const [pageMod, authMod] = await Promise.all([
+        pageImporter(),
+        import('@/components/auth/AuthGuard'),
+      ]);
 
-const withAdmin = (Cmp: React.ComponentType) => () => (
-  <AuthGuard requireAdmin>
-    <Cmp />
-  </AuthGuard>
-);
+      const Page = pageMod.default;
+      const { AuthGuard } = authMod;
 
-const withRole =
-  (roles: Array<'admin' | 'staff' | 'customer'>, Cmp: React.ComponentType) =>
-  () => (
-    <RoleGuard allowedRoles={roles}>
-      <Cmp />
-    </RoleGuard>
-  );
+      const Wrapped: React.FC = () => (
+        <AuthGuard requireAdmin>
+          <Page />
+        </AuthGuard>
+      );
+
+      return { Component: Wrapped };
+    } catch (err) {
+      if (handleStaleChunk(err)) {
+        return { Component: () => null };
+      }
+      const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
+      return {
+        Component: () => <RouteLoadError title="Failed to load admin page" details={msg} />,
+      };
+    }
+  };
+}
+
+function lazyWithRole(
+  roles: Array<'admin' | 'staff' | 'customer'>,
+  pageImporter: () => Promise<{ default: React.ComponentType }>,
+) {
+  return async (): Promise<{ Component: React.ComponentType }> => {
+    try {
+      const [pageMod, authMod] = await Promise.all([
+        pageImporter(),
+        import('@/components/auth/AuthGuard'),
+      ]);
+
+      const Page = pageMod.default;
+      const { RoleGuard } = authMod;
+
+      const Wrapped: React.FC = () => (
+        <RoleGuard allowedRoles={roles}>
+          <Page />
+        </RoleGuard>
+      );
+
+      return { Component: Wrapped };
+    } catch (err) {
+      if (handleStaleChunk(err)) {
+        return { Component: () => null };
+      }
+      const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
+      return {
+        Component: () => <RouteLoadError title="Failed to load page" details={msg} />,
+      };
+    }
+  };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Router
@@ -277,7 +288,6 @@ export const router = createBrowserRouter([
       },
       {
         path: 'deals',
-
         lazy: lazyRoute(() => import('@/pages/Deals/Deals')),
       },
       {
@@ -307,9 +317,6 @@ export const router = createBrowserRouter([
 
       // ──────────────────────────────────────────────────────────
       // ACCOUNT
-      // AccountLayout owns its own auth gate — it renders LoginGate
-      // for unauthenticated users instead of redirecting away.
-      // Do NOT wrap with withAuth() here.
       // ──────────────────────────────────────────────────────────
       {
         path: 'account',
@@ -343,7 +350,6 @@ export const router = createBrowserRouter([
       // ──────────────────────────────────────────────────────────
       {
         path: 'order-success',
-
         lazy: lazyRoute(() => import('@/modules/orders/pages/OrderSuccess')),
       },
       {
@@ -352,15 +358,8 @@ export const router = createBrowserRouter([
       },
       {
         path: 'order-status/:orderId',
-
         lazy: lazyRoute(() => import('@/modules/orders/pages/OrderStatus')),
       },
-      // ──────────────────────────────────────────────────────────
-      // GUEST ORDER RECOVERY
-      // Public — no auth required. Guest enters order number +
-      // contact to receive a verification code and recover tracking
-      // access after losing the original session.
-      // ──────────────────────────────────────────────────────────
       {
         path: 'find-order',
         lazy: lazyRoute(() => import('@/modules/orders/pages/FindOrder')),
@@ -368,6 +367,7 @@ export const router = createBrowserRouter([
 
       // ──────────────────────────────────────────────────────────
       // LEGAL
+      // ──────────────────────────────────────────────────────────
       {
         path: 'privacy-policy',
         lazy: lazyRoute(() => import('@/pages/Legal/PrivacyPolicy')),
@@ -382,78 +382,50 @@ export const router = createBrowserRouter([
       },
 
       // ──────────────────────────────────────────────────────────
-      // KITCHEN + EXPO (role protected)
+      // KITCHEN + EXPO (role protected — AuthGuard co-loaded lazily)
       // ──────────────────────────────────────────────────────────
       {
         path: 'kitchen',
-        lazy: async () => {
-          const route = await lazyRoute(
-            () => import('@/modules/orders/components/KitchenScreen'),
-          )();
-          return { Component: withRole(['admin', 'staff'], route.Component) };
-        },
+        lazy: lazyWithRole(
+          ['admin', 'staff'],
+          () => import('@/modules/orders/components/KitchenScreen'),
+        ),
       },
       {
         path: 'expo',
-        lazy: async () => {
-          const route = await lazyRoute(
-            () => import('@/modules/orders/components/ExpoCommandCenter'),
-          )();
-          return { Component: withRole(['admin', 'staff'], route.Component) };
-        },
+        lazy: lazyWithRole(
+          ['admin', 'staff'],
+          () => import('@/modules/orders/components/ExpoCommandCenter'),
+        ),
       },
 
       // ──────────────────────────────────────────────────────────
-      // ADMIN (admin auth required)
-      // All child routes go through withAdmin(AdminLayout) which
-      // performs verifyAdminAccess() → is_admin() RPC before any
-      // admin child renders.
+      // ADMIN (AuthGuard co-loaded lazily with AdminLayout)
       // ──────────────────────────────────────────────────────────
       {
         path: 'admin',
-        lazy: async () => {
-          const mod = await import('@/pages/Admin/AdminLayout').catch((err) => {
-            if (handleStaleChunk(err)) return null;
-            throw err;
-          });
-          if (!mod) return { Component: () => null };
-          return { Component: withAdmin(mod.default) };
-        },
+        lazy: lazyWithAdmin(() => import('@/pages/Admin/AdminLayout')),
         children: [
-          // Dashboard — index route
           {
             index: true,
             lazy: lazyRoute(() => import('@/features/admin/dashboard/Dashboard')),
           },
-
-          // Orders
           {
             path: 'orders',
             lazy: lazyRoute(() => import('@/pages/Admin/Orders')),
           },
-
-          // Kitchen (admin view — no role wrapper needed, admin is already gated)
           {
             path: 'kitchen',
             lazy: lazyRoute(() => import('@/modules/orders/components/KitchenScreen')),
           },
-
-          // Menu editor
           {
             path: 'menu',
             lazy: lazyRoute(() => import('@/pages/Admin/MenuEditor')),
           },
-
-          // Loyalty scan
           {
             path: 'loyalty-scan',
             lazy: lazyRoute(() => import('@/pages/Admin/LoyaltyScan')),
           },
-
-          // ── Marketing sub-tree ────────────────────────────────
-          // AbandonedCartAnalytics uses memo() with a named function,
-          // so it exports BOTH a named export AND no default. We use
-          // lazyPick() to resolve the named export gracefully.
           {
             path: 'marketing',
             children: [
@@ -482,11 +454,6 @@ export const router = createBrowserRouter([
                 ),
               },
               {
-                // THE BROKEN ROUTE — fixed by:
-                // 1. lazyPick handles named memo export correctly
-                // 2. handleStaleChunk() inside lazyPick recovers from 404s
-                // 3. AbandonedCartAnalytics.tsx now also has a `export default`
-                //    (see the companion file fix) so both prefer keys work
                 path: 'abandoned',
                 lazy: lazyPick(
                   () => import('@/pages/Admin/Marketing/AbandonedCartAnalytics'),
@@ -504,14 +471,10 @@ export const router = createBrowserRouter([
               },
             ],
           },
-
-          // Finance
           {
             path: 'finance',
             lazy: lazyRoute(() => import('@/pages/Admin/Finance')),
           },
-
-          // Taxes
           {
             path: 'taxes',
             lazy: lazyPick(
@@ -520,20 +483,14 @@ export const router = createBrowserRouter([
               'AdminTaxesPage',
             ),
           },
-
-          // Fraud log
           {
             path: 'fraud',
             lazy: lazyRoute(() => import('@/pages/Admin/FraudLog')),
           },
-
-          // Notifications
           {
             path: 'notifications',
             lazy: lazyRoute(() => import('@/pages/Admin/Notifications')),
           },
-
-          // Legacy alias routes — kept for backward compat, remove when safe
           {
             path: 'orders-page',
             lazy: lazyRoute(() => import('@/pages/Admin/Orders')),
@@ -547,7 +504,6 @@ export const router = createBrowserRouter([
 
       // ──────────────────────────────────────────────────────────
       // AUTH CALLBACK
-      // MUST be before /login and * or it hits NotFound
       // ──────────────────────────────────────────────────────────
       {
         path: 'auth/callback',
@@ -556,7 +512,6 @@ export const router = createBrowserRouter([
 
       // ──────────────────────────────────────────────────────────
       // AUTH REDIRECT STUBS
-      // No /login or /unauthorized pages — auth is modal-based.
       // ──────────────────────────────────────────────────────────
       {
         path: 'login',
