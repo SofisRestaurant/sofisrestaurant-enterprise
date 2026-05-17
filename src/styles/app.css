@@ -261,10 +261,14 @@
    ============================================================================= */
 
 html {
+  min-height: 100%;
   background-color: var(--app-bg);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
+  min-height: 100%;
   background-color: var(--app-bg);
   color: var(--app-text);
   transition:
@@ -279,15 +283,26 @@ body {
 }
 
 /* =============================================================================
-   FORM CONTROLS — iOS Safari zoom prevention
-   Safari zooms focused inputs/selects/textareas when computed font-size is below
-   16px. Keep real form controls at 16px minimum on touch devices.
+   FORM CONTROLS — Mobile Safari zoom prevention
+   iOS Safari zooms focused form fields when the computed font-size is below 16px.
+
+   This rule is intentionally placed AFTER Tailwind and all local CSS imports.
+   It targets real text-entry controls only, avoids checkbox/radio/range sizing,
+   and uses !important because Tailwind utilities such as text-sm/text-xs can
+   otherwise override the rule inside component className strings.
    ============================================================================= */
 
-@media (pointer: coarse) {
-  input,
+@media (pointer: coarse), (max-width: 767px) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='color']),
   select,
   textarea {
+    min-height: 44px;
+    font-size: 16px !important;
+    line-height: 1.5;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
     font-size: 16px;
   }
 }
