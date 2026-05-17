@@ -1,88 +1,58 @@
 // src/pages/Home.tsx
 // ─── Sofi's Restaurant — Premium Homepage ────────────────────────────────────
 //
-// Section order:
-//   1.  HeroSection      — cinematic full-screen slider
-//   2.  MarqueeStrip     — gold ticker
-//   3.  Feature cards    — 3 value props (inline)
-//   4.  FeaturedMenu     — horizontal dish carousel (lazy)
-//   5.  StatsBand        — animated achievement counters
-//   6.  MenuSection      — filterable full menu
-//   7.  PullQuoteBand    — philosophy pull-quote
-//   8.  Testimonials     — review grid with rating bars
-//   9.  Hours            — schedule + location
-//  10.  HouseRules       — policy cards grid
-//  11.  CTASection       — ember conversion band
-//  12.  Newsletter       — email capture strip
-//
-// Animation rules enforced throughout:
-//   • Every <m.*> with whileInView has a matching initial prop.
-//   • Every stagger container has initial="hidden" whileInView="visible".
-//   • Variants passed to children all have opacity:0 in their hidden state.
-//   • Elements using animate (not whileInView) are only those above the fold.
-//   • The global opacity:1 !important override has been permanently removed
-//     from globals.css and app.css — it breaks all Framer Motion animations.
-//
-// FIX (2026-03-15):
-//   BEFORE — crashed with "Element type is invalid. Received a promise that
-//   resolves to: undefined." because:
-//     1. The eager import { FeaturedMenu as FeaturedMenuEager } was dead code
-//        (aliased and never used in JSX). Vite tree-shakes unused bindings
-//        before type-checking, so the build succeeded even though the named
-//        export may not exist on the module — but the runtime lazy .then()
-//        call got back undefined and React.lazy received { default: undefined }.
-//     2. The lazy .then((m) => ...) callback shadowed the outer `m` alias
-//        for framer-motion, which is confusing and a lint error.
-//
-//   AFTER — both issues removed:
-//     • Eager FeaturedMenuEager import deleted entirely.
-//     • Lazy import uses `() => import(...)` with no .then() — relies on
-//       FeaturedMenu.tsx having `export default FeaturedMenu` (see note below).
-//     • If FeaturedMenu only has a named export, see OPTION B comment below.
+// Performance upgrade:
+//   - Above-the-fold stays eager: HeroSection, MarqueeStrip, feature cards.
+//   - Below-the-fold sections are lazy + viewport-deferred.
+//   - Heavy sections do not download until the user gets near them.
+//   - Root page no longer starts at opacity:0, preventing artificial FCP delay.
+//   - Visual order and working logic are preserved.
 
-import { Suspense, lazy, useEffect } from 'react';
+import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from 'react';
 import { motion as m } from 'framer-motion';
+
 import { HeroSection } from '@/components/home/HeroSection';
 import { MarqueeStrip } from '@/components/home/MarqueeStrip';
-import { MenuSection } from '@/components/home/MenuSection';
-import { Hours } from '@/components/home/Hours';
-import { HouseRules } from '@/components/home/HouseRules';
-import { Testimonials } from '@/components/home/Testimonials';
-import { PullQuoteBand, StatsBand } from '@/components/home/AtmosphereBand';
-import { Newsletter } from '@/components/home/Newsletter';
-import { CTASection } from '@/components/home/CTASection';
 import { SECTION_VIEWPORT, featureCardReveal } from '@/lib/animations/reveal';
 import { staggerMedium } from '@/lib/animations/stagger';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FeaturedMenu — lazy-loaded for bundle splitting
-//
-// OPTION A (default): FeaturedMenu.tsx has `export default FeaturedMenu`
-//   React.lazy requires the dynamic import to resolve to a module whose
-//   DEFAULT export is a valid React component. No .then() needed.
-//
-// OPTION B: FeaturedMenu.tsx only has `export function FeaturedMenu` (named only)
-//   Uncomment the .then() line below AND comment out Option A.
-//   Also add `export default FeaturedMenu` to FeaturedMenu.tsx — that's cleaner.
-//
-// WHY the old code crashed:
-//   The old lazy used .then((m) => ({ default: m.FeaturedMenu })) while ALSO
-//   having a dead static import `import { FeaturedMenu as FeaturedMenuEager }`.
-//   Vite tree-shakes unused bindings before runtime, so the static import
-//   never validated that the named export existed. At runtime, m.FeaturedMenu
-//   was undefined → React.lazy got { default: undefined } → crash.
+// Lazy below-the-fold sections
 // ─────────────────────────────────────────────────────────────────────────────
 
-// OPTION A — use this if FeaturedMenu.tsx has `export default FeaturedMenu`
 const FeaturedMenu = lazy(() =>
   import('@/components/home/FeaturedMenu').then((mod) => ({ default: mod.FeaturedMenu })),
 );
-// OPTION B — use this instead if FeaturedMenu.tsx only has a named export
-// (rename the .then param to `mod` — never `m`, which shadows the motion alias)
-// const FeaturedMenu = lazy(
-//   () => import('@/components/home/FeaturedMenu')
-//     .then((mod) => ({ default: mod.FeaturedMenu })),
-// );
+
+const StatsBand = lazy(() =>
+  import('@/components/home/AtmosphereBand').then((mod) => ({ default: mod.StatsBand })),
+);
+
+const PullQuoteBand = lazy(() =>
+  import('@/components/home/AtmosphereBand').then((mod) => ({ default: mod.PullQuoteBand })),
+);
+
+const MenuSection = lazy(() =>
+  import('@/components/home/MenuSection').then((mod) => ({ default: mod.MenuSection })),
+);
+
+const Testimonials = lazy(() =>
+  import('@/components/home/Testimonials').then((mod) => ({ default: mod.Testimonials })),
+);
+
+const Hours = lazy(() => import('@/components/home/Hours').then((mod) => ({ default: mod.Hours })));
+
+const HouseRules = lazy(() =>
+  import('@/components/home/HouseRules').then((mod) => ({ default: mod.HouseRules })),
+);
+
+const CTASection = lazy(() =>
+  import('@/components/home/CTASection').then((mod) => ({ default: mod.CTASection })),
+);
+
+const Newsletter = lazy(() =>
+  import('@/components/home/Newsletter').then((mod) => ({ default: mod.Newsletter })),
+);
 
 // ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -107,7 +77,56 @@ const FEATURES = [
   },
 ] as const;
 
-// ── Skeleton fallback ─────────────────────────────────────────────────────────
+// ── Viewport deferred loader ──────────────────────────────────────────────────
+
+function DeferredSection({
+  children,
+  fallback = null,
+  rootMargin = '700px',
+  minHeight,
+}: {
+  children: ReactNode;
+  fallback?: ReactNode;
+  rootMargin?: string;
+  minHeight?: number;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [shouldRender, setShouldRender] = useState(false);
+
+  useEffect(() => {
+    if (shouldRender) return;
+
+    const node = ref.current;
+    if (!node) return;
+
+    if (!('IntersectionObserver' in window)) {
+      setShouldRender(true);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setShouldRender(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin },
+    );
+
+    observer.observe(node);
+
+    return () => observer.disconnect();
+  }, [rootMargin, shouldRender]);
+
+  return (
+    <div ref={ref} style={minHeight ? { minHeight } : undefined}>
+      {shouldRender ? <Suspense fallback={fallback}>{children}</Suspense> : fallback}
+    </div>
+  );
+}
+
+// ── Skeleton fallbacks ────────────────────────────────────────────────────────
 
 function DishSkeleton() {
   return (
@@ -119,6 +138,14 @@ function DishSkeleton() {
           style={{ animationDelay: `${i * 0.1}s` }}
         />
       ))}
+    </div>
+  );
+}
+
+function SoftSectionSkeleton({ height = 260 }: { height?: number }) {
+  return (
+    <div className="mx-auto w-full max-w-6xl px-5 py-10 sm:px-8 md:px-12" aria-hidden="true">
+      <div className="skeleton rounded-[1.25rem]" style={{ height }} />
     </div>
   );
 }
@@ -137,11 +164,6 @@ function FeatureCard({
   index: number;
 }) {
   return (
-    /*
-      Receives hidden/visible from parent stagger container.
-      featureCardReveal.hidden has opacity:0 — no separate initial needed here.
-      custom={index} feeds the per-card delay in featureCardReveal.visible.
-    */
     <m.article
       custom={index}
       variants={featureCardReveal}
@@ -156,14 +178,12 @@ function FeatureCard({
       style={{ border: '1px solid rgba(212,175,55,0.10)' }}
     >
       <m.div
-        className="relative flex h-11 w-11 shrink-0 items-center justify-center
-                   overflow-hidden rounded-full text-xl"
+        className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full text-xl"
         style={{ background: 'var(--color-accent-pale, #fdf8e8)' }}
         whileHover={{ scale: 1.1, rotate: 6 }}
         transition={{ type: 'spring', stiffness: 300, damping: 18 }}
         aria-hidden="true"
       >
-        {/* Noise texture — position:absolute (NOT fixed) */}
         <div
           aria-hidden="true"
           className="pointer-events-none absolute inset-0 opacity-[0.06] mix-blend-multiply"
@@ -201,44 +221,27 @@ export default function HomePage() {
   }, []);
 
   return (
-    // Page wrapper — initial + animate (root element, always in viewport)
-    <m.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.65, ease: [0.16, 1, 0.3, 1] }}
+    <div
       className="min-h-screen"
       style={{
         background: 'var(--color-cream-100, #faf6ef)',
         color: 'var(--color-ink-900, #1c1c1c)',
       }}
     >
-      {/* ── 1 · Hero ──────────────────────────────────────────────────────── */}
+      {/* 1 · Hero */}
       <HeroSection />
 
-      {/* ── 2 · Marquee ───────────────────────────────────────────────────── */}
-      {/* Entrance wrapper — above the fold so uses animate, not whileInView */}
+      {/* 2 · Marquee */}
       <div style={{ background: 'var(--color-stone-900, #1c1915)' }}>
-        <m.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.7, delay: 0.22 }}
-        >
-          <MarqueeStrip variant="dark" />
-        </m.div>
+        <MarqueeStrip variant="dark" />
       </div>
 
-      {/* ── 3 · Feature cards ─────────────────────────────────────────────── */}
+      {/* 3 · Feature cards */}
       <section
         aria-label="Why guests choose Sofi's"
         className="px-5 py-12 sm:py-16 sm:px-8 md:px-12"
         style={{ background: 'var(--color-cream-300, #ede0ce)' }}
       >
-        {/*
-          initial="hidden" required — featureCardReveal has opacity:0 in hidden.
-          Without it, every card starts visible and no animation plays.
-          whileInView="visible" triggers on scroll.
-          viewport amount:0.15 fires early so cards animate before fully in view.
-        */}
         <m.div
           variants={staggerMedium}
           initial="hidden"
@@ -252,34 +255,50 @@ export default function HomePage() {
         </m.div>
       </section>
 
-      {/* ── 4 · Featured Menu ─────────────────────────────────────────────── */}
-      <Suspense fallback={<DishSkeleton />}>
+      {/* 4 · Featured Menu */}
+      <DeferredSection fallback={<DishSkeleton />} minHeight={360}>
         <FeaturedMenu />
-      </Suspense>
+      </DeferredSection>
 
-      {/* ── 5 · Stats band ────────────────────────────────────────────────── */}
-      <StatsBand />
+      {/* 5 · Stats band */}
+      <DeferredSection fallback={<SoftSectionSkeleton height={180} />} minHeight={220}>
+        <StatsBand />
+      </DeferredSection>
 
-      {/* ── 6 · Full menu ─────────────────────────────────────────────────── */}
-      <MenuSection />
+      {/* 6 · Full menu */}
+      <DeferredSection fallback={<SoftSectionSkeleton height={520} />} minHeight={560}>
+        <MenuSection />
+      </DeferredSection>
 
-      {/* ── 7 · Pull quote ────────────────────────────────────────────────── */}
-      <PullQuoteBand quote="Every detail matters." attribution="— Chef's Philosophy" />
+      {/* 7 · Pull quote */}
+      <DeferredSection fallback={<SoftSectionSkeleton height={180} />} minHeight={220}>
+        <PullQuoteBand quote="Every detail matters." attribution="— Chef's Philosophy" />
+      </DeferredSection>
 
-      {/* ── 8 · Testimonials ──────────────────────────────────────────────── */}
-      <Testimonials />
+      {/* 8 · Testimonials */}
+      <DeferredSection fallback={<SoftSectionSkeleton height={420} />} minHeight={460}>
+        <Testimonials />
+      </DeferredSection>
 
-      {/* ── 9 · Hours ─────────────────────────────────────────────────────── */}
-      <Hours onReservationClick={() => {}} />
+      {/* 9 · Hours */}
+      <DeferredSection fallback={<SoftSectionSkeleton height={360} />} minHeight={400}>
+        <Hours onReservationClick={() => {}} />
+      </DeferredSection>
 
-      {/* ── 10 · House rules ──────────────────────────────────────────────── */}
-      <HouseRules />
+      {/* 10 · House rules */}
+      <DeferredSection fallback={<SoftSectionSkeleton height={340} />} minHeight={380}>
+        <HouseRules />
+      </DeferredSection>
 
-      {/* ── 11 · CTA ──────────────────────────────────────────────────────── */}
-      <CTASection />
+      {/* 11 · CTA */}
+      <DeferredSection fallback={<SoftSectionSkeleton height={240} />} minHeight={280}>
+        <CTASection />
+      </DeferredSection>
 
-      {/* ── 12 · Newsletter ───────────────────────────────────────────────── */}
-      <Newsletter />
-    </m.div>
+      {/* 12 · Newsletter */}
+      <DeferredSection fallback={<SoftSectionSkeleton height={220} />} minHeight={260}>
+        <Newsletter />
+      </DeferredSection>
+    </div>
   );
 }
