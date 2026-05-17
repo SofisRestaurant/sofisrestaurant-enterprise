@@ -58,8 +58,7 @@ import { MenuGrid } from '@/modules/menu/components/MenuGrid';
 import { PopularRail } from '@/modules/menu/components/PopularRail';
 import { useMenuUi } from '@/modules/menu/store/menuUi.store';
 import type { MenuPriceRangeKey, MenuSortKey, MenuTagKey } from '@/types/menu-ui.types';
-import { getLcpPreloadAttrs } from '@/lib/images/supabaseImage';
-
+import { getMenuLcpPreloadAttrs } from '@/lib/images/menuImageDelivery';
 const MenuFilters = lazy(() => import('@/modules/menu/components/MenuFilters'));
 const MenuItemModal = lazy(() => import('@/modules/menu/components/MenuItemModal'));
 
@@ -613,8 +612,8 @@ function MenuPage() {
   useEffect(() => {
     if (loading || !firstVisibleImageUrl) return;
 
-    const attrs = getLcpPreloadAttrs(firstVisibleImageUrl);
-    if (!attrs) return;
+const attrs = getMenuLcpPreloadAttrs(firstVisibleImageUrl);
+if (!attrs) return;
 
     // Remove previous preload if it exists (filter change scenario).
     const existing = document.getElementById(LCP_PRELOAD_ID);
@@ -858,7 +857,7 @@ function MenuPage() {
                 whileTap={{ scale: 0.97 }}
                 transition={{ duration: 0.16, ease: EL }}
                 className={cx(
-                  'inline-flex h-10 min-w-[68px] items-center justify-center rounded-xl border px-4 text-sm font-semibold shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500/40',
+                  'inline-flex h-10 min-w-68px items-center justify-center rounded-xl border px-4 text-sm font-semibold shadow-sm focus:outline-none focus:ring-2 focus:ring-orange-500/40',
                   filtersOpen
                     ? 'border-orange-500 bg-orange-50 text-orange-700'
                     : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50',

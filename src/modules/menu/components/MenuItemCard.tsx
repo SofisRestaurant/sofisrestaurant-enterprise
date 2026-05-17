@@ -7,43 +7,39 @@
 //     - loading="eager"  fetchPriority="high"
 //     - Entrance animation skipped entirely (initial={false})
 //     - Price/badge child animations skipped
+//
 //   All other cards:
 //     - loading="lazy"   fetchPriority="auto"
 //     - Staggered entrance, capped at STAGGER_MAX_SLOTS slots
 //
 // Image delivery contract:
-//   - Supabase /storage/v1/render/image is feature-flagged.
-//   - Default behavior uses public object URLs because this project returned
-//     403 Forbidden on render/image.
-//   - To enable transforms after Supabase allows them, set:
+//   - Uses src/lib/images/menuImageDelivery.ts as the single source of truth.
+//   - Default mode uses raw Supabase public object URLs because this project
+//     returned 403 Forbidden from /storage/v1/render/image.
+//   - If transforms are enabled later, set:
 //       VITE_ENABLE_SUPABASE_IMAGE_TRANSFORMS=true
-//   - If transforms are enabled and fail, the card falls back once to the
-//     public object URL so images never disappear in production.
+//   - If any image fails, the card keeps its stable gradient placeholder.
+//   - No raw/optimized mismatch between card image and MenuPage preload.
 //
 // Price contracts:
 //   getPriceCents(item) → CENTS    → PricingEngine.formatPrice(cents)
-//   item.price          → DOLLARS  → formatCurrency(item.price)   (fallback)
+//   item.price          → DOLLARS  → formatCurrency(item.price)
 //
 // Availability contracts:
-//   getAvailable(item)  → explicit boolean override (full precedence)
-//   PricingEngine.getStockStatus → 'in_stock' | 'low_stock' | 'out_of_stock' | 'unknown'
+//   getAvailable(item)  → explicit boolean override
+//   PricingEngine.getStockStatus → fallback granular state
 //
 // Open contract:
-//   onOpen(item) is called IMMEDIATELY on CTA press — no artificial delay.
-//   A ref-based debounce (CTA_DEBOUNCE_MS) prevents double-tap on mobile.
-//   The caller (MenuGrid → MenuPage) owns all response logic.
-//   This card has NO direct modal/auth coupling.
-//
-// Animation: uses `m` from framer-motion — requires <LazyMotion> in RootLayout.
-// AnimatePresence is reserved for genuinely conditional elements.
+//   onOpen(item) is called immediately on CTA press.
+//   Ref debounce prevents accidental mobile double-tap.
 // =============================================================================
 
-import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, m } from 'framer-motion';
 
 import type { MenuItemBase } from '@/domain/menu/menu.types';
 import { PricingEngine } from '@/domain/pricing/pricing.engine';
-import { supabaseImageSrcSet, supabaseImageUrl } from '@/lib/images/supabaseImage';
+import { getMenuCardImageAttrs } from '@/lib/images/menuImageDelivery';
 import { formatCurrency } from '@/utils/currency';
 
 // ─── Performance constants ────────────────────────────────────────────────────
@@ -52,11 +48,6 @@ const ABOVE_FOLD_THRESHOLD = 1;
 const STAGGER_STEP = 0.055;
 const STAGGER_MAX_SLOTS = 8;
 const CTA_DEBOUNCE_MS = 400;
-
-// Supabase render/image currently returned 403 on this project.
-// Keep this disabled by default so production images never disappear.
-const ENABLE_SUPABASE_IMAGE_TRANSFORMS =
-  import.meta.env.VITE_ENABLE_SUPABASE_IMAGE_TRANSFORMS === 'true';
 
 // ─── Easing curves ────────────────────────────────────────────────────────────
 
@@ -74,7 +65,7 @@ type DietBadge = {
   bg: string;
 };
 
-type ImageMode = 'optimized' | 'raw' | 'none';
+type ImageState = 'ready' | 'failed';
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -88,16 +79,16 @@ export type MenuItemCardProps<TItem extends MenuItemBase = MenuItemBase> = {
 
 // ─── Safe field readers ───────────────────────────────────────────────────────
 
-function safeStr(v: unknown, fallback = ''): string {
-  return typeof v === 'string' && v.trim().length > 0 ? v.trim() : fallback;
+function safeStr(value: unknown, fallback = ''): string {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback;
 }
 
-function safeBool(v: unknown, fallback = false): boolean {
-  return typeof v === 'boolean' ? v : fallback;
+function safeBool(value: unknown, fallback = false): boolean {
+  return typeof value === 'boolean' ? value : fallback;
 }
 
-function safeNum(v: unknown, fallback = 0): number {
-  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+function safeNum(value: unknown, fallback = 0): number {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
   return Number.isFinite(n) ? n : fallback;
 }
 
@@ -114,8 +105,8 @@ function readDescription(item: MenuItemBase): string {
 }
 
 function readImageUrl(item: MenuItemBase): string | null {
-  const s = safeStr(item.image_url, '');
-  return s.length > 0 ? s : null;
+  const value = safeStr(item.image_url, '');
+  return value.length > 0 ? value : null;
 }
 
 function readPriceDollars(item: MenuItemBase): number {
@@ -138,8 +129,10 @@ function resolveAvailability<TItem extends MenuItemBase>(
 
   try {
     const status = PricingEngine.getStockStatus(item);
+
     if (status === 'out_of_stock') return 'unavailable';
     if (status === 'low_stock') return 'low_stock';
+
     return 'available';
   } catch {
     return 'available';
@@ -199,36 +192,13 @@ const GRADIENTS = [
 function pickGradient(id: string): string {
   if (!id) return GRADIENTS[0];
 
-  let h = 0;
+  let hash = 0;
 
-  for (let i = 0; i < id.length; i++) {
-    h = ((h << 5) - h + id.charCodeAt(i)) | 0;
+  for (let i = 0; i < id.length; i += 1) {
+    hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0;
   }
 
-  return GRADIENTS[Math.abs(h) % GRADIENTS.length];
-}
-
-function resolveImageSrc({
-  rawImageUrl,
-  isAboveFold,
-  imageMode,
-}: {
-  rawImageUrl: string | null;
-  isAboveFold: boolean;
-  imageMode: ImageMode;
-}): { src: string | null; srcSet: string | undefined } {
-  if (!rawImageUrl || imageMode === 'none') {
-    return { src: null, srcSet: undefined };
-  }
-
-  if (imageMode === 'raw' || !ENABLE_SUPABASE_IMAGE_TRANSFORMS) {
-    return { src: rawImageUrl, srcSet: undefined };
-  }
-
-  return {
-    src: supabaseImageUrl(rawImageUrl, isAboveFold ? 640 : 480, isAboveFold ? 74 : 72),
-    srcSet: supabaseImageSrcSet(rawImageUrl),
-  };
+  return GRADIENTS[Math.abs(hash) % GRADIENTS.length];
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -241,12 +211,11 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
   index = 0,
 }: MenuItemCardProps<TItem>) {
   const [imgLoaded, setImgLoaded] = useState(false);
-  const [imageMode, setImageMode] = useState<ImageMode>(
-    ENABLE_SUPABASE_IMAGE_TRANSFORMS ? 'optimized' : 'raw',
-  );
+  const [imageState, setImageState] = useState<ImageState>('ready');
   const [isOpening, setIsOpening] = useState(false);
 
   const isOpeningRef = useRef(false);
+  const openTimerRef = useRef<number | null>(null);
 
   const id = readId(item);
   const name = readName(item);
@@ -257,11 +226,23 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
   const staggerSlot = Math.min(index, STAGGER_MAX_SLOTS);
   const entranceDelay = isAboveFold ? 0 : staggerSlot * STAGGER_STEP;
 
-  const { src: displayImageUrl, srcSet: displaySrcSet } = resolveImageSrc({
-    rawImageUrl,
-    isAboveFold,
-    imageMode,
-  });
+  const imageAttrs = useMemo(
+    () => getMenuCardImageAttrs(rawImageUrl, { isAboveFold }),
+    [rawImageUrl, isAboveFold],
+  );
+
+  useEffect(() => {
+    setImgLoaded(false);
+    setImageState('ready');
+  }, [imageAttrs?.src]);
+
+  useEffect(() => {
+    return () => {
+      if (openTimerRef.current !== null) {
+        window.clearTimeout(openTimerRef.current);
+      }
+    };
+  }, []);
 
   const availState = useMemo(() => resolveAvailability(item, getAvailable), [item, getAvailable]);
   const priceLabel = useMemo(() => resolvePrice(item, getPriceCents), [item, getPriceCents]);
@@ -269,7 +250,7 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
 
   const isAvailable = availState !== 'unavailable';
   const isLowStock = availState === 'low_stock';
-  const showImage = displayImageUrl !== null;
+  const showImage = imageAttrs !== null && imageState === 'ready';
 
   const articleAnim = isAboveFold
     ? { initial: false as const }
@@ -296,22 +277,21 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
 
     onOpen?.(item);
 
-    window.setTimeout(() => {
+    openTimerRef.current = window.setTimeout(() => {
       isOpeningRef.current = false;
       setIsOpening(false);
+      openTimerRef.current = null;
     }, CTA_DEBOUNCE_MS);
-  }, [isAvailable, onOpen, item]);
+  }, [isAvailable, item, onOpen]);
+
+  const handleImageLoad = useCallback(() => {
+    setImgLoaded(true);
+  }, []);
 
   const handleImageError = useCallback(() => {
     setImgLoaded(false);
-
-    if (imageMode === 'optimized' && rawImageUrl) {
-      setImageMode('raw');
-      return;
-    }
-
-    setImageMode('none');
-  }, [imageMode, rawImageUrl]);
+    setImageState('failed');
+  }, []);
 
   return (
     <m.article
@@ -343,24 +323,16 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
           <div className="absolute inset-0 animate-pulse bg-zinc-200/20" aria-hidden="true" />
         )}
 
-        {showImage && (
+        {showImage && imageAttrs && (
           <img
-            key={`${displayImageUrl}-${imageMode}`}
-            src={displayImageUrl}
-            srcSet={displaySrcSet}
-            sizes="(max-width: 640px) 92vw, (max-width: 1024px) 45vw, 360px"
+            key={imageAttrs.src}
+            {...imageAttrs}
             alt={name}
-            width={400}
-            height={300}
-            loading={isAboveFold ? 'eager' : 'lazy'}
-            fetchPriority={isAboveFold ? 'high' : 'auto'}
-            decoding="async"
-            referrerPolicy="no-referrer"
             className="absolute inset-0 h-full w-full object-cover
                        transition-[opacity,transform] duration-700
                        ease-luxury group-hover:scale-[1.05]"
             style={{ opacity: imgLoaded ? 1 : 0 }}
-            onLoad={() => setImgLoaded(true)}
+            onLoad={handleImageLoad}
             onError={handleImageError}
           />
         )}
@@ -373,14 +345,14 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
 
         {dietBadges.length > 0 && (
           <m.div {...childAnim(0.16)} className="absolute left-2.5 top-2.5 flex flex-wrap gap-1">
-            {dietBadges.map((b) => (
+            {dietBadges.map((badge) => (
               <span
-                key={b.key}
+                key={badge.key}
                 className="inline-flex items-center rounded-full px-2 py-0.5
                            text-2xs font-bold leading-none tracking-wide shadow-sm"
-                style={{ color: b.fg, background: b.bg }}
+                style={{ color: badge.fg, background: badge.bg }}
               >
-                {b.label}
+                {badge.label}
               </span>
             ))}
           </m.div>
