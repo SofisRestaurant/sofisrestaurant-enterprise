@@ -28,14 +28,21 @@
   font-display: swap;
 }
 
-/* ── Body Face (SofiBody — Variable Font) ─────────────────────────────────── */
+/* ── Body Face (DM Sans — Variable Font) ─────────────────────────────────── */
 
 @font-face {
   font-family: 'SofiBody';
-  src: url('/fonts/body/SofiBody-Variable.woff2') format('woff2'),
-       url('/fonts/body/SofiBody-Variable.woff')  format('woff');
-  font-weight:  100 900;
-  font-style:   normal;
+  src: url('/fonts/body/DMSans-Variable.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'SofiBody';
+  src: url('/fonts/body/DMSans-Italic-Variable.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: italic;
   font-display: swap;
 }
 

@@ -1,14 +1,24 @@
 // =============================================================================
 // PATH: src/modules/menu/components/MenuItemModal.tsx
 // =============================================================================
-// MENU ITEM MODAL — Production 2026 — Premium Mobile-First
+// MENU ITEM MODAL — Production 2026 — Theme-aware (light + dark)
 // =============================================================================
 //
 // Architecture:
 //   Orchestrator shell (MenuItemModal) owns all state, hooks, and business logic.
 //   Pure-presentational sub-components receive props — zero duplication of logic.
 //
-// Design: Luxury dark bottom-sheet, Apple HIG + Uber Eats conversion patterns.
+// Theme model:
+//   ThemeProvider sets data-theme on <html>. Every surface in this modal resolves
+//   through --menu-modal-* tokens declared in tokens.css. The component itself
+//   is theme-agnostic — it only references semantic variables. No hardcoded
+//   neutral-950 / white / zinc / amber backgrounds on core readability surfaces.
+//
+//   Brand-gold CTA gradient is intentionally retained — gold is the conversion
+//   focal point in both modes and works on cream and stone alike. Status colours
+//   on success / adding states are also intentionally fixed (semantic).
+//
+// Design: Apple HIG + Uber Eats conversion patterns.
 //   - 48 px minimum tap targets on every interactive element
 //   - Bottom-anchored single-row action bar (qty + CTA with embedded price)
 //   - Staggered entrance animation, spring curve
@@ -108,15 +118,17 @@ interface AlertBannerProps {
 }
 
 const ALERT_STYLES = {
-  error: 'border-red-500/20 bg-red-500/6 text-red-200',
-  warning: 'border-amber-500/15 bg-amber-500/6 text-amber-200',
-  info: 'border-white/8 bg-white/2 text-zinc-300',
+  error:
+    'border-(--menu-modal-danger-border) bg-(--menu-modal-danger-bg) text-(--menu-modal-danger-text)',
+  warning:
+    'border-(--menu-modal-warning-border) bg-(--menu-modal-warning-bg) text-(--menu-modal-warning-text)',
+  info: 'border-[var(--menu-modal-info-border)] bg-[var(--menu-modal-info-bg)] text-[var(--menu-modal-info-text)]',
 } as const;
 
 const ALERT_ICON_COLOR = {
-  error: 'text-red-400',
-  warning: 'text-amber-400',
-  info: 'text-zinc-500',
+  error: 'text-(--menu-modal-danger-text)',
+  warning: 'text-(--menu-modal-warning-text)',
+  info: 'text-(--menu-modal-subtle)',
 } as const;
 
 const AlertBanner: FC<AlertBannerProps> = ({ variant, children, stagger }) => (
@@ -164,18 +176,23 @@ const ModalHeader = memo<ModalHeaderProps>(function ModalHeader({
   onClose,
 }) {
   return (
-    <div className="shrink-0 border-b border-white/6 px-5 pb-5 pt-3 sm:px-6 sm:pt-5">
+    <div
+      className={cx(
+        'shrink-0 border-b border-(--menu-modal-border)',
+        'bg-(--menu-modal-header-bg) backdrop-blur-xl',
+        'px-5 pb-5 pt-3 sm:px-6 sm:pt-5',
+      )}
+    >
       <div className="flex items-start gap-4">
         <div className="min-w-0 flex-1">
-          <p className="text-2xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
+          <p className="font-sans text-[0.68rem] font-semibold uppercase tracking-caps text-(--menu-modal-accent-muted)">
             {categoryLabel}
           </p>
 
           <div className="mt-2 flex flex-wrap items-center gap-2.5">
             <h2
               id={titleId}
-              className="text-[22px] font-bold leading-tight tracking-tight text-white sm:text-2xl"
-              style={{ fontFamily: 'var(--font-display, Georgia, serif)' }}
+              className="font-sans text-[23px] font-semibold leading-editorial tracking-[-0.025em] text-(--menu-modal-text) sm:text-[1.65rem]"
             >
               {name}
             </h2>
@@ -183,14 +200,18 @@ const ModalHeader = memo<ModalHeaderProps>(function ModalHeader({
           </div>
 
           <div className="mt-3 flex flex-wrap items-baseline gap-2.5">
-            <span className="text-lg font-bold tabular-nums text-amber-400">{basePriceLabel}</span>
+            <span className="font-sans text-lg font-semibold tabular-nums text-(--menu-modal-accent)">
+              {basePriceLabel}
+            </span>
             {preflightOk ? (
               <VerifiedBadge />
             ) : preflightLoading ? (
-              <span className="inline-block h-3 w-14 animate-pulse rounded bg-white/8" />
+              <span className="inline-block h-3 w-14 animate-pulse rounded bg-(--menu-modal-bg-soft)" />
             ) : null}
             {extrasLabel && (
-              <span className="text-xs font-medium text-amber-400/50">{extrasLabel}</span>
+              <span className="text-xs font-medium text-(--menu-modal-accent-muted)">
+                {extrasLabel}
+              </span>
             )}
           </div>
         </div>
@@ -201,11 +222,12 @@ const ModalHeader = memo<ModalHeaderProps>(function ModalHeader({
           onClick={onClose}
           className={cx(
             'flex h-12 w-12 shrink-0 items-center justify-center',
-            'rounded-2xl border border-white/8 bg-white/4',
-            'text-zinc-400 transition-all duration-150',
-            'hover:border-white/15 hover:bg-white/8 hover:text-white',
+            'rounded-2xl border border-(--menu-modal-border) bg-(--menu-modal-control-bg)',
+            'text-(--menu-modal-subtle)',
+            'transition-all duration-150',
+            'hover:border-(--menu-modal-border-strong) hover:bg-(--menu-modal-control-hover) hover:text-(--menu-modal-text)',
             'active:scale-90',
-            'focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--menu-modal-focus-ring)',
           )}
           aria-label="Close"
         >
@@ -217,14 +239,27 @@ const ModalHeader = memo<ModalHeaderProps>(function ModalHeader({
 });
 
 const PopularBadge: FC = () => (
-  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2.5 py-1 text-2xs font-bold uppercase tracking-wider text-amber-400 ring-1 ring-amber-500/20">
+  <span
+    className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-2xs font-bold uppercase tracking-wider ring-1"
+    style={{
+      background: 'var(--menu-modal-pill-popular-bg)',
+      color: 'var(--menu-modal-pill-popular-text)',
+      boxShadow: 'inset 0 0 0 1px var(--menu-modal-pill-popular-border)',
+    }}
+  >
     <Star className="h-3 w-3" aria-hidden="true" />
     Popular
   </span>
 );
 
 const VerifiedBadge: FC = () => (
-  <span className="rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-emerald-400">
+  <span
+    className="rounded-md px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest"
+    style={{
+      background: 'var(--menu-modal-pill-verified-bg)',
+      color: 'var(--menu-modal-pill-verified-text)',
+    }}
+  >
     Verified
   </span>
 );
@@ -258,7 +293,10 @@ const StatusAlerts = memo<StatusAlertsProps>(function StatusAlerts({
 
       {isLowStock && stockCount != null && (
         <div
-          className="mt-5 flex items-center gap-3 rounded-2xl border border-amber-500/15 bg-amber-500/6 px-4 py-3.5 text-sm text-amber-200"
+          className={cx(
+            'mt-5 flex items-center gap-3 rounded-2xl border px-4 py-3.5 text-sm',
+            'border-(--menu-modal-warning-border) bg-(--menu-modal-warning-bg) text-(--menu-modal-warning-text)',
+          )}
           role="status"
           style={{ animation: 'sofi-stagger-in 250ms ease both' }}
         >
@@ -266,8 +304,8 @@ const StatusAlerts = memo<StatusAlertsProps>(function StatusAlerts({
             ⚡
           </span>
           <span>
-            Only <strong className="font-bold text-amber-300">{stockCount}</strong> left — order
-            soon.
+            Only <strong className="font-bold text-(--menu-modal-accent)">{stockCount}</strong> left
+            — order soon.
           </span>
         </div>
       )}
@@ -312,9 +350,12 @@ const ModifierOption = memo<ModifierOptionProps>(function ModifierOption({
       disabled={disabled}
       onClick={onSelect}
       className={cx(
-        'flex w-full items-center gap-3 rounded-xl px-3.5 py-3.5 text-left transition-all duration-150',
-        isSelected ? 'bg-amber-500/8 ring-1 ring-amber-500/25' : 'bg-transparent hover:bg-white/3',
-        isBlocked && 'ring-1 ring-red-500/30',
+        'flex w-full items-center gap-3 rounded-2xl px-3.5 py-3.5 text-left',
+        'transition-all duration-150',
+        isSelected
+          ? 'bg-(--menu-modal-accent)/10 ring-1 ring-(--menu-modal-accent)/25'
+          : 'bg-(--menu-modal-card-bg) ring-1 ring-(--menu-modal-border) hover:bg-(--menu-modal-card-hover)',
+        isBlocked && 'ring-1 ring-(--menu-modal-danger-border)',
         disabled && 'opacity-40',
       )}
       aria-pressed={isSelected}
@@ -325,8 +366,10 @@ const ModifierOption = memo<ModifierOptionProps>(function ModifierOption({
       }`}
     >
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium text-white">{m.name}</p>
-        <p className="mt-0.5 text-xs text-zinc-500">
+        <p className="font-sans text-[0.96rem] font-semibold leading-snug tracking-[-0.01em] text-(--menu-modal-text)">
+          {m.name}
+        </p>
+        <p className="mt-1 font-sans text-xs leading-relaxed text-(--menu-modal-muted)">
           {m.price_adjustment !== 0
             ? `${m.price_adjustment > 0 ? '+' : ''}${fmtUsdFromCents(m.price_adjustment)}`
             : 'Included'}
@@ -338,15 +381,15 @@ const ModifierOption = memo<ModifierOptionProps>(function ModifierOption({
         className={cx(
           'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-all duration-150',
           isSelected
-            ? 'bg-amber-500/20 ring-1 ring-amber-400/40'
-            : 'bg-white/4 ring-1 ring-white/10',
+            ? 'bg-(--menu-modal-accent)/20 ring-1 ring-(--menu-modal-accent)/40'
+            : 'bg-(--menu-modal-control-bg) ring-1 ring-(--menu-modal-border-strong)',
         )}
         aria-hidden="true"
       >
         {isSelected ? (
-          <Check className="h-4 w-4 text-amber-300" />
+          <Check className="h-4 w-4 text-(--menu-modal-accent)" />
         ) : (
-          <span className="h-1.5 w-1.5 rounded-full bg-white/15" />
+          <span className="h-1.5 w-1.5 rounded-full bg-(--menu-modal-faint)" />
         )}
       </span>
     </button>
@@ -399,7 +442,9 @@ const ModifierGroupAccordion = memo<ModifierGroupAccordionProps>(
         role="listitem"
         className={cx(
           'overflow-hidden rounded-2xl border transition-colors duration-150',
-          !valid ? 'border-amber-500/25 bg-amber-500/3' : 'border-white/6 bg-white/2',
+          !valid
+            ? 'border-(--menu-modal-warning-border) bg-(--menu-modal-warning-bg)'
+            : 'border-(--menu-modal-border) bg-(--menu-modal-card-bg)',
         )}
         style={{
           animation: `sofi-stagger-in 260ms cubic-bezier(0.16,1,0.3,1) ${staggerIndex * 50}ms both`,
@@ -407,27 +452,31 @@ const ModifierGroupAccordion = memo<ModifierGroupAccordionProps>(
       >
         <button
           type="button"
-          className="flex w-full items-center gap-3 px-4 py-4 text-left transition-colors hover:bg-white/2"
+          className="flex w-full items-center gap-3 px-4 py-4 text-left transition-colors hover:bg-(--menu-modal-card-hover)"
           onClick={() => onToggleExpanded(g.id)}
           aria-expanded={expanded}
           aria-controls={`mod-body-${g.id}`}
         >
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <p className="text-sm font-semibold text-white">{g.name}</p>
+              <p className="font-sans text-[0.98rem] font-semibold tracking-[-0.015em] text-(--menu-modal-text)">
+                {g.name}
+              </p>
               {g.required || min > 0 ? (
-                <span className="rounded-md bg-amber-500/12 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-amber-400 ring-1 ring-amber-500/20">
+                <span className="rounded-md bg-(--menu-modal-accent)/12 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-(--menu-modal-accent) ring-1 ring-(--menu-modal-accent)/20">
                   Required
                 </span>
               ) : (
-                <span className="rounded-md bg-white/5 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-zinc-500">
+                <span className="rounded-md bg-(--menu-modal-control-bg) px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-(--menu-modal-subtle)">
                   Optional
                 </span>
               )}
             </div>
-            <p className="mt-1 text-xs text-zinc-500">{g.description || subline}</p>
+            <p className="mt-1 font-sans text-xs leading-relaxed text-(--menu-modal-muted)">
+              {g.description || subline}
+            </p>
             {!valid && (
-              <p className="mt-1.5 text-[11px] font-semibold text-amber-300">
+              <p className="mt-1.5 text-[11px] font-semibold text-(--menu-modal-warning-text)">
                 {selectedCount < min
                   ? `Choose at least ${min}`
                   : max != null
@@ -439,13 +488,13 @@ const ModifierGroupAccordion = memo<ModifierGroupAccordionProps>(
 
           <div className="flex shrink-0 items-center gap-2">
             {selectedCount > 0 && (
-              <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-amber-500/15 px-2 text-[11px] font-bold tabular-nums text-amber-300 ring-1 ring-amber-500/20">
+              <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-(--menu-modal-accent)/15 px-2 text-[11px] font-bold tabular-nums text-(--menu-modal-accent) ring-1 ring-(--menu-modal-accent)/20">
                 {selectedCount}
               </span>
             )}
             <ChevronDown
               className={cx(
-                'h-4 w-4 text-zinc-500 transition-transform duration-200',
+                'h-4 w-4 text-(--menu-modal-subtle) transition-transform duration-200',
                 expanded && 'rotate-180',
               )}
               aria-hidden="true"
@@ -456,7 +505,7 @@ const ModifierGroupAccordion = memo<ModifierGroupAccordionProps>(
         {expanded && (
           <div
             id={`mod-body-${g.id}`}
-            className="border-t border-white/6 px-3 py-3"
+            className="border-t border-(--menu-modal-border) px-3 py-3"
             style={{ animation: 'sofi-accordion-open 200ms ease both' }}
           >
             <div className="space-y-1.5">
@@ -471,7 +520,7 @@ const ModifierGroupAccordion = memo<ModifierGroupAccordionProps>(
               ))}
             </div>
             {maxSelectionHint && (
-              <p className="mt-3 px-1 text-[11px] font-medium text-amber-300/70">
+              <p className="mt-3 px-1 text-[11px] font-medium text-(--menu-modal-accent-muted)">
                 {maxSelectionHint}
               </p>
             )}
@@ -518,10 +567,10 @@ const ModifiersSection = memo<ModifiersSectionProps>(function ModifiersSection({
     <div className="mt-8">
       <div className="flex items-end justify-between gap-3">
         <div>
-          <p className="text-2xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
+          <p className="text-2xs font-semibold uppercase tracking-[0.2em] text-(--menu-modal-subtle)">
             Customize
           </p>
-          <p className="mt-1 text-xs text-zinc-600">
+          <p className="mt-1 text-xs text-(--menu-modal-faint)">
             Required options are validated before adding.
           </p>
         </div>
@@ -529,7 +578,11 @@ const ModifiersSection = memo<ModifiersSectionProps>(function ModifiersSection({
           <button
             type="button"
             onClick={onClearSelections}
-            className="rounded-lg px-3 py-2 text-[11px] font-semibold text-zinc-400 transition-colors hover:bg-white/4 hover:text-zinc-200 active:scale-95"
+            className={cx(
+              'rounded-lg px-3 py-2 text-[11px] font-semibold transition-colors active:scale-95',
+              'text-(--menu-modal-muted)',
+              'hover:bg-(--menu-modal-control-hover) hover:text-(--menu-modal-text)',
+            )}
             aria-label="Clear all selections"
           >
             Clear all
@@ -542,21 +595,25 @@ const ModifiersSection = memo<ModifiersSectionProps>(function ModifiersSection({
           {SKELETON_IDS.map((sid) => (
             <div
               key={sid}
-              className="h-16 animate-pulse rounded-2xl bg-white/3"
+              className="h-16 animate-pulse rounded-2xl bg-(--menu-modal-bg-soft)"
               aria-hidden="true"
             />
           ))}
         </div>
       ) : groupsError ? (
-        <div className="mt-4 flex items-start gap-3 rounded-2xl border border-white/8 bg-white/2 px-4 py-4">
-          <Info className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500" aria-hidden="true" />
+        <div className="mt-4 flex items-start gap-3 rounded-2xl border border-(--menu-modal-border) bg-(--menu-modal-bg-soft) px-4 py-4">
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-(--menu-modal-subtle)" aria-hidden="true" />
           <div>
-            <p className="text-sm font-semibold text-white">Options unavailable</p>
-            <p className="mt-0.5 text-xs text-zinc-500">{groupsError}</p>
+            <p className="text-sm font-semibold text-(--menu-modal-text)">Options unavailable</p>
+            <p className="mt-0.5 text-xs text-(--menu-modal-muted)">{groupsError}</p>
             <button
               type="button"
               onClick={() => void onLoadModifierGroups()}
-              className="mt-3 rounded-xl border border-white/10 bg-white/4 px-4 py-2.5 text-xs font-semibold text-zinc-300 transition-colors hover:bg-white/8 active:scale-95"
+              className={cx(
+                'mt-3 rounded-xl border px-4 py-2.5 text-xs font-semibold transition-colors active:scale-95',
+                'border-(--menu-modal-border) bg-(--menu-modal-control-bg) text-(--menu-modal-muted)',
+                'hover:bg-(--menu-modal-control-hover)',
+              )}
               aria-label="Retry loading options"
             >
               Retry
@@ -564,7 +621,7 @@ const ModifiersSection = memo<ModifiersSectionProps>(function ModifiersSection({
           </div>
         </div>
       ) : !modifierGroups.length ? (
-        <div className="mt-4 rounded-2xl border border-white/6 bg-white/2 px-4 py-4 text-sm text-zinc-500">
+        <div className="mt-4 rounded-2xl border border-(--menu-modal-border) bg-(--menu-modal-bg-soft) px-4 py-4 text-sm text-(--menu-modal-muted)">
           No customization options for this item.
         </div>
       ) : (
@@ -606,8 +663,12 @@ const NotesInput = memo<NotesInputProps>(function NotesInput({ notes, onChange }
     <div className="mt-8">
       <div className="mb-3 flex items-end justify-between gap-3">
         <div>
-          <p className="text-sm font-semibold text-white">Special instructions</p>
-          <p className="mt-0.5 text-xs text-zinc-600">Allergies, preferences, cooking requests</p>
+          <p className="font-sans text-[0.95rem] font-semibold text-(--menu-modal-text)">
+            Special instructions
+          </p>
+          <p className="mt-0.5 text-xs text-(--menu-modal-faint)">
+            Allergies, preferences, cooking requests
+          </p>
         </div>
 
         <div className="relative h-8 w-8 shrink-0" aria-hidden="true">
@@ -618,7 +679,7 @@ const NotesInput = memo<NotesInputProps>(function NotesInput({ notes, onChange }
               r="13"
               fill="none"
               strokeWidth="2"
-              className="stroke-white/6"
+              className="stroke-(--menu-modal-border)"
               strokeDasharray="100 100"
             />
             <circle
@@ -630,10 +691,10 @@ const NotesInput = memo<NotesInputProps>(function NotesInput({ notes, onChange }
               className={cx(
                 'transition-all duration-200',
                 counterFull
-                  ? 'stroke-red-400'
+                  ? 'stroke-(--menu-modal-danger-text)'
                   : counterNear
-                    ? 'stroke-amber-400'
-                    : 'stroke-white/20',
+                    ? 'stroke-(--menu-modal-accent)'
+                    : 'stroke-(--menu-modal-subtle)',
               )}
               strokeDasharray="100 100"
               strokeDashoffset={counterDash}
@@ -644,7 +705,7 @@ const NotesInput = memo<NotesInputProps>(function NotesInput({ notes, onChange }
             <span
               className={cx(
                 'absolute inset-0 flex items-center justify-center text-[9px] font-bold tabular-nums',
-                counterFull ? 'text-red-400' : 'text-amber-400',
+                counterFull ? 'text-(--menu-modal-danger-text)' : 'text-(--menu-modal-accent)',
               )}
             >
               {MAX_NOTES_LENGTH - noteLen}
@@ -659,10 +720,17 @@ const NotesInput = memo<NotesInputProps>(function NotesInput({ notes, onChange }
         rows={3}
         maxLength={MAX_NOTES_LENGTH}
         className={cx(
-          'w-full resize-none rounded-2xl border bg-white/2 px-4 py-3.5',
-          'text-base text-white placeholder-zinc-600',
+          'w-full resize-none rounded-2xl border px-4 py-3.5',
+
+          'font-sans text-[16px] leading-relaxed',
+
+          'bg-(--menu-modal-input-bg) text-(--menu-modal-text) placeholder:text-(--menu-modal-faint)',
+
+          'border-(--menu-modal-border)',
+
           'outline-none transition-all duration-150',
-          'border-white/6 focus:border-amber-500/30 focus:ring-2 focus:ring-amber-500/10',
+
+          'focus:border-(--menu-modal-accent)/40 focus:ring-2 focus:ring-(--menu-modal-focus-ring)',
         )}
         placeholder="Add a note for the kitchen (optional)…"
         aria-label="Special instructions"
@@ -687,6 +755,10 @@ const NotesInput = memo<NotesInputProps>(function NotesInput({ notes, onChange }
 // • Validation hint replaces CTA label ("Choose options") — no extra line.
 // • Legal copy removed (belongs at checkout, not on conversion surface).
 // • ~60 px height vs ~140 px before — nearly halved.
+//
+// The CTA gold gradient is intentionally retained across themes — gold is
+// the brand conversion focal point and reads on both cream and stone surfaces.
+// Success / adding states are semantic and also kept fixed.
 
 interface StickyFooterProps {
   safeQty: number;
@@ -721,28 +793,27 @@ const StickyFooter = memo<StickyFooterProps>(function StickyFooter({
   return (
     <div
       className={cx(
-        'shrink-0 border-t border-white/6',
-        'bg-neutral-950/95 backdrop-blur-xl',
+        'shrink-0 border-t border-(--menu-modal-border)',
+        'bg-(--menu-modal-footer-bg) backdrop-blur-2xl',
         'px-4 sm:px-5',
       )}
       style={{
+        boxShadow: 'var(--menu-modal-footer-shadow)',
         paddingTop: '12px',
         paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 12px)',
       }}
     >
       <div className="flex items-center gap-3">
-        {/* ── Compact Qty Stepper ───────────────────────────────────
-            40 px buttons, narrower count display. Stays above 44 px
-            effective touch area with the surrounding padding.       */}
-        <div className="flex shrink-0 items-center rounded-xl border border-white/8 bg-white/3">
+        {/* ── Compact Qty Stepper ────────────────────────────────────── */}
+        <div className="flex shrink-0 items-center rounded-2xl border border-(--menu-modal-border) bg-(--menu-modal-control-bg)">
           <button
             type="button"
             onClick={() => onSetQty((q) => clampInt(q - 1, 1, maxQty))}
             disabled={safeQty <= 1 || preflightLoading}
             className={cx(
               'flex h-10 w-10 items-center justify-center',
-              'text-zinc-400 transition-all duration-100',
-              'hover:text-white active:scale-90',
+              'text-(--menu-modal-subtle) transition-all duration-100',
+              'hover:text-(--menu-modal-text) active:scale-90',
               'disabled:opacity-25 disabled:active:scale-100',
             )}
             aria-label="Decrease quantity"
@@ -751,7 +822,7 @@ const StickyFooter = memo<StickyFooterProps>(function StickyFooter({
           </button>
 
           <span
-            className="flex h-10 w-9 items-center justify-center border-x border-white/6 text-sm font-bold tabular-nums text-white"
+            className="flex h-10 w-9 items-center justify-center border-x border-(--menu-modal-border) text-sm font-bold tabular-nums text-(--menu-modal-text)"
             aria-live="polite"
             aria-label={`Quantity: ${safeQty}`}
           >
@@ -764,8 +835,8 @@ const StickyFooter = memo<StickyFooterProps>(function StickyFooter({
             disabled={safeQty >= maxQty || preflightLoading}
             className={cx(
               'flex h-10 w-10 items-center justify-center',
-              'text-zinc-400 transition-all duration-100',
-              'hover:text-white active:scale-90',
+              'text-(--menu-modal-subtle) transition-all duration-100',
+              'hover:text-(--menu-modal-text) active:scale-90',
               'disabled:opacity-25 disabled:active:scale-100',
             )}
             aria-label="Increase quantity"
@@ -774,10 +845,7 @@ const StickyFooter = memo<StickyFooterProps>(function StickyFooter({
           </button>
         </div>
 
-        {/* ── CTA — price-embedded, single row ─────────────────────
-            Fills remaining width. Price badge on the right inside
-            the button — one source of truth, zero duplication.
-            48 px height: thumb-perfect, visually compact.          */}
+        {/* ── CTA — brand-gold (theme-stable), disabled state theme-aware ── */}
         <button
           type="button"
           onClick={onAddToCart}
@@ -794,17 +862,19 @@ const StickyFooter = memo<StickyFooterProps>(function StickyFooter({
           }
           className={cx(
             'relative flex h-12 min-w-0 flex-1 items-center justify-between gap-3',
-            'rounded-xl px-5 text-sm font-semibold',
+            'rounded-xl px-5 font-sans text-sm font-semibold tracking-[-0.01em]',
             'transition-all duration-200',
             // Success
             isSuccess && 'bg-emerald-500 text-white shadow-[0_2px_12px_rgb(16_185_129/0.4)]',
-            // Enabled idle
+            // Enabled idle — brand gold (intentionally fixed across themes)
             canAdd &&
               isIdle &&
-              'bg-linear-to-r from-amber-500 to-amber-400 text-neutral-950 shadow-[0_2px_16px_rgb(245_158_11/0.3)] hover:shadow-[0_4px_24px_rgb(245_158_11/0.45)] active:scale-[0.98]',
-            // Disabled / validation needed
-            !canAdd && isIdle && 'bg-white/6 text-zinc-500 cursor-not-allowed',
-            // Adding (spinner)
+              'bg-linear-to-r from-amber-400 via-yellow-300 to-amber-400 text-stone-950 shadow-[0_6px_24px_rgb(245_158_11/0.30)] hover:shadow-[0_8px_34px_rgb(245_158_11/0.42)] active:scale-[0.98]',
+            // Disabled / validation needed — theme-aware
+            !canAdd &&
+              isIdle &&
+              'bg-(--menu-modal-control-bg) text-(--menu-modal-subtle) cursor-not-allowed',
+            // Adding (spinner) — intentionally fixed
             isAdding && 'bg-amber-500/80 text-neutral-950 cursor-wait',
           )}
         >
@@ -827,7 +897,8 @@ const StickyFooter = memo<StickyFooterProps>(function StickyFooter({
             )}
           </span>
 
-          {/* Right price badge — only when actionable */}
+          {/* Right price badge — only when actionable. Sits inside the gold CTA, so
+              the dark wash is theme-stable like the CTA itself. */}
           {canAdd && isIdle && (
             <span className="shrink-0 rounded-lg bg-neutral-950/15 px-2.5 py-1 text-xs font-bold tabular-nums">
               {preflightLoading ? (
@@ -838,9 +909,11 @@ const StickyFooter = memo<StickyFooterProps>(function StickyFooter({
             </span>
           )}
 
-          {/* Inline validation pointer — replaces the old stacked hint */}
+          {/* Inline validation pointer */}
           {!modifierRulesOk && isIdle && !canAdd && (
-            <span className="shrink-0 text-2xs font-medium text-amber-400/70">required ↑</span>
+            <span className="shrink-0 text-2xs font-medium text-(--menu-modal-accent-muted)">
+              required ↑
+            </span>
           )}
         </button>
       </div>
@@ -867,25 +940,29 @@ export default function MenuItemModal({ item, onClose }: Props) {
 
   const invalidItem = !isMenuItemPublic(item);
 
-  const rec = isRecord(item) ? (item as Record<string, unknown>) : {};
+  const rec: Record<string, unknown> = isRecord(item) ? item : {};
   const id = safeStr(rec.id, '', 128);
   const name = safeStr(rec.name, 'Menu item', 120);
   const categoryLabel = safeStr(rec.category, 'menu', 40);
   const description = safeStr(rec.description, '', 1200);
-  const imageUrl =
-    typeof rec.image_url === 'string' && rec.image_url.trim() ? rec.image_url.trim() : null;
-  const tags = useMemo(() => parseTags(rec.tags), [rec.tags]);
 
+  const rawImageUrl = rec.image_url;
+  const imageUrl =
+    typeof rawImageUrl === 'string' && rawImageUrl.trim() ? rawImageUrl.trim() : null;
+
+  const rawTags = rec.tags;
+  const tags = useMemo(() => parseTags(rawTags), [rawTags]);
+
+  const rawPopularityScore = rec.popularity_score;
   const isPopular =
     rec.is_popular === true ||
     rec.isPopular === true ||
-    (typeof rec.popularity_score === 'number' &&
-      Number.isFinite(rec.popularity_score) &&
-      (rec.popularity_score as number) >= 80);
+    (typeof rawPopularityScore === 'number' &&
+      Number.isFinite(rawPopularityScore) &&
+      rawPopularityScore >= 80);
 
   const scrollToken = id ? `menu-item:${id}` : 'menu-item:unknown';
   useScrollLock({ enabled: true, token: scrollToken });
-
   // ── Phase + notes ──────────────────────────────────────────────────────────
 
   const [phase, setPhase] = useState<CartPhase>('idle');
@@ -1175,10 +1252,14 @@ export default function MenuItemModal({ item, onClose }: Props) {
         {liveStatus}
       </div>
 
+      {/* Backdrop — theme-aware scrim */}
       <div
-        className="absolute inset-0 bg-black/75 backdrop-blur-sm"
+        className="absolute inset-0 backdrop-blur-sm"
         aria-hidden="true"
-        style={{ animation: 'sofi-modal-backdrop 200ms ease both' }}
+        style={{
+          animation: 'sofi-modal-backdrop 200ms ease both',
+          background: 'var(--menu-modal-backdrop)',
+        }}
         onMouseDown={(e) => {
           e.preventDefault();
           close();
@@ -1192,20 +1273,26 @@ export default function MenuItemModal({ item, onClose }: Props) {
           aria-modal="true"
           aria-labelledby={titleId}
           className={cx(
-            'relative flex w-full flex-col',
+            'relative flex w-full flex-col font-sans',
             'max-h-[94dvh] sm:max-h-[88vh] sm:max-w-xl',
-            'rounded-t-3xl sm:rounded-3xl',
-            'overflow-hidden bg-neutral-950 text-white',
-            'border border-white/6',
-            'shadow-[0_-8px_40px_rgb(0_0_0/0.6)] sm:shadow-[0_24px_64px_rgb(0_0_0/0.7)]',
+            'rounded-t-[2rem] sm:rounded-[2rem]',
+            'overflow-hidden',
+            'text-(--menu-modal-text)',
+            'border border-(--menu-modal-border)',
+            'ring-1 ring-(--menu-modal-ring)',
           )}
           style={{
             animation: 'sofi-modal-dialog 380ms cubic-bezier(0.16,1,0.3,1) both',
+            background: 'var(--menu-modal-bg)',
+            boxShadow: 'var(--menu-modal-shadow)',
           }}
           onMouseDown={(e) => e.stopPropagation()}
         >
           <div className="flex shrink-0 justify-center pb-1 pt-3 sm:hidden" aria-hidden="true">
-            <div className="h-1.25 w-12 rounded-full bg-white/20" />
+            <div
+              className="h-1.5 w-12 rounded-full bg-(--menu-modal-border-strong)"
+              style={{ boxShadow: '0 0 18px var(--menu-modal-accent-glow)' }}
+            />
           </div>
 
           <ModalHeader
@@ -1226,27 +1313,36 @@ export default function MenuItemModal({ item, onClose }: Props) {
               'min-h-0 flex-1 overflow-y-auto overscroll-contain',
               'px-5 sm:px-6',
               '[-webkit-overflow-scrolling:touch]',
-              '[scrollbar-width:thin] [scrollbar-color:rgb(255_255_255/0.08)_transparent]',
+              'scrollbar-thin [scrollbar-color:var(--menu-modal-border-strong)_transparent]',
             )}
             style={{
-              // Reduced from 140px — footer is now ~60px
               paddingBottom: 'calc(80px + env(safe-area-inset-bottom))',
             }}
           >
             {invalidItem ? (
               <div
-                className="mt-6 flex items-start gap-3 rounded-2xl border border-red-500/20 bg-red-500/6 px-4 py-4"
+                className={cx(
+                  'mt-6 flex items-start gap-3 rounded-2xl border px-4 py-4',
+                  'border-(--menu-modal-danger-border) bg-(--menu-modal-danger-bg)',
+                )}
                 role="alert"
               >
-                <Info className="mt-0.5 h-5 w-5 shrink-0 text-red-400" aria-hidden="true" />
+                <Info
+                  className="mt-0.5 h-5 w-5 shrink-0 text-(--menu-modal-danger-text)"
+                  aria-hidden="true"
+                />
                 <div>
-                  <p className="text-sm font-semibold text-red-200">
+                  <p className="text-sm font-semibold text-(--menu-modal-danger-text)">
                     This item can't be opened right now.
                   </p>
                   <button
                     type="button"
                     onClick={close}
-                    className="mt-3 rounded-xl border border-white/10 bg-white/4 px-4 py-2.5 text-xs font-semibold text-zinc-300 transition-colors hover:bg-white/8 active:scale-95"
+                    className={cx(
+                      'mt-3 rounded-xl border px-4 py-2.5 text-xs font-semibold transition-colors active:scale-95',
+                      'border-(--menu-modal-border) bg-(--menu-modal-control-bg) text-(--menu-modal-muted)',
+                      'hover:bg-(--menu-modal-control-hover)',
+                    )}
                   >
                     Dismiss
                   </button>
