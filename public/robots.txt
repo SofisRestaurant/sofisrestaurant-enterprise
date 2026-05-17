@@ -1,4 +1,8 @@
 User-agent: *
 Allow: /
+Disallow: /admin
+Disallow: /checkout
+Disallow: /order-success
+Disallow: /auth
 
 Sitemap: https://sofislegacy.com/sitemap.xml

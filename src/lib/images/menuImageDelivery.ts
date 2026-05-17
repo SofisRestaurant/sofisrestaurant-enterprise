@@ -11,10 +11,16 @@
 //
 // Contract:
 //   - Default mode is raw public object URLs because they are reliable.
-//   - Supabase transforms are feature-flagged.
-//   - Cards and preload use the same URL builder.
-//   - Turning transforms on later requires only:
+//   - Supabase transforms are feature-flagged behind
 //       VITE_ENABLE_SUPABASE_IMAGE_TRANSFORMS=true
+//   - Cards and preload use the SAME URL builder — no mismatch possible.
+//   - Turning transforms on later requires only flipping the env var.
+//
+// 2026 compact list-card update:
+//   Thumbnails are now 92×92 mobile / 112×112 desktop (square, not full-bleed).
+//   CARD_SIZES, intrinsic width/height, and transform widths are calibrated
+//   to this layout so browser srcSet selection picks the correct variant and
+//   no 640px image is ever requested for a 112px container.
 //
 // Important:
 //   Payment/pricing/security logic is not connected to this file.
@@ -22,10 +28,34 @@
 
 import { supabaseImageSrcSet, supabaseImageUrl } from '@/lib/images/supabaseImage';
 
+// ─── Feature flag ─────────────────────────────────────────────────────────────
+
 const ENABLE_SUPABASE_IMAGE_TRANSFORMS =
   import.meta.env.VITE_ENABLE_SUPABASE_IMAGE_TRANSFORMS === 'true';
 
-const CARD_SIZES = '(max-width: 640px) 92vw, (max-width: 1024px) 45vw, 360px';
+// ─── Layout-matched sizes ─────────────────────────────────────────────────────
+//
+// Compact list-card thumbnails:
+//   Mobile:  92px CSS = 184px @2× retina
+//   Desktop: 112px CSS = 224px @2× retina
+//
+// The sizes attribute tells the browser how wide the image will render so it
+// picks the right srcSet candidate. These MUST match the actual CSS container.
+
+const CARD_SIZES = '(min-width: 640px) 112px, 92px';
+
+// ─── Transform widths ─────────────────────────────────────────────────────────
+//
+// When transforms are enabled, these are the pixel widths requested from
+// Supabase /render/image. Sized for the compact thumbnail, not the old
+// full-bleed card. 224px covers 2× retina on the 112px desktop container.
+
+const CARD_TRANSFORM_WIDTH_ABOVE_FOLD = 224;
+const CARD_TRANSFORM_WIDTH_BELOW_FOLD = 184;
+const CARD_TRANSFORM_QUALITY_ABOVE = 76;
+const CARD_TRANSFORM_QUALITY_BELOW = 72;
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export type MenuImagePriority = 'high' | 'auto';
 
@@ -41,6 +71,8 @@ export type MenuCardImageAttrs = {
   referrerPolicy: 'no-referrer';
 };
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 function cleanUrl(url: string | null | undefined): string | null {
   if (typeof url !== 'string') return null;
 
@@ -48,10 +80,18 @@ function cleanUrl(url: string | null | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+// ─── Public API ───────────────────────────────────────────────────────────────
+
 export function menuImageTransformsEnabled(): boolean {
   return ENABLE_SUPABASE_IMAGE_TRANSFORMS;
 }
 
+/**
+ * Returns a single image `src` URL.
+ *
+ * - Transforms disabled → raw public object URL (reliable, no 403).
+ * - Transforms enabled  → Supabase render/image URL at given width/quality.
+ */
 export function getMenuImageSrc(
   rawUrl: string | null | undefined,
   options: {
@@ -69,6 +109,11 @@ export function getMenuImageSrc(
   return supabaseImageUrl(url, options.width, options.quality);
 }
 
+/**
+ * Returns a responsive `srcSet` string, or `undefined` if transforms are off.
+ *
+ * When undefined, the `<img>` tag uses `src` alone — correct HTML behaviour.
+ */
 export function getMenuImageSrcSet(rawUrl: string | null | undefined): string | undefined {
   const url = cleanUrl(rawUrl);
   if (!url) return undefined;
@@ -80,6 +125,16 @@ export function getMenuImageSrcSet(rawUrl: string | null | undefined): string | 
   return supabaseImageSrcSet(url);
 }
 
+/**
+ * Returns all `<img>` attributes for a menu card thumbnail.
+ *
+ * Returns `null` if the URL is falsy/invalid — the card shows a gradient
+ * placeholder and the layout is unaffected.
+ *
+ * Intrinsic width/height (112×112) match the desktop thumbnail container
+ * for correct aspect-ratio CLS reservation. The actual container is
+ * `object-cover` so the image fills the square regardless of source aspect.
+ */
 export function getMenuCardImageAttrs(
   rawUrl: string | null | undefined,
   options: {
@@ -93,13 +148,14 @@ export function getMenuCardImageAttrs(
 
   return {
     src: getMenuImageSrc(url, {
-      width: isAboveFold ? 640 : 480,
-      quality: isAboveFold ? 74 : 72,
+      width: isAboveFold ? CARD_TRANSFORM_WIDTH_ABOVE_FOLD : CARD_TRANSFORM_WIDTH_BELOW_FOLD,
+      quality: isAboveFold ? CARD_TRANSFORM_QUALITY_ABOVE : CARD_TRANSFORM_QUALITY_BELOW,
     }),
     srcSet: getMenuImageSrcSet(url),
     sizes: CARD_SIZES,
-    width: 400,
-    height: 300,
+    // Intrinsic dimensions for CLS reservation — matches desktop thumbnail.
+    width: 112,
+    height: 112,
     loading: isAboveFold ? 'eager' : 'lazy',
     fetchPriority: isAboveFold ? 'high' : 'auto',
     decoding: 'async',
@@ -107,6 +163,15 @@ export function getMenuCardImageAttrs(
   };
 }
 
+/**
+ * Returns `<link rel="preload">` attributes for the LCP menu card image.
+ *
+ * Uses the SAME URL builder as `getMenuCardImageAttrs` with above-fold
+ * settings, guaranteeing the preloaded resource matches the `<img>` request.
+ * No "preloaded but not used" warning.
+ *
+ * Returns `null` if the URL is falsy.
+ */
 export function getMenuLcpPreloadAttrs(
   rawUrl: string | null | undefined,
 ): Record<string, string> | null {
@@ -114,8 +179,8 @@ export function getMenuLcpPreloadAttrs(
   if (!url) return null;
 
   const href = getMenuImageSrc(url, {
-    width: 640,
-    quality: 74,
+    width: CARD_TRANSFORM_WIDTH_ABOVE_FOLD,
+    quality: CARD_TRANSFORM_QUALITY_ABOVE,
   });
 
   if (!href) return null;

@@ -1,55 +1,50 @@
 # =============================================================================
-# Netlify HTTP Headers — Sofi's Restaurant
+# public/_headers — Sofi's Restaurant
+# =============================================================================
+# Reference file for Cloudflare Pages or Netlify hosting.
+# On Vercel, headers are controlled by vercel.json — this file is NOT used.
+# Keep in sync manually if you switch hosting providers.
 # =============================================================================
 
+# ── Global security headers (all responses) ─────────────────────────────────
 /*
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
-  X-XSS-Protection: 1; mode=block
-  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-DNS-Prefetch-Control: on
   Referrer-Policy: strict-origin-when-cross-origin
-  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(self "https://js.stripe.com"), usb=(), interest-cohort=()
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://js.stripe.com https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.supabase.co https://images.pexels.com https://images.unsplash.com https://sofisrestaurant.com https://sofisrestaurant.netlify.app; font-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.stripe.com https://unpkg.com; frame-src https://js.stripe.com https://hooks.stripe.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests;
-  Cache-Control: no-cache, no-store, must-revalidate
-  Pragma: no-cache
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), usb=(), interest-cohort=()
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
 
+# ── HTML shell — always revalidate ──────────────────────────────────────────
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+# ── Vite hashed assets — immutable forever ──────────────────────────────────
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
 
+# ── Fonts — immutable, CORS-safe ────────────────────────────────────────────
 /fonts/*
   Cache-Control: public, max-age=31536000, immutable
   Access-Control-Allow-Origin: *
 
-/images/*
-  Cache-Control: public, max-age=604800, stale-while-revalidate=86400
+# ── Favicon / app icons ─────────────────────────────────────────────────────
+/favicon*
+  Cache-Control: public, max-age=604800
 
-/icons/*
-  Cache-Control: public, max-age=604800, stale-while-revalidate=86400
+/apple-touch-icon*
+  Cache-Control: public, max-age=604800
 
-/*.glb
-  Cache-Control: public, max-age=604800, stale-while-revalidate=86400
-  Content-Type: model/gltf-binary
-
-/*.gltf
-  Cache-Control: public, max-age=604800, stale-while-revalidate=86400
-  Content-Type: model/gltf+json
-
-/manifest.json
+# ── SEO / manifest ──────────────────────────────────────────────────────────
+/robots.txt
   Cache-Control: public, max-age=86400
-  Content-Type: application/manifest+json
 
-/sw.js
-  Cache-Control: no-cache, no-store, must-revalidate
+/sitemap.xml
+  Cache-Control: public, max-age=86400
 
-/locales/*
-  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
-  Content-Type: application/json; charset=utf-8
+/manifest.webmanifest
+  Cache-Control: public, max-age=86400
 
-/.netlify/functions/*
-  Cache-Control: no-store
-
+# ── Admin routes — no caching ───────────────────────────────────────────────
 /admin/*
-  X-Frame-Options: DENY
-  X-Content-Type-Options: nosniff
-  Cache-Control: no-cache, no-store, must-revalidate
-  Pragma: no-cache
+  Cache-Control: no-store

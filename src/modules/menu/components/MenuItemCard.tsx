@@ -2,40 +2,41 @@
 // src/modules/menu/components/MenuItemCard.tsx
 // =============================================================================
 //
-// Performance contracts (2026):
+// 2026 premium compact list-card redesign.
+//
+// Mobile-first layout:
+//   - Clean horizontal card
+//   - Text left, soft rounded thumbnail right
+//   - Price visible without clutter
+//   - Modern black “Add +” pill instead of Grubhub-style yellow circle
+//   - Fixed image dimensions to prevent CLS
+//   - Bigger touch targets for mobile
+//
+// Performance contracts:
 //   Above-fold cards (index ≤ ABOVE_FOLD_THRESHOLD):
 //     - loading="eager"  fetchPriority="high"
-//     - Entrance animation skipped entirely (initial={false})
-//     - Price/badge child animations skipped
-//
+//     - Entrance animation skipped (initial={false})
 //   All other cards:
 //     - loading="lazy"   fetchPriority="auto"
-//     - Staggered entrance, capped at STAGGER_MAX_SLOTS slots
+//     - Staggered entrance, capped at STAGGER_MAX_SLOTS
 //
 // Image delivery contract:
-//   - Uses src/lib/images/menuImageDelivery.ts as the single source of truth.
-//   - Default mode uses raw Supabase public object URLs because this project
-//     returned 403 Forbidden from /storage/v1/render/image.
-//   - If transforms are enabled later, set:
-//       VITE_ENABLE_SUPABASE_IMAGE_TRANSFORMS=true
-//   - If any image fails, the card keeps its stable gradient placeholder.
-//   - No raw/optimized mismatch between card image and MenuPage preload.
+//   - Uses src/lib/images/menuImageDelivery.ts
+//   - Default mode should stay raw Supabase public object URLs while
+//     /render/image returns 403 on this project.
+//   - Failed images → stable gradient placeholder, layout unaffected.
 //
 // Price contracts:
-//   getPriceCents(item) → CENTS    → PricingEngine.formatPrice(cents)
-//   item.price          → DOLLARS  → formatCurrency(item.price)
-//
-// Availability contracts:
-//   getAvailable(item)  → explicit boolean override
-//   PricingEngine.getStockStatus → fallback granular state
+//   getPriceCents(item) → CENTS   → PricingEngine.formatPrice(cents)
+//   item.price          → DOLLARS → formatCurrency(item.price)
 //
 // Open contract:
-//   onOpen(item) is called immediately on CTA press.
+//   onOpen(item) fires immediately on card tap or “Add +” press.
 //   Ref debounce prevents accidental mobile double-tap.
 // =============================================================================
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AnimatePresence, m } from 'framer-motion';
+import { m } from 'framer-motion';
 
 import type { MenuItemBase } from '@/domain/menu/menu.types';
 import { PricingEngine } from '@/domain/pricing/pricing.engine';
@@ -44,15 +45,14 @@ import { formatCurrency } from '@/utils/currency';
 
 // ─── Performance constants ────────────────────────────────────────────────────
 
-const ABOVE_FOLD_THRESHOLD = 1;
-const STAGGER_STEP = 0.055;
-const STAGGER_MAX_SLOTS = 8;
+const ABOVE_FOLD_THRESHOLD = 3;
+const STAGGER_STEP = 0.035;
+const STAGGER_MAX_SLOTS = 10;
 const CTA_DEBOUNCE_MS = 400;
 
-// ─── Easing curves ────────────────────────────────────────────────────────────
+// ─── Easing ───────────────────────────────────────────────────────────────────
 
-const EL = [0.16, 1, 0.3, 1] as const;
-const ES = [0.34, 1.56, 0.64, 1] as const;
+const EASE_OUT: [number, number, number, number] = [0.16, 1, 0.3, 1];
 
 // ─── Internal types ───────────────────────────────────────────────────────────
 
@@ -129,10 +129,8 @@ function resolveAvailability<TItem extends MenuItemBase>(
 
   try {
     const status = PricingEngine.getStockStatus(item);
-
     if (status === 'out_of_stock') return 'unavailable';
     if (status === 'low_stock') return 'low_stock';
-
     return 'available';
   } catch {
     return 'available';
@@ -201,6 +199,28 @@ function pickGradient(id: string): string {
   return GRADIENTS[Math.abs(hash) % GRADIENTS.length];
 }
 
+// ─── Plus icon ────────────────────────────────────────────────────────────────
+
+function PlusIcon() {
+  return (
+    <svg
+      width="17"
+      height="17"
+      viewBox="0 0 20 20"
+      fill="none"
+      aria-hidden="true"
+      className="pointer-events-none"
+    >
+      <path
+        d="M10 4.5v11M4.5 10h11"
+        stroke="currentColor"
+        strokeWidth="2.25"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 function MenuItemCardInner<TItem extends MenuItemBase>({
@@ -255,19 +275,10 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
   const articleAnim = isAboveFold
     ? { initial: false as const }
     : {
-        initial: { opacity: 0, y: 22, scale: 0.96 } as const,
-        animate: { opacity: 1, y: 0, scale: 1 } as const,
-        transition: { duration: 0.55, ease: EL, delay: entranceDelay },
+        initial: { opacity: 0, y: 10 } as const,
+        animate: { opacity: 1, y: 0 } as const,
+        transition: { duration: 0.32, ease: EASE_OUT, delay: entranceDelay },
       };
-
-  const childAnim = (extraDelay: number) =>
-    isAboveFold
-      ? {}
-      : {
-          initial: { opacity: 0, x: 8 } as const,
-          animate: { opacity: 1, x: 0 } as const,
-          transition: { duration: 0.38, ease: EL, delay: entranceDelay + extraDelay },
-        };
 
   const handleOpen = useCallback(() => {
     if (!isAvailable || isOpeningRef.current) return;
@@ -293,150 +304,187 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
     setImageState('failed');
   }, []);
 
+  const handleCardClick = useCallback(() => {
+    handleOpen();
+  }, [handleOpen]);
+
+  const handlePlusClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.stopPropagation();
+      handleOpen();
+    },
+    [handleOpen],
+  );
+
+  const handleCardKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLElement>) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+
+      event.preventDefault();
+      handleOpen();
+    },
+    [handleOpen],
+  );
+
   return (
     <m.article
       {...articleAnim}
       whileHover={
         isAvailable
           ? {
-              y: -6,
-              boxShadow: '0 24px 56px rgba(26,18,9,0.13), 0 4px 16px rgba(26,18,9,0.07)',
-              transition: { duration: 0.28, ease: EL },
+              y: -1,
+              boxShadow: '0 12px 32px rgba(24,24,27,0.08)',
+              transition: { duration: 0.2, ease: EASE_OUT },
             }
           : undefined
       }
-      whileTap={isAvailable ? { scale: 0.985, transition: { duration: 0.1 } } : undefined}
-      className="group relative flex flex-col overflow-hidden rounded-2xl bg-white
-                 shadow-[0_2px_12px_rgba(26,18,9,0.07),0_1px_3px_rgba(26,18,9,0.04)]
-                 ring-1 ring-zinc-900/6 transition-shadow duration-300"
-      aria-label={name}
+      whileTap={isAvailable ? { scale: 0.995, transition: { duration: 0.08 } } : undefined}
+      onClick={isAvailable ? handleCardClick : undefined}
+      role="button"
+      tabIndex={isAvailable ? 0 : -1}
+      onKeyDown={handleCardKeyDown}
+      className={[
+        'group relative flex min-h-[126px] items-stretch overflow-hidden rounded-[22px]',
+        'bg-white',
+        'ring-1 ring-zinc-950/[0.055]',
+        'shadow-[0_1px_2px_rgba(24,24,27,0.04)]',
+        'transition-shadow duration-200',
+        'sm:min-h-[142px]',
+        isAvailable ? 'cursor-pointer' : 'cursor-default',
+        !isAvailable ? 'opacity-60' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      aria-label={
+        !isAvailable
+          ? `${name} is currently unavailable`
+          : `${name}, ${priceLabel}. Tap to customize.`
+      }
       data-available={isAvailable}
     >
-      <div className="relative aspect-4/3 overflow-hidden">
-        <div
-          className="absolute inset-0"
-          style={{ background: pickGradient(id) }}
-          aria-hidden="true"
-        />
-
-        {showImage && !imgLoaded && (
-          <div className="absolute inset-0 animate-pulse bg-zinc-200/20" aria-hidden="true" />
-        )}
-
-        {showImage && imageAttrs && (
-          <img
-            key={imageAttrs.src}
-            {...imageAttrs}
-            alt={name}
-            className="absolute inset-0 h-full w-full object-cover
-                       transition-[opacity,transform] duration-700
-                       ease-luxury group-hover:scale-[1.05]"
-            style={{ opacity: imgLoaded ? 1 : 0 }}
-            onLoad={handleImageLoad}
-            onError={handleImageError}
-          />
-        )}
-
-        <div
-          className="pointer-events-none absolute inset-x-0 bottom-0 h-12"
-          style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.28), transparent)' }}
-          aria-hidden="true"
-        />
-
-        {dietBadges.length > 0 && (
-          <m.div {...childAnim(0.16)} className="absolute left-2.5 top-2.5 flex flex-wrap gap-1">
-            {dietBadges.map((badge) => (
-              <span
-                key={badge.key}
-                className="inline-flex items-center rounded-full px-2 py-0.5
-                           text-2xs font-bold leading-none tracking-wide shadow-sm"
-                style={{ color: badge.fg, background: badge.bg }}
-              >
-                {badge.label}
-              </span>
-            ))}
-          </m.div>
-        )}
-
-        <AnimatePresence>
-          {!isAvailable && (
-            <m.div
-              key="overlay"
-              className="absolute inset-0 flex items-center justify-center bg-black/45 backdrop-blur-[2px]"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.22 }}
-              aria-hidden="true"
-            >
-              <span
-                className="rounded-full bg-white/90 px-3 py-1
-                           text-[11px] font-bold uppercase tracking-widest text-zinc-600 shadow"
-              >
-                Unavailable
-              </span>
-            </m.div>
-          )}
-        </AnimatePresence>
-      </div>
-
-      <div className="flex flex-1 flex-col gap-2 p-4">
-        <div className="flex items-start justify-between gap-2">
+      {/* ── Text content ──────────────────────────────────────────────── */}
+      <div className="relative flex min-w-0 flex-1 flex-col justify-between gap-2 px-4 py-3.5 sm:px-5 sm:py-4">
+        <div className="min-w-0">
           <h3
-            className="min-w-0 flex-1 font-semibold leading-snug text-zinc-900"
-            style={{ fontSize: '1rem' }}
+            className="truncate text-[0.98rem] font-semibold leading-snug text-zinc-950 sm:text-[1.05rem]"
+            title={name}
           >
             {name}
           </h3>
 
-          <m.span
-            {...childAnim(0.1)}
-            className="shrink-0 whitespace-nowrap font-bold tabular-nums"
-            style={{ fontSize: '1rem', color: 'var(--color-ember-500, #a86840)' }}
-          >
-            {priceLabel}
-          </m.span>
+          {description.length > 0 && (
+            <p className="mt-1 line-clamp-2 text-[0.82rem] leading-relaxed text-zinc-500 sm:text-sm">
+              {description}
+            </p>
+          )}
         </div>
 
-        {description.length > 0 && (
-          <p className="line-clamp-2 text-sm font-light leading-relaxed text-zinc-500">
-            {description}
-          </p>
-        )}
+        {/* Mobile-first bottom action row */}
+        <div className="mt-auto flex items-end justify-between gap-3 pt-2">
+          <div className="min-w-0">
+            <span className="block whitespace-nowrap text-[0.95rem] font-semibold tabular-nums text-zinc-950 sm:text-base">
+              {priceLabel}
+            </span>
 
-        <AnimatePresence>
-          {isLowStock && (
-            <m.p
-              key="low-stock"
-              initial={{ opacity: 0, y: -4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.2, ease: ES }}
-              className="flex items-center gap-1 text-[11px] font-semibold text-amber-600"
-            >
-              <span aria-hidden="true">&#9888;</span>
-              Only a few left
-            </m.p>
-          )}
-        </AnimatePresence>
+            {(dietBadges.length > 0 || isLowStock) && (
+              <div className="mt-1 flex max-w-full flex-wrap items-center gap-1.5">
+                {dietBadges.slice(0, 3).map((badge) => (
+                  <span
+                    key={badge.key}
+                    className="inline-flex items-center rounded-full bg-zinc-100 px-1.5 py-[2px] text-[10px] font-semibold text-zinc-600"
+                    title={badge.label}
+                  >
+                    {badge.label}
+                  </span>
+                ))}
 
-        <div className="flex-1" />
+                {isLowStock && (
+                  <span className="inline-flex items-center text-[10px] font-semibold text-amber-700">
+                    Few left
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
 
-        <m.div
-          whileHover={isAvailable ? { scale: 1.02 } : undefined}
-          whileTap={isAvailable ? { scale: 0.97 } : undefined}
-          transition={{ duration: 0.12, ease: ES }}
-        >
-          <button
+          <m.button
             type="button"
-            className={`min-h-11 w-full ${isAvailable ? 'btn btn-primary' : 'btn btn-ghost-dark'}`}
-            onClick={handleOpen}
+            whileHover={isAvailable ? { scale: 1.03 } : undefined}
+            whileTap={isAvailable ? { scale: 0.96 } : undefined}
+            transition={{ duration: 0.12 }}
+            onClick={handlePlusClick}
             disabled={!isAvailable || isOpening}
-            aria-label={!isAvailable ? `${name} is currently unavailable` : `Customize ${name}`}
+            aria-label={!isAvailable ? `${name} is currently unavailable` : `Add ${name}`}
+            className={[
+              'inline-flex min-h-10 shrink-0 items-center justify-center rounded-full px-4 text-sm font-semibold',
+              'transition-colors duration-150',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900/20',
+              'sm:min-h-11 sm:px-5',
+              isAvailable
+                ? 'bg-zinc-950 text-white hover:bg-zinc-800 active:bg-black'
+                : 'cursor-not-allowed bg-zinc-200 text-zinc-400',
+            ]
+              .filter(Boolean)
+              .join(' ')}
           >
-            {isOpening ? 'Opening\u2026' : !isAvailable ? 'Unavailable' : 'Customize'}
-          </button>
-        </m.div>
+            {isOpening ? (
+              'Opening'
+            ) : (
+              <>
+                Add
+                <span className="ml-1 inline-flex items-center leading-none">
+                  <PlusIcon />
+                </span>
+              </>
+            )}
+          </m.button>
+        </div>
+
+        {!isAvailable && (
+          <div
+            className="absolute inset-0 z-20 flex items-center justify-center rounded-[22px] bg-white/75 backdrop-blur-[1px]"
+            aria-hidden="true"
+          >
+            <span className="rounded-full bg-zinc-100 px-3 py-1 text-[11px] font-bold uppercase tracking-widest text-zinc-500 shadow-sm">
+              Unavailable
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* ── Thumbnail ─────────────────────────────────────────────────── */}
+      <div className="flex shrink-0 items-center py-3 pr-3 sm:py-4 sm:pr-4">
+        <div
+          className="relative h-[92px] w-[92px] overflow-hidden rounded-2xl bg-zinc-100 shadow-[inset_0_0_0_1px_rgba(24,24,27,0.04)] sm:h-[112px] sm:w-[112px]"
+          aria-hidden={!showImage}
+        >
+          <div
+            className="absolute inset-0"
+            style={{ background: pickGradient(id) }}
+            aria-hidden="true"
+          />
+
+          {showImage && !imgLoaded && (
+            <div className="sofi-shimmer absolute inset-0" aria-hidden="true" />
+          )}
+
+          {showImage && imageAttrs && (
+            <img
+              key={imageAttrs.src}
+              {...imageAttrs}
+              alt=""
+              className="absolute inset-0 h-full w-full object-cover transition-[opacity,transform] duration-500 ease-out group-hover:scale-[1.04]"
+              style={{ opacity: imgLoaded ? 1 : 0 }}
+              onLoad={handleImageLoad}
+              onError={handleImageError}
+            />
+          )}
+
+          <div
+            className="pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-black/[0.04]"
+            aria-hidden="true"
+          />
+        </div>
       </div>
     </m.article>
   );
