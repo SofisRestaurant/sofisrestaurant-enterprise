@@ -277,7 +277,37 @@ body {
     transition: none;
   }
 }
+body {
+  background-color: var(--app-bg);
+  color: var(--app-text);
+  transition:
+    background-color 220ms ease,
+    color 220ms ease;
+}
 
+@media (prefers-reduced-motion: reduce) {
+  body {
+    transition: none;
+  }
+}
+
+/* =============================================================================
+   FORM CONTROLS — iOS Safari zoom prevention
+   Safari zooms focused inputs/selects/textareas when computed font-size is below
+   16px. Keep real form controls at 16px minimum on touch devices.
+   ============================================================================= */
+
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+#root {
+  min-height: 100vh;
+}
 #root {
   min-height: 100vh;
 }
