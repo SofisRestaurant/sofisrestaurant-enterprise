@@ -298,35 +298,59 @@ function useFocusTrap(ref: React.RefObject<HTMLElement | null>, active: boolean)
 
 function useScrollLock(active: boolean) {
   useEffect(() => {
+    if (typeof document === 'undefined') return;
+
+    const body = document.body;
+    const html = document.documentElement;
+
     if (!active) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+
+    const previousBodyOverflow = body.style.overflow;
+    const previousBodyTouchAction = body.style.touchAction;
+    const previousHtmlOverflow = html.style.overflow;
+
+    body.style.overflow = 'hidden';
+    body.style.touchAction = 'none';
+    html.style.overflow = 'hidden';
+
     return () => {
-      document.body.style.overflow = prev;
+      body.style.overflow = previousBodyOverflow;
+      body.style.touchAction = previousBodyTouchAction;
+      html.style.overflow = previousHtmlOverflow;
     };
   }, [active]);
 }
-
 // ─── CartDrawer ───────────────────────────────────────────────────────────────
 
 export function CartDrawer() {
   const navigate = useNavigate();
   const location = useLocation();
+
   const isOpen = useCartUiStore((s) => s.isOpen);
   const closeCart = useCartUiStore((s) => s.close);
-const { user, session } = useAuth();
-const cart = useCart({
-  userId: user?.id ?? null,
-  sessionId: session ? getSupabaseSessionIdFromAccessToken(session.access_token) : null,
-});
   const clearFn = useCartStore((s) => s.clearCart);
+
+  const { user, session } = useAuth();
+
+  const cart = useCart({
+    userId: user?.id ?? null,
+    sessionId: session ? getSupabaseSessionIdFromAccessToken(session.access_token) : null,
+  });
+
   const { totals, flags } = useCartSummary();
+
   const [confirmClear, setConfirmClear] = useState(false);
   const mobileRef = useRef<HTMLDivElement>(null);
   const desktopRef = useRef<HTMLDivElement>(null);
+  const previousPathnameRef = useRef(location.pathname);
+
+  useEffect(() => {
+    injectCSS();
+  }, []);
 
   const items: CartItem[] = useMemo(() => {
     if (!Array.isArray(cart.items)) return [];
+
     return cart.items.filter(
       (v): v is CartItem =>
         typeof v === 'object' && v !== null && typeof (v as CartItem).menuItemId === 'string',
@@ -337,52 +361,53 @@ const cart = useCart({
   const hasItems = items.length > 0;
   const pts = Math.max(0, Math.floor(sc(totals.subtotalCents) / 100));
 
-
-  // Reset clear confirm when drawer closes
+  // Reset clear confirmation whenever the drawer closes.
   useEffect(() => {
     if (!isOpen) setConfirmClear(false);
   }, [isOpen]);
 
-  // Close on route change (e.g. user taps a link inside the drawer)
+  // Close on actual route changes only.
+  // Important for lazy-loaded CartDrawer:
+  // on first open, the drawer mounts while isOpen is already true.
+  // A plain pathname effect would run on mount and immediately close it.
   useEffect(() => {
-    if (isOpen) closeCart();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.pathname]);
+    const previousPathname = previousPathnameRef.current;
+    const pathnameChanged = previousPathname !== location.pathname;
 
-  // Escape key
+    previousPathnameRef.current = location.pathname;
+
+    if (pathnameChanged && isOpen) {
+      closeCart();
+    }
+  }, [location.pathname, isOpen, closeCart]);
+
+  // Escape key.
   useEffect(() => {
     if (!isOpen) return;
+
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') closeCart();
     };
+
     document.addEventListener('keydown', onKey);
+
     return () => {
       document.removeEventListener('keydown', onKey);
     };
   }, [isOpen, closeCart]);
 
-  /**
-   * useLayoutEffect — synchronous inline-style cleanup before paint.
-   *
-   * useCartDrawerDrag clears inline styles BEFORE calling onClose (see the
-   * hook). This useLayoutEffect is a belt-and-suspenders safety net: if for
-   * any reason the hook's cleanup didn't run (cancelled pointer, race on slow
-   * devices), this fires synchronously after React's DOM mutation but BEFORE
-   * the browser paints — guaranteeing the CSS class rule owns the transform
-   * from the very first frame the panel is open.
-   *
-   * useEffect would run after paint, creating a one-frame flash on Chrome
-   * where the panel could appear at translateY(110%) before snapping to 0.
-   */
   useLayoutEffect(() => {
     if (!isOpen) return;
+
     const el = mobileRef.current;
     if (!el) return;
+
     el.style.transform = '';
     el.style.transition = '';
   }, [isOpen]);
 
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+
   useFocusTrap(isMobile ? mobileRef : desktopRef, isOpen);
   useScrollLock(isOpen);
 
@@ -418,7 +443,7 @@ const cart = useCart({
       <div
         className="cart-backdrop pointer-events-none fixed inset-0 z-9998 bg-black/50 opacity-0 backdrop-blur-[2px] transition-opacity duration-200 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100"
         data-state={state}
-        onClick={closeCart}
+        onClick={isOpen ? closeCart : undefined}
         aria-hidden="true"
       />
 

@@ -2,28 +2,21 @@
 // =============================================================================
 // Floating Cart Pill — mobile-only cart CTA
 // =============================================================================
-// Performance contract:
-// - Lightweight global component safe for RootLayout.
-// - Does NOT import useCart(), checkout helpers, promo helpers, Supabase sync,
-//   auth, pricing engines, or drawer internals.
-// - Reads only the minimal cart store slices needed for display.
-// - Heavy CartDrawer should be lazy-loaded separately.
-// =============================================================================
-//
 // Behavior:
 // - Appears only when cart has items.
 // - Stays above BottomNav using --bottom-nav-offset from BottomNav.
 // - Hidden on checkout/admin/kitchen/expo/auth utility flows.
 // - Hidden while modal is open to avoid z-index conflicts.
 // - Uses transform/compositor-safe styling for iOS Safari.
-// - Clean visual treatment: no heavy glow, no backdrop blur, no edge bleed.
+// - Clean visual treatment: no heavy glow, no visible corner artifacts,
+//   no backdrop blur, no decorative pseudo-overlays that can bleed at edges.
 // =============================================================================
 
-import { useContext, useMemo } from 'react';
+import { useCallback, useContext, useMemo } from 'react';
 import { useLocation } from 'react-router-dom';
 
 import { ModalContext } from '@/components/ui/ModalContext';
-import { useCartStore, selectItemCount, selectItems } from '@/modules/cart/store/cart.store';
+import { useCart } from '@/modules/cart/hooks/useCart';
 import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
 
 const HIDDEN_ON = ['/checkout', '/admin', '/kitchen', '/expo', '/auth', '/update-password'];
@@ -62,35 +55,40 @@ function readLineTotalCents(value: unknown): number {
   return Math.max(0, Math.round(value));
 }
 
+function readCount(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.round(value));
+}
+
 export function FloatingCartPill() {
   const { pathname } = useLocation();
+  const { itemCount, items } = useCart();
+  const openCart = useCartUiStore((state) => state.open);
   const modalContext = useContext(ModalContext);
 
-  // Keep this component lightweight:
-  // Do not use useCart() here. It imports promo/checkout/sync helpers that are
-  // unnecessary for a small global mobile CTA.
-  const itemCount = useCartStore(selectItemCount);
-  const items = useCartStore(selectItems);
-  const openCart = useCartUiStore((state) => state.open);
-
   const hiddenRoute = isHiddenRoute(pathname);
-  const count = itemCount ?? 0;
+  const count = readCount(itemCount);
   const modalIsOpen = Boolean(modalContext?.activeModal);
 
-  const subtotalCents = useMemo(() => {
-    if (!Array.isArray(items)) return 0;
+  const subtotalCents = useMemo(
+    () =>
+      (items ?? []).reduce((sum, item) => {
+        return sum + readLineTotalCents(item.lineTotalCents);
+      }, 0),
+    [items],
+  );
 
-    return items.reduce((sum, item) => {
-      return sum + readLineTotalCents(item.lineTotalCents);
-    }, 0);
-  }, [items]);
+  const formattedSubtotal = useMemo(() => formatCurrencyFromCents(subtotalCents), [subtotalCents]);
+
+  const itemLabel = useMemo(() => `${count} item${count === 1 ? '' : 's'}`, [count]);
+
+  const handleOpenCart = useCallback(() => {
+    openCart();
+  }, [openCart]);
 
   if (hiddenRoute || count === 0 || modalIsOpen) {
     return null;
   }
-
-  const formattedSubtotal = formatCurrencyFromCents(subtotalCents);
-  const itemLabel = `${count} item${count === 1 ? '' : 's'}`;
 
   return (
     <div
@@ -113,7 +111,7 @@ export function FloatingCartPill() {
     >
       <button
         type="button"
-        onClick={openCart}
+        onClick={handleOpenCart}
         aria-label={`View cart — ${itemLabel}, ${formattedSubtotal}`}
         className={cx(
           'group relative flex w-full touch-manipulation select-none items-center justify-between gap-3',
