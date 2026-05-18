@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import type { MenuItemPublic } from '@/domain/menu/menu.types';
-import { getMenuCardImageAttrs } from '@/lib/images/menuImageDelivery';
+import { getFeaturedImageAttrs } from '@/lib/images/menuImageDelivery';
 import { invokeEdge } from '@/lib/supabase/invoke';
 
 export type MenuItem = MenuItemPublic;
@@ -81,11 +81,14 @@ function FeaturedImage({
   const rawImageUrl = readImageUrl(item);
   const isPriorityImage = index === 0;
 
-  const imageAttrs = useMemo(
-    () => getMenuCardImageAttrs(rawImageUrl, { isAboveFold: isPriorityImage }),
-    [rawImageUrl, isPriorityImage],
-  );
-
+const imageAttrs = useMemo(
+  () =>
+    getFeaturedImageAttrs(rawImageUrl, {
+      variant,
+      isAboveFold: isPriorityImage,
+    }),
+  [rawImageUrl, variant, isPriorityImage],
+);
   useEffect(() => {
     setLoaded(false);
     setFailed(false);
@@ -121,10 +124,8 @@ function FeaturedImage({
         {...imageAttrs}
         alt={readName(item)}
         className={[
-          'absolute inset-0 h-full w-full transition-[opacity,transform] duration-500 ease-out',
-          variant === 'circle' || variant === 'mini'
-            ? 'object-contain p-1.5'
-            : 'object-cover group-hover:scale-[1.035]',
+          'absolute inset-0 h-full w-full object-cover transition-[opacity,transform] duration-500 ease-out',
+          variant === 'hero' ? 'group-hover:scale-[1.035]' : '',
         ].join(' ')}
         style={{ opacity: loaded ? 1 : 0 }}
         onLoad={() => setLoaded(true)}
