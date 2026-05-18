@@ -34,7 +34,7 @@
   --font-serif: Georgia, 'Times New Roman', serif;
   --font-sans: 'SofiBody', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
   --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace;
-  --font-hand: 'SofiHand', cursive;
+  --font-hand: var(--font-display);
 
   /* ── Gold / Accent — Richer warm spectrum ───────────────────────────────── */
   --color-gold-50: #fef9e8;

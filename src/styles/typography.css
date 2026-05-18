@@ -167,34 +167,37 @@ small,
   color: #171312;
 }
 
-/* ── Script / hand-lettered accent ─────────────────────────────────────── */
-.text-script {
-  font-family: var(--font-hand);
+/* ── Accent typography — professional fallback, no mixed cursive ─────────── */
+.text-script,
+.signature,
+.menu-accent,
+.hero-script,
+.font-script {
+  font-family: var(--font-display);
+  font-style: italic;
   font-weight: 400;
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
+}
+
+.text-script {
   color: #171312;
 }
 
 .signature {
-  font-family: var(--font-hand);
-  font-size: clamp(1.4rem, 2vw, 2rem);
+  font-size: clamp(1.3rem, 1.8vw, 1.8rem);
   line-height: 1.2;
   color: #171312;
 }
 
 .menu-accent {
-  font-family: var(--font-hand);
-  font-size: 1.1em;
+  font-size: 1.05em;
   color: #b83224;
 }
 
 .hero-script {
-  font-family: var(--font-hand);
-  font-size: clamp(2rem, 5vw, 3rem);
-  letter-spacing: 0.01em;
+  font-size: clamp(1.75rem, 4vw, 2.5rem);
   color: #b83224;
 }
-
 /* ── Prevent orphans in large headings ──────────────────────────────────── */
 h1, h2, h3, .section-title {
   text-wrap: balance;
