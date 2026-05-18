@@ -2,24 +2,17 @@
 // =============================================================================
 // Sofi's Restaurant Header
 // =============================================================================
-// PERF FIX:
-//   - Removed `useCart` import → replaced with `useCartUiStore` selector.
-//     This removes cart.store.ts / Supabase / auth from the initial shell bundle.
-//   - All other behavior preserved exactly.
-//
-// FONT FIX (2026-05):
-//   - Replaced raw `text-script` live text with the LogoWordmark component.
-//     LogoWordmark uses the Font Loading API to guarantee the brand wordmark
-//     is either fully cursive or fully sans — never a mixed state.
-//   - The `text-script` class on the <Link> is removed; the component manages
-//     its own font-family via .logo-wordmark--cursive / .logo-wordmark--sans.
+// Premium production header.
+// - Keeps cart UI lightweight through useCartUiStore.
+// - Keeps brand script limited to the logo wordmark.
+// - Adds a warmer, authentic restaurant identity without hurting mobile UX.
+// - Improves mobile menu layout, cart access, search behavior, and polish.
 // =============================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { LogOut, Menu, Search, ShoppingCart, User, X } from 'lucide-react';
 
-import LogoWordmark from '@/components/brand/LogoWordmark';
 import { Button } from '@/components/ui/Button';
 import { useModal } from '@/components/ui/useModal';
 import { useAuth } from '@/features/auth/hooks/useAuth';
@@ -51,6 +44,41 @@ const NAV_LINKS: NavLink[] = [
 
 const SEARCH_DEBOUNCE_MS = 150;
 
+function BrandWordmark({ label }: { label: string }) {
+  const normalizedLabel = label.trim();
+
+  const parts = useMemo(() => {
+    const match = normalizedLabel.match(/^(Sofi)(['’]s)?(\s+Restaurant)?$/i);
+
+    if (!match) return null;
+
+    return {
+      first: match[1] ?? 'Sofi',
+      possessive: match[2] ?? "'s",
+      rest: match[3] ?? ' Restaurant',
+    };
+  }, [normalizedLabel]);
+
+  if (!parts) {
+    return <span className="font-brand">{normalizedLabel}</span>;
+  }
+
+  return (
+    <span className="font-brand whitespace-nowrap" aria-hidden="true">
+      <span>{parts.first}</span>
+      <span
+        style={{
+          fontFamily: "'Apple Chancery', 'Segoe Script', 'Brush Script MT', cursive",
+          letterSpacing: '0',
+        }}
+      >
+        {parts.possessive}
+      </span>
+      <span>{parts.rest}</span>
+    </span>
+  );
+}
+
 export default function Header() {
   const { t } = useTranslation();
   const { pathname } = useLocation();
@@ -59,9 +87,8 @@ export default function Header() {
 
   const { user, profile, signOut } = useAuth();
 
-  // PERF: Read itemCount from lightweight UI store instead of heavy useCart hook
-  const itemCount = useCartUiStore((s) => s.itemCount);
-  const openCart = useCartUiStore((s) => s.open);
+  const itemCount = useCartUiStore((state) => state.itemCount);
+  const openCart = useCartUiStore((state) => state.open);
 
   const modal = useModal();
   const activeOrderId = useActiveOrder(user?.id ?? null);
@@ -83,6 +110,8 @@ export default function Header() {
   const isAdmin = profile?.role ? canAccessAdmin(profile.role) : false;
   const isAuthed = Boolean(user);
 
+  const appName = t('common.appName');
+
   const displayName = useMemo(
     () => profile?.full_name?.trim() || user?.name?.trim() || user?.email || null,
     [profile?.full_name, user?.name, user?.email],
@@ -91,13 +120,8 @@ export default function Header() {
   const cartAriaLabel = useMemo(() => {
     const count = itemCount ?? 0;
 
-    if (count === 0) {
-      return t('header.cart.ariaEmpty');
-    }
-
-    if (count === 1) {
-      return t('header.cart.ariaSingular');
-    }
+    if (count === 0) return t('header.cart.ariaEmpty');
+    if (count === 1) return t('header.cart.ariaSingular');
 
     return t('header.cart.ariaPlural', { count });
   }, [itemCount, t]);
@@ -113,6 +137,7 @@ export default function Header() {
   }, []);
 
   const toggleMobileMenu = useCallback(() => {
+    setMobileSearchOpen(false);
     setMobileMenuOpen((isOpen) => !isOpen);
   }, []);
 
@@ -138,9 +163,7 @@ export default function Header() {
   }, []);
 
   const openMobileSearch = useCallback(() => {
-    if (!isMenu) {
-      return;
-    }
+    if (!isMenu) return;
 
     setMobileMenuOpen(false);
     setMobileSearchOpen(true);
@@ -156,9 +179,7 @@ export default function Header() {
   }, [menuSearchText]);
 
   useEffect(() => {
-    if (!isMenu) {
-      return;
-    }
+    if (!isMenu) return;
 
     if (debounceRef.current) {
       window.clearTimeout(debounceRef.current);
@@ -176,14 +197,23 @@ export default function Header() {
   }, [draftSearch, isMenu, setMenuSearchText]);
 
   useEffect(() => {
-    if (!mobileMenuOpen && !mobileSearchOpen) {
-      return;
-    }
+    const shouldLock = mobileMenuOpen || mobileSearchOpen;
+
+    if (!shouldLock) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [mobileMenuOpen, mobileSearchOpen]);
+
+  useEffect(() => {
+    if (!mobileMenuOpen && !mobileSearchOpen) return;
 
     function handleEscape(event: KeyboardEvent) {
-      if (event.key !== 'Escape') {
-        return;
-      }
+      if (event.key !== 'Escape') return;
 
       if (mobileSearchOpen) {
         event.preventDefault();
@@ -206,16 +236,12 @@ export default function Header() {
   }, [mobileMenuOpen, mobileSearchOpen, closeMobileMenu, closeMobileSearch]);
 
   useEffect(() => {
-    if (!mobileMenuOpen) {
-      return;
-    }
+    if (!mobileMenuOpen) return;
 
     function handlePointerDown(event: PointerEvent) {
       const target = event.target as Node | null;
 
-      if (!target) {
-        return;
-      }
+      if (!target) return;
 
       if (mobileMenuRef.current?.contains(target) || mobileToggleRef.current?.contains(target)) {
         return;
@@ -232,18 +258,14 @@ export default function Header() {
   }, [mobileMenuOpen, closeMobileMenu]);
 
   useEffect(() => {
-    if (!mobileSearchOpen) {
-      return;
-    }
+    if (!mobileSearchOpen) return;
 
     queueMicrotask(() => mobileSearchInputRef.current?.focus());
 
     function handlePointerDown(event: PointerEvent) {
       const target = event.target as Node | null;
 
-      if (!target) {
-        return;
-      }
+      if (!target) return;
 
       if (
         mobileSearchPanelRef.current?.contains(target) ||
@@ -263,14 +285,10 @@ export default function Header() {
   }, [mobileSearchOpen, closeMobileSearch]);
 
   useEffect(() => {
-    if (!isMenu) {
-      return;
-    }
+    if (!isMenu) return;
 
     function handleSearchShortcut(event: KeyboardEvent) {
-      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) {
-        return;
-      }
+      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return;
 
       const activeElement = document.activeElement as HTMLElement | null;
       const activeTag = activeElement?.tagName?.toLowerCase();
@@ -290,39 +308,56 @@ export default function Header() {
     };
   }, [isMenu, openMobileSearch]);
 
+  const cartBadge = (itemCount ?? 0) > 99 ? '99+' : itemCount;
+
   return (
     <>
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-60 focus:rounded-xl focus:bg-[var(--app-surface-elevated)] focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-[var(--app-text)] focus:shadow-(--shadow-xl) focus:outline-none focus:ring-2 focus:ring-(--color-gold-400)"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[60] focus:rounded-xl focus:bg-[var(--app-surface-elevated)] focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-[var(--app-text)] focus:shadow-xl focus:outline-none focus:ring-2 focus:ring-(--color-gold-400)"
       >
         {t('nav.skipToContent')}
       </a>
 
-      <header className="sticky top-0 z-30 border-b border-[var(--app-border)] bg-[var(--app-header)] shadow-sm backdrop-blur-md transition-colors duration-200">
+      <header className="sticky top-0 z-30 border-b border-[rgba(120,72,38,0.13)] bg-[rgba(255,250,241,0.92)] shadow-[0_10px_30px_rgba(46,24,12,0.06)] backdrop-blur-xl transition-colors duration-200">
+        <div
+          className="hidden h-px w-full bg-[linear-gradient(90deg,transparent,rgba(212,175,55,0.55),transparent)] sm:block"
+          aria-hidden="true"
+        />
+
         <nav
-          className="mx-auto max-w-7xl px-4 py-3.5"
+          className="mx-auto max-w-7xl px-3 py-3 sm:px-4 lg:px-6"
           role="navigation"
           aria-label={t('nav.ariaLabel')}
         >
-          <div className="flex items-center justify-between gap-3">
-            {/* ── Brand wordmark ──────────────────────────────────────────
-                LogoWordmark handles font loading internally:
-                  • SofiDisplay loaded  → cursive wordmark
-                  • SofiDisplay failed  → clean 800-weight sans wordmark
-                  • Never shows mixed cursive + serif glyphs
-                aria-label on the Link provides the accessible name.
-            ──────────────────────────────────────────────────────────── */}
+          <div className="flex min-h-12 items-center justify-between gap-2 sm:gap-3">
             <Link
               to="/"
-              className="rounded-xl px-2 py-1 text-2xl text-(--color-ember-700) transition-colors hover:text-(--color-ember-600) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
+              className="group flex min-w-0 shrink items-center gap-2 rounded-2xl px-1.5 py-1 text-(--color-ember-700) transition-colors hover:text-(--color-ember-600) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
               aria-label={t('header.logo.aria')}
             >
-              <LogoWordmark />
+              <span
+                className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[rgba(212,175,55,0.28)] bg-[radial-gradient(circle_at_35%_28%,rgba(255,244,203,0.95),rgba(212,175,55,0.18)_48%,rgba(168,69,32,0.10))] text-[0.62rem] font-black uppercase tracking-[0.16em] text-(--color-ember-700) shadow-[0_8px_22px_rgba(120,72,38,0.10)] sm:flex"
+                aria-hidden="true"
+              >
+                SR
+              </span>
+
+              <span className="flex min-w-0 flex-col leading-none">
+                <span className="text-[1.55rem] sm:text-[1.72rem]">
+                  <BrandWordmark label={appName} />
+                </span>
+
+                <span className="mt-1 hidden font-body text-[0.56rem] font-bold uppercase tracking-[0.28em] text-[rgba(120,72,38,0.70)] sm:block">
+                  Real flavor · True tradition
+                </span>
+              </span>
+
+              <span className="sr-only">{appName}</span>
             </Link>
 
             <div
-              className="hidden items-center gap-1.5 md:flex"
+              className="hidden items-center gap-1 rounded-full border border-[rgba(120,72,38,0.10)] bg-white/55 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] md:flex"
               role="menubar"
               aria-label="Primary links"
             >
@@ -337,28 +372,21 @@ export default function Header() {
                     aria-label={t(`nav.links.${key}.aria`)}
                     aria-current={active ? 'page' : undefined}
                     className={cx(
-                      'relative rounded-xl px-3 py-2 text-sm font-semibold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]',
+                      'relative rounded-full px-3.5 py-2 text-sm font-bold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]',
                       active
-                        ? 'bg-(--color-ember-50) text-(--color-ember-700)'
-                        : 'text-[var(--app-text)] hover:bg-[var(--app-surface-hover)] hover:text-(--color-ember-700)',
+                        ? 'bg-(--color-ember-600) text-white shadow-[0_8px_18px_rgba(168,69,32,0.20)]'
+                        : 'text-[rgba(46,24,12,0.80)] hover:bg-[rgba(255,246,230,0.92)] hover:text-(--color-ember-700)',
                     )}
                   >
                     {t(`nav.links.${key}.label`)}
-
-                    {active && (
-                      <span
-                        className="absolute inset-x-3 -bottom-1 h-0.5 rounded-full bg-(--color-ember-500)"
-                        aria-hidden="true"
-                      />
-                    )}
                   </Link>
                 );
               })}
             </div>
 
-            <div className="flex items-center gap-2 md:gap-3">
+            <div className="flex shrink-0 items-center gap-1.5 sm:gap-2 md:gap-3">
               {isMenu && (
-                <div className="hidden w-28rem max-w-[38vw] lg:block">
+                <div className="hidden w-[28rem] max-w-[38vw] lg:block">
                   <MenuHeaderSearch
                     value={draftSearch}
                     onChange={setDraftSearch}
@@ -371,14 +399,11 @@ export default function Header() {
                 <button
                   ref={mobileSearchBtnRef}
                   type="button"
-                  onClick={() => {
-                    setMobileMenuOpen(false);
-                    openMobileSearch();
-                  }}
+                  onClick={openMobileSearch}
                   aria-label={t('header.search.openAria')}
                   aria-haspopup="dialog"
                   aria-expanded={mobileSearchOpen}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-(--radius-pill) border border-[var(--app-border)] bg-[var(--app-surface)] text-[var(--app-text)] shadow-(--shadow-xs) transition-colors hover:bg-[var(--app-surface-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40 lg:hidden"
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[rgba(120,72,38,0.16)] bg-white/75 text-[rgba(46,24,12,0.82)] shadow-sm transition-colors hover:bg-[rgba(255,246,230,0.95)] hover:text-(--color-ember-700) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40 lg:hidden"
                 >
                   <Search className="h-5 w-5" aria-hidden="true" />
                 </button>
@@ -388,18 +413,21 @@ export default function Header() {
                 onClick={openCart}
                 type="button"
                 aria-label={cartAriaLabel}
-                className={cx(
-                  'relative rounded-xl p-2 text-[var(--app-text)] transition-all hover:bg-[var(--app-surface-hover)] hover:text-(--color-ember-700) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]',
-                  'hidden md:inline-flex',
-                )}
+                className="relative inline-flex h-10 w-10 items-center justify-center rounded-full border border-[rgba(120,72,38,0.16)] bg-white/75 text-[rgba(46,24,12,0.82)] shadow-sm transition-all hover:bg-[rgba(255,246,230,0.95)] hover:text-(--color-ember-700) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)] md:h-auto md:w-auto md:rounded-full md:px-3 md:py-2"
               >
-                <ShoppingCart className="h-6 w-6" aria-hidden="true" />
+                <ShoppingCart
+                  className="h-5 w-5 md:h-[1.15rem] md:w-[1.15rem]"
+                  aria-hidden="true"
+                />
+
+                <span className="ml-2 hidden text-sm font-bold md:inline">Cart</span>
+
                 {(itemCount ?? 0) > 0 && (
                   <span
-                    className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-(--radius-pill) bg-(--color-ember-600) px-1 text-[11px] font-bold text-white shadow-(--shadow-xs)"
+                    className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-(--color-ember-600) px-1 text-[11px] font-black text-white shadow-sm"
                     aria-hidden="true"
                   >
-                    {(itemCount ?? 0) > 99 ? '99+' : itemCount}
+                    {cartBadge}
                   </span>
                 )}
               </button>
@@ -410,7 +438,7 @@ export default function Header() {
                     {activeOrderId && (
                       <Link
                         to={`/order-status/${activeOrderId}`}
-                        className="rounded-xl px-3 py-2 text-sm font-semibold text-(--color-ember-600) transition-colors hover:bg-[var(--app-surface-hover)] hover:text-(--color-ember-500) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
+                        className="rounded-full px-3.5 py-2 text-sm font-bold text-(--color-ember-600) transition-colors hover:bg-[rgba(255,246,230,0.95)] hover:text-(--color-ember-500) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
                       >
                         {t('header.auth.trackOrder')}
                       </Link>
@@ -419,7 +447,7 @@ export default function Header() {
                     {isAdmin && (
                       <Link
                         to="/admin"
-                        className="rounded-xl px-3 py-2 text-sm font-semibold text-(--color-gold-600) transition-colors hover:bg-[var(--app-surface-hover)] hover:text-(--color-gold-500) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
+                        className="rounded-full px-3.5 py-2 text-sm font-bold text-(--color-gold-600) transition-colors hover:bg-[rgba(255,246,230,0.95)] hover:text-(--color-gold-500) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
                       >
                         {t('header.auth.admin')}
                       </Link>
@@ -428,11 +456,11 @@ export default function Header() {
                     <Link
                       to="/account"
                       aria-label={t('header.auth.account')}
-                      className="flex items-center gap-2 rounded-xl border border-[var(--app-border)] bg-[var(--app-surface)] px-3 py-2 transition-all hover:bg-[var(--app-surface-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
+                      className="flex items-center gap-2 rounded-full border border-[rgba(120,72,38,0.14)] bg-white/65 px-3 py-2 transition-all hover:bg-[rgba(255,246,230,0.95)] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
                     >
-                      <User className="h-4 w-4 text-[var(--app-muted)]" aria-hidden="true" />
+                      <User className="h-4 w-4 text-[rgba(120,72,38,0.72)]" aria-hidden="true" />
                       {displayName && (
-                        <span className="max-w-32 truncate text-sm font-semibold text-[var(--app-text)]">
+                        <span className="max-w-32 truncate text-sm font-bold text-[rgba(46,24,12,0.88)]">
                           {t('header.auth.greeting', { name: displayName })}
                         </span>
                       )}
@@ -444,7 +472,7 @@ export default function Header() {
                       size="sm"
                       type="button"
                       aria-label={t('header.auth.signOut')}
-                      className="flex items-center gap-2 rounded-xl"
+                      className="flex items-center gap-2 rounded-full"
                     >
                       <LogOut className="h-4 w-4" aria-hidden="true" />
                       {t('header.auth.signOut')}
@@ -457,7 +485,7 @@ export default function Header() {
                       variant="secondary"
                       size="sm"
                       type="button"
-                      className="rounded-xl"
+                      className="rounded-full"
                     >
                       {t('header.auth.logIn')}
                     </Button>
@@ -467,7 +495,7 @@ export default function Header() {
                       variant="primary"
                       size="sm"
                       type="button"
-                      className="rounded-xl"
+                      className="rounded-full shadow-[0_10px_22px_rgba(168,69,32,0.18)]"
                     >
                       {t('header.auth.signUp')}
                     </Button>
@@ -482,12 +510,12 @@ export default function Header() {
                 aria-label={mobileMenuOpen ? t('header.auth.closeMenu') : t('header.auth.openMenu')}
                 aria-expanded={mobileMenuOpen}
                 aria-controls="mobile-menu"
-                className="rounded-xl p-2 text-[var(--app-text)] transition-all hover:bg-[var(--app-surface-hover)] hover:text-(--color-ember-700) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)] md:hidden"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[rgba(120,72,38,0.16)] bg-white/75 text-[rgba(46,24,12,0.82)] shadow-sm transition-all hover:bg-[rgba(255,246,230,0.95)] hover:text-(--color-ember-700) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)] md:hidden"
               >
                 {mobileMenuOpen ? (
-                  <X className="h-6 w-6" aria-hidden="true" />
+                  <X className="h-5 w-5" aria-hidden="true" />
                 ) : (
-                  <Menu className="h-6 w-6" aria-hidden="true" />
+                  <Menu className="h-5 w-5" aria-hidden="true" />
                 )}
               </button>
             </div>
@@ -498,11 +526,19 @@ export default function Header() {
               ref={mobileMenuRef}
               id="mobile-menu"
               role="menu"
-              className="mt-4 overflow-hidden rounded-[1.5rem] border border-[var(--app-border)] bg-[var(--app-card)] p-3 shadow-(--shadow-xl) transition-colors md:hidden"
-              style={{ transform: 'none' }}
+              className="mt-3 overflow-hidden rounded-[1.65rem] border border-[rgba(120,72,38,0.14)] bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(255,248,235,0.97))] p-3 shadow-[0_22px_60px_rgba(46,24,12,0.16)] transition-colors md:hidden"
             >
+              <div className="mb-3 rounded-[1.25rem] border border-[rgba(212,175,55,0.16)] bg-[rgba(255,246,230,0.72)] px-4 py-3 text-center">
+                <p className="font-brand text-2xl leading-none text-(--color-ember-700)">
+                  <BrandWordmark label={appName} />
+                </p>
+                <p className="mt-1 font-body text-[0.62rem] font-black uppercase tracking-[0.24em] text-[rgba(120,72,38,0.70)]">
+                  Handmade flavor in Surprise
+                </p>
+              </div>
+
               <div className="flex flex-col gap-2">
-                <div className="flex flex-col gap-1">
+                <div className="grid grid-cols-2 gap-2">
                   {NAV_LINKS.map(({ path, key }) => {
                     const active = isActive(path);
 
@@ -515,10 +551,10 @@ export default function Header() {
                         aria-label={t(`nav.links.${key}.aria`)}
                         aria-current={active ? 'page' : undefined}
                         className={cx(
-                          'rounded-2xl px-4 py-3 text-sm font-semibold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)',
+                          'rounded-2xl px-4 py-3 text-center text-sm font-black transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)',
                           active
-                            ? 'bg-(--color-ember-50) text-(--color-ember-700)'
-                            : 'text-[var(--app-text)] hover:bg-[var(--app-surface-hover)] hover:text-(--color-ember-700)',
+                            ? 'bg-(--color-ember-600) text-white shadow-[0_10px_22px_rgba(168,69,32,0.18)]'
+                            : 'bg-white/60 text-[rgba(46,24,12,0.86)] hover:bg-[rgba(255,246,230,0.95)] hover:text-(--color-ember-700)',
                         )}
                       >
                         {t(`nav.links.${key}.label`)}
@@ -527,7 +563,7 @@ export default function Header() {
                   })}
                 </div>
 
-                <hr className="my-1 border-[var(--app-divider)]" />
+                <hr className="my-1 border-[rgba(120,72,38,0.12)]" />
 
                 {user ? (
                   <>
@@ -535,7 +571,7 @@ export default function Header() {
                       <Link
                         to={`/order-status/${activeOrderId}`}
                         onClick={closeMobileMenu}
-                        className="block rounded-2xl bg-(--color-ember-50) px-4 py-3 text-sm font-semibold text-(--color-ember-700) transition-colors hover:bg-(--color-ember-100) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)"
+                        className="block rounded-2xl bg-(--color-ember-50) px-4 py-3 text-sm font-black text-(--color-ember-700) transition-colors hover:bg-(--color-ember-100) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)"
                       >
                         {t('header.auth.trackOrder')}
                       </Link>
@@ -545,7 +581,7 @@ export default function Header() {
                       <Link
                         to="/admin"
                         onClick={closeMobileMenu}
-                        className="block rounded-2xl bg-(--color-gold-50) px-4 py-3 text-sm font-semibold text-(--color-gold-600) transition-colors hover:bg-(--color-gold-100) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)"
+                        className="block rounded-2xl bg-(--color-gold-50) px-4 py-3 text-sm font-black text-(--color-gold-600) transition-colors hover:bg-(--color-gold-100) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)"
                       >
                         {t('header.auth.adminPanel')}
                       </Link>
@@ -555,16 +591,17 @@ export default function Header() {
                       to="/account"
                       onClick={closeMobileMenu}
                       aria-label={t('header.auth.account')}
-                      className="block rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface)] px-4 py-3 transition-all hover:bg-[var(--app-surface-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)"
+                      className="block rounded-2xl border border-[rgba(120,72,38,0.14)] bg-white/70 px-4 py-3 transition-all hover:bg-[rgba(255,246,230,0.95)] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)"
                     >
                       <div className="mb-1 flex items-center gap-2">
-                        <User className="h-4 w-4 text-[var(--app-muted)]" aria-hidden="true" />
-                        <span className="text-sm font-semibold text-[var(--app-text)]">
-                          {displayName}
+                        <User className="h-4 w-4 text-[rgba(120,72,38,0.72)]" aria-hidden="true" />
+                        <span className="truncate text-sm font-black text-[rgba(46,24,12,0.88)]">
+                          {displayName ?? user.email}
                         </span>
                       </div>
+
                       {user.email && (
-                        <p className="text-xs text-[var(--app-muted)]">{user.email}</p>
+                        <p className="truncate text-xs text-[rgba(120,72,38,0.66)]">{user.email}</p>
                       )}
                     </Link>
 
@@ -581,7 +618,7 @@ export default function Header() {
                     </Button>
                   </>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
                     <Button
                       onClick={() => openModalSafe('login')}
                       variant="secondary"
@@ -614,18 +651,21 @@ export default function Header() {
           aria-modal="true"
           aria-label={t('header.search.aria')}
         >
-          <div className="absolute inset-0 bg-[var(--app-overlay)]" aria-hidden="true" />
+          <div
+            className="absolute inset-0 bg-[rgba(28,18,8,0.48)] backdrop-blur-sm"
+            aria-hidden="true"
+          />
 
-          <div className="absolute inset-x-0 top-0 p-3">
+          <div className="absolute inset-x-0 top-0 p-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
             <div
               ref={mobileSearchPanelRef}
-              className="mx-auto max-w-2xl overflow-hidden rounded-[1.5rem] border border-[var(--app-border)] bg-[var(--app-card)] text-[var(--app-text)] shadow-(--shadow-2xl)"
+              className="mx-auto max-w-2xl overflow-hidden rounded-[1.65rem] border border-[rgba(120,72,38,0.14)] bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(255,248,235,0.97))] text-[rgba(46,24,12,0.88)] shadow-[0_24px_70px_rgba(28,18,8,0.22)]"
             >
-              <div className="flex items-center gap-2 border-b border-[var(--app-border)] px-4 py-3">
+              <div className="flex items-center gap-2 border-b border-[rgba(120,72,38,0.12)] px-3 py-3 sm:px-4">
                 <div className="min-w-0 flex-1">
                   <div className="relative">
                     <Search
-                      className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--app-muted)]"
+                      className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[rgba(120,72,38,0.62)]"
                       aria-hidden="true"
                     />
 
@@ -634,7 +674,7 @@ export default function Header() {
                       value={draftSearch}
                       onChange={(event) => setDraftSearch(event.target.value)}
                       placeholder={t('header.search.placeholder')}
-                      className="h-11 w-full rounded-2xl border border-[var(--app-input-border)] bg-[var(--app-input)] pl-10 pr-10 text-[var(--app-text)] outline-none transition focus:ring-2 focus:ring-(--color-gold-400)/40"
+                      className="h-11 w-full rounded-2xl border border-[rgba(120,72,38,0.16)] bg-white/75 pl-10 pr-10 text-[rgba(46,24,12,0.90)] outline-none transition placeholder:text-[rgba(120,72,38,0.46)] focus:ring-2 focus:ring-(--color-gold-400)/40"
                       type="search"
                       inputMode="search"
                       autoComplete="off"
@@ -645,7 +685,7 @@ export default function Header() {
                       <button
                         type="button"
                         onClick={() => setDraftSearch('')}
-                        className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-xl border border-[var(--app-border)] bg-[var(--app-surface)] text-[var(--app-muted)] transition-colors hover:bg-[var(--app-surface-hover)] hover:text-[var(--app-text)] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40"
+                        className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-xl border border-[rgba(120,72,38,0.14)] bg-white/80 text-[rgba(120,72,38,0.68)] transition-colors hover:bg-[rgba(255,246,230,0.95)] hover:text-[rgba(46,24,12,0.88)] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40"
                         aria-label={t('header.search.clear')}
                       >
                         <X className="h-4 w-4" aria-hidden="true" />
@@ -657,7 +697,7 @@ export default function Header() {
                 <button
                   type="button"
                   onClick={closeMobileSearch}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--app-border)] bg-[var(--app-surface)] text-[var(--app-text)] transition-colors hover:bg-[var(--app-surface-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40"
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[rgba(120,72,38,0.14)] bg-white/75 text-[rgba(46,24,12,0.82)] transition-colors hover:bg-[rgba(255,246,230,0.95)] focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40"
                   aria-label={t('header.search.close')}
                 >
                   <X className="h-5 w-5" aria-hidden="true" />
@@ -665,7 +705,9 @@ export default function Header() {
               </div>
 
               <div className="px-4 py-3">
-                <p className="text-xs text-[var(--app-muted)]">{t('header.search.tip')}</p>
+                <p className="text-xs leading-relaxed text-[rgba(120,72,38,0.68)]">
+                  {t('header.search.tip')}
+                </p>
               </div>
             </div>
           </div>

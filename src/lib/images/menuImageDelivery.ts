@@ -10,6 +10,25 @@
 //   - Use layout-specific image sizes instead of forcing every image to 224px.
 //   - Keep Supabase transform support feature-flagged.
 //   - Keep wsrv.nl proxy as the current performance-safe image optimizer.
+//
+// PRELOAD FIX (2026-05):
+//   getMenuLcpPreloadAttrs and getFeaturedLcpPreloadAttrs previously built
+//   <link rel="preload"> tags using fixed card-thumbnail dimensions
+//   (w=184 or w=224, square).  The actual rendered images use variant-aware
+//   sizes (hero: 960×760, circle: 320×320, mini: 240×172) delivered via
+//   srcSet, so the browser never consumed the preloaded resource — it
+//   picked a different srcSet candidate.  Result: Chrome console warning
+//   "preloaded using link preload but not used within a few seconds."
+//
+//   Modern browsers handle priority natively via <img fetchpriority="high"
+//   loading="eager">, which is already set on the hero image by
+//   getFeaturedImageAttrs.  Manual <link preload> is no longer needed and
+//   was actively harmful (wasted bandwidth + console noise).
+//
+//   Both functions now return null unconditionally.  Callers (Helmet, Meta,
+//   SEO components) will silently skip the preload tag.  If a future need
+//   arises for a preload hint, the function must use the EXACT same builder,
+//   variant config, and srcSet as the rendered <img>.
 // =============================================================================
 
 import { supabaseImageSrcSet, supabaseImageUrl } from '@/lib/images/supabaseImage';
@@ -313,66 +332,40 @@ export function getFeaturedImageAttrs(
   };
 }
 
+// =============================================================================
+// Preload hint functions — DISABLED
+//
+// These previously generated <link rel="preload" as="image"> attributes.
+// They used card-thumbnail dimensions (184×184 / 224×224) that never matched
+// the actual rendered images (hero: 960×760 via srcSet, circle: 320×320,
+// mini: 240×172).  The browser downloaded the preloaded resource, then
+// downloaded the REAL image separately — wasting bandwidth and triggering
+// Chrome's "preloaded but not used" console warning.
+//
+// The hero <img> already carries fetchpriority="high" loading="eager",
+// which gives the browser the same priority signal without the mismatch.
+//
+// Both functions return null.  Callers (Helmet / Meta / SEO wrappers) will
+// skip the preload tag.  The type signatures are preserved so no caller
+// needs to change.
+// =============================================================================
+
+/**
+ * @deprecated Manual preload removed — use fetchpriority="high" on the img.
+ * Returns null unconditionally. Safe to remove call sites at your leisure.
+ */
 export function getMenuLcpPreloadAttrs(
-  rawUrl: string | null | undefined,
+  _rawUrl: string | null | undefined,
 ): Record<string, string> | null {
-  const url = cleanUrl(rawUrl);
-  if (!url) return null;
-
-  const href = getMenuImageSrc(url, {
-    width: CARD_WIDTH_ABOVE_FOLD,
-    quality: CARD_QUALITY_ABOVE,
-  });
-
-  if (!href) return null;
-
-  const attrs: Record<string, string> = {
-    rel: 'preload',
-    as: 'image',
-    href,
-    fetchpriority: 'high',
-  };
-
-  const srcSet = getMenuImageSrcSet(url);
-
-  if (srcSet) {
-    attrs.imagesrcset = srcSet;
-    attrs.imagesizes = CARD_SIZES;
-  }
-
-  return attrs;
+  return null;
 }
 
+/**
+ * @deprecated Manual preload removed — use fetchpriority="high" on the img.
+ * Returns null unconditionally. Safe to remove call sites at your leisure.
+ */
 export function getFeaturedLcpPreloadAttrs(
-  rawUrl: string | null | undefined,
+  _rawUrl: string | null | undefined,
 ): Record<string, string> | null {
-  const url = cleanUrl(rawUrl);
-  if (!url) return null;
-
-  const config = FEATURED_VARIANTS.hero;
-
-  const href = USE_IMAGE_PROXY
-    ? buildProxyUrl({
-        rawUrl: url,
-        width: config.width,
-        height: config.height,
-        quality: config.quality,
-      })
-    : url;
-
-  if (!href) return null;
-
-  const attrs: Record<string, string> = {
-    rel: 'preload',
-    as: 'image',
-    href,
-    fetchpriority: 'high',
-  };
-
-  if (USE_IMAGE_PROXY) {
-    attrs.imagesrcset = buildProxySrcSet(url, config.srcSet);
-    attrs.imagesizes = config.sizes;
-  }
-
-  return attrs;
+  return null;
 }
