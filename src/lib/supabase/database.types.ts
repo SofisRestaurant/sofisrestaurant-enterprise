@@ -3165,17 +3165,23 @@ export type Database = {
         Row: {
           event_id: string
           event_type: string
+          handler_error: string | null
           processed_at: string
+          status: string
         }
         Insert: {
           event_id: string
           event_type: string
+          handler_error?: string | null
           processed_at?: string
+          status?: string
         }
         Update: {
           event_id?: string
           event_type?: string
+          handler_error?: string | null
           processed_at?: string
+          status?: string
         }
         Relationships: []
       }

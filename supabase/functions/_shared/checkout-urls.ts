@@ -30,7 +30,7 @@ function validateSiteUrl(raw: string): string {
   if (!raw) {
     throw new Error(
       "SITE_URL env var is not set. " +
-        "Set it to your public origin (e.g. https://sofisrestaurant.netlify.app) " +
+        "Set it to your public origin (e.g. https://sofisrestaurant-enterprise.vercel.app) " +
         "in Supabase → Edge Functions → Settings → Secrets.",
     );
   }
