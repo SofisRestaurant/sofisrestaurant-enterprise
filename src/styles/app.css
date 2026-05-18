@@ -4,7 +4,7 @@
 
    Load order:
      1. Tailwind engine      — base reset, utilities, variants
-     2. Fonts                — @font-face, aliases
+     2. Fonts                — @font-face, aliases, logo-wordmark states
      3. Tokens               — :root vars not covered by @theme
      4. Animations           — @keyframes + animation utilities
      5. Effects              — glass, glow, gradients, textures
@@ -25,16 +25,29 @@
 
 /* =============================================================================
    THEME — 2026 Luxury Expansion
-   Every scalar design token. Tailwind v4 generates utility classes from this.
+   Every scalar design token.  Tailwind v4 generates utility classes from this.
+
+   FONT ARCHITECTURE:
+     --font-sans    DM Sans (SofiBody) — body, headings, buttons, prices, UI
+     --font-display Same as --font-sans.  Modern luxury uses one sans at
+                    varying weights + tracking for hierarchy.
+     --font-serif   Georgia — blockquotes, editorial accents only.
+     --font-hand    Alias of --font-sans.  Neutralised — no cursive generic
+                    can ever leak into the UI via this token.
+     --font-mono    Code / monospace.
+
+     SofiDisplay is loaded in fonts.css but is NOT referenced by any token.
+     It is used exclusively by the LogoWordmark component via the
+     .logo-wordmark--cursive class.
    ============================================================================= */
 
 @theme {
   /* ── Typefaces ──────────────────────────────────────────────────────────── */
-  --font-display: 'SofiDisplay', Georgia, 'Times New Roman', serif;
+  --font-display: 'SofiBody', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
   --font-serif: Georgia, 'Times New Roman', serif;
   --font-sans: 'SofiBody', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
   --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace;
-  --font-hand: var(--font-display);
+  --font-hand: var(--font-sans);
 
   /* ── Gold / Accent — Richer warm spectrum ───────────────────────────────── */
   --color-gold-50: #fef9e8;
@@ -255,8 +268,6 @@
 
 /* =============================================================================
    BASE — System theme application
-   html and body pick up the theme surface + text from --app-* semantic vars.
-   Transitions are subtle and respect prefers-reduced-motion.
    ============================================================================= */
 
 html {
@@ -283,12 +294,6 @@ body {
 
 /* =============================================================================
    FORM CONTROLS — Mobile Safari zoom prevention
-   iOS Safari zooms focused form fields when the computed font-size is below 16px.
-
-   This rule is intentionally placed AFTER Tailwind and all local CSS imports.
-   It targets real text-entry controls only, avoids checkbox/radio/range sizing,
-   and uses !important because Tailwind utilities such as text-sm/text-xs can
-   otherwise override the rule inside component className strings.
    ============================================================================= */
 
 @media (pointer: coarse), (max-width: 767px) {

@@ -1,16 +1,36 @@
 /* =============================================================================
    SOFIS — fonts.css
    Critical font loading optimized for faster FCP/LCP.
+
+   TYPOGRAPHY FIX (2026-05):
+     SofiDisplay is a decorative / script typeface.  It MUST NOT be used for
+     headings, prices, buttons, or body text — only the brand wordmark.
+
+     The logo wordmark uses the LogoWordmark React component, which relies on
+     the Font Loading API to guarantee consistent rendering:
+       • Font loads  → full cursive wordmark
+       • Font fails  → clean sans-serif at weight 800
+       • Never shows a mixed cursive + serif state
+
+     font-display is set to `block` so the browser hides text (up to 3 s)
+     while the font downloads.  The React component independently manages
+     visibility via document.fonts, so the CSS block period is a safety net
+     for the rare case where JS hasn't hydrated yet.
+
+     SofiBody (DM Sans Variable) is the workhorse for everything else.
    ============================================================================= */
 
-/* ── Display Face ─────────────────────────────────────────────────────────── */
+/* ── Display Face — brand wordmark only ───────────────────────────────────
+   font-display: block  →  invisible until loaded (prevents FOUT on logo).
+   The LogoWordmark component controls actual visibility via JS.
+   ──────────────────────────────────────────────────────────────────────── */
 
 @font-face {
   font-family: 'SofiDisplay';
   src: url('/fonts/display/SofiDisplay-Regular.woff2') format('woff2');
   font-weight: 400;
   font-style: normal;
-  font-display: swap;
+  font-display: block;
 }
 
 @font-face {
@@ -18,7 +38,7 @@
   src: url('/fonts/display/SofiDisplay-Bold.woff2') format('woff2');
   font-weight: 700;
   font-style: normal;
-  font-display: swap;
+  font-display: block;
 }
 
 /* ── Body Face ────────────────────────────────────────────────────────────── */
@@ -33,24 +53,95 @@
 
 /*
   Do not load DMSans-Italic-Variable.ttf globally.
-  Lighthouse showed it in the critical path at 133KB+.
+  Lighthouse flagged it in the critical path at 133 KB+.
   Browser synthetic italic is acceptable for first paint.
 */
 
 /*
   Do not load SofiHand globally.
-  It was also showing in the critical path.
-  Load it later only if a specific below-fold component truly needs it.
+  SofiDisplay is the only decorative face, confined to the logo.
 */
 
-/* ── Utility classes ─────────────────────────────────────────────────────── */
+/* =============================================================================
+   Logo wordmark — two mutually-exclusive states
+   Managed by the LogoWordmark React component (src/components/brand/).
+   The component adds --cursive OR --sans, never both.
+   ============================================================================= */
+
+.logo-wordmark {
+  transition: opacity 180ms ease;
+  line-height: 1.15;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Cursive state (SofiDisplay confirmed loaded) ─────────────────────────
+   Fallback stays in the cursive/script generic family so that even if a
+   stray glyph falls back, it falls back to *another* script face — not to
+   Georgia or a sans, which would break the visual rhythm.
+   font-synthesis: none  →  prevents the browser from faking bold/italic
+   with the wrong outlines.
+   ──────────────────────────────────────────────────────────────────────── */
+
+.logo-wordmark--cursive {
+  font-family:
+    'SofiDisplay',
+    'Apple Chancery',
+    'Segoe Script',
+    'Brush Script MT',
+    cursive;
+  font-weight: 400;
+  font-style: normal;
+  font-synthesis: none;
+  letter-spacing: 0.01em;
+}
+
+/* ── Sans fallback state (font failed / timed out) ────────────────────────
+   Weight 800 + tight tracking gives a confident brand feel even without the
+   decorative face.  Looks intentional, not broken.
+   ──────────────────────────────────────────────────────────────────────── */
+
+.logo-wordmark--sans {
+  font-family: var(--font-sans);
+  font-weight: 800;
+  font-style: normal;
+  letter-spacing: -0.03em;
+}
+
+/* =============================================================================
+   Legacy utility classes
+   These may still appear in JSX.  They now resolve to safe, non-decorative
+   stacks so nothing ever accidentally renders in a script face.
+   ============================================================================= */
 
 .font-body {
   font-family: var(--font-sans);
 }
 
+/*
+  .font-brand  →  alias for the cursive logo state.
+  Only use on elements that the LogoWordmark component wraps, or on text
+  that has been explicitly confirmed safe (e.g. a decorative "S" monogram).
+*/
+.font-brand {
+  font-family:
+    'SofiDisplay',
+    'Apple Chancery',
+    'Segoe Script',
+    'Brush Script MT',
+    cursive;
+  font-weight: 400;
+  font-style: normal;
+  font-synthesis: none;
+  letter-spacing: 0.01em;
+}
+
+/*
+  .font-accent  →  clean serif for editorial flourish (pull-quotes, etc.)
+  NOT cursive.
+*/
 .font-accent {
-  font-family: var(--font-display);
+  font-family: var(--font-serif);
   font-style: italic;
   font-weight: 400;
 }

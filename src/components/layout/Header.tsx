@@ -6,12 +6,20 @@
 //   - Removed `useCart` import → replaced with `useCartUiStore` selector.
 //     This removes cart.store.ts / Supabase / auth from the initial shell bundle.
 //   - All other behavior preserved exactly.
+//
+// FONT FIX (2026-05):
+//   - Replaced raw `text-script` live text with the LogoWordmark component.
+//     LogoWordmark uses the Font Loading API to guarantee the brand wordmark
+//     is either fully cursive or fully sans — never a mixed state.
+//   - The `text-script` class on the <Link> is removed; the component manages
+//     its own font-family via .logo-wordmark--cursive / .logo-wordmark--sans.
 // =============================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { LogOut, Menu, Search, ShoppingCart, User, X } from 'lucide-react';
 
+import LogoWordmark from '@/components/brand/LogoWordmark';
 import { Button } from '@/components/ui/Button';
 import { useModal } from '@/components/ui/useModal';
 import { useAuth } from '@/features/auth/hooks/useAuth';
@@ -298,12 +306,19 @@ export default function Header() {
           aria-label={t('nav.ariaLabel')}
         >
           <div className="flex items-center justify-between gap-3">
+            {/* ── Brand wordmark ──────────────────────────────────────────
+                LogoWordmark handles font loading internally:
+                  • SofiDisplay loaded  → cursive wordmark
+                  • SofiDisplay failed  → clean 800-weight sans wordmark
+                  • Never shows mixed cursive + serif glyphs
+                aria-label on the Link provides the accessible name.
+            ──────────────────────────────────────────────────────────── */}
             <Link
               to="/"
-              className="text-script rounded-xl px-2 py-1 text-2xl text-(--color-ember-700) transition-colors hover:text-(--color-ember-600) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
+              className="rounded-xl px-2 py-1 text-2xl text-(--color-ember-700) transition-colors hover:text-(--color-ember-600) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]"
               aria-label={t('header.logo.aria')}
             >
-              {t('common.appName')}
+              <LogoWordmark />
             </Link>
 
             <div

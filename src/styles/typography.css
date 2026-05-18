@@ -1,12 +1,30 @@
 /* =============================================================================
    SOFIS — typography.css
-   Editorial luxury typography system.
+   Professional luxury typography system — 2026 edition.
 
-   Darker modern color pass:
-   • Rich ink for headings
-   • Softer warm-gray body text
-   • Ember links with gold hover
-   • No layout, spacing, or scale changes
+   DESIGN DIRECTION:
+     Modern luxury restaurants (Eleven Madison Park, Noma, Alinea, Atelier
+     Crenn) use a single high-quality sans-serif across the entire UI.
+     Hierarchy is created with weight, tracking, and scale — not with a
+     second decorative face.
+
+     DM Sans (loaded as SofiBody) is the workhorse:
+       • Headings at 700 – 900 weight, tight tracking
+       • Body at 400 weight, relaxed leading
+       • Labels / eyebrows at 600 weight, wide tracking, uppercase
+
+     Georgia (--font-serif) is used only for:
+       • Blockquotes and pull-quote overlays
+       • Long-form editorial prose (.prose-serif)
+
+     SofiDisplay is NOT referenced anywhere in this file.  It is used
+     exclusively by the LogoWordmark component in fonts.css.
+
+   LEGACY CLASSES:
+     .text-script, .hero-script, .menu-accent, .signature, .font-script
+     still exist so that any JSX referencing them continues to build.
+     They now resolve to var(--font-sans) or var(--font-serif) — safe,
+     readable, and professional.
    ============================================================================= */
 
 /* ── Base body ───────────────────────────────────────────────────────────── */
@@ -19,10 +37,10 @@ body {
   color: #171312;
 }
 
-/* ── Display headings ────────────────────────────────────────────────────── */
+/* ── Headings — clean sans hierarchy ─────────────────────────────────────── */
 h1, h2, h3, h4, h5, h6 {
-  font-family: var(--font-display);
-  font-weight: 400;          /* Playfair looks best at regular weight */
+  font-family: var(--font-sans);
+  font-weight: 700;
   letter-spacing: var(--tracking-tight);
   line-height: var(--leading-tight);
   color: #120f0e;
@@ -30,35 +48,39 @@ h1, h2, h3, h4, h5, h6 {
 
 h1 {
   font-size: clamp(2.75rem, 5.5vw, 4.5rem);
+  font-weight: 800;
   letter-spacing: var(--tracking-tighter);
   line-height: 1.05;
 }
 
 h2 {
   font-size: clamp(2rem, 3.5vw, 3.25rem);
+  font-weight: 800;
   letter-spacing: var(--tracking-tight);
   line-height: 1.15;
 }
 
 h3 {
   font-size: clamp(1.5rem, 2.5vw, 2.25rem);
+  font-weight: 700;
   line-height: 1.25;
 }
 
 h4 {
   font-size: clamp(1.2rem, 1.8vw, 1.6rem);
+  font-weight: 700;
   line-height: 1.3;
 }
 
 h5 {
   font-size: 1.125rem;
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: 0;
 }
 
 h6 {
   font-size: 1rem;
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: 0;
 }
 
@@ -89,7 +111,7 @@ a:hover { color: #c7922b; }
   color: #3f3632;
 }
 
-/* ── Blockquote ──────────────────────────────────────────────────────────── */
+/* ── Blockquote — serif for editorial contrast ───────────────────────────── */
 blockquote {
   font-family: var(--font-serif);
   font-style: italic;
@@ -125,36 +147,36 @@ small,
 .eyebrow {
   font-family: var(--font-sans);
   font-size: var(--text-2xs);
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: var(--tracking-loose);
   text-transform: uppercase;
   line-height: 1;
   color: #4b403b;
 }
 
-/* ── Section title ────────────────────────────────────────────────────────── */
+/* ── Section title — prominent sans heading ───────────────────────────────── */
 .section-title {
-  font-family: var(--font-display);
+  font-family: var(--font-sans);
   font-size: clamp(2rem, 3.5vw, 3.25rem);
   letter-spacing: var(--tracking-tighter);
   line-height: 1.1;
-  font-weight: 400;
+  font-weight: 800;
   color: #120f0e;
 }
 
-/* ── Hero display ─────────────────────────────────────────────────────────── */
+/* ── Hero display — large impact heading ──────────────────────────────────── */
 .text-display {
-  font-family: var(--font-display);
+  font-family: var(--font-sans);
   font-size: clamp(3rem, 11vw, 6.5rem);
   letter-spacing: var(--tracking-tightest);
   line-height: 0.92;
-  font-weight: 400;
+  font-weight: 900;
   color: #120f0e;
 }
 
 /* ── Italic accent span — inside headlines ──────────────────────────────── */
 .text-accent-italic {
-  font-family: var(--font-display);
+  font-family: var(--font-serif);
   font-style: italic;
   color: #b8841f;
 }
@@ -167,37 +189,59 @@ small,
   color: #171312;
 }
 
-/* ── Accent typography — professional fallback, no mixed cursive ─────────── */
-.text-script,
-.signature,
-.menu-accent,
-.hero-script,
-.font-script {
-  font-family: var(--font-display);
-  font-style: italic;
-  font-weight: 400;
-  letter-spacing: 0;
-}
+/* =============================================================================
+   Legacy accent classes — neutralized to safe stacks.
+   These class names may still appear in JSX.  They now render clean sans or
+   serif instead of the decorative SofiDisplay face.
+
+   NOTE: .text-script previously applied SofiDisplay to any element that used
+   it.  It is now a NO-OP that resolves to var(--font-sans).  The logo
+   wordmark is rendered exclusively by the LogoWordmark component, which
+   manages its own font-family via the .logo-wordmark--cursive class
+   defined in fonts.css.  If you still see `text-script` on a <Link> in
+   Header.tsx or TopBar.tsx, it is harmless — it just renders DM Sans.
+   ============================================================================= */
 
 .text-script {
-  color: #171312;
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: inherit;
 }
 
 .signature {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 400;
   font-size: clamp(1.3rem, 1.8vw, 1.8rem);
   line-height: 1.2;
   color: #171312;
 }
 
 .menu-accent {
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-weight: 600;
   font-size: 1.05em;
   color: #b83224;
 }
 
 .hero-script {
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-weight: 700;
   font-size: clamp(1.75rem, 4vw, 2.5rem);
+  letter-spacing: var(--tracking-tight);
   color: #b83224;
 }
+
+.font-script {
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-weight: 400;
+}
+
 /* ── Prevent orphans in large headings ──────────────────────────────────── */
 h1, h2, h3, .section-title {
   text-wrap: balance;
