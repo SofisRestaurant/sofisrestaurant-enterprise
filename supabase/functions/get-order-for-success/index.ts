@@ -96,6 +96,16 @@ function constantTimeEqual(a: string, b: string): boolean {
   return result === 0;
 }
 
+function publicOrder(order: Record<string, unknown>): Record<string, unknown> {
+  const {
+    customer_uid: _customerUid,
+    guest_token: _guestToken,
+    stripe_session_id: _stripeSessionId,
+    ...safeOrder
+  } = order;
+
+  return safeOrder;
+}
 // ─── Main handler ────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -183,12 +193,40 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // ── Look up order ─────────────────────────────────────────────────────────
-  const { data: orderRow, error: orderError } = await db
-    .from("orders")
-    .select("*")
-    .eq("stripe_session_id", sessionId)
-    .maybeSingle();
-
+const { data: orderRow, error: orderError } = await db
+  .from("orders")
+  .select(`
+    id,
+    created_at,
+    status,
+    payment_status,
+    fulfillment_type,
+    customer_email,
+    customer_name,
+    customer_phone,
+    amount_subtotal,
+    amount_tax,
+    amount_shipping,
+    amount_total,
+    subtotal_cents,
+    tax_cents,
+    tip_cents,
+    discount_cents,
+    delivery_fee_cents,
+    service_fee_cents,
+    total_cents,
+    currency,
+    cart_items,
+    notes,
+    pickup_time,
+    sms_opt_in,
+    guest_phone_e164,
+    customer_uid,
+    guest_token,
+    stripe_session_id
+  `)
+  .eq("stripe_session_id", sessionId)
+  .maybeSingle();
   if (orderError) {
     log("error", "get_order_lookup_failed", {
       requestId,
@@ -277,12 +315,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
       orderId: prefix(readString(orderRecord.id)),
     });
 
-    return successResponse(
-      requestId,
-      "order_found",
-      { order: orderRow, pending: false },
-      corsHeaders,
-    );
+return successResponse(
+  requestId,
+  "order_found",
+  { order: publicOrder(orderRecord), pending: false },
+  corsHeaders,
+);
   }
 
   // Guest order: require guest_token in body matching the stored token.
@@ -321,12 +359,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
       orderId: prefix(readString(orderRecord.id)),
     });
 
-    return successResponse(
-      requestId,
-      "order_found",
-      { order: orderRow, pending: false },
-      corsHeaders,
-    );
+return successResponse(
+  requestId,
+  "order_found",
+  { order: publicOrder(orderRecord), pending: false },
+  corsHeaders,
+);
   }
 
   // Defensive: order has neither customer_uid nor guest_token — should

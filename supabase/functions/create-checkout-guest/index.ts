@@ -551,13 +551,21 @@ Deno.serve(async (req: Request): Promise<Response> => {
   let idempotencyKey: string;
 
   try {
-    const cartHash = await sha256Hex(JSON.stringify(body.items));
+const cartHash = await sha256Hex(
+  JSON.stringify({
+    items: body.items,
+    orderType: body.order_type,
+    pickupTime,
+    smsOptIn,
+    guestPhoneE164: guestPhoneE164 ?? null,
+  }),
+);
 
-    idempotencyKey = await buildGuestIdempotencyKey({
-      guestEmail: body.guest_email,
-      cartHash,
-      pricingHash,
-    });
+idempotencyKey = await buildGuestIdempotencyKey({
+  guestEmail: body.guest_email,
+  cartHash,
+  pricingHash,
+});
   } catch (error) {
     log("error", "guest_checkout_idempotency_key_failed", {
       requestId,

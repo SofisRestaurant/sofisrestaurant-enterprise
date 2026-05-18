@@ -810,7 +810,8 @@ export async function createOrderFromSession(args: {
     pickup_time:               pickupTime,
     risk_score:                finalRiskScore,
     risk_level:                finalRiskLevel,
-    verified_at:      verificationStatus === 'verified' ? nowIso() : null,
+    verification_status:       verificationStatus,
+    verified_at:               verificationStatus === 'verified' ? nowIso() : null,
     // Persist the opted-in phone so send-sms can dispatch transactional
     // order updates. Uses the same columns for both guest and auth paths;
     // send-sms already reads guest_phone_e164 when sms_opt_in is true.

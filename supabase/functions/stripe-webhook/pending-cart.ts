@@ -380,13 +380,10 @@ export async function prepareAuthoritativeCartState(args: {
   const stripeAmountTotal = typeof session.amount_total === "number"
     ? session.amount_total
     : null;
-const stripeCurrency = typeof session.currency === "string" &&
-
-  session.currency.trim().length > 0
-
-  ? normCurrency(session.currency)
-
-  : null;
+const stripeCurrency =
+  typeof session.currency === "string" && session.currency.trim().length > 0
+    ? normCurrency(session.currency)
+    : null;
   const snapshotTotal     = snapshotNumber(snapshot, "totalCents");
   const snapshotCurrency  = normCurrency(
     snapshotString(snapshot, "currency") ?? currency,

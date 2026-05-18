@@ -55,6 +55,8 @@ export function webhookFail(code: string, message: string): WebhookFail {
 // ─── Valid order types ────────────────────────────────────────────────────────
 
 const VALID_ORDER_TYPES = new Set(["pickup", "delivery", "dine_in"]);
+const VALID_RISK_LEVELS = new Set(["low", "medium", "high", "critical"]);
+const VALID_VERIFICATION_STATUSES = new Set(["not_required", "verified", "required"]);
 
 export type OrderType = "pickup" | "delivery" | "dine_in";
 
@@ -68,8 +70,8 @@ function isOrderType(value: string): value is OrderType {
 // the pre-checkout gate passes. The three keys are:
 //   pre_checkout_risk_score   — numeric 0–100
 //   pre_checkout_risk_level   — 'low' | 'medium' | 'high' | 'critical'
-//   pre_checkout_verif_status — 'not_required' | 'verified'
-//
+//   pre_checkout_verif_status — 'not_required' | 'verified' | 'required'
+// //
 // When present, order-creation.ts uses these values directly and does NOT
 // call evaluateOrderRisk(). This prevents the post-payment re-scoring that
 // was overriding the pre-checkout allow decision for low-risk guest orders.
@@ -96,28 +98,44 @@ export function extractPreCheckoutRisk(
 ): PreCheckoutRiskMeta | null {
   if (!metadata) return null;
 
-  const rawScore  = metadata["pre_checkout_risk_score"];
-  const rawLevel  = metadata["pre_checkout_risk_level"];
+  const rawScore = metadata["pre_checkout_risk_score"];
+  const rawLevel = metadata["pre_checkout_risk_level"];
   const rawStatus = metadata["pre_checkout_verif_status"];
 
   // All three must be non-empty. A partially written session is treated as
   // legacy — safer to re-evaluate than to use an incomplete risk decision.
   if (
-    rawScore  == null || rawScore  === "" ||
-    rawLevel  == null || rawLevel  === "" ||
-    rawStatus == null || rawStatus === ""
+    rawScore == null ||
+    rawScore === "" ||
+    rawLevel == null ||
+    rawLevel === "" ||
+    rawStatus == null ||
+    rawStatus === ""
   ) {
     return null;
   }
 
-  const riskScore = parseInt(rawScore, 10);
-  if (!Number.isFinite(riskScore) || riskScore < 0 || riskScore > 100) {
+  const riskScore = Number(rawScore);
+
+  if (
+    !Number.isSafeInteger(riskScore) ||
+    riskScore < 0 ||
+    riskScore > 100
+  ) {
+    return null;
+  }
+
+  if (!VALID_RISK_LEVELS.has(rawLevel)) {
+    return null;
+  }
+
+  if (!VALID_VERIFICATION_STATUSES.has(rawStatus)) {
     return null;
   }
 
   return {
     riskScore,
-    riskLevel:          rawLevel,
+    riskLevel: rawLevel,
     verificationStatus: rawStatus,
   };
 }
@@ -192,10 +210,14 @@ export type ParsedCheckoutMetadata = {
 
 function safeInt(value: string | null | undefined): number | null {
   if (value === null || value === undefined) return null;
+
   const trimmed = value.trim();
   if (trimmed === "") return null;
-  const n = parseInt(trimmed, 10);
-  return Number.isFinite(n) ? n : null;
+
+  if (!/^-?\d+$/.test(trimmed)) return null;
+
+  const n = Number(trimmed);
+  return Number.isSafeInteger(n) ? n : null;
 }
 
 function safeStr(value: string | null | undefined): string | null {
@@ -223,16 +245,24 @@ export function parseCheckoutMetadata(
     return webhookFail("metadata_missing", "Session metadata is absent.");
   }
 
-  const userId     = pickStr(metadata, "user_id", "customer_uid", "uid");
-  const guestToken = safeStr(metadata["guest_token"]);
+const userId     = pickStr(metadata, "user_id", "customer_uid", "uid");
+const guestToken = safeStr(metadata["guest_token"]);
 
-  if (userId === null && guestToken === null) {
-    log("warn", "webhook_metadata_no_identity", { requestId });
-    return webhookFail(
-      "metadata_no_identity",
-      "Metadata contains neither user_id nor guest_token.",
-    );
-  }
+const hasUserIdentity = userId !== null;
+const hasGuestIdentity = guestToken !== null;
+
+if (hasUserIdentity === hasGuestIdentity) {
+  log("warn", "webhook_metadata_invalid_identity", {
+    requestId,
+    hasUserIdentity,
+    hasGuestIdentity,
+  });
+
+  return webhookFail(
+    "metadata_invalid_identity",
+    "Metadata must contain exactly one identity: user_id or guest_token.",
+  );
+}
 
   const resolvedCartId = pickStr(
     metadata,
