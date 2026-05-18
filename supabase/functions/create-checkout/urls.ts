@@ -1,52 +1,63 @@
 import { getAllowedOrigins } from "./cors.ts";
 import { optEnv } from "./env.ts";
 
-const DEFAULT_SITE_ORIGIN = "https://www.sofislegacy.com";
+const DEFAULT_SITE_ORIGIN = "https://sofisrestaurant-enterprise.vercel.app";
+
+function cleanOrigin(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return null;
+    }
+
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
 
 function resolveAppOrigin(): string {
-  const candidate = optEnv("APP_URL") ??
+  const candidate =
+    optEnv("APP_URL") ??
     optEnv("PUBLIC_SITE_URL") ??
     optEnv("SITE_URL") ??
     optEnv("CHECKOUT_BASE_URL") ??
     DEFAULT_SITE_ORIGIN;
 
-  try {
-    const parsed = new URL(candidate);
-    if (getAllowedOrigins().has(parsed.origin)) {
-      return parsed.origin;
-    }
-  } catch {
-    // fall through
+  const origin = cleanOrigin(candidate);
+
+  if (origin && getAllowedOrigins().has(origin)) {
+    return origin;
   }
 
   return DEFAULT_SITE_ORIGIN;
 }
 
-export function resolveSuccessUrl(supplied: string | null): string {
-  const base = supplied ??
-    optEnv("CHECKOUT_SUCCESS_URL") ??
-    `${resolveAppOrigin()}/order-success`;
+function resolveAllowedOriginFromUrl(value: string | null): string | null {
+  if (!value) return null;
 
-  try {
-    const parsed = new URL(base);
-    if (!parsed.searchParams.has("session_id")) {
-      parsed.searchParams.set("session_id", "{CHECKOUT_SESSION_ID}");
-    }
-    return parsed.toString();
-  } catch {
-    const fallback = new URL("/order-success", resolveAppOrigin());
-    fallback.searchParams.set("session_id", "{CHECKOUT_SESSION_ID}");
-    return fallback.toString();
-  }
+  const origin = cleanOrigin(value);
+  if (!origin) return null;
+
+  return getAllowedOrigins().has(origin) ? origin : null;
+}
+
+export function resolveSuccessUrl(supplied: string | null): string {
+  const suppliedOrigin = resolveAllowedOriginFromUrl(supplied);
+  const envOrigin = resolveAllowedOriginFromUrl(optEnv("CHECKOUT_SUCCESS_URL"));
+  const origin = suppliedOrigin ?? envOrigin ?? resolveAppOrigin();
+
+  // IMPORTANT:
+  // Do not use URLSearchParams for this.
+  // Stripe needs literal {CHECKOUT_SESSION_ID}, not encoded %7B...%7D.
+  return `${origin}/order-success?session_id={CHECKOUT_SESSION_ID}`;
 }
 
 export function resolveCancelUrl(supplied: string | null): string {
-  const base = supplied ?? optEnv("CHECKOUT_CANCEL_URL") ??
-    `${resolveAppOrigin()}/menu`;
+  const suppliedOrigin = resolveAllowedOriginFromUrl(supplied);
+  const envOrigin = resolveAllowedOriginFromUrl(optEnv("CHECKOUT_CANCEL_URL"));
+  const origin = suppliedOrigin ?? envOrigin ?? resolveAppOrigin();
 
-  try {
-    return new URL(base).toString();
-  } catch {
-    return new URL("/menu", resolveAppOrigin()).toString();
-  }
+  return `${origin}/order-canceled`;
 }
