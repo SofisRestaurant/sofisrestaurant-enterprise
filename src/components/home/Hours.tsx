@@ -1,14 +1,3 @@
-// src/components/home/Hours.tsx
-// ─── Operating hours, location, and reservation CTA ──────────────────────────
-//
-// Animation rules:
-//   • <m.tbody> stagger: initial="hidden" whileInView="visible"
-//   • Each <m.tr> uses rowVariant (opacity:0 in hidden state)
-//   • LocationCard: initial={{ opacity:0, y:20 }} whileInView
-//   • Footnotes: initial={{ opacity:0, y:8 }} whileInView each
-//   • Section header stagger: initial="hidden" on container
-//   • Gold rules: initial={{ scaleX:0 }} whileInView
-
 import type { CSSProperties } from 'react';
 import { motion as m } from 'framer-motion';
 import { Link } from 'react-router-dom';
@@ -57,16 +46,16 @@ const lineGrow = {
 // ── Footnotes — explicit named entries, no null-slot array mapping ─────────────
 
 interface Footnote {
-  key:   string;
+  key: string;
   delay: number;
   muted: boolean;
   content: 'kitchen' | 'holiday' | 'reservations';
 }
 
 const FOOTNOTES: Footnote[] = [
-  { key: 'note-kitchen',      delay: 0.20, muted: false, content: 'kitchen'      },
-  { key: 'note-holiday',      delay: 0.28, muted: false, content: 'holiday'      },
-  { key: 'note-reservations', delay: 0.36, muted: true,  content: 'reservations' },
+  { key: 'note-kitchen', delay: 0.2, muted: false, content: 'kitchen' },
+  { key: 'note-holiday', delay: 0.28, muted: false, content: 'holiday' },
+  { key: 'note-reservations', delay: 0.36, muted: true, content: 'reservations' },
 ];
 
 // ── Hours table ───────────────────────────────────────────────────────────────

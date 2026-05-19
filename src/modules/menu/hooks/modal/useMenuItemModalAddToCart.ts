@@ -2,7 +2,7 @@
 // PATH: src/modules/menu/hooks/modal/useMenuItemModalAddToCart.ts
 // =============================================================================
 // Encapsulates the add-to-cart side-effect:
-//   - guards (canAdd, phase)
+//   - guards (canAdd, phase, kitchen status)
 //   - timer-delayed addItem() call
 //   - phase transitions: idle → adding → success → (close)
 //   - pricingHash composition
@@ -14,18 +14,21 @@
 // =============================================================================
 
 import { useCallback } from 'react';
+
 import type { CartPhase, PreflightResult, SelectionMap } from '@/domain/menu/menu-modal.types';
 import type { ModifierGroup } from '@/domain/menu/menu.types';
+import { useKitchenStatus } from '@/features/restaurant/useKitchenStatus';
 import { useCart } from '@/modules/cart/hooks/useCart';
+import { normalizeMenuCategory } from '@/modules/menu/utils/menuCategory';
+
+import {
+  MODAL_ADD_DEBOUNCE_MS,
+  MODAL_MAX_NOTES_LENGTH,
+  MODAL_SUCCESS_CLOSE_DELAY_MS,
+} from '../../constants/menuItemModal.constants';
 import { safeStr } from '../../utils/menuItemGuards';
 import { flattenSelectionsForCart } from '../../utils/modal/modalSelection';
 import { composePricingHash } from '../../utils/modal/modalPricing';
-import {
-  MODAL_ADD_DEBOUNCE_MS,
-  MODAL_SUCCESS_CLOSE_DELAY_MS,
-  MODAL_MAX_NOTES_LENGTH,
-} from '../../constants/menuItemModal.constants';
-import { normalizeMenuCategory } from "@/modules/menu/utils/menuCategory";
 
 interface UseMenuItemModalAddToCartParams {
   id: string;
@@ -67,12 +70,19 @@ export function useMenuItemModalAddToCart({
   close,
 }: UseMenuItemModalAddToCartParams) {
   const { addItem } = useCart();
+  const kitchenStatus = useKitchenStatus();
 
   const handleAddToCart = useCallback(() => {
+    if (!kitchenStatus.isOpen) {
+      setLiveStatus(kitchenStatus.closedMessage);
+      return;
+    }
+
     if (!canAdd) {
       if (!modifierRulesOk) setLiveStatus('Choose required options before adding.');
       return;
     }
+
     if (preflight?.ok !== true) return;
     if (phase !== 'idle') return;
 
@@ -108,6 +118,8 @@ export function useMenuItemModalAddToCart({
       successTimer.current = setTimeout(() => close(), MODAL_SUCCESS_CLOSE_DELAY_MS);
     }, MODAL_ADD_DEBOUNCE_MS);
   }, [
+    kitchenStatus.isOpen,
+    kitchenStatus.closedMessage,
     canAdd,
     modifierRulesOk,
     preflight,

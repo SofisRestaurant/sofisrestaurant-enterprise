@@ -1,24 +1,20 @@
 // src/modules/cart/components/CartDisplaySync.tsx
 // =============================================================================
-// Cart Display Sync — bridges real cart state → lightweight cartUi.store
+// CartDisplaySync
 // =============================================================================
+// Always-mounted bridge from the real cart store → lightweight cartUi.store.
 //
 // Purpose:
-//   Shell components (TopBar, Header, BottomNav, FloatingCartPill) need
-//   itemCount and subtotalCents for badge display. They must NOT import
-//   the heavy useCart hook.
+// - Keeps shell UI synced after reload.
+// - Fixes FloatingCartPill disappearing until the drawer/cart is opened.
+// - Lets Header, BottomNav, FloatingCartPill, and other shell UI read from
+//   cartUi.store without importing heavy cart logic.
 //
-// Professional sync behavior:
-//   - selectItemCount is the source of truth for badge count.
-//   - selectTotals is the preferred source for subtotalCents.
-//   - selectItems is intentionally used as a fallback/validation source in case
-//     totals are briefly unavailable during hydration, reset, clear, or restore.
-//   - subtotalCents is DISPLAY-ONLY. Checkout/payment remains server-authoritative.
-//
-// Safety:
-//   - No checkout/payment logic is changed.
-//   - No auth/session logic here.
-//   - No DOM output.
+// Rules:
+// - Display-only data.
+// - Never used for checkout/payment authority.
+// - No auth/session logic.
+// - No DOM output.
 // =============================================================================
 
 import { useEffect, useMemo } from 'react';
@@ -35,25 +31,27 @@ import type { CartItem } from '@/modules/cart/types/cart.types';
 // ─── Safe readers ─────────────────────────────────────────────────────────────
 
 function safeNumber(value: unknown, fallback = 0): number {
-  const n = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(n) ? Math.max(0, Math.round(n)) : fallback;
+  const numeric = typeof value === 'number' ? value : Number(value);
+
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  return Math.max(0, Math.round(numeric));
 }
 
 function safeFingerprintPart(value: unknown, fallback = ''): string {
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (value === null || value === undefined) return fallback;
   return fallback;
 }
 
 function readLineTotalCents(item: CartItem): number {
   const record = item as unknown as Record<string, unknown>;
 
-  // Prefer already-computed line total if the cart item has it.
   const directLineTotal = safeNumber(record.lineTotalCents, -1);
   if (directLineTotal >= 0) return directLineTotal;
 
-  // Fallbacks for alternate cart shapes. These are display-only.
   const priceCents = safeNumber(record.priceCents ?? record.unitPriceCents, 0);
   const quantity = safeNumber(record.quantity ?? record.qty, 1);
 
@@ -65,8 +63,6 @@ function computeFallbackSubtotalCents(items: readonly CartItem[]): number {
 }
 
 function buildItemsVersion(items: readonly CartItem[]): string {
-  // Stable fingerprint for meaningful cart display changes.
-  // Uses explicit primitive conversion to satisfy no-base-to-string.
   return items
     .map((item) => {
       const record = item as unknown as Record<string, unknown>;
@@ -85,12 +81,17 @@ function buildItemsVersion(items: readonly CartItem[]): string {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function CartDisplaySync() {
+export function CartDisplaySync() {
   const itemCount = useCartStore(selectItemCount);
   const items = useCartStore(selectItems);
   const totals = useCartStore(selectTotals);
 
-  const safeItems = Array.isArray(items) ? items : [];
+  const safeItems = useMemo<readonly CartItem[]>(
+    () => (Array.isArray(items) ? items : []),
+    [items],
+  );
+
+  const itemsVersion = useMemo(() => buildItemsVersion(safeItems), [safeItems]);
 
   const subtotalCents = useMemo(() => {
     const totalsSubtotal = safeNumber(totals?.subtotalCents, -1);
@@ -102,11 +103,11 @@ export default function CartDisplaySync() {
     return computeFallbackSubtotalCents(safeItems);
   }, [safeItems, totals?.subtotalCents]);
 
-  const itemsVersion = useMemo(() => buildItemsVersion(safeItems), [safeItems]);
-
   useEffect(() => {
     useCartUiStore.getState().syncDisplayData(safeNumber(itemCount, 0), subtotalCents);
   }, [itemCount, subtotalCents, itemsVersion]);
 
   return null;
 }
+
+export default CartDisplaySync;

@@ -6,17 +6,20 @@
 //   - Keeps the initial app shell small
 //   - Does NOT directly import CartDrawer
 //   - Mounts LazyCartDrawer only once
+//   - Mounts CartDisplaySync globally so cart badges / FloatingCartPill restore
+//     immediately after page reload
 //   - Keeps auth/session/modal systems lazy
 //   - Avoids duplicate portals and duplicate dialogs
 //
 // Layer order:
-//   1. TopBar
-//   2. main / Outlet
-//   3. Footer, lazy on desktop
-//   4. FloatingCartPill
-//   5. BottomNav
-//   6. SessionExpiryWarning, AuthModals, ModalRenderer
-//   7. LazyCartDrawer, once only, last
+//   1. CartDisplaySync, invisible sync bridge
+//   2. TopBar
+//   3. main / Outlet
+//   4. Footer, lazy on desktop
+//   5. FloatingCartPill
+//   6. BottomNav
+//   7. SessionExpiryWarning, AuthModals, ModalRenderer
+//   8. LazyCartDrawer, once only, last
 // =============================================================================
 
 import { lazy, Suspense } from 'react';
@@ -30,6 +33,7 @@ import TopBar from '@/components/layout/TopBar';
 import BottomNav from '@/components/layout/BottomNav';
 import ScrollSafety from '@/components/app/ScrollSafety';
 
+import CartDisplaySync from '@/modules/cart/components/CartDisplaySync';
 import { FloatingCartPill } from '@/modules/cart/components/FloatingCartPill';
 import { LazyCartDrawer } from '@/modules/cart/components/LazyCartDrawer';
 
@@ -45,6 +49,15 @@ export default function RootLayout() {
         <AppBoot>
           <ActiveOrderProvider>
             <div className="flex min-h-dvh flex-col">
+              {/*
+                Invisible cart display bridge.
+
+                This must stay mounted at the root level so mobile shell UI
+                can restore cart itemCount/subtotalCents after a hard reload
+                without waiting for the user to open the cart drawer.
+              */}
+              <CartDisplaySync />
+
               {/* Header */}
               <TopBar />
 

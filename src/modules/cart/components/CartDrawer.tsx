@@ -8,6 +8,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 
 import { useCartSummary } from '@/domain/cart/use-cart-summary';
 import { useAuth } from '@/features/auth/hooks/useAuth';
+import { useKitchenStatus } from '@/features/restaurant/useKitchenStatus';
 import { CartFooter } from '@/modules/cart/components/CartFooter';
 import { CartDrawerContent } from '@/modules/cart/components/cart-drawer/CartDrawerContent';
 import { CartDrawerDragHandle } from '@/modules/cart/components/cart-drawer/CartDrawerDragHandle';
@@ -199,6 +200,7 @@ export function CartDrawer() {
   const navigate = useNavigate();
   const location = useLocation();
   const isMobile = useIsMobileQuery();
+  const kitchenStatus = useKitchenStatus();
 
   const isOpen = useCartUiStore((state) => state.isOpen);
   const closeCart = useCartUiStore((state) => state.close);
@@ -288,10 +290,14 @@ export function CartDrawer() {
   useScrollLock(isOpen);
 
   const handleCheckout = useCallback(() => {
+    if (!kitchenStatus.isOpen) {
+      return;
+    }
+
     releaseCartScrollLock();
     closeCart();
     void navigate('/checkout');
-  }, [closeCart, navigate]);
+  }, [closeCart, kitchenStatus.isOpen, navigate]);
 
   const state = isOpen ? 'open' : 'closed';
 
@@ -310,6 +316,7 @@ export function CartDrawer() {
     setConfirmClear,
     clearFn: clearCart,
     onCheckout: handleCheckout,
+    kitchenStatus,
   };
 
   if (typeof document === 'undefined') return null;

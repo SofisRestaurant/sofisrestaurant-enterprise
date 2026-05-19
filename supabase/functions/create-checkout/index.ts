@@ -43,6 +43,7 @@ import {
   createServiceClient,
   readBearerToken,
 } from "../_shared/supabase.ts";
+import { getStoreHoursStatus } from "../_shared/store-hours.ts";
 import {
   buildStripeLineItemsFromPricing,
   type CanonicalCartItem,
@@ -1586,8 +1587,20 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
+  // ── Stage: Store hours guard ────────────────────────────────────────────────
+  // Must run before any Stripe Checkout session can be created.
+  // Also runs before auth/rate-limit/pricing to avoid unnecessary work while
+  // ordering is closed.
+  const storeHours = getStoreHoursStatus();
+
+  if (!storeHours.isOpen) {
+    return storeClosedResponse(requestId, corsHeaders, storeHours.message);
+  }
+
   // ── Stage: Authenticate ────────────────────────────────────────────────────
   const authResult = await authenticateUser(req, requestId);
+
+
   if (!authResult.ok) return toResponse(requestId, authResult.error, corsHeaders);
   const { userId, userEmail } = authResult.data;
 
@@ -1631,7 +1644,19 @@ Deno.serve(async (req: Request): Promise<Response> => {
     userId,
     requestId,
   });
-
+function storeClosedResponse(
+  requestId: string,
+  corsHeaders: Record<string, string>,
+  message: string,
+): Response {
+  return errorResponse(
+    requestId,
+    409,
+    "STORE_CLOSED",
+    message,
+    corsHeaders,
+  );
+}
   // ── Stage: Pre-checkout risk gate ──────────────────────────────────────────
   // Position: after buildPricing (needs totalCents for scoring) and before
   // persistPendingCart (no irreversible DB writes may exist on rejection).

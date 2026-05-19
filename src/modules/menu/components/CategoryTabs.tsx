@@ -336,13 +336,12 @@ export function CategoryTabs({
             className="pointer-events-none absolute -right-20 -bottom-20 h-36 w-36 rounded-full bg-ember-200/10 blur-3xl dark:bg-gold-300/8"
             aria-hidden="true"
           />
-
-          <div className="relative z-10 flex items-center gap-2 p-2">
+          <div className="relative z-10 flex items-center gap-1.5 p-1.5 sm:gap-2 sm:p-2">
             <button
               type="button"
               onClick={() => setSheetOpen(true)}
               className={[
-                'group flex h-11 shrink-0 items-center gap-2 rounded-full px-3',
+                'group flex h-10 shrink-0 items-center gap-1.5 rounded-full px-2.5 sm:h-11 sm:gap-2 sm:px-3',
                 'border border-cream-200/80 bg-white/82 text-ink-900 shadow-[0_7px_18px_rgba(46,24,12,0.075)] backdrop-blur-xl transition',
                 'hover:border-gold-200 hover:bg-cream-50 hover:text-ember-700 hover:shadow-[0_10px_24px_rgba(168,69,32,0.12)]',
                 'active:scale-[0.97]',
@@ -386,8 +385,8 @@ export function CategoryTabs({
                       whileHover={{ y: active ? 0 : -1 }}
                       whileTap={{ scale: 0.965 }}
                       className={[
-                        'group relative min-h-11 shrink-0 snap-start overflow-hidden whitespace-nowrap rounded-full',
-                        'px-4 py-2.5 text-sm font-black tracking-tight',
+                        'group relative min-h-10 shrink-0 snap-start overflow-hidden whitespace-nowrap rounded-full sm:min-h-11',
+                        'px-3.5 py-2 text-[13px] font-black tracking-tight sm:px-4 sm:py-2.5 sm:text-sm',
                         'transition-[color,background-color,border-color,box-shadow,transform] duration-200',
                         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember-600/35 focus-visible:ring-offset-2',
                         'focus-visible:ring-offset-cream-50 dark:focus-visible:ring-offset-ink-950',
@@ -459,12 +458,12 @@ export function CategoryTabs({
 
           <div
             className={[
-              'border-t border-cream-200/50 px-4 py-2 sm:hidden',
+              'border-t border-cream-200/50 px-3 py-1.5 sm:hidden',
               'bg-[linear-gradient(90deg,rgba(255,255,255,0.34),rgba(255,248,235,0.55),rgba(255,255,255,0.28))]',
               'dark:border-white/10 dark:bg-white/3',
             ].join(' ')}
           >
-            <p className="truncate text-[11px] font-bold text-ink-500 dark:text-white/50">
+            <p className="truncate text-[10px] font-bold text-ink-500 dark:text-white/50">
               Viewing{' '}
               <span className="font-black text-ember-700 dark:text-ember-300">{selectedLabel}</span>
             </p>

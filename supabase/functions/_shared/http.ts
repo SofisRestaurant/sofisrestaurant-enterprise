@@ -9,7 +9,7 @@
 const ALLOWED_ORIGINS = [
   Deno.env.get('SITE_URL') ?? 'http://localhost:5173',
   'https://sofisrestaurant.com',
-  'https://www.sofisrestaurant.com',
+  'https://www.sofisrestaurant-enterprise.vercel.app',
 ] as const;
 
 export function corsHeaders(req: Request): Record<string, string> {

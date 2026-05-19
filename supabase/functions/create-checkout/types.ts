@@ -173,6 +173,7 @@ export type ReusablePendingCartRow = {
 };
 
 export type ErrorCode =
+  | "STORE_CLOSED"
   | "auth_not_permitted"
   | "authorization_required"
   | "body_read_failed"
