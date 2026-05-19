@@ -1,8 +1,5 @@
 // =============================================================================
-// PATH: src/modules/menu/components/modal/sections/ModalGroupWrapper.tsx
-// =============================================================================
-// Wraps a modifier group card with the correct border color (valid vs invalid).
-// Pure renderer — receives validity as a prop, applies no logic.
+// Modifier group card shell — valid vs needs-attention border.
 // =============================================================================
 
 import type { ModalGroupWrapperProps } from '@/domain/menu/menu-modal.types';
@@ -12,8 +9,9 @@ export function ModalGroupWrapper({ children, valid, className }: ModalGroupWrap
   return (
     <div
       className={cx(
-        'overflow-hidden rounded-2xl border bg-white/3',
-        valid ? 'border-white/10' : 'border-amber-500/25',
+        'overflow-hidden rounded-2xl border bg-(--menu-modal-card-bg)',
+        valid ? 'border-(--menu-modal-border)' : 'border-(--menu-modal-warning-border)',
+        !valid && 'bg-(--menu-modal-warning-bg)/40',
         className,
       )}
     >

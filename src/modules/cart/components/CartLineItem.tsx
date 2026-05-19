@@ -1,45 +1,26 @@
 // src/modules/cart/components/CartLineItem.tsx
-// =============================================================================
-// Fully self-contained cart line item.
-//
-// Contract:
-//   • Receives one prop: `item: CartItem`
-//   • Reads updateQuantity + removeItem from the cart store directly
-//   • All price formatting is local — no helpers passed from a parent
-//   • Every interactive element calls e.stopPropagation() so taps never
-//     surface to the sheet's gesture/backdrop layer
-// =============================================================================
+// Fully self-contained cart line item — store reads + local formatting only.
 
 import { memo, useMemo } from 'react';
-import { Minus, Plus, X } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 
 import { useCartStore } from '@/modules/cart/store/cart.store';
 import { cartItemKey, computeLineTotalCents } from '@/modules/cart/types/cart.types';
 import type { CartItem } from '@/modules/cart/types/cart.types';
+import { formatCents } from '@/modules/cart/utils/cart.utils';
 
-// ─── Formatting helpers (local — no shared import needed) ─────────────────────
+import { CartQuantityStepper } from './CartQuantityStepper';
+import { cartGhostButton, cartLineCard } from './cartStyles';
 
-/** Cents → "$0.00" string. Guards against NaN / Infinity / negatives. */
-const fmt = (c: number) =>
-  new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: 2,
-  }).format(Math.max(0, Number.isFinite(c) ? c : 0) / 100);
-
-/** Safe-cast to a finite integer (defaults to 0). */
 const sc = (n: unknown): number => {
   const v = typeof n === 'number' ? n : Number(n);
   return Number.isFinite(v) ? Math.round(v) : 0;
 };
 
-/** Safe-cast to a quantity in [1, 20]. */
 const cq = (n: unknown): number => {
   const v = typeof n === 'number' ? n : Number(n);
   return Number.isFinite(v) ? Math.max(1, Math.min(20, Math.floor(v))) : 1;
 };
-
-// ─── Component ────────────────────────────────────────────────────────────────
 
 interface CartLineItemProps {
   item: CartItem;
@@ -56,14 +37,13 @@ export const CartLineItem = memo(function CartLineItem({ item }: CartLineItemPro
 
   const qty = useMemo(() => cq(item.quantity), [item.quantity]);
   const unit = useMemo(() => sc(item.unitPriceCents), [item.unitPriceCents]);
+  const itemName = item.name || 'Item';
 
-  /** Total modifier price-adjustment (all options combined). */
   const modifierTotal = useMemo(
     () => (item.modifiers ?? []).reduce((sum, m) => sum + sc(m.priceAdjustmentCents), 0),
     [item.modifiers],
   );
 
-  /** Extended line total = (unit + modifiers) × qty */
   const lineTotal = useMemo(
     () =>
       computeLineTotalCents({
@@ -74,127 +54,94 @@ export const CartLineItem = memo(function CartLineItem({ item }: CartLineItemPro
     [unit, item.modifiers, qty],
   );
 
+  const notes = item.notes?.trim() ?? '';
+  const hasModifiers = (item.modifiers?.length ?? 0) > 0;
+
   return (
-    <div className="flex gap-3 py-4">
-      {/* Item image — warm gradient placeholder when no URL */}
-      {item.imageUrl ? (
-        <img
-          src={item.imageUrl}
-          alt={item.name}
-          className="h-16 w-16 shrink-0 rounded-xl object-cover"
-          loading="lazy"
-        />
-      ) : (
-        <div
-          className="h-16 w-16 shrink-0 rounded-xl"
-          style={{
-            background:
-              'linear-gradient(135deg,rgba(212,175,55,0.12) 0%,rgba(212,175,55,0.04) 100%)',
-            border: '1px solid rgba(212,175,55,0.18)',
-          }}
-        />
-      )}
-
-      <div className="min-w-0 flex-1">
-        {/* Name row + remove button */}
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold" style={{ color: '#1c1915' }}>
-              {item.name}
-            </p>
-            <p className="mt-0.5 text-xs" style={{ color: '#8a7a6a' }}>
-              {fmt(unit)}
-              {modifierTotal > 0 ? ` · +${fmt(modifierTotal)} options` : ''}
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              removeItem(item.menuItemId, key);
-            }}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition-colors hover:bg-red-50 active:scale-95"
-            style={{ color: '#c0a080' }}
-            aria-label={`Remove ${item.name}`}
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        {/* Modifier tags */}
-        {(item.modifiers?.length ?? 0) > 0 && (
-          <div className="mt-1.5 flex flex-wrap gap-1">
-            {item.modifiers.map((m) => (
-              <span
-                key={`${m.groupId}:${m.id}`}
-                className="rounded-full px-2 py-0.5 text-[10px] font-medium"
-                style={{ background: 'rgba(212,175,55,0.1)', color: '#8a5c2e' }}
-              >
-                {m.name}
-                {sc(m.priceAdjustmentCents) > 0 ? ` +${fmt(sc(m.priceAdjustmentCents))}` : ''}
-              </span>
-            ))}
-          </div>
+    <article className={cartLineCard}>
+      <div className="flex gap-3.5">
+        {item.imageUrl ? (
+          <img
+            src={item.imageUrl}
+            alt={itemName}
+            className="h-[4.25rem] w-[4.25rem] shrink-0 rounded-2xl object-cover ring-1 ring-cream-200"
+            loading="lazy"
+            decoding="async"
+          />
+        ) : (
+          <div
+            className="h-[4.25rem] w-[4.25rem] shrink-0 rounded-2xl bg-linear-to-br from-gold-100/80 to-cream-100 ring-1 ring-gold-200/60"
+            aria-hidden="true"
+          />
         )}
 
-        {/* Special instructions */}
-        {item.notes?.trim() ? (
-          <p className="mt-1 text-[11px] italic" style={{ color: '#a89080' }}>
-            "{item.notes.trim()}"
-          </p>
-        ) : null}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <h3 className="truncate text-[15px] font-bold leading-snug text-ink-900">{itemName}</h3>
+              <p className="mt-0.5 text-xs text-ink-500">
+                {formatCents(unit)}
+                {modifierTotal > 0 ? (
+                  <span className="text-ink-400"> · +{formatCents(modifierTotal)} options</span>
+                ) : null}
+              </p>
+            </div>
 
-        {/* Quantity stepper + line total */}
-        <div className="mt-2.5 flex items-center justify-between">
-          <div
-            className="flex items-center gap-1 rounded-xl p-1"
-            style={{
-              background: 'rgba(0,0,0,0.04)',
-              border: '1px solid rgba(0,0,0,0.07)',
-            }}
-          >
             <button
               type="button"
               onClick={(e) => {
+                e.stopPropagation();
+                removeItem(item.menuItemId, key);
+              }}
+              className={cartGhostButton + ' !px-2 !py-2 text-ink-400 hover:text-ember-700'}
+              aria-label={`Remove ${itemName} from cart`}
+            >
+              <Trash2 className="h-4 w-4" strokeWidth={2} aria-hidden="true" />
+            </button>
+          </div>
+
+          {hasModifiers ? (
+            <ul className="mt-2 flex flex-wrap gap-1.5" aria-label="Selected options">
+              {(item.modifiers ?? []).map((m) => (
+                <li
+                  key={`${m.groupId}:${m.id}`}
+                  className="rounded-full border border-gold-200/70 bg-gold-50/80 px-2 py-0.5 text-[10px] font-semibold text-ember-800"
+                >
+                  {m.name}
+                  {sc(m.priceAdjustmentCents) > 0
+                    ? ` +${formatCents(sc(m.priceAdjustmentCents))}`
+                    : ''}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
+          {notes ? (
+            <p className="mt-2 rounded-xl bg-cream-50/90 px-2.5 py-1.5 text-[11px] leading-snug text-ink-600">
+              <span className="font-semibold text-ink-700">Note:</span> {notes}
+            </p>
+          ) : null}
+
+          <div className="mt-3 flex items-center justify-between gap-3">
+            <CartQuantityStepper
+              quantity={qty}
+              itemName={itemName}
+              onDecrease={(e) => {
                 e.stopPropagation();
                 updateQuantity(item.menuItemId, key, qty - 1);
               }}
-              disabled={qty <= 1}
-              className="flex h-8 w-8 items-center justify-center rounded-lg transition-colors active:scale-95 disabled:opacity-30"
-              style={{ color: '#1c1915' }}
-              aria-label="Decrease quantity"
-            >
-              <Minus className="h-3.5 w-3.5" />
-            </button>
-
-            <span
-              className="w-7 text-center text-sm font-bold tabular-nums"
-              style={{ color: '#1c1915' }}
-            >
-              {qty}
-            </span>
-
-            <button
-              type="button"
-              onClick={(e) => {
+              onIncrease={(e) => {
                 e.stopPropagation();
                 updateQuantity(item.menuItemId, key, qty + 1);
               }}
-              disabled={qty >= 20}
-              className="flex h-8 w-8 items-center justify-center rounded-lg transition-colors active:scale-95 disabled:opacity-30"
-              style={{ color: '#1c1915' }}
-              aria-label="Increase quantity"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
-          </div>
+            />
 
-          <p className="text-sm font-bold tabular-nums" style={{ color: '#1c1915' }}>
-            {fmt(lineTotal)}
-          </p>
+            <p className="text-base font-black tabular-nums tracking-tight text-ink-900">
+              {formatCents(lineTotal)}
+            </p>
+          </div>
         </div>
       </div>
-    </div>
+    </article>
   );
 });

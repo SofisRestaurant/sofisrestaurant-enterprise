@@ -1,21 +1,12 @@
-// src/modules/cart/components/FloatingCartPill.tsx
-// =============================================================================
-// Floating Cart Pill — mobile-only cart CTA
-// =============================================================================
-// PERF FIX:
-//   - Removed `useCart` import → replaced with `useCartUiStore` selectors.
-//     Reads `itemCount` and `subtotalCents` from the lightweight UI store.
-//     This removes cart.store.ts / Supabase / auth from the initial shell bundle.
-//   - subtotalCents is DISPLAY-ONLY — never used for payment. Server-authoritative
-//     pricing via Stripe Checkout is unchanged.
-//   - All other behavior preserved exactly.
-// =============================================================================
+// Floating Cart Pill — mobile-only cart CTA (reads lightweight cartUi.store).
 
 import { useCallback, useContext, useMemo } from 'react';
+import { ChevronRight, ShoppingBag } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 
 import { ModalContext } from '@/components/ui/ModalContext';
 import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
+import { formatCents } from '@/modules/cart/utils/cart.utils';
 
 const HIDDEN_ON = ['/checkout', '/admin', '/kitchen', '/expo', '/auth', '/update-password'];
 
@@ -24,16 +15,6 @@ const DEFAULT_BOTTOM_NAV_OFFSET = '92px';
 
 function cx(...classes: Array<string | false | null | undefined>): string {
   return classes.filter(Boolean).join(' ');
-}
-
-function formatCurrencyFromCents(cents: number): string {
-  const safeCents = Number.isFinite(cents) ? Math.max(0, Math.round(cents)) : 0;
-
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: 2,
-  }).format(safeCents / 100);
 }
 
 function isHiddenRoute(pathname: string): boolean {
@@ -48,7 +29,6 @@ function readCount(value: unknown): number {
 export function FloatingCartPill() {
   const { pathname } = useLocation();
 
-  // PERF: Read from lightweight UI store instead of heavy useCart hook
   const itemCount = useCartUiStore((s) => s.itemCount);
   const subtotalCents = useCartUiStore((s) => s.subtotalCents);
   const openCart = useCartUiStore((state) => state.open);
@@ -59,7 +39,10 @@ export function FloatingCartPill() {
   const count = readCount(itemCount);
   const modalIsOpen = Boolean(modalContext?.activeModal);
 
-  const formattedSubtotal = useMemo(() => formatCurrencyFromCents(subtotalCents), [subtotalCents]);
+  const formattedSubtotal = useMemo(
+    () => formatCents(Number.isFinite(subtotalCents) ? Math.max(0, Math.round(subtotalCents)) : 0),
+    [subtotalCents],
+  );
 
   const itemLabel = useMemo(() => `${count} item${count === 1 ? '' : 's'}`, [count]);
 
@@ -75,8 +58,7 @@ export function FloatingCartPill() {
     <div
       className={cx(
         'fixed inset-x-3 z-40 md:hidden min-[390px]:inset-x-4',
-        'transform-gpu',
-        'transition-[bottom,opacity,transform] duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]',
+        'transform-gpu motion-safe:transition-[bottom,opacity,transform] motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.16,1,0.3,1)]',
         'motion-reduce:transition-none',
       )}
       style={{
@@ -96,62 +78,49 @@ export function FloatingCartPill() {
         aria-label={`View cart — ${itemLabel}, ${formattedSubtotal}`}
         className={cx(
           'group relative flex w-full touch-manipulation select-none items-center justify-between gap-3',
-          'overflow-hidden rounded-2xl border px-4 py-3.5 text-left',
-          'transition-[transform,border-color,background-color] duration-200',
-          'active:scale-[0.985]',
-          'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)',
-          'focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]',
+          'overflow-hidden rounded-2xl border border-gold-300/35 px-4 py-3.5 text-left',
+          'bg-ink-900 shadow-[0_12px_36px_rgba(28,25,21,0.32)] ring-1 ring-white/10',
+          'motion-safe:transition-[transform,box-shadow] motion-safe:duration-200',
+          'hover:shadow-[0_16px_40px_rgba(28,25,21,0.38)]',
+          'active:scale-[0.985] motion-reduce:active:scale-100',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]',
         )}
-        style={{
-          background: 'linear-gradient(135deg, #1f1b16 0%, #2a251f 100%)',
-          borderColor: 'rgba(212,175,55,0.24)',
-          boxShadow: '0 8px 24px rgba(0,0,0,0.26)',
-        }}
       >
-        <div className="flex min-w-0 items-center gap-3">
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent via-gold-400/50 to-transparent"
+        />
+
+        <span className="flex min-w-0 items-center gap-3">
           <span
-            className="flex h-8 min-w-8 shrink-0 items-center justify-center rounded-xl px-2 text-xs font-black leading-none"
-            style={{
-              background: '#d4af37',
-              color: '#1c1915',
-            }}
+            className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gold-400 text-ink-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.35)]"
             aria-hidden="true"
           >
-            {count > 99 ? '99+' : count}
+            <ShoppingBag className="h-[18px] w-[18px]" strokeWidth={2.25} />
+            <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-white px-1 text-[10px] font-black text-ink-900 shadow-sm">
+              {count > 99 ? '99+' : count}
+            </span>
           </span>
 
           <span className="min-w-0">
             <span className="block truncate text-sm font-bold leading-tight text-white">
-              View Order
+              View your bag
             </span>
             <span className="block truncate text-[11px] font-medium text-white/55">
-              {itemLabel} in cart
+              {itemLabel} · tap to review
             </span>
           </span>
-        </div>
+        </span>
 
-        <div className="flex shrink-0 items-center gap-2">
-          <span className="text-sm font-black tabular-nums text-white">{formattedSubtotal}</span>
-
+        <span className="flex shrink-0 items-center gap-2">
+          <span className="text-base font-black tabular-nums text-white">{formattedSubtotal}</span>
           <span
-            className="flex h-7 w-7 items-center justify-center rounded-full bg-white/7"
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white/80 motion-safe:transition-transform motion-safe:group-hover:translate-x-0.5"
             aria-hidden="true"
           >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="rgba(255,255,255,0.72)"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="transition-transform duration-200 group-hover:translate-x-0.5"
-            >
-              <path d="M9 18l6-6-6-6" />
-            </svg>
+            <ChevronRight className="h-4 w-4" strokeWidth={2.5} />
           </span>
-        </div>
+        </span>
       </button>
     </div>
   );

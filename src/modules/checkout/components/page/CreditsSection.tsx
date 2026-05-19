@@ -16,6 +16,7 @@ export function CreditsSection({
   onSelectCredit,
   onRemoveCredit,
   onRetry,
+  embedded = false,
 }: {
   credits: UserCredit[];
   creditsLoading: boolean;
@@ -25,6 +26,7 @@ export function CreditsSection({
   onSelectCredit: (id: string) => void;
   onRemoveCredit: () => void;
   onRetry: () => void;
+  embedded?: boolean;
 }) {
   if (creditsLoading) {
     return (

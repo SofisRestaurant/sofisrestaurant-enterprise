@@ -6,13 +6,21 @@ export function OrderTotals({
   subtotalCents,
   estimatedTaxCents,
   estimatedTotalCents,
+  embedded = false,
 }: {
   subtotalCents: number;
   estimatedTaxCents: number;
   estimatedTotalCents: number;
+  embedded?: boolean;
 }) {
   return (
-    <div className="space-y-2 border-t border-(--color-cream-200) bg-(--color-cream-50) px-5 py-4 text-sm">
+    <div
+      className={
+        embedded
+          ? 'space-y-2 border-t border-cream-200 bg-cream-50/80 px-5 py-4 text-sm'
+          : 'space-y-2 border-t border-(--color-cream-200) bg-(--color-cream-50) px-5 py-4 text-sm'
+      }
+    >
       <div className="flex justify-between text-(--color-ink-600)">
         <span>Subtotal</span>
         <span className="tabular-nums">{formatCents(subtotalCents)}</span>

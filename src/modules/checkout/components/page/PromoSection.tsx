@@ -10,15 +10,17 @@ export function PromoSection({
   onPromoApply,
   onPromoClear,
   onPromoKeyDown,
+  embedded = false,
 }: {
   promo: PromoState;
   onPromoChange: (e: ChangeEvent<HTMLInputElement>) => void;
   onPromoApply: () => void;
   onPromoClear: () => void;
   onPromoKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void;
+  embedded?: boolean;
 }) {
   return (
-    <div className="px-5 py-4">
+    <div className={embedded ? '' : 'px-5 py-4'}>
       {promo.applied ? (
         <div className="flex items-center justify-between rounded-xl border border-(--color-success) bg-(--color-success-bg) px-4 py-3">
           <div className="flex items-center gap-2">

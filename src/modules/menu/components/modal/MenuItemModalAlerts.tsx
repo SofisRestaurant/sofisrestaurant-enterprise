@@ -1,52 +1,59 @@
 // =============================================================================
-// PATH: src/modules/menu/components/modal/MenuItemModalAlerts.tsx
-// =============================================================================
-// All conditional alert banners between image and modifiers section.
-// Renders only the alerts that are relevant — null for the rest.
-// Pure renderer.
+// Conditional status alerts between hero and modifiers.
 // =============================================================================
 
+import { memo } from 'react';
 import type { ModalAlertsProps } from '@/domain/menu/menu-modal.types';
+import { MenuItemModalAlertBanner } from './MenuItemModalAlertBanner';
+import { MODAL_ANIM } from './menuItemModalAnimations';
 
-export function MenuItemModalAlerts({
+export const MenuItemModalAlerts = memo<ModalAlertsProps>(function MenuItemModalAlerts({
   preflightError,
   isLowStock,
   stockCount,
   unavailable,
   selectionPrunedWarning,
   hasBlockedSelections,
-}: ModalAlertsProps) {
+}) {
   return (
     <>
       {preflightError ? (
-        <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+        <MenuItemModalAlertBanner variant="error" stagger>
           {preflightError}
-        </div>
+        </MenuItemModalAlertBanner>
       ) : null}
 
       {isLowStock && stockCount != null ? (
-        <div className="mt-4 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-4 text-sm text-amber-200">
-          Only {stockCount} left — order soon.
+        <div
+          className="mt-4 flex items-center gap-3 rounded-2xl border border-(--menu-modal-warning-border) bg-(--menu-modal-warning-bg) px-4 py-3.5 text-sm text-(--menu-modal-warning-text)"
+          role="status"
+          style={{ animation: MODAL_ANIM.stagger(60) }}
+        >
+          <span className="text-base leading-none" aria-hidden="true">
+            ⚡
+          </span>
+          <span>
+            Only <strong className="font-bold text-ember-700">{stockCount}</strong> left — order
+            soon.
+          </span>
         </div>
       ) : null}
 
       {unavailable ? (
-        <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+        <MenuItemModalAlertBanner variant="error">
           This item is currently unavailable.
-        </div>
+        </MenuItemModalAlertBanner>
       ) : null}
 
       {selectionPrunedWarning ? (
-        <div className="mt-4 rounded-2xl border border-amber-500/25 bg-amber-500/10 p-4 text-sm text-amber-200">
-          {selectionPrunedWarning}
-        </div>
+        <MenuItemModalAlertBanner variant="warning">{selectionPrunedWarning}</MenuItemModalAlertBanner>
       ) : null}
 
       {hasBlockedSelections ? (
-        <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+        <MenuItemModalAlertBanner variant="error">
           Some selected options are no longer available. Please update your choices.
-        </div>
+        </MenuItemModalAlertBanner>
       ) : null}
     </>
   );
-}
+});

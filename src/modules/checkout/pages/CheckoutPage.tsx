@@ -1,38 +1,5 @@
 // src/modules/checkout/pages/CheckoutPage.tsx
-// =============================================================================
-// CHANGES FROM PRIOR VERSION:
-//
-//   [SPLIT] All helpers, sub-components, and the loyalty API call have been
-//           extracted into their checkout-owned files. This file is now the
-//           orchestrator only: state, effects, event handlers, render tree.
-//
-//   [SMS]   handleCheckout passes guestPhone and smsOptIn when SMS opt-in is enabled.
-//           The router validates the phone before any network call.
-//
-//   [ORDER INTENT]
-//           Checkout no longer owns pickup-time selection.
-//           Pickup/delivery intent now comes from useOrderIntentStore, which is
-//           controlled by the top-nav OrderIntentSelector and the mobile
-//           bottom sheet. This prevents duplicate pickup-time UI and keeps the
-//           customer's order setup consistent before checkout.
-//
-//           The local `pickupTimingToIso` helper has been replaced by the
-//           shared `getPickupTimingDate` helper exported from the store so the
-//           selector, the sheet, the checkout payload, and the copy-summary
-//           all agree on what a given timing means.
-//
-//           A mobile-only "Change" button in the Order Details card now opens
-//           MobileOrderIntentSheet (the same one rendered by TopBar) via the
-//           store, so the customer doesn't have to scroll up to change pickup
-//           timing on mobile.
-//
-// Security invariants preserved:
-//   - No Stripe URL before verification.
-//   - CheckoutButton is unmounted during OTP challenge.
-//   - challenge_token lives only in CheckoutChallengeModal state + router memory.
-//   - guest_token continuity preserved via sessionStorage.
-//   - pendingInputRef in useGuestCheckout preserves cart + phone across OTP cycle.
-// =============================================================================
+// Checkout orchestrator — state, effects, and handlers only. UI lives in components/page/.
 
 import {
   useEffect,
@@ -42,16 +9,9 @@ import {
   type ChangeEvent,
   type KeyboardEvent,
 } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useNavigate } from 'react-router-dom';
 
-// ── Checkout module ────────────────────────────────────────────────────────────
-import CheckoutButton from '@/modules/checkout/components/CheckoutButton';
-import { CheckoutChallengeModal } from '@/modules/checkout/components/CheckoutChallengeModal';
-import {
-  RewardsRedeem,
-  type LoyaltyRedeemValue,
-} from '@/modules/checkout/components/RewardsRedeem';
+import { type LoyaltyRedeemValue } from '@/modules/checkout/components/RewardsRedeem';
 import { useCheckoutRouter } from '@/modules/checkout/hooks/useCheckoutRouter';
 import {
   getAvailableCredits,
@@ -67,15 +27,11 @@ import {
   isOtpRequired,
   isCheckoutBlocked,
 } from '@/modules/checkout/types/checkout.types';
-
-// ── Page types ─────────────────────────────────────────────────────────────────
 import type {
   PromoState,
   OrderType,
   OrderDetailsState,
 } from '@/modules/checkout/types/checkout-page.types';
-
-// ── Page storage ───────────────────────────────────────────────────────────────
 import {
   CHECKOUT_STORAGE,
   CHECKOUT_LIMITS,
@@ -83,8 +39,6 @@ import {
   safeLocalSet,
   safeLocalRemove,
 } from '@/modules/checkout/utils/checkoutPageStorage';
-
-// ── Page formatters ────────────────────────────────────────────────────────────
 import {
   clampInt,
   normalizePromo,
@@ -93,21 +47,13 @@ import {
   formatOrderTypeLabel,
 } from '@/modules/checkout/utils/checkoutPageFormatters';
 
-// ── Page sub-components ────────────────────────────────────────────────────────
-import { fadeUp } from '@/modules/checkout/components/page/animations';
-import { SectionCard } from '@/modules/checkout/components/page/SectionCard';
-import { SectionHeader } from '@/modules/checkout/components/page/SectionHeader';
-import { BlockedOrderCard } from '@/modules/checkout/components/page/BlockedOrderCard';
-import { GuestContactStrip } from '@/modules/checkout/components/page/GuestContactStrip';
-import { AuthContactStrip } from '@/modules/checkout/components/page/AuthContactStrip';
-import { LoyaltyEarnBanner } from '@/modules/checkout/components/page/LoyaltyEarnBanner';
-import { OrderItemsList } from '@/modules/checkout/components/page/OrderItemsList';
-import { OrderTotals } from '@/modules/checkout/components/page/OrderTotals';
-import { PromoSection } from '@/modules/checkout/components/page/PromoSection';
-import { CreditsSection } from '@/modules/checkout/components/page/CreditsSection';
-import { GuestPostCheckoutNudge } from '@/modules/checkout/components/page/GuestPostCheckoutNudge';
+import { CheckoutEmptyState } from '@/modules/checkout/components/page/CheckoutEmptyState';
+import { CheckoutFlowContent } from '@/modules/checkout/components/page/CheckoutFlowContent';
+import { CheckoutFooter } from '@/modules/checkout/components/page/CheckoutFooter';
+import { CheckoutHeader } from '@/modules/checkout/components/page/CheckoutHeader';
+import { CheckoutShell } from '@/modules/checkout/components/page/CheckoutShell';
+import { CheckoutSummaryRail } from '@/modules/checkout/components/page/CheckoutSummaryRail';
 
-// ── Other modules ──────────────────────────────────────────────────────────────
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useCart } from '@/modules/cart/hooks/useCart';
 import { formatCents } from '@/modules/cart/utils/cart.utils';
@@ -117,9 +63,7 @@ import {
   useOrderIntentStore,
 } from '@/modules/orders/store/orderIntent.store';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Main Component
-// ─────────────────────────────────────────────────────────────────────────────
+const CHECKOUT_PROGRESS_STEPS = 4;
 
 export default function CheckoutPage() {
   const navigate = useNavigate();
@@ -144,12 +88,11 @@ export default function CheckoutPage() {
 
   const showChallenge = guestPhase.tag === 'otp_required' || guestPhase.tag === 'retrying';
   const showBlocked = guestPhase.tag === 'blocked';
-
   const hasItems = Array.isArray(items) && items.length > 0;
 
   const subtotalCents = useMemo(() => {
     if (!hasItems) return 0;
-    return items.reduce((sum, i) => sum + computeDisplayLineTotalCents(i), 0);
+    return items.reduce((sum, item) => sum + computeDisplayLineTotalCents(item), 0);
   }, [items, hasItems]);
 
   const estimatedTaxCents = useMemo(() => Math.round(subtotalCents * 0.095), [subtotalCents]);
@@ -161,31 +104,23 @@ export default function CheckoutPage() {
 
   const itemCount = useMemo(() => {
     if (!hasItems) return 0;
-    return items.reduce((acc, i) => acc + clampInt(i.quantity, 0, 10_000), 0);
+    return items.reduce((acc, item) => acc + clampInt(item.quantity, 0, 10_000), 0);
   }, [items, hasItems]);
 
-  // Effective order type: only "delivery" if delivery is BOTH selected AND
-  // actually available. Otherwise we submit pickup. Defensive double-lock
-  // alongside the store-level guard in setFulfillmentType.
   const effectiveOrderType = useMemo<OrderType>(() => {
     if (fulfillmentType === 'delivery' && deliveryAvailability === 'available') {
       return 'delivery';
     }
-
     return 'pickup';
   }, [fulfillmentType, deliveryAvailability]);
 
   const pickupTimingLabel = useMemo(() => getPickupTimingLabel(pickupTiming), [pickupTiming]);
 
   const orderSummarySubtitle = useMemo(() => {
-    if (effectiveOrderType === 'delivery') {
-      return 'Delivery';
-    }
-
+    if (effectiveOrderType === 'delivery') return 'Delivery';
     return `Pickup · ${pickupTimingLabel}`;
   }, [effectiveOrderType, pickupTimingLabel]);
 
-  // ── Order details ──────────────────────────────────────────────────────────
   const [orderDetails, setOrderDetails] = useState<OrderDetailsState>(() => {
     const storedType = safeLocalGet(CHECKOUT_STORAGE.ORDER_TYPE);
     const storedNotes = safeLocalGet(CHECKOUT_STORAGE.NOTES);
@@ -205,10 +140,7 @@ export default function CheckoutPage() {
     setOrderDetails((current) =>
       current.orderType === effectiveOrderType
         ? current
-        : {
-            ...current,
-            orderType: effectiveOrderType,
-          },
+        : { ...current, orderType: effectiveOrderType },
     );
   }, [effectiveOrderType]);
 
@@ -221,21 +153,22 @@ export default function CheckoutPage() {
     else safeLocalSet(CHECKOUT_STORAGE.NOTES, orderDetails.notes);
   }, [orderDetails.notes]);
 
-  // ── Promo ──────────────────────────────────────────────────────────────────
   const [promo, setPromo] = useState<PromoState>(() => {
     const stored = safeLocalGet(CHECKOUT_STORAGE.PROMO);
     return { code: stored ? normalizePromo(stored) : '', applied: false, error: null };
   });
 
-  const onPromoChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
-    const code = normalizePromo(e.target.value);
+  const onPromoChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    const code = normalizePromo(event.target.value);
     setPromo({ code, applied: false, error: null });
     if (code) safeLocalSet(CHECKOUT_STORAGE.PROMO, code);
     else safeLocalRemove(CHECKOUT_STORAGE.PROMO);
   }, []);
 
   const onPromoApply = useCallback(() => {
-    if (promo.code.trim()) setPromo((p) => ({ ...p, applied: true, error: null }));
+    if (promo.code.trim()) {
+      setPromo((current) => ({ ...current, applied: true, error: null }));
+    }
   }, [promo.code]);
 
   const onPromoClear = useCallback(() => {
@@ -244,39 +177,33 @@ export default function CheckoutPage() {
   }, []);
 
   const onPromoKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
+    (event: KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
         onPromoApply();
       }
-
-      if (e.key === 'Escape') {
-        e.preventDefault();
+      if (event.key === 'Escape') {
+        event.preventDefault();
         onPromoClear();
       }
     },
     [onPromoApply, onPromoClear],
   );
 
-  // ── Guest state ────────────────────────────────────────────────────────────
   const [guestEmail, setGuestEmail] = useState('');
   const [guestPhone, setGuestPhone] = useState('');
   const [smsOptIn, setSmsOptIn] = useState(false);
-
-  // [FIX] Frozen identity email for OTP token binding.
   const [challengeEmail, setChallengeEmail] = useState<string | null>(null);
 
   useEffect(() => {
     if (guestPhase.tag === 'otp_required' && challengeEmail === null) {
       setChallengeEmail(guestEmail.trim().toLowerCase() || null);
     }
-
     if (guestPhase.tag === 'idle') {
       setChallengeEmail(null);
     }
   }, [guestPhase.tag, guestEmail, challengeEmail]);
 
-  // ── Auth: credits ──────────────────────────────────────────────────────────
   const [credits, setCredits] = useState<UserCredit[]>([]);
   const [selectedCredit, setSelectedCredit] = useState<string | null>(() =>
     safeLocalGet(CHECKOUT_STORAGE.CREDIT),
@@ -289,7 +216,6 @@ export default function CheckoutPage() {
     [credits],
   );
 
-  // ── Auth: loyalty ──────────────────────────────────────────────────────────
   const [loyaltyProfile, setLoyaltyProfile] = useState<LoyaltyProfile | null>(null);
   const [loyaltyPreview, setLoyaltyPreview] = useState<LoyaltyPreview | null>(null);
   const [loyaltyBalance, setLoyaltyBalance] = useState(0);
@@ -301,7 +227,6 @@ export default function CheckoutPage() {
     loyaltyAccountId: '',
   });
 
-  // ── Data loading (auth only) ───────────────────────────────────────────────
   const loadCredits = useCallback(async () => {
     setCreditsLoading(true);
     setCreditsError(null);
@@ -333,7 +258,6 @@ export default function CheckoutPage() {
     }
 
     let alive = true;
-
     void loadCredits().finally(() => {
       if (!alive) return;
     });
@@ -347,7 +271,6 @@ export default function CheckoutPage() {
     if (!isAuthenticated) return;
 
     let alive = true;
-
     void getLoyaltyProfile().then((profile) => {
       if (alive) setLoyaltyProfile(profile);
     });
@@ -367,7 +290,6 @@ export default function CheckoutPage() {
     if (!isAuthenticated) return;
 
     let alive = true;
-
     void getLoyaltyAccount().then((account) => {
       if (!alive || !account) return;
 
@@ -395,7 +317,6 @@ export default function CheckoutPage() {
     else safeLocalSet(CHECKOUT_STORAGE.CREDIT, selectedCredit);
   }, [selectedCredit]);
 
-  // ── handleCheckout — single checkout trigger ───────────────────────────────
   const handleCheckout = useCallback(async () => {
     const pickupTime =
       effectiveOrderType === 'pickup'
@@ -443,7 +364,6 @@ export default function CheckoutPage() {
     isGuest,
   ]);
 
-  // ── Copy summary ───────────────────────────────────────────────────────────
   const copySummary = useCallback(async () => {
     if (!hasItems) return;
 
@@ -453,13 +373,12 @@ export default function CheckoutPage() {
         : undefined;
 
     const lines = [
-      `Sofi's — Checkout Summary`,
+      `Sofi's - Checkout Summary`,
       `Type: ${formatOrderTypeLabel(effectiveOrderType)}`,
     ];
 
     if (effectiveOrderType === 'pickup') {
       lines.push(`Pickup: ${pickupTimingLabel}`);
-
       if (pickupTime) {
         lines.push(
           `Estimated ready time: ${new Date(pickupTime).toLocaleTimeString('en-US', {
@@ -472,7 +391,7 @@ export default function CheckoutPage() {
 
     for (const item of items) {
       lines.push(
-        `- ${item.name} x${clampInt(item.quantity, 1, 100)} — ${formatCents(
+        `- ${item.name} x${clampInt(item.quantity, 1, 100)} - ${formatCents(
           computeDisplayLineTotalCents(item),
         )}`,
       );
@@ -484,362 +403,91 @@ export default function CheckoutPage() {
     try {
       await navigator.clipboard.writeText(lines.join('\n'));
     } catch {
-      /* clipboard unavailable */
+      // Clipboard may be unavailable in some browsers.
     }
   }, [hasItems, items, subtotalCents, effectiveOrderType, pickupTiming, pickupTimingLabel]);
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Render
-  // ─────────────────────────────────────────────────────────────────────────
-
   return (
-    <main className="relative mx-auto w-full max-w-2xl px-4 py-8 sm:py-12">
-      <motion.header
-        initial={{ opacity: 0, y: -8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.35 }}
-        className="mb-7"
-      >
-        {isGuest ? (
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-(--color-ink-900)">Checkout</h1>
-            <p className="mt-1 text-sm text-(--color-ink-400)">Fast, secure, no account needed.</p>
-          </div>
-        ) : (
-          <div>
-            <p className="mb-1 text-xs font-semibold uppercase tracking-widest text-(--color-ember-500)">
-              Welcome back{user?.name ? `, ${user.name.split(' ')[0]}` : ''}
-            </p>
-            <h1 className="text-2xl font-bold tracking-tight text-(--color-ink-900)">Your Order</h1>
-            <p className="mt-1 text-sm text-(--color-ink-400)">
-              Your details are saved. Rewards applied automatically.
-            </p>
-          </div>
-        )}
-      </motion.header>
+    <CheckoutShell>
+      <CheckoutHeader
+        isGuest={isGuest}
+        userName={user?.name ?? null}
+        hasItems={hasItems}
+        estimatedTotalCents={estimatedTotalCents}
+        activeStep={CHECKOUT_PROGRESS_STEPS}
+        totalSteps={CHECKOUT_PROGRESS_STEPS}
+      />
 
       {!hasItems ? (
-        <SectionCard index={0}>
-          <div className="p-10 text-center">
-            <p className="text-(--color-ink-500)">Your cart is empty.</p>
-            <div className="mt-6 flex justify-center gap-3">
-              <button
-                type="button"
-                onClick={() => navigate('/menu')}
-                className="btn btn-primary px-5 py-2.5 text-sm"
-              >
-                Browse Menu
-              </button>
-              <Link to="/" className="btn btn-ghost px-5 py-2.5 text-sm">
-                Home
-              </Link>
-            </div>
-          </div>
-        </SectionCard>
+        <CheckoutEmptyState onBrowseMenu={() => navigate('/menu')} />
       ) : (
-        <div className="space-y-3">
-          {/* SECTION 1: ORDER REVIEW */}
-          <SectionCard index={0}>
-            <SectionHeader
-              title="Order Summary"
-              subtitle={`${itemCount} item${itemCount !== 1 ? 's' : ''}`}
-              right={
-                <Link
-                  to="/menu"
-                  className="text-xs text-(--color-ink-400) underline hover:text-(--color-ink-700)"
-                >
-                  Edit
-                </Link>
-              }
-            />
-            <OrderItemsList items={items} />
-            <OrderTotals
-              subtotalCents={subtotalCents}
-              estimatedTaxCents={estimatedTaxCents}
-              estimatedTotalCents={estimatedTotalCents}
-            />
-          </SectionCard>
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_24rem] lg:items-start">
+          <CheckoutFlowContent
+            isGuest={isGuest}
+            userEmail={user?.email ?? ''}
+            userName={user?.name ?? null}
+            guestEmail={guestEmail}
+            guestPhone={guestPhone}
+            smsOptIn={smsOptIn}
+            onGuestEmailChange={setGuestEmail}
+            onGuestPhoneChange={setGuestPhone}
+            onSmsToggle={() => setSmsOptIn((value) => !value)}
+            effectiveOrderType={effectiveOrderType}
+            pickupTimingLabel={pickupTimingLabel}
+            orderSummarySubtitle={orderSummarySubtitle}
+            fulfillmentType={fulfillmentType}
+            deliveryAvailability={deliveryAvailability}
+            onChangePickup={openOrderIntentSheet}
+            notes={orderDetails.notes}
+            onNotesChange={(notes) => setOrderDetails((current) => ({ ...current, notes }))}
+            onPrint={() => window.print()}
+            onCopySummary={() => void copySummary()}
+            promo={promo}
+            onPromoChange={onPromoChange}
+            onPromoApply={onPromoApply}
+            onPromoClear={onPromoClear}
+            onPromoKeyDown={onPromoKeyDown}
+            loyaltyPreview={loyaltyPreview}
+            recentlyRedeemed={recentlyRedeemed}
+            loyaltyBalance={loyaltyBalance}
+            loyaltyAccountId={loyaltyAccountId}
+            subtotalCents={subtotalCents}
+            onLoyaltyChange={setLoyaltyIntent}
+            credits={credits}
+            creditsLoading={creditsLoading}
+            creditsError={creditsError}
+            creditsAvailableCents={creditsAvailableCents}
+            selectedCredit={selectedCredit}
+            onSelectCredit={setSelectedCredit}
+            onRemoveCredit={() => setSelectedCredit(null)}
+            onRetryCredits={() => void loadCredits()}
+          />
 
-          {/* SECTION 2: ORDER DETAILS */}
-          <SectionCard index={1}>
-            <SectionHeader title="Order details" subtitle={orderSummarySubtitle} />
+          <CheckoutSummaryRail
+            items={items}
+            itemCount={itemCount}
+            subtotalCents={subtotalCents}
+            estimatedTaxCents={estimatedTaxCents}
+            estimatedTotalCents={estimatedTotalCents}
+            isGuest={isGuest}
+            guestEmail={guestEmail}
+            hasItems={hasItems}
+            isLoading={isLoading}
+            routerError={routerError}
+            showChallenge={showChallenge}
+            showBlocked={showBlocked}
+            otpChallenge={otpChallenge}
+            challengeEmail={challengeEmail}
+            isAuthenticated={isAuthenticated}
+            userId={user?.id ?? null}
+            onCheckout={handleCheckout}
+            onRetryWithToken={(token) => void retryWithToken(token)}
+            onReset={reset}
+          />
 
-            <div className="space-y-5 px-5 py-5">
-              <div className="rounded-2xl border border-(--color-cream-200) bg-(--color-cream-50) p-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-(--color-ink-400)">
-                      Fulfillment
-                    </p>
-                    <p className="mt-1 text-sm font-bold text-(--color-ink-900)">
-                      {formatOrderTypeLabel(effectiveOrderType)}
-                    </p>
-
-                    {effectiveOrderType === 'pickup' && (
-                      <p className="mt-1 text-xs text-(--color-ink-500)">
-                        Pickup time: <span className="font-semibold">{pickupTimingLabel}</span>
-                      </p>
-                    )}
-
-                    {fulfillmentType === 'delivery' && deliveryAvailability !== 'available' && (
-                      <p className="mt-2 text-xs font-medium text-(--color-gold-700)">
-                        Delivery is coming soon. This order will be prepared for pickup.
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="flex shrink-0 flex-col items-end gap-2">
-                    {/* Mobile-only: open the bottom sheet so the customer doesn't
-                        have to scroll up to TopBar to change pickup timing. */}
-                    <button
-                      type="button"
-                      onClick={openOrderIntentSheet}
-                      className="rounded-full border border-(--color-cream-300) bg-white px-3 py-1.5 text-xs font-semibold text-(--color-ink-600) transition-colors hover:bg-(--color-cream-50) hover:text-(--color-ember-700) md:hidden"
-                      aria-label="Change pickup timing"
-                    >
-                      Change
-                    </button>
-
-                    <Link
-                      to="/menu"
-                      className="rounded-full border border-(--color-cream-300) bg-white px-3 py-1.5 text-xs font-semibold text-(--color-ink-600) transition-colors hover:bg-(--color-cream-50) hover:text-(--color-ember-700)"
-                    >
-                      Add more
-                    </Link>
-                  </div>
-                </div>
-
-                <p className="mt-3 hidden text-[11px] leading-5 text-(--color-ink-400) md:block">
-                  To change pickup timing, use the order setup selector in the top navigation before
-                  payment.
-                </p>
-              </div>
-
-              <div>
-                <label
-                  htmlFor="checkout-notes"
-                  className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-(--color-ink-400)"
-                >
-                  Kitchen notes{' '}
-                  <span className="text-[11px] font-normal normal-case text-(--color-ink-300)">
-                    (optional)
-                  </span>
-                </label>
-                <textarea
-                  id="checkout-notes"
-                  value={orderDetails.notes}
-                  onChange={(e) =>
-                    setOrderDetails((current) => ({
-                      ...current,
-                      notes: String(e.target.value).slice(0, CHECKOUT_LIMITS.NOTES_MAX),
-                    }))
-                  }
-                  rows={2}
-                  placeholder="No onions, mild salsa, sauce on the side…"
-                  className="input w-full resize-none"
-                />
-                <div className="mt-1 flex justify-end">
-                  <span className="text-[11px] tabular-nums text-(--color-ink-300)">
-                    {orderDetails.notes.length}/{CHECKOUT_LIMITS.NOTES_MAX}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => window.print()}
-                  className="rounded-lg border border-(--color-cream-300) bg-white px-3 py-2 text-xs font-medium text-(--color-ink-600) hover:bg-(--color-cream-50)"
-                >
-                  Print / Save PDF
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void copySummary()}
-                  className="rounded-lg border border-(--color-cream-300) bg-white px-3 py-2 text-xs font-medium text-(--color-ink-600) hover:bg-(--color-cream-50)"
-                >
-                  Copy summary
-                </button>
-              </div>
-            </div>
-          </SectionCard>
-
-          {/* SECTION 3: CONTACT */}
-          <SectionCard index={2}>
-            {isGuest ? (
-              <>
-                <SectionHeader title="Contact" subtitle="For your receipt and order updates" />
-                <GuestContactStrip
-                  email={guestEmail}
-                  onEmailChange={setGuestEmail}
-                  phone={guestPhone}
-                  onPhoneChange={setGuestPhone}
-                  smsOptIn={smsOptIn}
-                  onSmsToggle={() => setSmsOptIn((value) => !value)}
-                />
-              </>
-            ) : (
-              <>
-                <SectionHeader title="Your info" />
-                <AuthContactStrip
-                  email={user?.email ?? ''}
-                  name={user?.name ?? null}
-                  phone={guestPhone}
-                  onPhoneChange={setGuestPhone}
-                  smsOptIn={smsOptIn}
-                  onSmsToggle={() => setSmsOptIn((value) => !value)}
-                />
-              </>
-            )}
-          </SectionCard>
-
-          {/* SECTION 4: PROMO */}
-          <SectionCard index={3}>
-            <SectionHeader title="Promo Code" subtitle="Verified by the server at checkout" />
-            <PromoSection
-              promo={promo}
-              onPromoChange={onPromoChange}
-              onPromoApply={onPromoApply}
-              onPromoClear={onPromoClear}
-              onPromoKeyDown={onPromoKeyDown}
-            />
-          </SectionCard>
-
-          {/* SECTION 5: REWARDS (AUTH ONLY) */}
-          {!isGuest && (
-            <SectionCard index={4}>
-              {loyaltyPreview && <LoyaltyEarnBanner preview={loyaltyPreview} />}
-              <SectionHeader
-                title="Rewards & Credits"
-                subtitle="Applied by the server — final balance confirmed at payment"
-              />
-              <div className="space-y-4 px-5 py-4">
-                {recentlyRedeemed && (
-                  <p className="rounded-xl border border-(--color-gold-200) bg-(--color-gold-50) px-3 py-2.5 text-xs text-(--color-gold-700)">
-                    ✨ You recently redeemed points. Your balance reflects that.
-                  </p>
-                )}
-
-                {loyaltyBalance > 0 && loyaltyAccountId && (
-                  <RewardsRedeem
-                    balance={loyaltyBalance}
-                    accountId={loyaltyAccountId}
-                    subtotalCents={subtotalCents}
-                    onChange={setLoyaltyIntent}
-                  />
-                )}
-
-                <CreditsSection
-                  credits={credits}
-                  creditsLoading={creditsLoading}
-                  creditsError={creditsError}
-                  creditsAvailableCents={creditsAvailableCents}
-                  selectedCredit={selectedCredit}
-                  onSelectCredit={(id) => setSelectedCredit(id)}
-                  onRemoveCredit={() => setSelectedCredit(null)}
-                  onRetry={() => void loadCredits()}
-                />
-              </div>
-            </SectionCard>
-          )}
-
-          {/* SECTION 6: PAYMENT CTA */}
-          <SectionCard
-            index={isGuest ? 4 : 5}
-            className="border-(--color-ember-200) bg-linear-to-b from-white to-(--color-cream-50)"
-          >
-            <div className="space-y-3 px-5 py-5">
-              <AnimatePresence>
-                {showChallenge && otpChallenge && (
-                  <motion.div
-                    key="otp-challenge"
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -4 }}
-                    transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-                  >
-                    <CheckoutChallengeModal
-                      key={otpChallenge.nonce}
-                      nonce={otpChallenge.nonce}
-                      expiresAt={otpChallenge.expiresAt}
-                      userId={isAuthenticated && user?.id ? user.id : null}
-                      guestEmail={challengeEmail}
-                      onToken={(token) => void retryWithToken(token)}
-                      onExpired={() => reset()}
-                    />
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              <AnimatePresence>
-                {showBlocked && (
-                  <motion.div
-                    key="blocked"
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.2 }}
-                  >
-                    <BlockedOrderCard onReset={reset} />
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {!showChallenge && !showBlocked && (
-                <CheckoutButton
-                  onCheckout={handleCheckout}
-                  isLoading={isLoading}
-                  disabled={!hasItems}
-                />
-              )}
-
-              {routerError && !showChallenge && !showBlocked && (
-                <p className="text-center text-sm font-medium text-(--color-error)" role="alert">
-                  {routerError}
-                </p>
-              )}
-
-              <p className="text-center text-[11px] text-(--color-ink-300)">
-                🔒 Secure payment via Stripe — card details never stored on our servers
-              </p>
-            </div>
-          </SectionCard>
-
-          {/* GUEST: POST-CTA NUDGE */}
-          {isGuest && (
-            <motion.div custom={5} variants={fadeUp} initial="hidden" animate="visible">
-              <GuestPostCheckoutNudge email={guestEmail} />
-            </motion.div>
-          )}
-
-          <motion.div custom={6} variants={fadeUp} initial="hidden" animate="visible">
-            <div className="px-1 py-2 text-center">
-              <p className="text-xs text-(--color-ink-400)">
-                Need help?{' '}
-                <a
-                  href="mailto:sofisrestaurante@gmail.com"
-                  className="underline hover:text-(--color-ink-700)"
-                >
-                  Email us
-                </a>
-                {' · '}
-                <Link to="/contact" className="underline hover:text-(--color-ink-700)">
-                  Contact form
-                </Link>
-                {isAuthenticated && (
-                  <>
-                    {' · '}
-
-                    <Link to="/account/orders" className="underline hover:text-(--color-ink-700)">
-                      Order history
-                    </Link>
-                  </>
-                )}
-              </p>
-            </div>
-          </motion.div>
+          <CheckoutFooter isAuthenticated={isAuthenticated} />
         </div>
       )}
-    </main>
+    </CheckoutShell>
   );
 }

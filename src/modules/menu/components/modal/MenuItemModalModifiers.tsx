@@ -1,18 +1,12 @@
 // =============================================================================
-// PATH: src/modules/menu/components/modal/MenuItemModalModifiers.tsx
-// =============================================================================
-// Renders the "Customize your order" section:
-//   - loading skeleton
-//   - error + retry
-//   - empty state
-//   - list of ModifierGroup cards
-// Pure renderer — orchestration lives in the modal shell.
+// Customize section — loading, error, empty, and modifier group list.
 // =============================================================================
 
 import { Info } from 'lucide-react';
 import type { ModalModifiersProps } from '@/domain/menu/menu-modal.types';
 import { isSelectionValidForGroup } from '../../utils/modifierGuards';
-import { MODAL_SKELETON_IDS } from '../../constants/menuItemModal.constants';
+import { SKELETON_IDS } from '../../constants';
+import { cx } from '../../utils/uiHelpers';
 import { MenuItemModalModifierGroup } from './MenuItemModalModifierGroup';
 import { ModalSection } from './sections/ModalSection';
 
@@ -31,67 +25,69 @@ export function MenuItemModalModifiers({
 }: ModalModifiersProps) {
   return (
     <ModalSection>
-      {/* Section header */}
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex items-end justify-between gap-3">
         <div className="min-w-0">
-          <p className="section-eyebrow">Customize your order</p>
-          <p className="text-xs input-label mt-1">
-            Options are validated for availability and required picks before adding to cart.
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-500">
+            Customize
+          </h3>
+          <p className="mt-1 text-xs text-ink-500">
+            Required choices must be completed before adding to cart.
           </p>
         </div>
-        {modifierGroups.length ? (
+        {modifierGroups.length > 0 ? (
           <button
             type="button"
             onClick={onClearSelections}
-            className="btn btn-ghost-dark btn-sm px-2 py-1 shrink-0"
+            className={cx(
+              'shrink-0 rounded-lg px-3 py-2 text-xs font-semibold text-ink-500',
+              'transition-colors hover:bg-cream-100 hover:text-ink-800 active:scale-95',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--menu-modal-focus-ring)',
+            )}
             aria-label="Clear all selections"
           >
-            Clear
+            Clear all
           </button>
         ) : null}
       </div>
 
-      {/* States */}
       {groupsLoading ? (
-        <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
-          <p className="text-sm text-zinc-300">Loading options…</p>
-          <div className="mt-3 grid gap-2">
-            {MODAL_SKELETON_IDS.map((skeletonId) => (
-              <div
-                key={skeletonId}
-                className="h-10 animate-pulse rounded-xl bg-white/5"
-                aria-hidden="true"
-              />
-            ))}
-          </div>
+        <div className="mt-4 space-y-3" aria-busy="true" aria-label="Loading options">
+          {SKELETON_IDS.map((skeletonId) => (
+            <div
+              key={skeletonId}
+              className="h-[4.5rem] animate-pulse rounded-2xl bg-cream-100"
+              aria-hidden="true"
+            />
+          ))}
         </div>
       ) : groupsError ? (
-        <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-zinc-300">
-          <div className="flex items-start gap-3">
-            <span className="mt-0.5 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 ring-1 ring-white/10">
-              <Info className="h-4 w-4 text-zinc-200" aria-hidden="true" />
-            </span>
-            <div className="min-w-0">
-              <p className="font-semibold text-white">Options unavailable</p>
-              <p className="mt-1 text-xs text-zinc-500">{groupsError}</p>
-              <button
-                type="button"
-                onClick={onRetryLoad}
-                className="mt-3 rounded-lg bg-white/10 px-3 py-2 text-xs font-semibold text-white hover:bg-white/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25"
-                aria-label="Retry loading options"
-              >
-                Retry
-              </button>
-            </div>
+        <div className="mt-4 flex items-start gap-3 rounded-2xl border border-(--menu-modal-border) bg-(--menu-modal-bg-soft) px-4 py-4">
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-ink-500" aria-hidden="true" />
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-ink-900">Options unavailable</p>
+            <p className="mt-0.5 text-xs text-ink-500">{groupsError}</p>
+            <button
+              type="button"
+              onClick={onRetryLoad}
+              className={cx(
+                'mt-3 rounded-xl border border-(--menu-modal-border) bg-(--menu-modal-control-bg)',
+                'px-4 py-2.5 text-xs font-semibold text-ink-700',
+                'transition-colors hover:bg-(--menu-modal-control-hover) active:scale-95',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--menu-modal-focus-ring)',
+              )}
+              aria-label="Retry loading options"
+            >
+              Retry
+            </button>
           </div>
         </div>
       ) : !modifierGroups.length ? (
-        <div className="mt-4 rounded-2xl border border-white/10 bg-white/3 p-4 text-sm text-zinc-300">
+        <p className="mt-4 rounded-2xl border border-(--menu-modal-border) bg-cream-50 px-4 py-4 text-sm text-ink-600">
           No customization options for this item.
-        </div>
+        </p>
       ) : (
-        <div className="mt-4 space-y-3">
-          {modifierGroups.map((g) => (
+        <div className="mt-4 space-y-3" role="list">
+          {modifierGroups.map((g, gi) => (
             <MenuItemModalModifierGroup
               key={g.id}
               group={g}
@@ -99,6 +95,8 @@ export function MenuItemModalModifiers({
               expanded={Boolean(expandedGroups[g.id])}
               valid={isSelectionValidForGroup(g, selected[g.id] ?? [])}
               maxSelectionHint={maxSelectionHint}
+              selectionBlockedIds={selectionBlockedIds}
+              staggerIndex={gi}
               onToggle={() => onToggleGroup(g.id)}
               onSetSelection={onSetSelection}
             />

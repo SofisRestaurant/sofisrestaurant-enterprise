@@ -12,6 +12,7 @@ type GuestContactStripProps = {
   onPhoneChange: (v: string) => void;
   smsOptIn: boolean;
   onSmsToggle: () => void;
+  embedded?: boolean;
 };
 
 export function GuestContactStrip({
@@ -21,9 +22,10 @@ export function GuestContactStrip({
   onPhoneChange,
   smsOptIn,
   onSmsToggle,
+  embedded = false,
 }: GuestContactStripProps) {
   return (
-    <div className="space-y-4 px-5 py-5">
+    <div className={embedded ? 'space-y-4' : 'space-y-4 px-5 py-5'}>
       <div>
         <label
           htmlFor="guest-email"

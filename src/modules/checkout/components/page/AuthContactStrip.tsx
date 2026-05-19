@@ -22,6 +22,7 @@ export type AuthContactStripProps = {
   onPhoneChange: (v: string) => void;
   smsOptIn:      boolean;
   onSmsToggle:   () => void;
+  embedded?:     boolean;
 };
 
 export function AuthContactStrip({
@@ -31,9 +32,10 @@ export function AuthContactStrip({
   onPhoneChange,
   smsOptIn,
   onSmsToggle,
+  embedded = false,
 }: AuthContactStripProps) {
   return (
-    <div className="space-y-4 px-5 py-5">
+    <div className={embedded ? 'space-y-4' : 'space-y-4 px-5 py-5'}>
       {/* ── Identity row ──────────────────────────────────────────────────── */}
       <div className="flex items-center gap-3">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-(--color-ember-50)">

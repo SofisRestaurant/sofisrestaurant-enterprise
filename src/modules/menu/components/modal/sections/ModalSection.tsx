@@ -1,8 +1,5 @@
 // =============================================================================
-// PATH: src/modules/menu/components/modal/sections/ModalSection.tsx
-// =============================================================================
-// Thin layout primitive that adds consistent vertical rhythm + optional
-// top-border between modal body sections. Pure renderer — no logic.
+// Vertical rhythm wrapper for modal body sections.
 // =============================================================================
 
 import type { ModalSectionProps } from '@/domain/menu/menu-modal.types';
@@ -10,14 +7,14 @@ import { cx } from '../../../utils/uiHelpers';
 
 export function ModalSection({ children, className, bordered = false }: ModalSectionProps) {
   return (
-    <div
+    <section
       className={cx(
-        'mt-6',
-        bordered && 'border-t border-white/10 pt-6',
+        'mt-8',
+        bordered && 'border-t border-(--menu-modal-border) pt-8',
         className,
       )}
     >
       {children}
-    </div>
+    </section>
   );
 }

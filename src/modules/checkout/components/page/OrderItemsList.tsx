@@ -10,9 +10,15 @@ import {
   computeDisplayLineTotalCents,
 } from '@/modules/checkout/utils/checkoutPageFormatters';
 
-export function OrderItemsList({ items }: { items: CartItem[] }) {
+export function OrderItemsList({
+  items,
+  embedded = false,
+}: {
+  items: CartItem[];
+  embedded?: boolean;
+}) {
   return (
-    <div className="divide-y divide-(--color-cream-200)">
+    <div className={embedded ? 'divide-y divide-cream-200' : 'divide-y divide-(--color-cream-200)'}>
       {items.map((item) => {
         const notes = safeText(item.notes, 500);
         const lineTotalCents = computeDisplayLineTotalCents(item);
@@ -22,9 +28,17 @@ export function OrderItemsList({ items }: { items: CartItem[] }) {
             className="flex items-start justify-between gap-3 px-5 py-4"
           >
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-(--color-ink-900) truncate">
+              <p
+                className={
+                  embedded
+                    ? 'truncate text-sm font-semibold text-ink-900'
+                    : 'truncate text-sm font-medium text-(--color-ink-900)'
+                }
+              >
                 {item.name}{' '}
-                <span className="text-(--color-ink-400)">× {clampInt(item.quantity, 1, 100)}</span>
+                <span className={embedded ? 'text-ink-400' : 'text-(--color-ink-400)'}>
+                  × {clampInt(item.quantity, 1, 100)}
+                </span>
               </p>
               {item.modifiers?.length ? (
                 <ul className="mt-1 space-y-0.5">
