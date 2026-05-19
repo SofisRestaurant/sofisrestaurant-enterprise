@@ -835,15 +835,7 @@ if (!attrs) return;
           */}
           <div className="mt-8 flex items-center justify-between gap-3">
             <div className="mt-5 flex items-center justify-between gap-3 rounded-2xl border border-cream-200/70 bg-white/70 px-4 py-3 shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
-              <div className="min-w-0">
-                <p className="text-xs font-black uppercase tracking-[0.14em] text-ember-700 dark:text-ember-300">
-                  Browse categories
-                </p>
-
-                <p className="mt-0.5 truncate text-[11px] font-medium text-ink-500 dark:text-white/45">
-                  Use filters for promo-only deals.
-                </p>
-              </div>
+              <div className="min-w-0"></div>
             </div>
 
             <div className="flex items-center gap-2">

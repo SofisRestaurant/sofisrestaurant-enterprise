@@ -49,7 +49,7 @@ function getPhoenixDateParts(date: Date): PhoenixDateParts {
   };
 }
 
-export function getStoreHoursStatus(date = new Date()): StoreHoursStatus {
+export function getStoreHoursStatus(date = new Date("2026-05-19T21:30:00-07:00")): StoreHoursStatus {
   const { weekday, minutesNow } = getPhoenixDateParts(date);
 
   const isSunday = weekday === "Sun";
