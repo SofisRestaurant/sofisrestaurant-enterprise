@@ -1,5 +1,6 @@
 // CartDrawer — premium slide-over panel (mobile sheet + desktop panel).
-// Zero Headless UI; CSS data-state transitions + manual focus trap / scroll lock.
+// Mobile-first, production-safe drawer with responsive focus target,
+// scroll lock, safe-area spacing, and stable z-index layering.
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -29,6 +30,8 @@ import { getSupabaseSessionIdFromAccessToken } from '@/security/auth/sessionId';
 type ScrollLockSnapshot = {
   bodyOverflow: string;
   bodyTouchAction: string;
+  htmlOverflow: string;
+  htmlTouchAction: string;
 };
 
 function releaseCartScrollLock() {
@@ -40,8 +43,28 @@ function releaseCartScrollLock() {
   body.style.overflow = '';
   body.style.touchAction = '';
   body.removeAttribute('data-cart-scroll-lock');
+
   html.style.overflow = '';
   html.style.touchAction = '';
+  html.removeAttribute('data-cart-scroll-lock');
+}
+
+function useIsMobileQuery(query = '(max-width: 767px)') {
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const media = window.matchMedia(query);
+    const update = () => setIsMobile(media.matches);
+
+    update();
+
+    media.addEventListener?.('change', update);
+    return () => media.removeEventListener?.('change', update);
+  }, [query]);
+
+  return isMobile;
 }
 
 function useFocusTrap(ref: React.RefObject<HTMLElement | null>, active: boolean) {
@@ -50,6 +73,9 @@ function useFocusTrap(ref: React.RefObject<HTMLElement | null>, active: boolean)
 
     const el = ref.current;
     if (!el) return;
+
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
     const selector = [
       'a[href]',
@@ -60,9 +86,18 @@ function useFocusTrap(ref: React.RefObject<HTMLElement | null>, active: boolean)
       '[tabindex]:not([tabindex="-1"])',
     ].join(',');
 
-    const getFocusable = () => Array.from(el.querySelectorAll<HTMLElement>(selector));
+    const getFocusable = () =>
+      Array.from(el.querySelectorAll<HTMLElement>(selector)).filter(
+        (node) =>
+          !node.hasAttribute('disabled') &&
+          node.getAttribute('aria-hidden') !== 'true' &&
+          node.offsetParent !== null,
+      );
 
-    getFocusable()[0]?.focus();
+    requestAnimationFrame(() => {
+      const firstFocusable = getFocusable()[0];
+      firstFocusable?.focus({ preventScroll: true });
+    });
 
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Tab') return;
@@ -70,22 +105,27 @@ function useFocusTrap(ref: React.RefObject<HTMLElement | null>, active: boolean)
       const focusable = getFocusable();
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
-      if (!first) return;
+
+      if (!first || !last) return;
 
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
-        last?.focus();
+        last.focus({ preventScroll: true });
         return;
       }
 
       if (!event.shiftKey && document.activeElement === last) {
         event.preventDefault();
-        first.focus();
+        first.focus({ preventScroll: true });
       }
     };
 
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      previouslyFocused?.focus?.({ preventScroll: true });
+    };
   }, [active, ref]);
 }
 
@@ -96,6 +136,7 @@ function useScrollLock(active: boolean) {
     if (typeof document === 'undefined') return;
 
     const body = document.body;
+    const html = document.documentElement;
 
     if (!active) {
       releaseCartScrollLock();
@@ -107,22 +148,33 @@ function useScrollLock(active: boolean) {
       snapshotRef.current = {
         bodyOverflow: body.style.overflow,
         bodyTouchAction: body.style.touchAction,
+        htmlOverflow: html.style.overflow,
+        htmlTouchAction: html.style.touchAction,
       };
     }
 
     body.setAttribute('data-cart-scroll-lock', 'true');
+    html.setAttribute('data-cart-scroll-lock', 'true');
+
     body.style.overflow = 'hidden';
     body.style.touchAction = 'none';
+    html.style.overflow = 'hidden';
+    html.style.touchAction = 'none';
 
     return () => {
       const snapshot = snapshotRef.current;
+
       if (snapshot) {
         body.style.overflow = snapshot.bodyOverflow;
         body.style.touchAction = snapshot.bodyTouchAction;
+        html.style.overflow = snapshot.htmlOverflow;
+        html.style.touchAction = snapshot.htmlTouchAction;
       } else {
         releaseCartScrollLock();
       }
+
       body.removeAttribute('data-cart-scroll-lock');
+      html.removeAttribute('data-cart-scroll-lock');
       snapshotRef.current = null;
     };
   }, [active]);
@@ -130,23 +182,25 @@ function useScrollLock(active: boolean) {
 
 function isCartItem(value: unknown): value is CartItem {
   if (typeof value !== 'object' || value === null) return false;
+
   const record = value as Record<string, unknown>;
   return typeof record.menuItemId === 'string';
 }
 
-function sc(n: unknown): number {
-  const v = typeof n === 'number' ? n : Number(n);
-  return Number.isFinite(v) ? Math.round(v) : 0;
+function safeCents(value: unknown): number {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(numeric) ? Math.round(numeric) : 0;
 }
 
 export function CartDrawer() {
   const navigate = useNavigate();
   const location = useLocation();
+  const isMobile = useIsMobileQuery();
 
   const isOpen = useCartUiStore((state) => state.isOpen);
   const closeCart = useCartUiStore((state) => state.close);
   const syncDisplayData = useCartUiStore((state) => state.syncDisplayData);
-  const clearFn = useCartStore((state) => state.clearCart);
+  const clearCart = useCartStore((state) => state.clearCart);
 
   const { user, session } = useAuth();
 
@@ -182,12 +236,14 @@ export function CartDrawer() {
 
   const count = typeof cart.itemCount === 'number' ? Math.max(0, cart.itemCount) : 0;
   const hasItems = items.length > 0;
-  const pts = Math.max(0, Math.floor(sc(totals.subtotalCents) / 100));
-  const subtotalLabel = formatCents(totals.subtotalCents);
+
+  const subtotalCents = safeCents(totals.subtotalCents);
+  const pointsPreview = Math.max(0, Math.floor(subtotalCents / 100));
+  const subtotalLabel = formatCents(subtotalCents);
 
   useEffect(() => {
-    syncDisplayData(count, sc(totals.subtotalCents));
-  }, [count, totals.subtotalCents, syncDisplayData]);
+    syncDisplayData(count, subtotalCents);
+  }, [count, subtotalCents, syncDisplayData]);
 
   useEffect(() => {
     if (!isOpen) setConfirmClear(false);
@@ -196,6 +252,7 @@ export function CartDrawer() {
   useEffect(() => {
     const previousPathname = previousPathnameRef.current;
     const pathnameChanged = previousPathname !== location.pathname;
+
     previousPathnameRef.current = location.pathname;
 
     if (pathnameChanged && isOpen) {
@@ -224,8 +281,6 @@ export function CartDrawer() {
     }
   }, [isOpen]);
 
-  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
-
   useFocusTrap(isMobile ? mobileRef : desktopRef, isOpen);
   useScrollLock(isOpen);
 
@@ -247,59 +302,71 @@ export function CartDrawer() {
 
   const footerProps = {
     totals,
-    pts,
+    pts: pointsPreview,
     confirmClear,
     setConfirmClear,
-    clearFn,
+    clearFn: clearCart,
     onCheckout: handleCheckout,
   };
 
   if (typeof document === 'undefined') return null;
 
-  const backdrop = (
-    <div
-      className="cart-backdrop fixed inset-0 z-9998 bg-ink-900/45 backdrop-blur-[3px] motion-reduce:backdrop-blur-none"
-      data-state={state}
-      onClick={isOpen ? closeCartSafely : undefined}
-      aria-hidden="true"
-    />
-  );
-
   const scrollExtras = hasItems ? (
-    <>
+    <div className="shrink-0 border-b border-cream-200/80 bg-white/70 backdrop-blur-xl dark:border-white/10 dark:bg-ink-950/70">
       <CartFulfillmentStrip />
-      <CartLoyaltyBanner pts={pts} />
-    </>
+      <CartLoyaltyBanner pts={pointsPreview} />
+    </div>
   ) : null;
 
   return createPortal(
     <>
-      {backdrop}
+      <div
+        className="cart-backdrop fixed inset-0 z-[9998] bg-ink-950/50 backdrop-blur-[3px] transition-opacity duration-300 motion-reduce:backdrop-blur-none"
+        data-state={state}
+        onClick={isOpen ? closeCartSafely : undefined}
+        aria-hidden="true"
+      />
 
-      {/* Mobile bottom sheet */}
       <div
         ref={mobileRef}
         data-cart-sheet
         data-state={state}
-        className={`cart-sheet fixed inset-x-0 bottom-0 z-absolute flex max-h-[92dvh] flex-col rounded-t-[1.75rem] ${cartSurface} ${cartPanelShadow} touch-pan-y md:hidden`}
+        className={[
+          'cart-sheet fixed inset-x-0 bottom-0 z-[9999] flex max-h-[92dvh] min-h-[42dvh] flex-col overflow-hidden rounded-t-[1.75rem]',
+          'border border-white/70 border-b-0 touch-pan-y md:hidden',
+          'pb-[env(safe-area-inset-bottom)]',
+          cartSurface,
+          cartPanelShadow,
+        ].join(' ')}
         role="dialog"
         aria-modal="true"
         aria-labelledby="cart-drawer-title"
       >
         <CartDrawerDragHandle onClose={closeCartSafely} />
         <CartDrawerHeader itemCount={count} variant="mobile" onClose={closeCartSafely} />
+
         {scrollExtras}
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y">
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-0 pb-2 touch-pan-y [-webkit-overflow-scrolling:touch]">
           <CartDrawerContent {...contentProps} />
         </div>
-        {hasItems ? <CartFooter {...footerProps} /> : null}
+
+        {hasItems ? (
+          <div className="shrink-0 border-t border-cream-200/80 bg-white/95 backdrop-blur-xl dark:border-white/10 dark:bg-ink-950/95">
+            <CartFooter {...footerProps} />
+          </div>
+        ) : null}
       </div>
 
-      {/* Desktop slide-over */}
       <div
         ref={desktopRef}
         data-state={state}
-        className={`cart-panel fixed inset-y-0 right-0 z-absolute hidden w-full max-w-[26rem] flex-col border-l border-cream-200 ${cartSurface} ${cartDesktopPanelShadow} md:flex`}
+        className={[
+          'cart-panel fixed inset-y-0 right-0 z-[9999] hidden w-full max-w-[27rem] flex-col overflow-hidden',
+          'border-l border-cream-200 md:flex dark:border-white/10',
+          cartSurface,
+          cartDesktopPanelShadow,
+        ].join(' ')}
         role="dialog"
         aria-modal="true"
         aria-labelledby="cart-drawer-title"
@@ -310,11 +377,18 @@ export function CartDrawer() {
           variant="desktop"
           onClose={closeCartSafely}
         />
+
         {scrollExtras}
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2 [-webkit-overflow-scrolling:touch]">
           <CartDrawerContent {...contentProps} />
         </div>
-        {hasItems ? <CartFooter {...footerProps} /> : null}
+
+        {hasItems ? (
+          <div className="shrink-0 border-t border-cream-200/80 bg-white/95 backdrop-blur-xl dark:border-white/10 dark:bg-ink-950/95">
+            <CartFooter {...footerProps} />
+          </div>
+        ) : null}
       </div>
     </>,
     document.body,
