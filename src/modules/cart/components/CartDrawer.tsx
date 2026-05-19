@@ -1,6 +1,6 @@
 // CartDrawer — premium slide-over panel (mobile sheet + desktop panel).
 // Mobile-first, production-safe drawer with responsive focus target,
-// scroll lock, safe-area spacing, and stable z-index layering.
+// scroll lock, safe-area spacing, stable z-index layering, and premium app feel.
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -15,11 +15,7 @@ import { CartDrawerHeader } from '@/modules/cart/components/cart-drawer/CartDraw
 import { CartFulfillmentStrip } from '@/modules/cart/components/cart-drawer/CartFulfillmentStrip';
 import { CartLoyaltyBanner } from '@/modules/cart/components/cart-drawer/CartLoyaltyBanner';
 import { injectCartDrawerCss } from '@/modules/cart/components/cart-drawer/cartDrawerCss';
-import {
-  cartDesktopPanelShadow,
-  cartPanelShadow,
-  cartSurface,
-} from '@/modules/cart/components/cartStyles';
+import { cartDesktopPanelShadow, cartSurface } from '@/modules/cart/components/cartStyles';
 import { useCart } from '@/modules/cart/hooks/useCart';
 import { useCartStore } from '@/modules/cart/store/cart.store';
 import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
@@ -33,6 +29,13 @@ type ScrollLockSnapshot = {
   htmlOverflow: string;
   htmlTouchAction: string;
 };
+
+const CART_BACKDROP_Z = 'z-[9998]';
+const CART_DRAWER_Z = 'z-[9999]';
+
+function cn(...classes: Array<string | false | null | undefined>) {
+  return classes.filter(Boolean).join(' ');
+}
 
 function releaseCartScrollLock() {
   if (typeof document === 'undefined') return;
@@ -312,80 +315,110 @@ export function CartDrawer() {
   if (typeof document === 'undefined') return null;
 
   const scrollExtras = hasItems ? (
-    <div className="shrink-0 border-b border-cream-200/80 bg-white/70 backdrop-blur-xl dark:border-white/10 dark:bg-ink-950/70">
-      <CartFulfillmentStrip />
-      <CartLoyaltyBanner pts={pointsPreview} />
+    <div className="shrink-0 border-b border-cream-200/70 bg-white/85 backdrop-blur-2xl dark:border-white/10 dark:bg-ink-950/80">
+      <div className="max-h-[6.5rem] overflow-hidden">
+        <CartFulfillmentStrip />
+        <CartLoyaltyBanner pts={pointsPreview} />
+      </div>
     </div>
   ) : null;
 
   return createPortal(
     <>
       <div
-        className="cart-backdrop fixed inset-0 z-[9998] bg-ink-950/50 backdrop-blur-[3px] transition-opacity duration-300 motion-reduce:backdrop-blur-none"
+        className={cn(
+          'cart-backdrop fixed inset-0 bg-ink-950/55 backdrop-blur-[4px]',
+          'transition-opacity duration-300 ease-out motion-reduce:transition-none motion-reduce:backdrop-blur-none',
+          CART_BACKDROP_Z,
+        )}
         data-state={state}
         onClick={isOpen ? closeCartSafely : undefined}
         aria-hidden="true"
       />
 
+      {/* Mobile premium bottom sheet */}
       <div
         ref={mobileRef}
         data-cart-sheet
         data-state={state}
-        className={[
-          'cart-sheet fixed inset-x-0 bottom-0 z-[9999] flex max-h-[92dvh] min-h-[42dvh] flex-col overflow-hidden rounded-t-[1.75rem]',
-          'border border-white/70 border-b-0 touch-pan-y md:hidden',
-          'pb-[env(safe-area-inset-bottom)]',
-          cartSurface,
-          cartPanelShadow,
-        ].join(' ')}
+        className={cn(
+          'cart-sheet fixed inset-x-0 bottom-0 flex flex-col overflow-hidden md:hidden',
+          'h-[calc(100dvh-0.5rem)] max-h-[calc(100dvh-0.5rem)]',
+          'rounded-t-[2rem] border border-white/75 border-b-0',
+          'bg-white shadow-[0_-28px_90px_rgba(15,23,42,0.28)]',
+          'transition-[transform,opacity] duration-300 ease-out will-change-transform',
+          'touch-pan-y motion-reduce:transition-none',
+          'dark:border-white/10 dark:bg-ink-950 dark:shadow-[0_-28px_90px_rgba(0,0,0,0.55)]',
+          CART_DRAWER_Z,
+        )}
         role="dialog"
         aria-modal="true"
         aria-labelledby="cart-drawer-title"
       >
-        <CartDrawerDragHandle onClose={closeCartSafely} />
-        <CartDrawerHeader itemCount={count} variant="mobile" onClose={closeCartSafely} />
+        <div className="shrink-0 border-b border-cream-200/70 bg-white/95 backdrop-blur-2xl dark:border-white/10 dark:bg-ink-950/95">
+          <CartDrawerDragHandle onClose={closeCartSafely} />
+          <CartDrawerHeader itemCount={count} variant="mobile" onClose={closeCartSafely} />
+        </div>
 
         {scrollExtras}
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-0 pb-2 touch-pan-y [-webkit-overflow-scrolling:touch]">
-          <CartDrawerContent {...contentProps} />
+        <div className="relative min-h-0 flex-1 bg-gradient-to-b from-cream-50/45 via-white to-white dark:from-ink-950 dark:via-ink-950 dark:to-ink-950">
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-5 bg-gradient-to-b from-white/95 to-transparent dark:from-ink-950/95" />
+
+          <div className="h-full min-h-0 overflow-y-auto overscroll-contain px-0 py-2 touch-pan-y [-webkit-overflow-scrolling:touch]">
+            <CartDrawerContent {...contentProps} />
+          </div>
+
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-6 bg-gradient-to-t from-white/95 to-transparent dark:from-ink-950/95" />
         </div>
 
         {hasItems ? (
-          <div className="shrink-0 border-t border-cream-200/80 bg-white/95 backdrop-blur-xl dark:border-white/10 dark:bg-ink-950/95">
+          <div className="shrink-0 border-t border-cream-200/80 bg-white/96 pb-[max(env(safe-area-inset-bottom),0.75rem)] backdrop-blur-2xl dark:border-white/10 dark:bg-ink-950/96">
             <CartFooter {...footerProps} />
           </div>
         ) : null}
       </div>
 
+      {/* Desktop premium slide-over */}
       <div
         ref={desktopRef}
         data-state={state}
-        className={[
-          'cart-panel fixed inset-y-0 right-0 z-[9999] hidden w-full max-w-[27rem] flex-col overflow-hidden',
-          'border-l border-cream-200 md:flex dark:border-white/10',
+        className={cn(
+          'cart-panel fixed inset-y-0 right-0 hidden w-full max-w-[28rem] flex-col overflow-hidden md:flex',
+          'border-l border-cream-200 bg-white/95 backdrop-blur-2xl',
+          'transition-[transform,opacity] duration-300 ease-out will-change-transform motion-reduce:transition-none',
+          'dark:border-white/10 dark:bg-ink-950/95',
           cartSurface,
           cartDesktopPanelShadow,
-        ].join(' ')}
+          CART_DRAWER_Z,
+        )}
         role="dialog"
         aria-modal="true"
         aria-labelledby="cart-drawer-title"
       >
-        <CartDrawerHeader
-          itemCount={count}
-          subtotalLabel={hasItems ? subtotalLabel : undefined}
-          variant="desktop"
-          onClose={closeCartSafely}
-        />
+        <div className="shrink-0 border-b border-cream-200/70 bg-white/95 backdrop-blur-2xl dark:border-white/10 dark:bg-ink-950/95">
+          <CartDrawerHeader
+            itemCount={count}
+            subtotalLabel={hasItems ? subtotalLabel : undefined}
+            variant="desktop"
+            onClose={closeCartSafely}
+          />
+        </div>
 
         {scrollExtras}
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2 [-webkit-overflow-scrolling:touch]">
-          <CartDrawerContent {...contentProps} />
+        <div className="relative min-h-0 flex-1 bg-gradient-to-b from-cream-50/35 via-white to-white dark:from-ink-950 dark:via-ink-950 dark:to-ink-950">
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-5 bg-gradient-to-b from-white/95 to-transparent dark:from-ink-950/95" />
+
+          <div className="h-full min-h-0 overflow-y-auto overscroll-contain pb-2 [-webkit-overflow-scrolling:touch]">
+            <CartDrawerContent {...contentProps} />
+          </div>
+
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-6 bg-gradient-to-t from-white/95 to-transparent dark:from-ink-950/95" />
         </div>
 
         {hasItems ? (
-          <div className="shrink-0 border-t border-cream-200/80 bg-white/95 backdrop-blur-xl dark:border-white/10 dark:bg-ink-950/95">
+          <div className="shrink-0 border-t border-cream-200/80 bg-white/96 backdrop-blur-2xl dark:border-white/10 dark:bg-ink-950/96">
             <CartFooter {...footerProps} />
           </div>
         ) : null}

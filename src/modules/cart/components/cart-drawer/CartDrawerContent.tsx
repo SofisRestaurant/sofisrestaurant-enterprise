@@ -29,8 +29,8 @@ export function CartDrawerContent({
   }
 
   return (
-    <div className="space-y-4 px-4 pb-4 pt-1">
-      <ul className="space-y-3" aria-label="Cart items">
+    <div className="space-y-3 px-3 pb-2 pt-1 sm:px-4 sm:pb-3">
+      <ul className="space-y-2.5" aria-label="Cart items">
         {items.map((item) => (
           <li key={cartItemKey(item.menuItemId, item.modifiers)}>
             <CartLineItem item={item} />
@@ -38,7 +38,9 @@ export function CartDrawerContent({
         ))}
       </ul>
 
-      <CartDrawerPricing totals={totals} flags={flags} />
+      <div className="pb-1">
+        <CartDrawerPricing totals={totals} flags={flags} />
+      </div>
     </div>
   );
 }
