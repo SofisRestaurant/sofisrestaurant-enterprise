@@ -1587,16 +1587,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
-  // ── Stage: Store hours guard ────────────────────────────────────────────────
-  // Must run before any Stripe Checkout session can be created.
-  // Also runs before auth/rate-limit/pricing to avoid unnecessary work while
-  // ordering is closed.
-  const storeHours = getStoreHoursStatus();
-
-  if (!storeHours.isOpen) {
-    return storeClosedResponse(requestId, corsHeaders, storeHours.message);
-  }
-
   // ── Stage: Authenticate ────────────────────────────────────────────────────
   const authResult = await authenticateUser(req, requestId);
 
@@ -1614,6 +1604,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const servicesResult = initServices(requestId);
   if (!servicesResult.ok) return toResponse(requestId, servicesResult.error, corsHeaders);
   const { db, stripe } = servicesResult.data;
+
+  // ── Stage: Store hours + emergency pause guard ─────────────────────────────
+  // Reads DB pause switch; falls back to hardcoded hours if row is missing.
+  // Runs after service init (needs db), before pricing and Stripe session.
+  const storeHours = await getStoreHoursStatus(db);
+  if (!storeHours.isOpen) {
+    return storeClosedResponse(requestId, corsHeaders, storeHours.message);
+  }
 
   const ctx: RequestContext = {
     requestId,

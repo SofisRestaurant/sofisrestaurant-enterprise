@@ -3,13 +3,26 @@
 // SOFI'S RESTAURANT STORE HOURS — backend source of truth for checkout guards
 // =============================================================================
 //
-// Ordering hours:
+// Ordering hours (hardcoded baseline):
 //   America/Phoenix
 //   Monday–Saturday: 7:00 AM–8:00 PM
 //   Sunday:          7:00 AM–2:00 PM
 //
-// This file intentionally has no Stripe, Supabase, or secret dependencies.
+// Emergency pause (DB-backed):
+//   Reads public.restaurant_ordering_settings via the service-role client
+//   passed in by the caller.
+//
+//   Priority:
+//     1. If the DB read fails          → fail closed (ordering unavailable).
+//     2. If online_ordering_enabled=false → paused, return pause_message.
+//     3. If the settings row is missing → fall through to hardcoded hours.
+//     4. If online_ordering_enabled=true  → fall through to hardcoded hours.
+//
+// This file has no Stripe or secret dependencies.
+// The only Supabase coupling is the SvcClient type used for the db parameter.
 // =============================================================================
+
+import type { SvcClient } from './supabase.ts';
 
 export const SOFIS_STORE_TIME_ZONE = "America/Phoenix";
 
@@ -49,7 +62,11 @@ function getPhoenixDateParts(date: Date): PhoenixDateParts {
   };
 }
 
-export function getStoreHoursStatus(date = new Date()): StoreHoursStatus {
+// ─────────────────────────────────────────────────────────────
+// Hardcoded hours (unchanged baseline logic)
+// ─────────────────────────────────────────────────────────────
+
+function checkHardcodedHours(date: Date): StoreHoursStatus {
   const { weekday, minutesNow } = getPhoenixDateParts(date);
 
   const isSunday = weekday === "Sun";
@@ -68,4 +85,88 @@ export function getStoreHoursStatus(date = new Date()): StoreHoursStatus {
     isOpen: false,
     message: "Online ordering is currently closed. Ordering opens at 7 AM.",
   };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Public API
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Check whether online ordering is currently available.
+ *
+ * 1. Reads the emergency pause switch from public.restaurant_ordering_settings.
+ * 2. Falls back to hardcoded hours if the row is missing or enabled.
+ * 3. Fails closed on any DB error.
+ *
+ * @param db  Service-role Supabase client (bypasses RLS).
+ * @param date  Injectable for testing; defaults to now.
+ */
+export async function getStoreHoursStatus(
+  db: SvcClient,
+  date: Date = new Date(),
+): Promise<StoreHoursStatus> {
+  // ── Emergency pause switch (DB) ──────────────────────────────────────────
+  try {
+    // restaurant_ordering_settings may not yet be in the generated Database
+    // types — cast to bypass the strict table-name check on .from().
+    // deno-lint-ignore no-explicit-any
+    const { data, error } = await (db as any)
+      .from('restaurant_ordering_settings')
+      .select('online_ordering_enabled, pause_message')
+      .eq('id', 'default')
+      .maybeSingle();
+
+    if (error) {
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          source: 'store-hours',
+          message: 'Failed to read restaurant_ordering_settings',
+          error: error.message,
+        }),
+      );
+
+      // Fail closed — cannot verify ordering status.
+      return {
+        isOpen: false,
+        message:
+          'Online ordering is temporarily unavailable. Please call the restaurant.',
+      };
+    }
+
+    // Row exists and ordering is explicitly paused.
+    if (data !== null && data.online_ordering_enabled === false) {
+      const pauseMsg =
+        typeof data.pause_message === 'string' && data.pause_message.trim()
+          ? data.pause_message
+          : 'Online ordering is currently paused.';
+
+      return {
+        isOpen: false,
+        message: pauseMsg,
+      };
+    }
+
+    // Row missing (data === null) or online_ordering_enabled === true
+    // → fall through to hardcoded hours.
+  } catch (err: unknown) {
+    console.error(
+      JSON.stringify({
+        level: 'error',
+        source: 'store-hours',
+        message: 'Unexpected error reading restaurant_ordering_settings',
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+
+    // Fail closed.
+    return {
+      isOpen: false,
+      message:
+        'Online ordering is temporarily unavailable. Please call the restaurant.',
+    };
+  }
+
+  // ── Hardcoded hours ──────────────────────────────────────────────────────
+  return checkHardcodedHours(date);
 }

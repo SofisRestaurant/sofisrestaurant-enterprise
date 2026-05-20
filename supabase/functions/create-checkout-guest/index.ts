@@ -239,16 +239,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
-  // ── Store hours guard ───────────────────────────────────────────────────────
-  // Must run before any Stripe Checkout session can be created.
-  // Also runs before validation/pricing to avoid unnecessary work while ordering
-  // is closed.
-  const storeHours = getStoreHoursStatus();
-
-  if (!storeHours.isOpen) {
-    return storeClosedResponse(requestId, corsHeaders, storeHours.message);
-  }
-
   // ── Hard reject any Authorization header ───────────────────────────────────
   if (req.headers.get("authorization")) {
     log("warn", "guest_checkout_auth_header_rejected", { requestId });
@@ -416,6 +406,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
       "Checkout service is temporarily unavailable.",
       corsHeaders,
     );
+  }
+
+  // ── Store hours + emergency pause guard ─────────────────────────────────────
+  // Reads DB pause switch; falls back to hardcoded hours if row is missing.
+  // Runs after service init (needs db), before pricing and Stripe session.
+  const storeHours = await getStoreHoursStatus(db);
+  if (!storeHours.isOpen) {
+    return storeClosedResponse(requestId, corsHeaders, storeHours.message);
   }
 
   // ── IP-based rate limiting ──────────────────────────────────────────────────
