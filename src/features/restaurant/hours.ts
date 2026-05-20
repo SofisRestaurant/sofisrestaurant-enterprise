@@ -48,7 +48,7 @@ function getArizonaParts(date: Date): ArizonaParts {
   };
 }
 
-export function getKitchenStatus(date = new Date("2026-05-19T21:30:00-07:00")): KitchenStatus {
+export function getKitchenStatus(date = new Date()): KitchenStatus {
   const { weekday, minutesNow } = getArizonaParts(date);
 
   const isSunday = weekday === 'Sun';
