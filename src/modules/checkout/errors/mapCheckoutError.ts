@@ -183,6 +183,20 @@ export function mapCheckoutError(
   }
 
   if (status === 409) {
+    // The backend returns 409 for both STORE_CLOSED (emergency pause / outside
+    // hours) and genuine cart conflicts. Extract the backend code so the
+    // customer sees the server-provided pause message, not "cart changed".
+    const conflict = extractError(json);
+
+    if (conflict.code === 'STORE_CLOSED') {
+      return {
+        message: conflict.message ||
+          'Online ordering is currently closed. Please try again during business hours.',
+        code: 'STORE_CLOSED',
+        status,
+      };
+    }
+
     return {
       message: 'Your cart changed. Please review your order and try again.',
       code: 'checkout_conflict',
