@@ -22,21 +22,21 @@ import { LanguageSwitcher } from '@/components/ui/LanguageSwitcher';
 
 // ── Constants (URLs never change with locale) ─────────────────────────────────
 
-const PHONE_DISPLAY = '(623) 555-0000';
-const PHONE_TEL = 'tel:+16235550000';
-const SUPPORT_EMAIL = 'hello@sofisrestaurant.com';
-const MAPS_URL = 'https://maps.google.com/?q=San+Francisco+CA';
+const PHONE_DISPLAY = '(623) 248-0536';
+const PHONE_TEL = 'tel:+16232480536';
+const SUPPORT_EMAIL = 'sofisrestaurant2022@gmail.com';
+const MAPS_URL =
+  'https://www.google.com/maps/search/?api=1&query=12851%20W%20Bell%20Rd%20Unit%20120%2C%20Surprise%2C%20AZ%2085378';
 const INSTAGRAM_URL = 'https://www.instagram.com/sofisrestaurante/';
 const TIKTOK_URL = 'https://www.tiktok.com/@Sofisrestaurant';
 
 // Route paths never change — labels come from translations
 const QUICK_LINK_PATHS = [
-  { to: '/menu',         key: 'quickLinks.menu'         },
-  { to: '/about',        key: 'quickLinks.about'        },
-  { to: '/gallery',      key: 'quickLinks.gallery'      },
-  { to: '/reservations', key: 'quickLinks.reservations' },
-  { to: '/contact',      key: 'quickLinks.contact'      },
-  { to: '/reviews',      key: 'quickLinks.reviews'      },
+  { to: '/menu', key: 'quickLinks.menu' },
+  { to: '/deals', key: 'quickLinks.deals' },
+  { to: '/about', key: 'quickLinks.about' },
+  { to: '/contact', key: 'quickLinks.contact' },
+  { to: '/reviews', key: 'quickLinks.reviews' },
 ] as const;
 
 const LEGAL_LINK_PATHS = [
@@ -143,8 +143,8 @@ export default function Footer() {
 
             {/* Primary CTA */}
             <div>
-              <Link to="/reservations" className="btn btn-primary btn-sm">
-                {t('footer.cta.reserve')}
+              <Link to="/menu" className="btn btn-primary btn-sm">
+                {t('footer.cta.viewMenu')}
               </Link>
             </div>
 
@@ -155,7 +155,7 @@ export default function Footer() {
                 target="_blank"
                 rel="noreferrer"
                 className="glass flex items-center gap-2 rounded-full px-3.5 py-2
-                           font-body text-[0.68rem] font-medium uppercase tracking-caps[0.10em]
+                           font-body text-[0.68rem] font-medium uppercase tracking-0.10em
                            transition-all duration-300 hover:border-gold-400/30"
                 style={{ color: 'rgba(255,255,255,0.55)' }}
                 aria-label={t('footer.social.instagramAria')}
