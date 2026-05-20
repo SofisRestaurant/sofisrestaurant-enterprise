@@ -1,8 +1,11 @@
 // supabase/functions/create-checkout-guest/index.ts
 // =============================================================================
 // Guest checkout pipeline — minimal, isolated, no auth dependencies.
-// All error responses are emitted via errorResponse() from responses.ts.
-// Shape: { ok: false, error: { code, message, requestId } }
+//
+// HOURS ENFORCEMENT:
+//   assertStoreOpen() from _shared/store-hours.ts is called after rate
+//   limiting and before pricing. If the store is closed, a 409 STORE_CLOSED
+//   error is returned immediately — no Stripe session is created.
 //
 // HARD CONSTRAINTS:
 //   - No import of loyalty.ts, credits.ts, promos.ts, riskScore.ts
@@ -11,24 +14,10 @@
 //   - No checkIntegrityHash
 //   - No user_id / customer_uid / uid in Stripe metadata
 //   - promoId, promoCode, creditId hardcoded to null in pricing call
-//
-// Hosted Stripe Checkout only:
-//   - Server creates a hosted Stripe Checkout Session.
-//   - Success returns a Stripe Checkout `url`.
-//   - Client redirects to Stripe Checkout.
-//   - success_url and cancel_url are resolved server-side through allowlisted
-//     URL resolvers with safe environment/default fallbacks.
-//
-// Security invariants:
-//   - Stripe payment finalization remains webhook-owned.
-//   - Client never sends authoritative totals.
-//   - Guest SMS phone is validated server-side before metadata write.
-//   - Phone is never logged.
 // =============================================================================
 
 import Stripe from "stripe";
 import { createServiceClient } from "../_shared/supabase.ts";
-import { getStoreHoursStatus } from "../_shared/store-hours.ts";
 import {
   buildStripeLineItemsFromPricing,
   type CanonicalCartItem,
@@ -42,6 +31,11 @@ import {
   pickupTimeToMetadata,
   validatePickupTime,
 } from "../_shared/pickup-time.ts";
+import { getStoreHoursStatus } from "../_shared/store-hours.ts";
+import {
+  sanitizeAttribution,
+  attributionToMetadata,
+} from "../_shared/attribution.ts";
 
 import { loadCanonicalCartItems } from "../create-checkout/catalog.ts";
 import { corsHeadersFor } from "../create-checkout/cors.ts";
@@ -73,7 +67,7 @@ import {
 } from "../create-checkout/responses.ts";
 import { buildGuestIdempotencyKey } from "../create-checkout/security.ts";
 import { getStripe } from "../create-checkout/stripe-client.ts";
-import type { DbClient, ErrorCode, JsonObject } from "../create-checkout/types.ts";
+import type { DbClient, JsonObject } from "../create-checkout/types.ts";
 import { enforcePreCheckoutRisk } from "../create-checkout/risk-gate.ts";
 import type { RiskGateOutcome } from "../create-checkout/risk-gate.ts";
 import {
@@ -94,13 +88,6 @@ function hasHostedUrl(session: Stripe.Checkout.Session): boolean {
 // ─── E.164 US phone validation ────────────────────────────────────────────────
 
 const E164_US_PHONE_RE = /^\+1[2-9]\d{9}$/;
-
-// ─── Store-hours error code ───────────────────────────────────────────────────
-//
-// Keep this typed so STORE_CLOSED is verified against the shared checkout
-// ErrorCode union in create-checkout/types.ts.
-
-const STORE_CLOSED_CODE: ErrorCode = "STORE_CLOSED";
 
 // ─── Local sha256Hex ──────────────────────────────────────────────────────────
 
@@ -161,6 +148,31 @@ function toRiskGateResponse(
   );
 }
 
+// ─── Store-hours response ─────────────────────────────────────────────────────
+
+function storeClosedResponse(
+  requestId: string,
+  message: string,
+  corsHeaders: Record<string, string>,
+): Response {
+  return new Response(
+    JSON.stringify({
+      ok: false,
+      error: "STORE_CLOSED",
+      message,
+      requestId,
+    }),
+    {
+      status: 409,
+      headers: {
+        ...BASE_HEADERS,
+        ...corsHeaders,
+        "Content-Type": "application/json",
+      },
+    },
+  );
+}
+
 // ─── Response body shaping ────────────────────────────────────────────────────
 
 function buildGuestModeResponseBody(
@@ -176,20 +188,6 @@ function buildGuestModeResponseBody(
     pricing: buildGuestPricingResponse(snapshot),
     guest_token: guestToken,
   } as JsonObject;
-}
-
-function storeClosedResponse(
-  requestId: string,
-  corsHeaders: Record<string, string>,
-  message: string,
-): Response {
-  return errorResponse(
-    requestId,
-    409,
-    STORE_CLOSED_CODE,
-    message,
-    corsHeaders,
-  );
 }
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
@@ -371,6 +369,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
     guestPhoneE164 = rawGuestPhone;
   }
 
+  // ── Attribution (optional, non-blocking) ──────────────────────────────────
+  const rawAttribution = isRecord(rawBodyRecord) ? rawBodyRecord["attribution"] : null;
+  const attribution = sanitizeAttribution(rawAttribution);
+
   // ── pickup_time validation ──────────────────────────────────────────────────
   const pickupTimeResult = validatePickupTime(body.pickup_time ?? null);
 
@@ -408,14 +410,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
-  // ── Store hours + emergency pause guard ─────────────────────────────────────
-  // Reads DB pause switch; falls back to hardcoded hours if row is missing.
-  // Runs after service init (needs db), before pricing and Stripe session.
-  const storeHours = await getStoreHoursStatus(db);
-  if (!storeHours.isOpen) {
-    return storeClosedResponse(requestId, corsHeaders, storeHours.message);
-  }
-
   // ── IP-based rate limiting ──────────────────────────────────────────────────
   const requestIp = getRequestIp(req);
   const rawIp = requestIp ?? "unknown";
@@ -437,6 +431,20 @@ Deno.serve(async (req: Request): Promise<Response> => {
       },
     );
   }
+
+// ── Store hours gate ────────────────────────────────────────────────────────
+// Must run before any pricing, pending cart, or Stripe work.
+// Uses shared backend store-hours logic so guest checkout matches auth checkout.
+const storeHours = await getStoreHoursStatus(db);
+
+if (!storeHours.isOpen) {
+  log("info", "guest_checkout_store_closed", {
+    requestId,
+    message: storeHours.message,
+  });
+
+  return storeClosedResponse(requestId, storeHours.message, corsHeaders);
+}
 
   // ── Guest token ─────────────────────────────────────────────────────────────
   const guestToken = body.guest_token ?? generateGuestToken();
@@ -580,22 +588,23 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // ── Idempotency key ─────────────────────────────────────────────────────────
   let idempotencyKey: string;
 
-  try {
-    const cartHash = await sha256Hex(
-      JSON.stringify({
-        items: body.items,
-        orderType: body.order_type,
-        pickupTime,
-        smsOptIn,
-        guestPhoneE164: guestPhoneE164 ?? null,
-      }),
-    );
+try {
+  const cartHash = await sha256Hex(
+    JSON.stringify({
+      items: body.items,
+      orderType: body.order_type,
+      pickupTime,
+      smsOptIn,
+      guestPhoneE164: guestPhoneE164 ?? null,
+    }),
+  );
 
-    idempotencyKey = await buildGuestIdempotencyKey({
-      guestEmail: body.guest_email,
-      cartHash,
-      pricingHash,
-    });
+  idempotencyKey = await buildGuestIdempotencyKey({
+    guestEmail: body.guest_email,
+    cartHash,
+    pricingHash,
+  });
+  
   } catch (error) {
     log("error", "guest_checkout_idempotency_key_failed", {
       requestId,
@@ -756,6 +765,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
           guest_phone_e164: guestPhoneE164,
         }
       : {}),
+    // ── Attribution (campaign tracking) ──────────────────────────────────────
+    ...(attribution !== null
+      ? attributionToMetadata(attribution)
+      : {}),
   };
 
   // ── Create Stripe hosted Checkout session ───────────────────────────────────
@@ -812,7 +825,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
     );
   }
 
-  // Hosted sessions sometimes benefit from a refetch for the authoritative URL.
   let authoritativeSession = stripeSession;
 
   try {

@@ -125,6 +125,7 @@ import type {
 } from "./types.ts";
 import type { OrderType, PricingSnapshot } from "../_shared/pricing.ts";
 import { buildStoredOrderCartItemsFromSnapshot } from "../_shared/order-cart-items-builder.ts";
+import { attributionFromMetadata } from "../_shared/attribution.ts";
 import {
   normCurrency,
   pickMeta,
@@ -402,6 +403,10 @@ function buildOrderMetadata(args: {
       requires_verification: risk.requiresVerification,
       breakdown:             risk.breakdown,
     }) : null,
+
+    // Paid-ad attribution from Stripe Checkout metadata.
+    // Written by create-checkout / create-checkout-guest.
+    attribution: attributionFromMetadata(session.metadata) ?? null,
   });
 }
 

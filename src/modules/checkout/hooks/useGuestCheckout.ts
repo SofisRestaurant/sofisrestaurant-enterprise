@@ -4,10 +4,16 @@
 //
 // Calls `create-checkout-guest` with the `apikey` header and NO Authorization.
 // Server owns Stripe session creation.
+//
+// ATTRIBUTION:
+//   getAttributionForCheckout() is called at checkout time and included in the
+//   request body as `attribution: { utm_source, ... }`. The server sanitizes
+//   and writes these to Stripe session metadata for order-level attribution.
 // =============================================================================
 
 import { useReducer, useCallback, useRef } from 'react';
 import { env } from '@/lib/config/env';
+import { getAttributionForCheckout } from '@/lib/analytics/campaignTracking';
 import { useCartStore } from '@/modules/cart/store/cart.store';
 import { mapCheckoutError } from '@/modules/checkout/errors/mapCheckoutError';
 import type { CartItem } from '@/modules/cart/types/cart.types';
@@ -61,28 +67,14 @@ function phaseReducer(_state: GuestCheckoutPhase, action: PhaseAction): GuestChe
   switch (action.type) {
     case 'INITIATE':
       return { tag: 'initiating' };
-
     case 'OTP_REQUIRED':
-      return {
-        tag: 'otp_required',
-        nonce: action.nonce,
-        expiresAt: action.expiresAt,
-      };
-
+      return { tag: 'otp_required', nonce: action.nonce, expiresAt: action.expiresAt };
     case 'RETRY':
       return { tag: 'retrying' };
-
     case 'BLOCKED':
       return { tag: 'blocked' };
-
     case 'ERROR':
-      return {
-        tag: 'error',
-        message: action.message,
-        code: action.code,
-        recoverable: action.recoverable,
-      };
-
+      return { tag: 'error', message: action.message, code: action.code, recoverable: action.recoverable };
     case 'RESET':
       return IDLE;
   }
@@ -175,11 +167,15 @@ function buildGuestRequestBody(
     }),
   );
 
+  // Include campaign attribution data for server-side persistence
+  const attribution = getAttributionForCheckout();
+
   return {
     items: itemsPayload,
     ...serialiseGuestCheckoutInput(input),
     ...(storedToken ? { guest_token: storedToken } : {}),
     ...(challengeToken ? { challenge_token: challengeToken } : {}),
+    ...(attribution !== null ? { attribution } : {}),
   };
 }
 

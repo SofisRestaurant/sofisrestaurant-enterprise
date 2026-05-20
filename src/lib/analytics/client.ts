@@ -14,7 +14,10 @@
 // - VITE_ANALYTICS_ENDPOINT env var — configurable per environment, no code change needed
 // - reset() method — clean state for tests; no-op in production
 // - canDispatch() short-circuits on cheapest checks first (enabled → browser → DNT → consent)
+// - Auto-includes campaign attribution data (UTM params) in every tracked event
 // =============================================================================
+
+import { getAttributionFlat } from './campaignTracking';
 
 export enum AnalyticsEvent {
   PAGE_VIEW = 'page_view',
@@ -133,9 +136,6 @@ declare global {
   }
 }
 
-// Allow per-environment override via VITE_ANALYTICS_ENDPOINT.
-// Falls back to '/api/analytics' so no existing config breaks.
-// Inline normalization here because normalizeEnvString is declared later in the file.
 const ANALYTICS_ENDPOINT: string = (() => {
   const raw = import.meta.env.VITE_ANALYTICS_ENDPOINT;
   if (typeof raw === 'string') {
@@ -583,7 +583,14 @@ class AnalyticsClient {
 
   track(event: AnalyticsEvent | string, data?: EventData): void {
     const eventName = normalizeEventName(event);
-    const sanitizedData = sanitizeEventData(data);
+
+    // Merge campaign attribution data into event data automatically.
+    // Attribution fields use attr_ prefix so they don't collide with event data.
+    const attrFlat = getAttributionFlat();
+    const mergedData: EventData | undefined =
+      attrFlat !== null ? { ...(data ?? {}), ...attrFlat } : data;
+
+    const sanitizedData = sanitizeEventData(mergedData);
 
     if (!this.canDispatch()) {
       return;
@@ -640,11 +647,6 @@ class AnalyticsClient {
     }
   }
 
-  /**
-   * Resets the client to a clean state.
-   * Intended for test environments — clears the queue, identity, and drain timer.
-   * Has no effect in production builds when analytics is enabled.
-   */
   reset(): void {
     this.dropQueuedEvents();
     this.currentIdentity = { userId: null, traits: null };
@@ -652,11 +654,9 @@ class AnalyticsClient {
   }
 
   private canDispatch(): boolean {
-    // Check cheapest conditions first to short-circuit early.
     if (!this.isEnabled) return false;
     if (!isBrowser()) return false;
 
-    // DNT check before consent — no storage/cookie access needed.
     if (getDoNotTrackEnabled()) {
       this.dropQueuedEvents();
       return false;
@@ -982,10 +982,6 @@ export function flush(): void {
   analytics.flush();
 }
 
-/**
- * Resets the analytics client to a clean state.
- * Use in test setups (beforeEach / afterEach) to prevent state leaking between tests.
- */
 export function reset(): void {
   analytics.reset();
 }

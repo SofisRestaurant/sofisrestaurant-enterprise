@@ -13,16 +13,27 @@
 //       added in 20260508000000_harden_otp_challenge_tables.sql:
 //         CHECK (verification_status <> 'verified' OR verified_at IS NOT NULL)
 //       finalize-order always writes verification_status='not_required', so
-//       verified_at is always null here — but it must be present explicitly
+//       verified_at is always null here, but it must be present explicitly
 //       to satisfy any future constraint changes and for schema consistency.
 // =============================================================================
 
 import Stripe from 'stripe';
-import type { DbClient, PendingCartRecord, PendingCartUpdate, OrderInsert, ExistingOrderRow } from './types.ts';
+import type {
+  DbClient,
+  PendingCartRecord,
+  PendingCartUpdate,
+  OrderInsert,
+  ExistingOrderRow,
+} from './types.ts';
 import type { Json } from '../_shared/database.types.ts';
 import type { PricingSnapshot } from '../_shared/pricing.ts';
+import { attributionFromMetadata } from '../_shared/attribution.ts';
 import { nowIso, log, prefix } from './utils.ts';
-import { DB_PAYMENT_STATUS_PAID, DB_ORDER_STATUS_CONFIRMED, DB_ORDER_TYPE_FOOD } from './config.ts';
+import {
+  DB_PAYMENT_STATUS_PAID,
+  DB_ORDER_STATUS_CONFIRMED,
+  DB_ORDER_TYPE_FOOD,
+} from './config.ts';
 import { resolveSnapshotOrderType } from './snapshot.ts';
 
 export async function consumePendingCart(args: {
@@ -49,6 +60,7 @@ export async function consumePendingCart(args: {
     .select('id');
 
   if (error) throw new Error(`PENDING_CART_CONSUME_FAILED:${error.code ?? 'unknown'}`);
+
   return Array.isArray(data) && data.length > 0;
 }
 
@@ -61,6 +73,7 @@ export async function getExistingOrderBySession(
     .select('id,amount_total,payment_status,status')
     .eq('stripe_session_id', sessionId)
     .maybeSingle();
+
   return data ?? null;
 }
 
@@ -75,7 +88,18 @@ export function buildOrderMetadata(args: {
   stripeCurrency: string;
   consumedNow: boolean;
 }): Json {
-  const { requestId, pendingCart, snapshot, pricingHash, stripeSession, stripeApiVersion, stripeAmountTotal, stripeCurrency, consumedNow } = args;
+  const {
+    requestId,
+    pendingCart,
+    snapshot,
+    pricingHash,
+    stripeSession,
+    stripeApiVersion,
+    stripeAmountTotal,
+    stripeCurrency,
+    consumedNow,
+  } = args;
+
   const serviceType = resolveSnapshotOrderType(stripeSession, snapshot);
 
   return {
@@ -95,6 +119,10 @@ export function buildOrderMetadata(args: {
     stripe_amount_total: stripeAmountTotal,
     stripe_currency: stripeCurrency,
     pending_cart_consumed_now: consumedNow,
+
+    // Paid-ad attribution from Stripe Checkout metadata.
+    // Written by create-checkout / create-checkout-guest.
+    attribution: attributionFromMetadata(stripeSession.metadata) ?? null,
   } as Json;
 }
 
@@ -110,22 +138,39 @@ export async function insertOrReadFinalOrder(args: {
   pendingCart: PendingCartRecord;
   orderMetadata: Json;
 }): Promise<{ order: ExistingOrderRow; inserted: boolean }> {
-  const { db, requestId, sessionId, userId, userEmail, stripeSession, paymentIntentId, snapshot, pendingCart, orderMetadata } = args;
+  const {
+    db,
+    requestId,
+    sessionId,
+    userId,
+    userEmail,
+    stripeSession,
+    paymentIntentId,
+    snapshot,
+    pendingCart,
+    orderMetadata,
+  } = args;
 
-    const smsMeta = stripeSession.metadata ?? {};
-  const smsOptInRaw   = smsMeta["sms_opt_in"]    === "true";
-  const smsRawPhone   = typeof smsMeta["sms_phone_e164"] === "string"
-    ? smsMeta["sms_phone_e164"]
+  const smsMeta = stripeSession.metadata ?? {};
+
+  const smsOptInRaw = smsMeta['sms_opt_in'] === 'true';
+
+  const smsRawPhone = typeof smsMeta['sms_phone_e164'] === 'string'
+    ? smsMeta['sms_phone_e164']
     : null;
+
   const smsValidPhone =
     smsOptInRaw && smsRawPhone && /^\+1[2-9]\d{9}$/.test(smsRawPhone)
       ? smsRawPhone
       : null;
-  const orderSmsOptIn  = smsOptInRaw && smsValidPhone !== null;
-  const orderSmsPhone  = orderSmsOptIn ? smsValidPhone : null;
+
+  const orderSmsOptIn = smsOptInRaw && smsValidPhone !== null;
+  const orderSmsPhone = orderSmsOptIn ? smsValidPhone : null;
 
   const totalDiscountCents =
-    snapshot.campaignDiscountCents + snapshot.promoDiscountCents + snapshot.creditCents;
+    snapshot.campaignDiscountCents +
+    snapshot.promoDiscountCents +
+    snapshot.creditCents;
 
   const orderInsert = {
     stripe_session_id: sessionId,
@@ -155,21 +200,20 @@ export async function insertOrReadFinalOrder(args: {
     total_cents: snapshot.totalCents,
     amount_received_cents: snapshot.totalCents,
     refunded_amount_cents: 0,
-    // DO NOT include net_amount_cents — generated column
+
+    // Do not include net_amount_cents, it is a generated column.
     // finalize-order is auth-only: the authenticated user has already proven
     // ownership, so no post-payment OTP gate is appropriate.
     verification_status: 'not_required',
     risk_score: null,
     risk_level: null,
+
     // verified_at must be null when verification_status is not 'verified'.
-    // Explicit null satisfies orders_verified_at_completeness and prevents
-    // any future constraint tightening from silently rejecting this insert.
-  verified_at: null,
+    verified_at: null,
+
     // Persist opted-in phone so send-sms can dispatch transactional updates.
-    // finalize-order is auth-only; uses the same DB columns as the guest path
-    // (guest_phone_e164, sms_opt_in) — send-sms prefers guest_phone_e164 when
-    // sms_opt_in is true, then falls back to customer_phone.
-    sms_opt_in:       orderSmsOptIn,
+    // finalize-order is auth-only; uses the same DB columns as the guest path.
+    sms_opt_in: orderSmsOptIn,
     guest_phone_e164: orderSmsPhone,
   } as OrderInsert & {
     verification_status: string;
@@ -179,6 +223,7 @@ export async function insertOrReadFinalOrder(args: {
     sms_opt_in: boolean;
     guest_phone_e164: string | null;
   };
+
   const { data: insertedOrder, error: insertError } = await db
     .from('orders')
     .insert(orderInsert)
@@ -187,15 +232,22 @@ export async function insertOrReadFinalOrder(args: {
 
   if (insertError) {
     log('warn', 'order_insert_failed', {
-      requestId, sessionId: prefix(sessionId),
-      code: insertError.code ?? null, message: insertError.message,
+      requestId,
+      sessionId: prefix(sessionId),
+      code: insertError.code ?? null,
+      message: insertError.message,
     });
   }
 
-  if (insertedOrder?.id) return { order: insertedOrder, inserted: true };
+  if (insertedOrder?.id) {
+    return { order: insertedOrder, inserted: true };
+  }
 
   const existing = await getExistingOrderBySession(db, sessionId);
-  if (existing?.id) return { order: existing, inserted: false };
+
+  if (existing?.id) {
+    return { order: existing, inserted: false };
+  }
 
   throw new Error('ORDER_CREATE_FAILED');
 }

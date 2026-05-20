@@ -10,6 +10,7 @@
 //   - Cleans all timers/subscriptions on unmount.
 //   - Optional boot splash is fully lazy and disabled by default for Lighthouse.
 //   - Fallback banner appears only if backend health fails.
+//   - Initializes campaign attribution tracking on first render.
 //
 // Biggest Lighthouse win:
 //   The old version forced the app to wait for retryStartup() + health_ping()
@@ -19,9 +20,10 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 
 import AuthBootstrapGuard from './boot/AuthBootstrapGuard';
-import { runStartupHealthCheck } from '@/security/StartupHealthCheck';
+import { initCampaignTracking } from '@/lib/analytics/campaignTracking';
 import { retryStartup } from '@/lib/resilience/startupRetry';
 import { supabase } from '@/lib/supabase/supabaseClient';
+import { runStartupHealthCheck } from '@/security/StartupHealthCheck';
 
 // Disabled by default for maximum Lighthouse performance.
 // Turn true only if you accept a visual boot overlay cost.
@@ -67,10 +69,10 @@ export default function AppBoot({ children }: { children: ReactNode }) {
   const [state, setState] = useState<BootState>('ready');
 
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const mountedRef = useRef(true);
+  const mountedRef = useRef(false);
 
   const clearRefreshTimer = useCallback(() => {
-    if (refreshTimerRef.current) {
+    if (refreshTimerRef.current !== null) {
       clearTimeout(refreshTimerRef.current);
       refreshTimerRef.current = null;
     }
@@ -86,7 +88,6 @@ export default function AppBoot({ children }: { children: ReactNode }) {
 
       const expiresAtMs = expiresAtSeconds * 1000;
       const msUntilRefresh = expiresAtMs - safeNowMs() - SESSION_REFRESH_SAFETY_WINDOW_MS;
-
       const delay = clampMs(msUntilRefresh, MIN_REFRESH_DELAY_MS, MAX_REFRESH_DELAY_MS);
 
       refreshTimerRef.current = setTimeout(() => {
@@ -98,8 +99,13 @@ export default function AppBoot({ children }: { children: ReactNode }) {
     [clearRefreshTimer],
   );
 
+  // ── Session bootstrap + campaign tracking ──────────────────────────────────
   useEffect(() => {
     mountedRef.current = true;
+
+    // Capture UTM params and landing page on first render.
+    // Must run before any navigation can clear URL params.
+    initCampaignTracking();
 
     const bootstrapSession = async () => {
       try {
@@ -115,17 +121,25 @@ export default function AppBoot({ children }: { children: ReactNode }) {
 
     void bootstrapSession();
 
-    const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!mountedRef.current) return;
       scheduleRefresh(session?.expires_at ?? null);
     });
 
     const onVisibilityChange = () => {
       if (document.visibilityState !== 'visible') return;
 
-      void supabase.auth.getSession().then(({ data }) => {
-        if (!mountedRef.current) return;
-        scheduleRefresh(data?.session?.expires_at ?? null);
-      });
+      void supabase.auth
+        .getSession()
+        .then(({ data }) => {
+          if (!mountedRef.current) return;
+          scheduleRefresh(data?.session?.expires_at ?? null);
+        })
+        .catch(() => {
+          // Best effort only. Do not block the app.
+        });
     };
 
     document.addEventListener('visibilitychange', onVisibilityChange);
@@ -133,11 +147,12 @@ export default function AppBoot({ children }: { children: ReactNode }) {
     return () => {
       mountedRef.current = false;
       clearRefreshTimer();
-      authSub?.subscription?.unsubscribe();
+      subscription.unsubscribe();
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [clearRefreshTimer, scheduleRefresh]);
 
+  // ── Background startup health check ─────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
 
@@ -155,7 +170,7 @@ export default function AppBoot({ children }: { children: ReactNode }) {
           if (cancelled || !mountedRef.current) return;
           setState('ready');
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           if (cancelled || !mountedRef.current) return;
 
           setState('fallback');
@@ -178,7 +193,7 @@ export default function AppBoot({ children }: { children: ReactNode }) {
         <div
           role="status"
           aria-live="polite"
-          className="fixed inset-x-0 top-0 z-[9998] bg-yellow-500 px-4 py-2 text-center text-xs font-bold text-black shadow-md"
+          className="fixed inset-x-0 top-0 z-9998 bg-yellow-500 px-4 py-2 text-center text-xs font-bold text-black shadow-md"
         >
           Backend is responding slowly. Ordering may be temporarily limited.
         </div>

@@ -45,6 +45,11 @@ import {
 } from "../_shared/supabase.ts";
 import { getStoreHoursStatus } from "../_shared/store-hours.ts";
 import {
+  sanitizeAttribution,
+  attributionToMetadata,
+  type AttributionData,
+} from "../_shared/attribution.ts";
+import {
   buildStripeLineItemsFromPricing,
   type CanonicalCartItem,
   hashPricingSnapshot,
@@ -183,7 +188,29 @@ function toRiskGateResponse(
     corsHeaders,
   );
 }
-
+// ─── Store-hours response ─────────────────────────────────────────────────────
+function storeClosedResponse(
+  requestId: string,
+  message: string,
+  corsHeaders: Record<string, string>,
+): Response {
+  return new Response(
+    JSON.stringify({
+      ok: false,
+      error: "STORE_CLOSED",
+      message,
+      requestId,
+    }),
+    {
+      status: 409,
+      headers: {
+        ...BASE_HEADERS,
+        ...corsHeaders,
+        "Content-Type": "application/json",
+      },
+    },
+  );
+}
 // ─── ParsedBody ───────────────────────────────────────────────────────────────
 //
 // Uses RequestBody directly (imported from types.ts) rather than a conditional
@@ -191,12 +218,13 @@ function toRiskGateResponse(
 // `never` in some TypeScript versions when validateAuthBody's return type is
 // not fully resolved at the usage site.
 interface ParsedBody {
-  body:       RequestBody;
-  pickupTime: string | null;
+  body:        RequestBody;
+  pickupTime:  string | null;
   /** Validated E.164 US phone for auth SMS opt-in, or null when not opted in. */
-  smsPhone:   string | null;
+  smsPhone:    string | null;
   /** True only when smsPhone is non-null — the pair is always consistent. */
-  smsOptIn:   boolean;
+  smsOptIn:    boolean;
+  attribution: AttributionData | null;
 }
 // ─── Loyalty sealed outcome type ─────────────────────────────────────────────
 //
@@ -443,12 +471,17 @@ async function parseRequest(
     );
   }
 
+  const rawAttribution = isRec(parsedJson) ? parsedJson["attribution"] : null;
+  const attribution = sanitizeAttribution(rawAttribution);
+
   const parsed: ParsedBody = {
     body,
     pickupTime: pickupTimeResult.value,
     smsPhone:   rawSmsOptIn && validSmsPhone !== null ? validSmsPhone : null,
     smsOptIn:   rawSmsOptIn && validSmsPhone !== null,
+    attribution,
   };
+
   return ok(parsed);
 }
 // ─── Stage 3: Init services ───────────────────────────────────────────────────
@@ -1436,6 +1469,13 @@ function buildSessionMetadata(
     ...(smsOptIn && smsPhone !== null
       ? { sms_opt_in: "true", sms_phone_e164: smsPhone }
       : {}),
+
+    // Campaign attribution from paid ads, organic links, QR codes, etc.
+    // Values are sanitized before this point and converted to Stripe-safe
+    // metadata keys by attributionToMetadata().
+    ...(parsed.attribution !== null
+      ? attributionToMetadata(parsed.attribution)
+      : {}),
   };
 }
 
@@ -1590,8 +1630,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // ── Stage: Authenticate ────────────────────────────────────────────────────
   const authResult = await authenticateUser(req, requestId);
 
-
-  if (!authResult.ok) return toResponse(requestId, authResult.error, corsHeaders);
+  if (!authResult.ok) 
+    
+    return toResponse(requestId, authResult.error, corsHeaders);
   const { userId, userEmail } = authResult.data;
 
   // ── Stage: Parse request ───────────────────────────────────────────────────
@@ -1604,14 +1645,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const servicesResult = initServices(requestId);
   if (!servicesResult.ok) return toResponse(requestId, servicesResult.error, corsHeaders);
   const { db, stripe } = servicesResult.data;
-
-  // ── Stage: Store hours + emergency pause guard ─────────────────────────────
-  // Reads DB pause switch; falls back to hardcoded hours if row is missing.
-  // Runs after service init (needs db), before pricing and Stripe session.
-  const storeHours = await getStoreHoursStatus(db);
-  if (!storeHours.isOpen) {
-    return storeClosedResponse(requestId, corsHeaders, storeHours.message);
-  }
 
   const ctx: RequestContext = {
     requestId,
@@ -1628,6 +1661,21 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const rateLimitResult = await enforceRateLimit(db, userId, ctx.requestIp, requestId);
   if (!rateLimitResult.ok) return toResponse(requestId, rateLimitResult.error, corsHeaders);
 
+  // ── Stage: Store hours + emergency pause guard ─────────────────────────────
+  // Reads DB pause switch; falls back to hardcoded hours if row is missing.
+  // Runs after rate limiting and before pricing/Stripe session creation.
+  const storeHours = await getStoreHoursStatus(db);
+
+  if (!storeHours.isOpen) {
+    log("info", "checkout_store_closed", {
+      requestId,
+      userId: prefix(userId),
+      message: storeHours.message,
+    });
+
+    return storeClosedResponse(requestId, storeHours.message, corsHeaders);
+  }
+
   // ── Stage: Pricing ─────────────────────────────────────────────────────────
   const pricingResult = await buildPricing(db, userId, parsed, requestId);
   if (!pricingResult.ok) return toResponse(requestId, pricingResult.error, corsHeaders);
@@ -1642,19 +1690,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     userId,
     requestId,
   });
-function storeClosedResponse(
-  requestId: string,
-  corsHeaders: Record<string, string>,
-  message: string,
-): Response {
-  return errorResponse(
-    requestId,
-    409,
-    "STORE_CLOSED",
-    message,
-    corsHeaders,
-  );
-}
+
   // ── Stage: Pre-checkout risk gate ──────────────────────────────────────────
   // Position: after buildPricing (needs totalCents for scoring) and before
   // persistPendingCart (no irreversible DB writes may exist on rejection).
