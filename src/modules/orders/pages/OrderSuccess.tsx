@@ -6,7 +6,7 @@
 //
 //   BEFORE: clearGuestToken() was called immediately after setPageState('found')
 //   in both run() and reconcile(). React batches state updates, so by the time
-//   the component re-rendered and showed the "Track My Order" button, the token
+//   the component re-rendered and showed the "Track your order" button, the token
 //   was already gone from sessionStorage. Clicking the button landed the guest
 //   on /order-status/:id with no credential → 401 "Access denied".
 //
@@ -131,7 +131,7 @@ export default function OrderSuccess() {
   // ── [CHANGE 1] Guest detection flag ───────────────────────────────────────
   // Set to true in both found-paths when no JWT was present and a
   // checkout_guest_token existed at the moment the order was confirmed.
-  // Drives the guest-only recovery info card below the Track My Order CTA.
+  // Drives the guest-only recovery info card below the Track your order CTA.
   const [isGuestOrder, setIsGuestOrder] = useState(false);
 
   const [loyalty, setLoyalty] = useState<LoyaltyTxV2 | null>(null);
@@ -459,8 +459,8 @@ export default function OrderSuccess() {
     if (loyalty) return null;
     if (pageState !== 'found') return null;
     if (loyaltyAttempt <= 0) return null;
-    if (loyaltyAttempt < LOYALTY_MAX_ATTEMPTS) return '✨ Updating your points…';
-    return '✨ Your points are still updating — check your account in a moment.';
+    if (loyaltyAttempt < LOYALTY_MAX_ATTEMPTS) return '✨ Updating your rewards…';
+    return '✨ Your rewards are still updating. Please check your account again in a moment.';
   }, [loyalty, loyaltyAttempt, pageState]);
 
   return (
@@ -494,7 +494,7 @@ export default function OrderSuccess() {
                     </div>
 
                     <h1 className="text-2xl font-bold tracking-tight text-white">
-                      Order Confirmed
+                      Thank you, your order is confirmed
                     </h1>
 
                     {order.order_number ? (
@@ -536,7 +536,7 @@ export default function OrderSuccess() {
                         </div>
                       ) : null}
                       <div className="flex justify-between border-t border-white/10 pt-2 font-bold text-white">
-                        <span>Total Paid</span>
+                        <span>Total paid</span>
                         <span className="text-amber-400">${cents(order.amount_total)}</span>
                       </div>
                     </div>
@@ -599,11 +599,11 @@ export default function OrderSuccess() {
                                    focus-visible:ring-offset-neutral-950"
                       >
                         <MapPin size={15} className="shrink-0" />
-                        Track My Order
+                        Track your order
                       </Link>
                       <p className="mt-2 text-center text-[11px] leading-relaxed text-neutral-500">
-                        Guest tracking works in this browser session. Keep this tab open to follow
-                        your order.
+                        We’re getting everything ready with care. Keep this tab open if you’d like
+                        to follow your order.
                       </p>
                     </motion.div>
 
@@ -616,8 +616,8 @@ export default function OrderSuccess() {
                       <div className="rounded-xl border border-white/8 bg-white/3 px-4 py-3 text-xs leading-relaxed text-neutral-400">
                         <p className="mb-1 font-semibold text-neutral-300">
                           {order.order_number
-                            ? `Order #${String(order.order_number).padStart(4, '0')} · Lost this page?`
-                            : 'Lost this page?'}
+                            ? `Order #${String(order.order_number).padStart(4, '0')} · Need to find this order later?`
+                            : 'Need to find this order later?'}
                         </p>
                         <p>
                           Go to{' '}
@@ -628,8 +628,8 @@ export default function OrderSuccess() {
                             Find My Order
                           </Link>
                           {order.order_number
-                            ? ` and enter order #${String(order.order_number).padStart(4, '0')} with the email you used at checkout.`
-                            : ' and enter your order number with the email you used at checkout.'}
+                            ? ` and enter order #${String(order.order_number).padStart(4, '0')} with the email you used at checkout. We’ll help you pull it back up.`
+                            : ' and enter your order number with the email you used at checkout. We’ll help you pull it back up. We’ll help you pull it back up.'}
                         </p>
                       </div>
                     )}
@@ -648,7 +648,7 @@ export default function OrderSuccess() {
                                    hover:bg-white/12 focus-visible:outline-none
                                    focus-visible:ring-2 focus-visible:ring-white/30"
                       >
-                        View Order History
+                        View order history
                       </Link>
                     </motion.div>
 
@@ -684,7 +684,7 @@ export default function OrderSuccess() {
                                      text-xs font-semibold text-amber-400
                                      hover:bg-amber-500/15"
                         >
-                          Order Again
+                          Order again
                         </Link>
                       </motion.div>
                     </div>
@@ -694,7 +694,7 @@ export default function OrderSuccess() {
                       className="w-full text-10px text-neutral-600 underline underline-offset-2 hover:text-neutral-400"
                       type="button"
                     >
-                      Continue browsing
+                      Back to menu
                     </button>
                   </motion.div>
 
@@ -717,7 +717,7 @@ export default function OrderSuccess() {
 
           {pageState === 'found' ? (
             <p className="mt-4 text-center text-xs text-neutral-700">
-              A confirmation has been sent to your email.
+              We appreciate your order. A confirmation has been sent to your email.
             </p>
           ) : null}
         </div>
