@@ -3,48 +3,57 @@
 // LEGAL ROUTES — Route definitions for all legal/policy pages.
 // =============================================================================
 //
-// Usage: spread these into your existing route array in the app router.
+// These routes are already registered inline in src/app/router.tsx.
+// This file exists as a standalone reference and can be spread into
+// any createBrowserRouter configuration that doesn't use router.tsx:
 //
 //   import { legalRoutes } from '@/routes/legalRoutes';
 //
-//   const routes = [
-//     ...existingRoutes,
-//     ...legalRoutes,
-//   ];
+//   const router = createBrowserRouter([
+//     { path: '/', children: [...otherRoutes, ...legalRoutes] }
+//   ]);
 //
-// All pages are lazy-loaded to keep the initial bundle small.
+// IMPORTANT: These use the `lazy` property (async () => { Component })
+// which is the correct pattern for createBrowserRouter. Do NOT use
+// React.lazy() + element — that pattern is incompatible.
 // =============================================================================
 
-import { lazy } from 'react';
 import type { RouteObject } from 'react-router-dom';
-
-const PrivacyPolicyPage = lazy(() => import('@/pages/legal/PrivacyPolicyPage'));
-const TermsOfServicePage = lazy(() => import('@/pages/legal/TermsOfServicePage'));
-const MobileOrderPaymentTermsPage = lazy(
-  () => import('@/pages/legal/MobileOrderPaymentTermsPage'),
-);
-const RewardsTermsPage = lazy(() => import('@/pages/legal/RewardsTermsPage'));
-const RefundPolicyPage = lazy(() => import('@/pages/legal/RefundPolicyPage'));
 
 export const legalRoutes: RouteObject[] = [
   {
-    path: '/privacy-policy',
-    element: <PrivacyPolicyPage />,
+    path: 'privacy-policy',
+    lazy: async () => {
+      const mod = await import('@/pages/legal/PrivacyPolicyPage');
+      return { Component: mod.default };
+    },
   },
   {
-    path: '/terms-of-service',
-    element: <TermsOfServicePage />,
+    path: 'terms-of-service',
+    lazy: async () => {
+      const mod = await import('@/pages/legal/TermsOfServicePage');
+      return { Component: mod.default };
+    },
   },
   {
-    path: '/mobile-order-payment-terms',
-    element: <MobileOrderPaymentTermsPage />,
+    path: 'mobile-order-payment-terms',
+    lazy: async () => {
+      const mod = await import('@/pages/legal/MobileOrderPaymentTermsPage');
+      return { Component: mod.default };
+    },
   },
   {
-    path: '/rewards-terms',
-    element: <RewardsTermsPage />,
+    path: 'rewards-terms',
+    lazy: async () => {
+      const mod = await import('@/pages/legal/RewardsTermsPage');
+      return { Component: mod.default };
+    },
   },
   {
-    path: '/refund-policy',
-    element: <RefundPolicyPage />,
+    path: 'refund-policy',
+    lazy: async () => {
+      const mod = await import('@/pages/legal/RefundPolicyPage');
+      return { Component: mod.default };
+    },
   },
 ];

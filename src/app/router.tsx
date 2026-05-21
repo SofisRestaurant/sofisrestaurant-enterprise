@@ -370,15 +370,23 @@ export const router = createBrowserRouter([
       // ──────────────────────────────────────────────────────────
       {
         path: 'privacy-policy',
-        lazy: lazyRoute(() => import('@/pages/legal/PrivacyPolicy')),
+        lazy: lazyRoute(() => import('@/pages/legal/PrivacyPolicyPage')),
       },
       {
         path: 'terms-of-service',
-        lazy: lazyRoute(() => import('@/pages/legal/TermsOfService')),
+        lazy: lazyRoute(() => import('@/pages/legal/TermsOfServicePage')),
+      },
+      {
+        path: 'mobile-order-payment-terms',
+        lazy: lazyRoute(() => import('@/pages/legal/MobileOrderPaymentTermsPage')),
+      },
+      {
+        path: 'rewards-terms',
+        lazy: lazyRoute(() => import('@/pages/legal/RewardsTermsPage')),
       },
       {
         path: 'refund-policy',
-        lazy: lazyRoute(() => import('@/pages/legal/RefundPolicy')),
+        lazy: lazyRoute(() => import('@/pages/legal/RefundPolicyPage')),
       },
 
       // ──────────────────────────────────────────────────────────
