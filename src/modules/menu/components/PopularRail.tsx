@@ -59,8 +59,17 @@ const SKELETON_KEYS = ['skel-0', 'skel-1', 'skel-2', 'skel-3'] as const;
 /** Fixed card height — skeleton, loaded cards, and empty rail must match (CLS). */
 const POPULAR_CARD_HEIGHT_CLASS = 'h-[13.5rem]';
 
-/** Header row + card track — reserved on MenuPage wrapper and section. */
-export const POPULAR_SECTION_MIN_HEIGHT_CLASS = 'min-h-[17.5rem]';
+/** Fixed header row — icon + title + subtitle + arrow slot. */
+const POPULAR_HEADER_HEIGHT_CLASS = 'h-[3.25rem]';
+
+/**
+ * Total section height: header (3.25rem) + gap (1rem) + track (13.5rem) = 17.75rem.
+ * Use exact `h-*` (not min-h) so Lighthouse never sees growth after data loads.
+ */
+export const POPULAR_SECTION_HEIGHT_CLASS = 'h-[17.75rem]';
+
+/** @deprecated Use POPULAR_SECTION_HEIGHT_CLASS — min-h allowed section growth (CLS). */
+export const POPULAR_SECTION_MIN_HEIGHT_CLASS = POPULAR_SECTION_HEIGHT_CLASS;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -313,17 +322,23 @@ function PopularRailImpl<TItem extends BaseItem>({
     if (hasItems) scrollToStart();
   }, [hasItems, list.length, scrollToStart]);
 
-  // ── CLS FIX: min-h-[12rem] reserves stable space so the grid ──
-  // ── below does not shift when this section mounts or transitions ──
-  // ── between loading / empty / loaded states.                      ──
-
   return (
     <section
-      className={cx(POPULAR_SECTION_MIN_HEIGHT_CLASS, 'space-y-4', className)}
+      className={cx(
+        POPULAR_SECTION_HEIGHT_CLASS,
+        'flex flex-col gap-4 overflow-hidden',
+        className,
+      )}
       aria-label={ariaLabel}
+      aria-busy={loading}
     >
-      {/* ── Section header ── */}
-      <div className="flex items-center justify-between gap-3">
+      {/* ── Section header — fixed height ── */}
+      <div
+        className={cx(
+          POPULAR_HEADER_HEIGHT_CLASS,
+          'flex shrink-0 items-center justify-between gap-3',
+        )}
+      >
         <div className="flex items-center gap-3">
           {/* Icon */}
           <div className="relative flex-shrink-0">
@@ -355,7 +370,7 @@ function PopularRailImpl<TItem extends BaseItem>({
       </div>
 
       {/* ── Rail track — fixed height across loading / empty / loaded ── */}
-      <div className={POPULAR_CARD_HEIGHT_CLASS}>
+      <div className={cx(POPULAR_CARD_HEIGHT_CLASS, 'shrink-0 overflow-hidden')}>
       {loading ? (
         <div className="flex h-full gap-3 overflow-hidden" aria-hidden="true">
           {SKELETON_KEYS.map((key) => (
@@ -385,7 +400,7 @@ function PopularRailImpl<TItem extends BaseItem>({
         /* Scrollable cards — no entry animation, renders immediately */
         <div
           ref={ref}
-          className="flex h-full gap-3 overflow-x-auto pb-2 -mx-1 px-1"
+          className="flex h-full gap-3 overflow-x-auto -mx-1 px-1"
           style={{ scrollbarWidth: 'none' }}
           role="list"
           tabIndex={0}

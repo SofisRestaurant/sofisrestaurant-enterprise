@@ -50,15 +50,11 @@ import {
 } from 'react';
 import { AnimatePresence, m } from 'framer-motion';
 
-import { Spinner } from '@/components/ui/Spinner';
 import { MenuPublicService } from '@/domain/menu/menu.service.public';
 import type { MenuCategory, MenuItemPublic } from '@/domain/menu/menu.types';
 import { CategoryTabs } from '@/modules/menu/components/CategoryTabs';
 import { MenuGrid } from '@/modules/menu/components/MenuGrid';
-import {
-  PopularRail,
-  POPULAR_SECTION_MIN_HEIGHT_CLASS,
-} from '@/modules/menu/components/PopularRail';
+import { PopularRail } from '@/modules/menu/components/PopularRail';
 import { useMenuUi } from '@/modules/menu/store/menuUi.store';
 import type { MenuPriceRangeKey, MenuSortKey, MenuTagKey } from '@/types/menu-ui.types';
 import {
@@ -773,22 +769,11 @@ if (!attrs) return;
   // ── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <main className="mx-auto w-full max-w-7xl px-4 pb-10 pt-4">
+    <main
+      className="relative mx-auto w-full max-w-7xl px-4 pb-10 pt-4"
+      aria-busy={loading}
+    >
       <AnimatePresence>
-        {loading && (
-          <m.div
-            key="loading"
-            initial={{ opacity: 0, y: 14 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.35, ease: EL }}
-            className="flex flex-col items-center gap-4 py-24 text-zinc-500"
-          >
-            <Spinner />
-            <p className="text-sm">Loading the menu</p>
-          </m.div>
-        )}
-
         {!loading && error && (
           <m.div
             key="error"
@@ -817,10 +802,9 @@ if (!attrs) return;
         )}
       </AnimatePresence>
 
-      {/* Popular rail — always mounted (except error) so LCP image is discoverable early
-          and layout height is reserved before menu data finishes loading. */}
+      {/* Popular rail — first paint slot; fixed height inside PopularRail (no flow-blocking spinner above). */}
       {!error && (
-        <div className={cx('mt-6', POPULAR_SECTION_MIN_HEIGHT_CLASS)}>
+        <div className="mt-6">
           <PopularRail
             loading={loading}
             items={popular}
