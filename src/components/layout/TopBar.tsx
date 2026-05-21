@@ -78,6 +78,22 @@ export default function TopBar() {
   const setMenuSearchText = useMenuUi((state) => state.setSearchText);
 
   const pickupTiming = useOrderIntentStore((state) => state.pickupTiming);
+  const mobileSheetOpen = useOrderIntentStore((state) => state.mobileSheetOpen);
+  const [isDesktopNav, setIsDesktopNav] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia('(min-width: 768px)').matches;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const media = window.matchMedia('(min-width: 768px)');
+    const sync = () => setIsDesktopNav(media.matches);
+
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
   const fulfillmentType = useOrderIntentStore((state) => state.fulfillmentType);
   const deliveryAvailability = useOrderIntentStore((state) => state.deliveryAvailability);
   const openOrderIntentSheet = useOrderIntentStore((state) => state.openMobileSheet);
@@ -348,7 +364,7 @@ export default function TopBar() {
                 </span>
 
                 <span className="min-w-0 flex-1 text-left">
-                  <span className="block text-[8px] font-black uppercase leading-none tracking-[0.14em] text-(--color-ink-400) dark:text-white/40">
+                  <span className="block text-[8px] font-black uppercase leading-none tracking-[0.14em] text-(--color-ink-500) dark:text-white/55">
                     Pickup
                   </span>
                   <span className="mt-0.5 block truncate text-[10.5px] font-black leading-none">
@@ -357,9 +373,11 @@ export default function TopBar() {
                 </span>
               </button>
 
-              <Suspense fallback={null}>
-                <OrderIntentSelector />
-              </Suspense>
+              {isDesktopNav ? (
+                <Suspense fallback={null}>
+                  <OrderIntentSelector />
+                </Suspense>
+              ) : null}
 
               {!isAuthed && (
                 <Link
@@ -543,9 +561,11 @@ export default function TopBar() {
         </div>
       )}
 
-      <Suspense fallback={null}>
-        <MobileOrderIntentSheet />
-      </Suspense>
+      {mobileSheetOpen ? (
+        <Suspense fallback={null}>
+          <MobileOrderIntentSheet />
+        </Suspense>
+      ) : null}
     </>
   );
 }

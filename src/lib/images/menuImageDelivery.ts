@@ -90,15 +90,15 @@ const FEATURED_VARIANTS: Record<
   }
 > = {
   hero: {
-    width: 960,
-    height: 760,
-    quality: 80,
-    sizes: '(min-width: 1280px) 520px, (min-width: 1024px) 46vw, 92vw',
+    width: 480,
+    height: 384,
+    quality: 76,
+    sizes: '(max-width: 640px) 92vw, (min-width: 1280px) 520px, (min-width: 1024px) 46vw, 92vw',
     srcSet: [
+      { w: 360, h: 288, q: 72 },
       { w: 480, h: 384, q: 74 },
       { w: 720, h: 576, q: 78 },
       { w: 960, h: 760, q: 80 },
-      { w: 1200, h: 950, q: 80 },
     ],
   },
 

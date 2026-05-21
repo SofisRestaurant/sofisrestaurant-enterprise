@@ -92,6 +92,15 @@ export default defineConfig({
             return 'vendor-icons';
           }
 
+          // ── QR (admin / account only — keep off homepage vendor blob) ──
+          if (id.includes('node_modules/html5-qrcode/')) {
+            return 'vendor-qrcode-scanner';
+          }
+
+          if (id.includes('node_modules/qrcode.react/')) {
+            return 'vendor-qrcode';
+          }
+
           // ── Everything else from node_modules ─────────────────────
           if (id.includes('node_modules/')) {
             return 'vendor';

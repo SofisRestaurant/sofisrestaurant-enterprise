@@ -4,7 +4,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { RouterProvider } from 'react-router-dom';
-import { MotionConfig } from 'framer-motion';
 
 // ── i18n — MUST be imported before any component that calls useTranslation() ──
 import './i18n';
@@ -29,8 +28,6 @@ const root = ReactDOM.createRoot(container);
 
 root.render(
   <React.StrictMode>
-    <MotionConfig reducedMotion="user">
-      <RouterProvider router={router} />
-    </MotionConfig>
+    <RouterProvider router={router} />
   </React.StrictMode>,
 );

@@ -110,7 +110,7 @@ const StandardTab = memo(function StandardTab({ tab }: StandardTabProps) {
         <Icon
           className={cx(
             'h-5 w-5 transition-colors duration-200',
-            tab.isActive ? 'text-(--color-ember-600)' : 'text-[var(--app-muted)]',
+            tab.isActive ? 'text-(--color-ember-600)' : 'text-(--color-ink-600)',
           )}
           strokeWidth={tab.isActive ? 2.25 : 1.8}
           aria-hidden="true"
@@ -128,7 +128,7 @@ const StandardTab = memo(function StandardTab({ tab }: StandardTabProps) {
         className={cx(
           'max-w-full truncate text-[10px] font-semibold leading-none tracking-wide',
           'transition-colors duration-200',
-          tab.isActive ? 'text-(--color-ember-600)' : 'text-[var(--app-muted)]',
+          tab.isActive ? 'text-(--color-ember-600)' : 'text-(--color-ink-600)',
         )}
       >
         {tab.label}
