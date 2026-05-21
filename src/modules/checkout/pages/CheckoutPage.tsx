@@ -1,5 +1,11 @@
 // src/modules/checkout/pages/CheckoutPage.tsx
 // Checkout orchestrator — state, effects, and handlers only. UI lives in components/page/.
+//
+// [FIX 2026-05-20] Added pending checkout lock guard for guest checkout.
+// If a Stripe session was already created (user hit back, reloaded, or
+// returned after redirect), the page now shows a recovery UI instead of
+// allowing a duplicate payment. The lock is set immediately before redirect
+// to Stripe and cleared only when OrderSuccess confirms the order.
 
 import {
   useEffect,
@@ -38,6 +44,10 @@ import {
   safeLocalGet,
   safeLocalSet,
   safeLocalRemove,
+  getPendingCheckoutLock,
+  setPendingCheckoutLock,
+  clearPendingCheckoutLock,
+  type PendingCheckoutLock,
 } from '@/modules/checkout/utils/checkoutPageStorage';
 import {
   clampInt,
@@ -89,6 +99,38 @@ export default function CheckoutPage() {
   const showChallenge = guestPhase.tag === 'otp_required' || guestPhase.tag === 'retrying';
   const showBlocked = guestPhase.tag === 'blocked';
   const hasItems = Array.isArray(items) && items.length > 0;
+
+  // ── [FIX] Pending checkout lock — prevents duplicate guest payment ────────
+  const [pendingLock, setPendingLockState] = useState<PendingCheckoutLock | null>(() =>
+    isGuest ? getPendingCheckoutLock() : null,
+  );
+
+  // Re-check lock when returning to this page (e.g. via popstate / back button)
+  useEffect(() => {
+    if (!isGuest) {
+      setPendingLockState(null);
+      return;
+    }
+    const onFocus = () => setPendingLockState(getPendingCheckoutLock());
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('pageshow', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('pageshow', onFocus);
+    };
+  }, [isGuest]);
+
+  const handleCancelPendingCheckout = useCallback(() => {
+    clearPendingCheckoutLock();
+    setPendingLockState(null);
+  }, []);
+
+  const handleContinueToPayment = useCallback(() => {
+    if (pendingLock?.sessionUrl) {
+      window.location.assign(pendingLock.sessionUrl);
+    }
+  }, [pendingLock]);
+  // ── End pending lock ──────────────────────────────────────────────────────
 
   const subtotalCents = useMemo(() => {
     if (!hasItems) return 0;
@@ -318,6 +360,13 @@ export default function CheckoutPage() {
   }, [selectedCredit]);
 
   const handleCheckout = useCallback(async () => {
+    // [FIX] Prevent duplicate payment if a lock already exists
+    const existingLock = isGuest ? getPendingCheckoutLock() : null;
+    if (existingLock) {
+      setPendingLockState(existingLock);
+      return;
+    }
+
     const pickupTime =
       effectiveOrderType === 'pickup'
         ? (getPickupTimingDate(pickupTiming) ?? undefined)
@@ -336,6 +385,17 @@ export default function CheckoutPage() {
     });
 
     if (isCheckoutSuccess(result)) {
+      // [FIX] Store pending checkout lock before redirecting to Stripe.
+      // This prevents duplicate payment if the user navigates back.
+      if (isGuest && result.sessionId) {
+        setPendingCheckoutLock(result.sessionId, result.url);
+        setPendingLockState({
+          sessionId: result.sessionId,
+          sessionUrl: result.url,
+          createdAt: Date.now(),
+        });
+      }
+
       window.location.assign(result.url);
       return;
     }
@@ -418,7 +478,71 @@ export default function CheckoutPage() {
         totalSteps={CHECKOUT_PROGRESS_STEPS}
       />
 
-      {!hasItems ? (
+      {/* ── [FIX] Pending checkout recovery for guests ────────────────────────
+           If a Stripe session was already created, show recovery UI instead of
+           allowing a second payment. The user can continue to the existing
+           Stripe session or cancel and start fresh.                           */}
+      {pendingLock && isGuest ? (
+        <div className="mx-auto max-w-md space-y-4 py-10 text-center">
+          <div className="flex justify-center">
+            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-amber-500/15 ring-1 ring-amber-500/30">
+              <span className="text-3xl">💳</span>
+            </div>
+          </div>
+
+          <div>
+            <h2 className="text-lg font-bold text-white">Payment already started</h2>
+            <p className="mt-1 text-sm text-neutral-400">
+              A checkout session is already active for this order. You can continue to the payment
+              page or cancel and start over.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={handleContinueToPayment}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl
+                         bg-amber-500 py-3 text-sm font-bold text-neutral-950
+                         hover:shadow-[0_0_18px_4px_rgba(245,158,11,0.35)]
+                         focus-visible:outline-none focus-visible:ring-2
+                         focus-visible:ring-amber-400 focus-visible:ring-offset-2
+                         focus-visible:ring-offset-neutral-950"
+            >
+              Continue to Payment
+            </button>
+            <button
+              type="button"
+              onClick={handleCancelPendingCheckout}
+              className="inline-flex w-full items-center justify-center rounded-xl
+                         bg-white/8 py-3 text-sm font-semibold text-white
+                         hover:bg-white/12 focus-visible:outline-none
+                         focus-visible:ring-2 focus-visible:ring-white/30"
+            >
+              Cancel &amp; Start Over
+            </button>
+            <p className="text-xs text-neutral-600">
+              If you already completed payment, your order is being confirmed. Check{' '}
+              <button
+                type="button"
+                onClick={() => navigate('/account/orders')}
+                className="text-amber-400 underline underline-offset-2 hover:text-amber-300"
+              >
+                your orders
+              </button>{' '}
+              or{' '}
+              <button
+                type="button"
+                onClick={() => navigate('/find-order')}
+                className="text-amber-400 underline underline-offset-2 hover:text-amber-300"
+              >
+                find your order
+              </button>{' '}
+              for status.
+            </p>
+          </div>
+        </div>
+      ) : !hasItems ? (
         <CheckoutEmptyState onBrowseMenu={() => navigate('/menu')} />
       ) : (
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_24rem] lg:items-start">

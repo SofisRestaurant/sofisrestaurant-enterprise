@@ -17,6 +17,14 @@
 //   status (DELIVERED / CANCELLED) during polling.
 //
 // All other logic is unchanged from the prior version.
+//
+// [FIX 2026-05-20] clearPendingCheckoutLock() added at both confirmed-order
+//   paths (run + reconcile). Without this, the pending checkout lock persists
+//   in sessionStorage after a successful order. If the guest starts a new
+//   checkout in the same tab, CheckoutPage sees the stale lock and blocks
+//   the new payment with "Payment already started". The lock MUST be cleared
+//   here — not earlier — because only this page has server-confirmed proof
+//   that the order was created.
 // ============================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -29,6 +37,8 @@ import { invokeEdge } from '@/lib/supabase/invoke';
 import { useCartStore } from '@/modules/cart/store/cart.store';
 import { mapOrderRowToDomain } from '@/modules/orders/mappers';
 import type { Order, OrderStatus } from '@/domain/orders/order.types';
+// [FIX 2026-05-20] Clear the pending checkout lock after confirmed order.
+import { clearPendingCheckoutLock } from '@/modules/checkout/utils/checkoutPageStorage';
 
 import type {
   PageState,
@@ -252,6 +262,8 @@ export default function OrderSuccess() {
           setLiveStatus(mapped.status);
           setPageState('found');
           clearCart();
+          // [FIX 2026-05-20] Clear checkout lock after server-confirmed order.
+          clearPendingCheckoutLock();
           // ── [CHANGE 2] Guest detection — reconcile path ─────────────────
           if (jwtRef.current === null && readGuestToken() !== null) setIsGuestOrder(true);
           // NOTE: clearGuestToken() intentionally omitted — guest must be
@@ -337,6 +349,8 @@ export default function OrderSuccess() {
         setLiveStatus(mapped.status);
         setPageState('found');
         clearCart();
+        // [FIX 2026-05-20] Clear checkout lock after server-confirmed order.
+        clearPendingCheckoutLock();
         // ── [CHANGE 3] Guest detection — run() path ─────────────────────
         if (jwtRef.current === null && readGuestToken() !== null) setIsGuestOrder(true);
         // NOTE: clearGuestToken() intentionally omitted — guest must be
@@ -351,7 +365,12 @@ export default function OrderSuccess() {
       } catch (err) {
         if (cancelled) return;
 
-        const message = (err instanceof Error ? err.message : String(err ?? '')).toLowerCase();
+        const message =
+          err instanceof Error
+            ? err.message.toLowerCase()
+            : typeof err === 'string'
+              ? err.toLowerCase()
+              : '';
         const isFatalAuth =
           message.includes('401') ||
           message.includes('403') ||
