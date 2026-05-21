@@ -18,6 +18,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ShoppingBag, Truck, UtensilsCrossed, X, type LucideIcon } from 'lucide-react';
 
 import {
   SERVICE_CHOICE_EVENTS,
@@ -32,8 +33,9 @@ type ServiceOption = {
   eyebrow: string;
   title: string;
   description: string;
+  cta: string;
   href: string;
-  icon: string;
+  Icon: LucideIcon;
   primary?: boolean;
 };
 
@@ -42,27 +44,26 @@ const SHOW_DELAY_MS = 1100;
 const OPTIONS: ServiceOption[] = [
   {
     mode: 'pickup',
-    eyebrow: 'Fastest choice',
+    eyebrow: 'Quick and fresh',
     title: 'Pickup from Sofi’s',
-    description: 'Order fresh and pick it up when it’s ready.',
+    description: 'Place your order and we’ll have it ready for you.',
+    cta: 'Start pickup order',
     href: '/menu',
-    icon: '🛍️',
+    Icon: ShoppingBag,
     primary: true,
   },
   {
     mode: 'delivery',
-    eyebrow: 'Delivery options',
-    title: 'Delivery',
-    description: 'Choose your preferred delivery partner.',
+    eyebrow: 'Delivered your way',
+    title: 'Delivery options',
+    description: 'Choose the delivery partner that works best for you.',
+    cta: 'See delivery options',
     href: '#delivery',
-    icon: '🚗',
+    Icon: Truck,
   },
 ];
 
 function emitServiceChoiceEvent(eventName: ServiceChoiceEventName, metadata?: Record<string, unknown>) {
-  // Safe analytics hook.
-  // Later you can replace this with:
-  // await supabase.from('analytics_events').insert({ event_name: eventName, metadata });
   if (import.meta.env.DEV) {
     console.info('[Sofi service choice]', eventName, metadata ?? {});
   }
@@ -81,6 +82,31 @@ function emitServiceChoiceEvent(eventName: ServiceChoiceEventName, metadata?: Re
 function getCurrentPathname(): string {
   if (typeof window === 'undefined') return '/';
   return window.location.pathname || '/';
+}
+
+function scrollToHashTarget(hash: string) {
+  const scroll = () => {
+    const target = document.querySelector(hash);
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  requestAnimationFrame(() => {
+    requestAnimationFrame(scroll);
+  });
+}
+
+function cardClassName(primary?: boolean): string {
+  return [
+    'group flex w-full flex-col rounded-2xl p-4 text-left shadow-sm ring-1 transition duration-200',
+    'focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-[#faf6ef]',
+    'motion-reduce:transition-none',
+    'active:scale-[0.985] motion-reduce:active:scale-100',
+    primary
+      ? 'bg-stone-950 text-white ring-stone-900/80 sm:hover:-translate-y-0.5 sm:hover:bg-stone-900 sm:hover:shadow-md'
+      : 'bg-white text-stone-950 ring-stone-200/90 sm:hover:-translate-y-0.5 sm:hover:border-orange-100 sm:hover:shadow-md sm:hover:ring-orange-200/60',
+  ].join(' ');
 }
 
 export function ServiceChoiceModal() {
@@ -158,12 +184,7 @@ export function ServiceChoiceModal() {
       closeModal();
 
       if (option.href.startsWith('#')) {
-        const target = document.querySelector(option.href);
-
-        if (target) {
-          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-
+        scrollToHashTarget(option.href);
         return;
       }
 
@@ -198,7 +219,7 @@ export function ServiceChoiceModal() {
 
   return (
     <div
-      className="fixed inset-0 z-[9999] flex items-end justify-center bg-black/45 px-3 pb-3 pt-16 backdrop-blur-sm sm:items-center sm:p-6"
+      className="fixed inset-0 z-[9999] flex items-end justify-center bg-stone-950/50 px-0 pb-0 pt-8 backdrop-blur-[2px] animate-backdrop-in motion-reduce:animate-none sm:items-center sm:p-6"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
@@ -211,16 +232,27 @@ export function ServiceChoiceModal() {
         aria-modal="true"
         aria-labelledby="service-choice-title"
         aria-describedby="service-choice-description"
-        className="relative w-full max-w-[560px] overflow-hidden rounded-[2rem] bg-[#faf6ef] shadow-[0_24px_90px_rgba(0,0,0,0.32)] ring-1 ring-white/50 sm:rounded-[2.25rem]"
+        className={[
+          'relative w-full max-w-[34rem] overflow-hidden bg-[#faf6ef]',
+          'rounded-t-[1.75rem] shadow-[0_-8px_40px_rgba(28,25,21,0.12),0_24px_80px_rgba(28,25,21,0.22)]',
+          'ring-1 ring-stone-200/80',
+          'max-sm:animate-sheet-in sm:animate-modal-in motion-reduce:animate-none',
+          'sm:max-w-[32rem] sm:rounded-[1.75rem]',
+          'pb-[max(1rem,env(safe-area-inset-bottom))]',
+        ].join(' ')}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div
-          className="pointer-events-none absolute -right-20 -top-20 h-52 w-52 rounded-full bg-orange-300/30 blur-3xl"
+          className="pointer-events-none absolute -right-16 -top-16 h-44 w-44 rounded-full bg-orange-200/25 blur-3xl"
+          aria-hidden="true"
+        />
+        <div
+          className="pointer-events-none absolute -bottom-20 -left-16 h-48 w-48 rounded-full bg-amber-100/50 blur-3xl"
           aria-hidden="true"
         />
 
         <div
-          className="pointer-events-none absolute -bottom-24 -left-24 h-56 w-56 rounded-full bg-amber-200/40 blur-3xl"
+          className="mx-auto mt-3 mb-1 h-1 w-10 shrink-0 rounded-full bg-stone-300/90 sm:hidden"
           aria-hidden="true"
         />
 
@@ -228,113 +260,112 @@ export function ServiceChoiceModal() {
           ref={closeButtonRef}
           type="button"
           onClick={handleBrowse}
-          aria-label="Close service choice"
-          className="absolute right-4 top-4 z-10 inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/80 text-lg font-black text-stone-500 shadow-sm ring-1 ring-black/5 transition hover:bg-white hover:text-stone-950 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500/50"
+          aria-label="Close and continue browsing"
+          className="absolute right-3 top-3 z-10 inline-flex h-11 w-11 items-center justify-center rounded-full bg-white/90 text-stone-500 shadow-sm ring-1 ring-stone-200/80 transition hover:bg-white hover:text-stone-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500/50 sm:right-4 sm:top-4"
         >
-          ×
+          <X className="h-5 w-5" strokeWidth={2} aria-hidden="true" />
         </button>
 
-        <div className="relative p-5 sm:p-7">
-          <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-stone-950 text-2xl text-white shadow-[0_14px_34px_rgba(28,25,21,0.22)]">
-            🌮
+        <div className="relative px-5 pt-2 pb-5 sm:px-7 sm:pt-6 sm:pb-7">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-linear-to-br from-amber-100 to-orange-50 text-orange-800 shadow-sm ring-1 ring-orange-200/50">
+            <UtensilsCrossed className="h-5 w-5" strokeWidth={2} aria-hidden="true" />
           </div>
 
           <div className="text-center">
-            <p className="text-xs font-black uppercase tracking-[0.22em] text-orange-700">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-orange-800/90">
               Sofi&apos;s Restaurant · Surprise, AZ
             </p>
 
             <h2
               id="service-choice-title"
-              className="mt-3 text-3xl font-black leading-[0.95] tracking-[-0.055em] text-stone-950 sm:text-4xl"
+              className="mt-2.5 text-[1.65rem] font-bold leading-tight tracking-[-0.03em] text-stone-950 sm:text-[1.85rem]"
             >
-              How would you like to enjoy Sofi&apos;s today?
+              Welcome in. How would you like to enjoy Sofi&apos;s today?
             </h2>
 
             <p
               id="service-choice-description"
-              className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-stone-600 sm:text-base"
+              className="mx-auto mt-2.5 max-w-[20rem] text-sm leading-relaxed text-stone-600 sm:max-w-md sm:text-[0.95rem]"
             >
-              Choose what fits your visit. You can still browse the menu without picking right now.
+              Choose pickup, delivery, or take a look around first. No rush.
             </p>
           </div>
 
-          <div className="mt-6 grid gap-3 sm:grid-cols-2">
-            {OPTIONS.map((option) => (
-              <button
-                key={option.mode}
-                type="button"
-                onClick={() => handleChoose(option)}
-                className={[
-                  'group rounded-[1.35rem] p-4 text-left shadow-sm ring-1 transition duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500/50',
-                  option.primary
-                    ? 'bg-stone-950 text-white ring-stone-950 hover:-translate-y-0.5 hover:bg-stone-900'
-                    : 'bg-white text-stone-950 ring-black/5 hover:-translate-y-0.5 hover:bg-orange-50',
-                ].join(' ')}
-              >
-                <div className="flex items-start gap-3">
-                  <div
-                    className={[
-                      'flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-xl',
-                      option.primary ? 'bg-white/12' : 'bg-[#f5f1ef]',
-                    ].join(' ')}
-                    aria-hidden="true"
-                  >
-                    {option.icon}
-                  </div>
+          <div className="stagger-children mt-5 grid gap-3 sm:grid-cols-2">
+            {OPTIONS.map((option) => {
+              const { Icon } = option;
 
-                  <div className="min-w-0">
-                    <p
-                      className={[
-                        'text-[10px] font-black uppercase tracking-[0.16em]',
-                        option.primary ? 'text-orange-200' : 'text-orange-700',
-                      ].join(' ')}
-                    >
-                      {option.eyebrow}
-                    </p>
-
-                    <h3 className="mt-1 text-lg font-black tracking-[-0.035em]">
-                      {option.title}
-                    </h3>
-
-                    <p
-                      className={[
-                        'mt-1 text-sm leading-relaxed',
-                        option.primary ? 'text-white/72' : 'text-stone-500',
-                      ].join(' ')}
-                    >
-                      {option.description}
-                    </p>
-                  </div>
-                </div>
-
-                <div
-                  className={[
-                    'mt-4 inline-flex h-9 items-center justify-center rounded-full px-4 text-xs font-black transition',
-                    option.primary
-                      ? 'bg-white text-stone-950 group-hover:bg-orange-50'
-                      : 'bg-stone-950 text-white group-hover:bg-stone-800',
-                  ].join(' ')}
+              return (
+                <button
+                  key={option.mode}
+                  type="button"
+                  onClick={() => handleChoose(option)}
+                  aria-label={`${option.cta}. ${option.description}`}
+                  className={[cardClassName(option.primary), 'animate-fade-rise motion-reduce:animate-none'].join(' ')}
                 >
-                  Continue
-                  <span className="ml-1.5" aria-hidden="true">
-                    →
+                  <div className="flex items-start gap-3">
+                    <div
+                      className={[
+                        'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl',
+                        option.primary
+                          ? 'bg-white/10 text-orange-100'
+                          : 'bg-[#f3ede4] text-orange-800',
+                      ].join(' ')}
+                      aria-hidden="true"
+                    >
+                      <Icon className="h-5 w-5" strokeWidth={1.75} />
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <p
+                        className={[
+                          'text-[10px] font-semibold uppercase tracking-[0.14em]',
+                          option.primary ? 'text-orange-200/90' : 'text-orange-800',
+                        ].join(' ')}
+                      >
+                        {option.eyebrow}
+                      </p>
+
+                      <h3 className="mt-0.5 text-base font-bold tracking-[-0.02em] sm:text-[1.05rem]">
+                        {option.title}
+                      </h3>
+
+                      <p
+                        className={[
+                          'mt-1 text-sm leading-snug',
+                          option.primary ? 'text-white/75' : 'text-stone-500',
+                        ].join(' ')}
+                      >
+                        {option.description}
+                      </p>
+                    </div>
+                  </div>
+
+                  <span
+                    className={[
+                      'mt-4 inline-flex min-h-11 w-full items-center justify-center rounded-full px-4 text-sm font-semibold transition',
+                      option.primary
+                        ? 'bg-white text-stone-950 group-hover:bg-orange-50'
+                        : 'bg-stone-950 text-white group-hover:bg-stone-800',
+                    ].join(' ')}
+                  >
+                    {option.cta}
                   </span>
-                </div>
-              </button>
-            ))}
+                </button>
+              );
+            })}
           </div>
 
           <button
             type="button"
             onClick={handleBrowse}
-            className="mt-4 inline-flex min-h-11 w-full items-center justify-center rounded-full bg-transparent px-5 text-sm font-black text-stone-500 transition hover:bg-white/60 hover:text-stone-950 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500/40"
+            className="mt-3 inline-flex min-h-12 w-full items-center justify-center rounded-full px-5 text-sm font-medium text-stone-600 underline-offset-4 transition hover:bg-white/70 hover:text-stone-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500/45"
           >
             Just browsing for now
           </button>
 
           <p className="mt-3 text-center text-[11px] leading-relaxed text-stone-400">
-            We&apos;ll remember your choice for a few days so you don&apos;t have to pick every visit.
+            We&apos;ll remember your choice for a little while so your next visit feels easier.
           </p>
         </div>
       </section>
