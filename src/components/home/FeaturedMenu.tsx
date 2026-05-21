@@ -1,10 +1,11 @@
 // path: src/components/home/FeaturedMenu.tsx
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import type { MenuItemPublic } from '@/domain/menu/menu.types';
-import { getFeaturedImageAttrs } from '@/lib/images/menuImageDelivery';
+import { pickMenuImageUrlFromRecord } from '@/lib/images/menuImageDelivery';
+import { MenuFoodImage } from '@/modules/menu/components/MenuFoodImage';
 import { invokeEdge } from '@/lib/supabase/invoke';
 
 export type MenuItem = MenuItemPublic;
@@ -34,11 +35,6 @@ function formatPrice(value: unknown): string {
 function readSpicyLevel(value: unknown): number {
   const spicy = typeof value === 'number' ? value : Number(value ?? 0);
   return Number.isFinite(spicy) ? Math.max(0, Math.round(spicy)) : 0;
-}
-
-function readImageUrl(item: MenuItem): string | null {
-  const value = safeStr(item.image_url, '');
-  return value.length > 0 ? value : null;
 }
 
 function readName(item: MenuItem): string {
@@ -75,64 +71,27 @@ function FeaturedImage({
   index: number;
   variant: FeaturedImageVariant;
 }) {
-  const [loaded, setLoaded] = useState(false);
-  const [failed, setFailed] = useState(false);
-
-  const rawImageUrl = readImageUrl(item);
+  const record = item as unknown as Record<string, unknown>;
   const isPriorityImage = index === 0;
 
-const imageAttrs = useMemo(
-  () =>
-    getFeaturedImageAttrs(rawImageUrl, {
-      variant,
-      isAboveFold: isPriorityImage,
-    }),
-  [rawImageUrl, variant, isPriorityImage],
-);
-  useEffect(() => {
-    setLoaded(false);
-    setFailed(false);
-  }, [imageAttrs?.src]);
-
   const wrapperClassByVariant: Record<FeaturedImageVariant, string> = {
-    hero: 'relative aspect-[1.25/1] w-full overflow-hidden rounded-[1.75rem] bg-[#f5f1ef] lg:aspect-[1.05/1]',
+    hero: 'relative aspect-[1.25/1] w-full overflow-hidden rounded-[1.75rem] lg:aspect-[1.05/1]',
     circle:
-      'relative mx-auto mb-3 flex h-28 w-28 overflow-hidden rounded-full bg-[#f5f1ef] ring-1 ring-black/5 sm:h-32 sm:w-32',
-    mini: 'relative h-[76px] w-[106px] shrink-0 overflow-hidden rounded-xl bg-[#f5f1ef] ring-1 ring-black/5',
+      'relative mx-auto mb-3 flex h-28 w-28 overflow-hidden rounded-full sm:h-32 sm:w-32',
+    mini: 'relative h-[76px] w-[106px] shrink-0 overflow-hidden rounded-xl',
   };
-
-  if (!imageAttrs || failed) {
-    return (
-      <div
-        className={`${wrapperClassByVariant[variant]} bg-[radial-gradient(circle_at_35%_25%,rgba(245,158,11,0.24),rgba(250,246,239,1)_52%,rgba(237,224,206,1))]`}
-        aria-hidden="true"
-      />
-    );
-  }
 
   return (
     <div className={wrapperClassByVariant[variant]}>
-      {!loaded && (
-        <div
-          className="absolute inset-0 animate-pulse bg-[linear-gradient(135deg,#f5f1ef,#ede0ce)]"
-          aria-hidden="true"
-        />
-      )}
-
-      <img
-        key={imageAttrs.src}
-        {...imageAttrs}
-        alt={readName(item)}
-        className={[
-          'absolute inset-0 h-full w-full object-cover transition-[opacity,transform] duration-500 ease-out',
-          variant === 'hero' ? 'group-hover:scale-[1.035]' : '',
-        ].join(' ')}
-        style={{ opacity: loaded ? 1 : 0 }}
-        onLoad={() => setLoaded(true)}
-        onError={() => {
-          setLoaded(false);
-          setFailed(true);
-        }}
+      <MenuFoodImage
+        record={record}
+        rawUrl={pickMenuImageUrlFromRecord(record)}
+        name={readName(item)}
+        itemId={safeStr(item.id, '')}
+        variant={variant}
+        priority={isPriorityImage}
+        enableHoverScale={variant === 'hero' && isPriorityImage}
+        className="h-full w-full"
       />
     </div>
   );

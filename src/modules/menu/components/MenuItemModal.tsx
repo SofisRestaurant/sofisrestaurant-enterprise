@@ -39,6 +39,7 @@ import {
   canonicalizeSelectionsForHash,
   isSelectionValidForGroup,
 } from '../utils/modifierGuards';
+import { pickMenuImageUrlFromRecord } from '@/lib/images/menuImageDelivery';
 import { cx, getFocusable } from '../utils/uiHelpers';
 import { MAX_NOTES_LENGTH } from '../constants';
 
@@ -63,9 +64,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
   const categoryLabel = safeStr(rec.category, 'menu', 40);
   const description = safeStr(rec.description, '', 1200);
 
-  const rawImageUrl = rec.image_url;
-  const imageUrl =
-    typeof rawImageUrl === 'string' && rawImageUrl.trim() ? rawImageUrl.trim() : null;
+  const imageUrl = pickMenuImageUrlFromRecord(rec);
 
   const rawTags = rec.tags;
   const tags = useMemo(() => parseTags(rawTags), [rawTags]);

@@ -35,6 +35,30 @@ function corsHeadersFor(origin: string | null): Record<string, string> | null {
   };
 }
 
+function pickImageUrl(row: Record<string, unknown>): string | null {
+  const keys = [
+    'image_url',
+    'imageUrl',
+    'image_path',
+    'imagePath',
+    'photo_url',
+    'photoUrl',
+    'public_url',
+    'storage_path',
+    'thumbnail_url',
+    'image',
+  ] as const;
+
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+
+  return null;
+}
+
 function mapMenuItem(row: Record<string, unknown>) {
   return {
     id: String(row.id ?? ''),
@@ -48,7 +72,7 @@ function mapMenuItem(row: Record<string, unknown>) {
     is_vegan: Boolean(row.is_vegan ?? false),
     is_gluten_free: Boolean(row.is_gluten_free ?? false),
     description: row.description ? String(row.description) : null,
-    image_url: row.image_url ? String(row.image_url) : null,
+    image_url: pickImageUrl(row),
     spicy_level: row.spicy_level ?? null,
     allergens: Array.isArray(row.allergens) ? row.allergens : [],
     pairs_with: Array.isArray(row.pairs_with) ? row.pairs_with : [],

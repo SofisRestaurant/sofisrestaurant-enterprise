@@ -4,33 +4,19 @@
 // Menu + featured image delivery — single source of truth.
 // =============================================================================
 //
-// Purpose:
-//   - Keep compact menu cards lightweight.
-//   - Prevent homepage hero images from looking blurry.
-//   - Use layout-specific image sizes instead of forcing every image to 224px.
-//   - Keep Supabase transform support feature-flagged.
-//   - Keep wsrv.nl proxy as the current performance-safe image optimizer.
+// Responsibilities:
+//   - Normalize image URLs from every legacy DB / API field name.
+//   - Convert Supabase storage paths → public object URLs.
+//   - Unwrap accidental wsrv.nl double-proxy URLs before re-wrapping.
+//   - Deliver layout-specific sizes (card, hero, circle, mini, rail).
+//   - Keep wsrv.nl as the default optimizer (Supabase /render/image 403s here).
+//   - Support a direct-URL delivery mode for onError fallback in UI.
 //
-// PRELOAD FIX (2026-05):
-//   getMenuLcpPreloadAttrs and getFeaturedLcpPreloadAttrs previously built
-//   <link rel="preload"> tags using fixed card-thumbnail dimensions
-//   (w=184 or w=224, square).  The actual rendered images use variant-aware
-//   sizes (hero: 960×760, circle: 320×320, mini: 240×172) delivered via
-//   srcSet, so the browser never consumed the preloaded resource — it
-//   picked a different srcSet candidate.  Result: Chrome console warning
-//   "preloaded using link preload but not used within a few seconds."
-//
-//   Modern browsers handle priority natively via <img fetchpriority="high"
-//   loading="eager">, which is already set on the hero image by
-//   getFeaturedImageAttrs.  Manual <link preload> is no longer needed and
-//   was actively harmful (wasted bandwidth + console noise).
-//
-//   Both functions now return null unconditionally.  Callers (Helmet, Meta,
-//   SEO components) will silently skip the preload tag.  If a future need
-//   arises for a preload hint, the function must use the EXACT same builder,
-//   variant config, and srcSet as the rendered <img>.
+// LCP: priority images use fetchPriority="high" + loading="eager" on the <img>.
+// Manual <link rel="preload"> stays disabled (dimension mismatch with srcSet).
 // =============================================================================
 
+import { env } from '@/lib/config/env';
 import { supabaseImageSrcSet, supabaseImageUrl } from '@/lib/images/supabaseImage';
 
 // ─── Feature flags ────────────────────────────────────────────────────────────
@@ -43,12 +29,17 @@ const USE_IMAGE_PROXY = import.meta.env.VITE_USE_IMAGE_PROXY !== 'false';
 // ─── Proxy configuration ──────────────────────────────────────────────────────
 
 const PROXY_BASE = 'https://wsrv.nl/';
+const PROXY_HOST_PATTERN = /(^|\.)wsrv\.nl$/i;
+
+const STORAGE_OBJECT_SEGMENT = '/storage/v1/object/public/';
+
+const KNOWN_IMAGE_BUCKETS = ['menu-images', 'hero-images', 'gallery-images', 'banner-images'] as const;
 
 // ─── Image variants ───────────────────────────────────────────────────────────
 
 export type MenuImagePriority = 'high' | 'auto';
 
-export type FeaturedImageVariant = 'hero' | 'circle' | 'mini';
+export type FeaturedImageVariant = 'hero' | 'circle' | 'mini' | 'rail';
 
 export type MenuCardImageAttrs = {
   src: string;
@@ -64,11 +55,9 @@ export type MenuCardImageAttrs = {
 
 export type FeaturedImageAttrs = MenuCardImageAttrs;
 
+export type MenuImageDeliveryMode = 'optimized' | 'direct';
+
 // ─── Menu card layout sizes ───────────────────────────────────────────────────
-//
-// Compact list-card thumbnails:
-//   Mobile:  92px CSS → 184px @2×
-//   Desktop: 112px CSS → 224px @2×
 
 const CARD_SIZES = '(min-width: 640px) 112px, 92px';
 
@@ -84,10 +73,11 @@ const CARD_SRCSET_WIDTHS = [
   { w: 224, q: 76 },
 ] as const;
 
-// ─── Featured homepage sizes ──────────────────────────────────────────────────
-//
-// Hero needs real resolution. Do NOT reuse card sizes here.
-// Circle/mini stay lighter but still sharp on retina screens.
+const MODAL_SIZES = '(max-width: 640px) 100vw, 540px';
+const MODAL_WIDTH = 960;
+const MODAL_QUALITY = 78;
+
+// ─── Featured / rail sizes ────────────────────────────────────────────────────
 
 const FEATURED_VARIANTS: Record<
   FeaturedImageVariant,
@@ -135,16 +125,181 @@ const FEATURED_VARIANTS: Record<
       { w: 240, h: 172, q: 76 },
     ],
   },
+
+  rail: {
+    width: 448,
+    height: 224,
+    quality: 78,
+    sizes: '224px',
+    srcSet: [
+      { w: 224, h: 112, q: 74 },
+      { w: 336, h: 168, q: 76 },
+      { w: 448, h: 224, q: 78 },
+    ],
+  },
 };
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+/** Field names seen across menu_items, RPC payloads, and admin forms. */
+export const MENU_IMAGE_FIELD_KEYS = [
+  'image_url',
+  'imageUrl',
+  'image_path',
+  'imagePath',
+  'photo_url',
+  'photoUrl',
+  'public_url',
+  'publicUrl',
+  'storage_path',
+  'storagePath',
+  'thumbnail_url',
+  'thumbnailUrl',
+  'image',
+  'photo',
+] as const;
+
+// ─── URL normalization ──────────────────────────────────────────────────────────
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function getSupabaseOrigin(): string {
+  return env.supabase.url.replace(/\/+$/u, '');
+}
+
+function decodeRepeatedly(value: string, maxPasses = 3): string {
+  let current = value;
+
+  for (let pass = 0; pass < maxPasses; pass += 1) {
+    if (!/%[0-9A-Fa-f]{2}/u.test(current)) break;
+
+    try {
+      const decoded = decodeURIComponent(current);
+      if (decoded === current) break;
+      current = decoded;
+    } catch {
+      break;
+    }
+  }
+
+  return current;
+}
+
+function unwrapProxyUrl(url: string): string {
+  let current = url.trim();
+
+  for (let depth = 0; depth < 4; depth += 1) {
+    try {
+      const parsed = new URL(current);
+      if (!PROXY_HOST_PATTERN.test(parsed.hostname)) break;
+
+      const inner = parsed.searchParams.get('url');
+      if (!inner) break;
+
+      current = decodeRepeatedly(inner);
+    } catch {
+      break;
+    }
+  }
+
+  return current;
+}
+
+function isLikelyStoragePath(value: string): boolean {
+  if (value.startsWith('http://') || value.startsWith('https://')) return false;
+  if (value.startsWith('/storage/v1/')) return false;
+  if (value.startsWith('//')) return false;
+
+  const firstSegment = value.split('/')[0]?.toLowerCase() ?? '';
+  if ((KNOWN_IMAGE_BUCKETS as readonly string[]).includes(firstSegment)) return true;
+
+  return /^[a-z0-9][a-z0-9_-]*\/[\w.-]+$/iu.test(value);
+}
+
+function toPublicStorageUrl(path: string): string {
+  const trimmed = path.replace(/^\/+/u, '');
+  const origin = getSupabaseOrigin();
+  return `${origin}${STORAGE_OBJECT_SEGMENT}${trimmed}`;
+}
+
+function absolutizeStorageUrl(url: string): string {
+  if (url.startsWith('http://') || url.startsWith('https://')) return url;
+
+  if (url.startsWith('/storage/v1/')) {
+    return `${getSupabaseOrigin()}${url}`;
+  }
+
+  if (isLikelyStoragePath(url)) {
+    return toPublicStorageUrl(url);
+  }
+
+  return url;
+}
+
+function isRenderableHttpUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Normalize any raw menu image reference into a fetchable absolute URL.
+ * Returns null when the value is empty, unsafe, or cannot be resolved.
+ */
+export function resolveMenuImageUrl(raw: string | null | undefined): string | null {
+  if (typeof raw !== 'string') return null;
+
+  let url = raw.trim();
+  if (!url.length || url.length > 2_048) return null;
+
+  url = decodeRepeatedly(url);
+  url = unwrapProxyUrl(url);
+  url = absolutizeStorageUrl(url);
+
+  if (!isRenderableHttpUrl(url)) return null;
+
+  return url;
+}
+
+/**
+ * Read the first valid image URL from a menu item / API record.
+ */
+export function pickMenuImageUrlFromRecord(
+  record: Record<string, unknown> | null | undefined,
+): string | null {
+  if (!record) return null;
+
+  for (const key of MENU_IMAGE_FIELD_KEYS) {
+    if (!(key in record)) continue;
+    const resolved = resolveMenuImageUrl(
+      typeof record[key] === 'string' ? record[key] : null,
+    );
+    if (resolved) return resolved;
+  }
+
+  const metadata = record.metadata;
+  if (isRecord(metadata)) {
+    const fromMeta = pickMenuImageUrlFromRecord(metadata);
+    if (fromMeta) return fromMeta;
+  }
+
+  const meta = record.meta;
+  if (isRecord(meta)) {
+    const fromMeta = pickMenuImageUrlFromRecord(meta);
+    if (fromMeta) return fromMeta;
+  }
+
+  return null;
+}
 
 function cleanUrl(url: string | null | undefined): string | null {
-  if (typeof url !== 'string') return null;
-
-  const trimmed = url.trim();
-  return trimmed.length > 0 ? trimmed : null;
+  return resolveMenuImageUrl(url);
 }
+
+// ─── Delivery builders ──────────────────────────────────────────────────────────
 
 function buildProxyUrl({
   rawUrl,
@@ -159,8 +314,10 @@ function buildProxyUrl({
   quality: number;
   fit?: 'cover' | 'contain' | 'inside';
 }): string {
+  const source = unwrapProxyUrl(rawUrl);
+
   const params = new URLSearchParams({
-    url: rawUrl,
+    url: source,
     w: String(width),
     h: String(height),
     fit,
@@ -205,102 +362,36 @@ function buildCardProxySrcSet(rawUrl: string): string {
     .join(', ');
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
-
-export function menuImageTransformsEnabled(): boolean {
-  return ENABLE_SUPABASE_TRANSFORMS;
-}
-
-export function getMenuImageSrc(
-  rawUrl: string | null | undefined,
-  options: { width: number; quality: number },
-): string {
-  const url = cleanUrl(rawUrl);
-  if (!url) return '';
-
-  if (ENABLE_SUPABASE_TRANSFORMS) {
-    return supabaseImageUrl(url, options.width, options.quality);
-  }
-
-  if (USE_IMAGE_PROXY) {
-    return buildProxyUrl({
-      rawUrl: url,
-      width: options.width,
-      height: options.width,
-      quality: options.quality,
-    });
-  }
-
-  return url;
-}
-
-export function getMenuImageSrcSet(rawUrl: string | null | undefined): string | undefined {
-  const url = cleanUrl(rawUrl);
-  if (!url) return undefined;
-
-  if (ENABLE_SUPABASE_TRANSFORMS) {
-    return supabaseImageSrcSet(url);
-  }
-
-  if (USE_IMAGE_PROXY) {
-    return buildCardProxySrcSet(url);
-  }
-
-  return undefined;
-}
-
-export function getMenuCardImageAttrs(
-  rawUrl: string | null | undefined,
-  options: { isAboveFold: boolean },
-): MenuCardImageAttrs | null {
-  const url = cleanUrl(rawUrl);
-  if (!url) return null;
-
-  const { isAboveFold } = options;
-
-  return {
-    src: getMenuImageSrc(url, {
-      width: isAboveFold ? CARD_WIDTH_ABOVE_FOLD : CARD_WIDTH_BELOW_FOLD,
-      quality: isAboveFold ? CARD_QUALITY_ABOVE : CARD_QUALITY_BELOW,
-    }),
-    srcSet: getMenuImageSrcSet(url),
-    sizes: CARD_SIZES,
-    width: 112,
-    height: 112,
-    loading: isAboveFold ? 'eager' : 'lazy',
-    fetchPriority: isAboveFold ? 'high' : 'auto',
-    decoding: 'async',
-    referrerPolicy: 'no-referrer',
-  };
-}
-
-export function getFeaturedImageAttrs(
-  rawUrl: string | null | undefined,
-  options: {
-    variant: FeaturedImageVariant;
-    isAboveFold: boolean;
+function buildAttrs(
+  url: string,
+  config: {
+    width: number;
+    height: number;
+    quality: number;
+    sizes: string;
+    srcSet?: readonly { w: number; h: number; q: number }[];
+    cardSrcSet?: boolean;
   },
-): FeaturedImageAttrs | null {
-  const url = cleanUrl(rawUrl);
-  if (!url) return null;
+  options: { isAboveFold: boolean; mode: MenuImageDeliveryMode },
+): MenuCardImageAttrs {
+  const { isAboveFold, mode } = options;
+  const useOptimized = mode === 'optimized';
 
-  const config = FEATURED_VARIANTS[options.variant];
-
-  if (ENABLE_SUPABASE_TRANSFORMS) {
+  if (useOptimized && ENABLE_SUPABASE_TRANSFORMS) {
     return {
       src: supabaseImageUrl(url, config.width, config.quality),
       srcSet: supabaseImageSrcSet(url),
       sizes: config.sizes,
       width: config.width,
       height: config.height,
-      loading: options.isAboveFold ? 'eager' : 'lazy',
-      fetchPriority: options.isAboveFold ? 'high' : 'auto',
+      loading: isAboveFold ? 'eager' : 'lazy',
+      fetchPriority: isAboveFold ? 'high' : 'auto',
       decoding: 'async',
       referrerPolicy: 'no-referrer',
     };
   }
 
-  if (USE_IMAGE_PROXY) {
+  if (useOptimized && USE_IMAGE_PROXY) {
     return {
       src: buildProxyUrl({
         rawUrl: url,
@@ -308,12 +399,16 @@ export function getFeaturedImageAttrs(
         height: config.height,
         quality: config.quality,
       }),
-      srcSet: buildProxySrcSet(url, config.srcSet),
+      srcSet: config.srcSet
+        ? buildProxySrcSet(url, config.srcSet)
+        : config.cardSrcSet
+          ? buildCardProxySrcSet(url)
+          : undefined,
       sizes: config.sizes,
       width: config.width,
       height: config.height,
-      loading: options.isAboveFold ? 'eager' : 'lazy',
-      fetchPriority: options.isAboveFold ? 'high' : 'auto',
+      loading: isAboveFold ? 'eager' : 'lazy',
+      fetchPriority: isAboveFold ? 'high' : 'auto',
       decoding: 'async',
       referrerPolicy: 'no-referrer',
     };
@@ -325,34 +420,161 @@ export function getFeaturedImageAttrs(
     sizes: config.sizes,
     width: config.width,
     height: config.height,
-    loading: options.isAboveFold ? 'eager' : 'lazy',
-    fetchPriority: options.isAboveFold ? 'high' : 'auto',
+    loading: isAboveFold ? 'eager' : 'lazy',
+    fetchPriority: isAboveFold ? 'high' : 'auto',
     decoding: 'async',
     referrerPolicy: 'no-referrer',
   };
 }
 
-// =============================================================================
-// Preload hint functions — DISABLED
-//
-// These previously generated <link rel="preload" as="image"> attributes.
-// They used card-thumbnail dimensions (184×184 / 224×224) that never matched
-// the actual rendered images (hero: 960×760 via srcSet, circle: 320×320,
-// mini: 240×172).  The browser downloaded the preloaded resource, then
-// downloaded the REAL image separately — wasting bandwidth and triggering
-// Chrome's "preloaded but not used" console warning.
-//
-// The hero <img> already carries fetchpriority="high" loading="eager",
-// which gives the browser the same priority signal without the mismatch.
-//
-// Both functions return null.  Callers (Helmet / Meta / SEO wrappers) will
-// skip the preload tag.  The type signatures are preserved so no caller
-// needs to change.
-// =============================================================================
+// ─── Public API ───────────────────────────────────────────────────────────────
+
+export function menuImageTransformsEnabled(): boolean {
+  return ENABLE_SUPABASE_TRANSFORMS;
+}
+
+export function getMenuImageSrc(
+  rawUrl: string | null | undefined,
+  options: { width: number; quality: number; mode?: MenuImageDeliveryMode },
+): string {
+  const url = cleanUrl(rawUrl);
+  if (!url) return '';
+
+  const mode = options.mode ?? 'optimized';
+
+  if (mode === 'optimized' && ENABLE_SUPABASE_TRANSFORMS) {
+    return supabaseImageUrl(url, options.width, options.quality);
+  }
+
+  if (mode === 'optimized' && USE_IMAGE_PROXY) {
+    return buildProxyUrl({
+      rawUrl: url,
+      width: options.width,
+      height: options.width,
+      quality: options.quality,
+    });
+  }
+
+  return url;
+}
+
+export function getMenuImageSrcSet(
+  rawUrl: string | null | undefined,
+  options: { mode?: MenuImageDeliveryMode } = {},
+): string | undefined {
+  const url = cleanUrl(rawUrl);
+  if (!url) return undefined;
+
+  const mode = options.mode ?? 'optimized';
+
+  if (mode === 'optimized' && ENABLE_SUPABASE_TRANSFORMS) {
+    return supabaseImageSrcSet(url);
+  }
+
+  if (mode === 'optimized' && USE_IMAGE_PROXY) {
+    return buildCardProxySrcSet(url);
+  }
+
+  return undefined;
+}
+
+export function getMenuCardImageAttrs(
+  rawUrl: string | null | undefined,
+  options: { isAboveFold: boolean; mode?: MenuImageDeliveryMode },
+): MenuCardImageAttrs | null {
+  const url = cleanUrl(rawUrl);
+  if (!url) return null;
+
+  const { isAboveFold } = options;
+  const mode = options.mode ?? 'optimized';
+
+  return buildAttrs(
+    url,
+    {
+      width: isAboveFold ? CARD_WIDTH_ABOVE_FOLD : CARD_WIDTH_BELOW_FOLD,
+      height: isAboveFold ? CARD_WIDTH_ABOVE_FOLD : CARD_WIDTH_BELOW_FOLD,
+      quality: isAboveFold ? CARD_QUALITY_ABOVE : CARD_QUALITY_BELOW,
+      sizes: CARD_SIZES,
+      cardSrcSet: true,
+    },
+    { isAboveFold, mode },
+  );
+}
+
+export function getFeaturedImageAttrs(
+  rawUrl: string | null | undefined,
+  options: {
+    variant: FeaturedImageVariant;
+    isAboveFold: boolean;
+    mode?: MenuImageDeliveryMode;
+  },
+): FeaturedImageAttrs | null {
+  const url = cleanUrl(rawUrl);
+  if (!url) return null;
+
+  const config = FEATURED_VARIANTS[options.variant];
+  const mode = options.mode ?? 'optimized';
+
+  return buildAttrs(
+    url,
+    {
+      width: config.width,
+      height: config.height,
+      quality: config.quality,
+      sizes: config.sizes,
+      srcSet: config.srcSet,
+    },
+    { isAboveFold: options.isAboveFold, mode },
+  );
+}
+
+export function getModalImageAttrs(
+  rawUrl: string | null | undefined,
+  options: { mode?: MenuImageDeliveryMode } = {},
+): MenuCardImageAttrs | null {
+  const url = cleanUrl(rawUrl);
+  if (!url) return null;
+
+  const mode = options.mode ?? 'optimized';
+
+  return buildAttrs(
+    url,
+    {
+      width: MODAL_WIDTH,
+      height: Math.round((MODAL_WIDTH * 10) / 16),
+      quality: MODAL_QUALITY,
+      sizes: MODAL_SIZES,
+      srcSet: [
+        { w: 480, h: 300, q: 72 },
+        { w: 720, h: 450, q: 76 },
+        { w: 960, h: 600, q: 78 },
+      ],
+    },
+    { isAboveFold: true, mode },
+  );
+}
+
+/** Stable warm gradient for branded fallbacks (keyed by item id). */
+export function pickMenuImageFallbackGradient(seed: string): string {
+  const gradients = [
+    'radial-gradient(ellipse at 38% 28%, rgba(245,158,11,0.22) 0%, rgba(250,246,239,1) 48%, rgba(237,224,206,1) 100%)',
+    'radial-gradient(ellipse at 62% 34%, rgba(180,83,9,0.14) 0%, rgba(255,251,235,1) 50%, rgba(237,224,206,1) 100%)',
+    'radial-gradient(ellipse at 50% 22%, rgba(217,119,6,0.18) 0%, rgba(254,243,199,0.9) 45%, rgba(237,224,206,1) 100%)',
+    'radial-gradient(ellipse at 44% 58%, rgba(120,53,15,0.12) 0%, rgba(250,246,239,1) 52%, rgba(228,213,195,1) 100%)',
+  ] as const;
+
+  if (!seed) return gradients[0];
+
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = ((hash << 5) - hash + seed.charCodeAt(i)) | 0;
+  }
+
+  return gradients[Math.abs(hash) % gradients.length];
+}
 
 /**
  * @deprecated Manual preload removed — use fetchpriority="high" on the img.
- * Returns null unconditionally. Safe to remove call sites at your leisure.
  */
 export function getMenuLcpPreloadAttrs(
   _rawUrl: string | null | undefined,
@@ -362,7 +584,6 @@ export function getMenuLcpPreloadAttrs(
 
 /**
  * @deprecated Manual preload removed — use fetchpriority="high" on the img.
- * Returns null unconditionally. Safe to remove call sites at your leisure.
  */
 export function getFeaturedLcpPreloadAttrs(
   _rawUrl: string | null | undefined,

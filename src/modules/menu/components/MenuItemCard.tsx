@@ -40,7 +40,8 @@ import { m } from 'framer-motion';
 
 import type { MenuItemBase } from '@/domain/menu/menu.types';
 import { PricingEngine } from '@/domain/pricing/pricing.engine';
-import { getMenuCardImageAttrs } from '@/lib/images/menuImageDelivery';
+import { pickMenuImageUrlFromRecord } from '@/lib/images/menuImageDelivery';
+import { MenuFoodImage } from '@/modules/menu/components/MenuFoodImage';
 import { formatCurrency } from '@/utils/currency';
 
 // ─── Performance constants ────────────────────────────────────────────────────
@@ -64,8 +65,6 @@ type DietBadge = {
   fg: string;
   bg: string;
 };
-
-type ImageState = 'ready' | 'failed';
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -102,11 +101,6 @@ function readName(item: MenuItemBase): string {
 
 function readDescription(item: MenuItemBase): string {
   return safeStr(item.description, '');
-}
-
-function readImageUrl(item: MenuItemBase): string | null {
-  const value = safeStr(item.image_url, '');
-  return value.length > 0 ? value : null;
 }
 
 function readPriceDollars(item: MenuItemBase): number {
@@ -177,28 +171,6 @@ function resolveDietBadges(item: MenuItemBase): DietBadge[] {
   return badges;
 }
 
-// ─── Placeholder gradient ─────────────────────────────────────────────────────
-
-const GRADIENTS = [
-  'radial-gradient(ellipse at 40% 35%, #3e2c20 0%, #1c1208 100%)',
-  'radial-gradient(ellipse at 60% 40%, #1a2a1a 0%, #0c160c 100%)',
-  'radial-gradient(ellipse at 50% 30%, #2e1e0c 0%, #160e04 100%)',
-  'radial-gradient(ellipse at 42% 58%, #201a2e 0%, #0e0c18 100%)',
-  'radial-gradient(ellipse at 55% 44%, #2e1814 0%, #160a08 100%)',
-] as const;
-
-function pickGradient(id: string): string {
-  if (!id) return GRADIENTS[0];
-
-  let hash = 0;
-
-  for (let i = 0; i < id.length; i += 1) {
-    hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0;
-  }
-
-  return GRADIENTS[Math.abs(hash) % GRADIENTS.length];
-}
-
 // ─── Plus icon ────────────────────────────────────────────────────────────────
 
 function PlusIcon() {
@@ -230,8 +202,6 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
   onOpen,
   index = 0,
 }: MenuItemCardProps<TItem>) {
-  const [imgLoaded, setImgLoaded] = useState(false);
-  const [imageState, setImageState] = useState<ImageState>('ready');
   const [isOpening, setIsOpening] = useState(false);
 
   const isOpeningRef = useRef(false);
@@ -240,21 +210,15 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
   const id = readId(item);
   const name = readName(item);
   const description = readDescription(item);
-  const rawImageUrl = readImageUrl(item);
+  const itemRecord = item as unknown as Record<string, unknown>;
+  const resolvedImageUrl = useMemo(
+    () => pickMenuImageUrlFromRecord(itemRecord),
+    [itemRecord],
+  );
 
   const isAboveFold = index <= ABOVE_FOLD_THRESHOLD;
   const staggerSlot = Math.min(index, STAGGER_MAX_SLOTS);
   const entranceDelay = isAboveFold ? 0 : staggerSlot * STAGGER_STEP;
-
-  const imageAttrs = useMemo(
-    () => getMenuCardImageAttrs(rawImageUrl, { isAboveFold }),
-    [rawImageUrl, isAboveFold],
-  );
-
-  useEffect(() => {
-    setImgLoaded(false);
-    setImageState('ready');
-  }, [imageAttrs?.src]);
 
   useEffect(() => {
     return () => {
@@ -270,7 +234,6 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
 
   const isAvailable = availState !== 'unavailable';
   const isLowStock = availState === 'low_stock';
-  const showImage = imageAttrs !== null && imageState === 'ready';
 
   const articleAnim = isAboveFold
     ? { initial: false as const }
@@ -294,15 +257,6 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
       openTimerRef.current = null;
     }, CTA_DEBOUNCE_MS);
   }, [isAvailable, item, onOpen]);
-
-  const handleImageLoad = useCallback(() => {
-    setImgLoaded(true);
-  }, []);
-
-  const handleImageError = useCallback(() => {
-    setImgLoaded(false);
-    setImageState('failed');
-  }, []);
 
   const handleCardClick = useCallback(() => {
     handleOpen();
@@ -453,36 +407,18 @@ function MenuItemCardInner<TItem extends MenuItemBase>({
       </div>
 
       {/* ── Thumbnail ─────────────────────────────────────────────────── */}
-      <div className="flex shrink-0 items-center py-3 pr-3 sm:py-4 sm:pr-4">
-        <div
-          className="relative h-[92px] w-[92px] overflow-hidden rounded-2xl bg-zinc-100 shadow-[inset_0_0_0_1px_rgba(24,24,27,0.04)] sm:h-[112px] sm:w-[112px]"
-          aria-hidden={!showImage}
-        >
-          <div
-            className="absolute inset-0"
-            style={{ background: pickGradient(id) }}
-            aria-hidden="true"
-          />
-
-          {showImage && !imgLoaded && (
-            <div className="sofi-shimmer absolute inset-0" aria-hidden="true" />
-          )}
-
-          {showImage && imageAttrs && (
-            <img
-              key={imageAttrs.src}
-              {...imageAttrs}
-              alt=""
-              className="absolute inset-0 h-full w-full object-cover transition-[opacity,transform] duration-500 ease-out group-hover:scale-[1.04]"
-              style={{ opacity: imgLoaded ? 1 : 0 }}
-              onLoad={handleImageLoad}
-              onError={handleImageError}
-            />
-          )}
-
-          <div
-            className="pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-black/[0.04]"
-            aria-hidden="true"
+      <div className="flex shrink-0 items-center py-3 pr-3 sm:py-4 sm:pr-4" aria-hidden="true">
+        <div className="relative h-[92px] w-[92px] overflow-hidden rounded-2xl bg-zinc-100 shadow-[inset_0_0_0_1px_rgba(24,24,27,0.04)] sm:h-[112px] sm:w-[112px]">
+          <MenuFoodImage
+            rawUrl={resolvedImageUrl}
+            record={itemRecord}
+            name={name}
+            itemId={id}
+            variant="card"
+            priority={false}
+            decorative
+            enableHoverScale
+            className="rounded-2xl"
           />
         </div>
       </div>

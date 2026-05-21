@@ -19,11 +19,17 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import { ChevronLeft, ChevronRight, Flame, Star } from 'lucide-react';
 
+import { MenuFoodImage } from '@/modules/menu/components/MenuFoodImage';
+
 // ── Types (unchanged contracts) ───────────────────────────────────────────────
 
 export type BaseItem = {
   id?: string;
   name?: string;
+  image_url?: string | null;
+  imageUrl?: string | null;
+  photo_url?: string | null;
+  photoUrl?: string | null;
 };
 
 export type PopularRailProps<TItem extends BaseItem = BaseItem> = {
@@ -49,6 +55,12 @@ export type Props = PopularRailProps<BaseItem>;
 
 /** Stable keys for skeleton cards — never changes between renders. */
 const SKELETON_KEYS = ['skel-0', 'skel-1', 'skel-2', 'skel-3'] as const;
+
+/** Fixed card height — skeleton, loaded cards, and empty rail must match (CLS). */
+const POPULAR_CARD_HEIGHT_CLASS = 'h-[13.5rem]';
+
+/** Header row + card track — reserved on MenuPage wrapper and section. */
+export const POPULAR_SECTION_MIN_HEIGHT_CLASS = 'min-h-[17.5rem]';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -101,9 +113,18 @@ function useHorizontalRail() {
 function SkeletonCard() {
   return (
     <div
-      className="h-[8.5rem] w-56 shrink-0 rounded-2xl border border-white/[0.05] bg-gradient-to-br from-white/[0.03] to-white/[0.02] animate-pulse"
+      className={cx(
+        POPULAR_CARD_HEIGHT_CLASS,
+        'w-56 shrink-0 overflow-hidden rounded-2xl border border-white/[0.05] bg-white/[0.03]',
+      )}
       aria-hidden="true"
-    />
+    >
+      <div className="h-28 bg-white/[0.06]" />
+      <div className="space-y-2 p-4">
+        <div className="h-3 w-3/4 rounded bg-white/[0.08]" />
+        <div className="h-3 w-1/3 rounded bg-white/[0.06]" />
+      </div>
+    </div>
   );
 }
 
@@ -113,52 +134,71 @@ type PopularCardProps = {
   name: string;
   priceCents: number;
   available: boolean;
+  itemId: string;
+  record: Record<string, unknown>;
+  isPriority: boolean;
   onClick: () => void;
 };
 
-function PopularCard({ name, priceCents, available, onClick }: PopularCardProps) {
+function PopularCard({
+  name,
+  priceCents,
+  available,
+  itemId,
+  record,
+  isPriority,
+  onClick,
+}: PopularCardProps) {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={!available}
       className={cx(
-        'group relative w-56 shrink-0 overflow-hidden rounded-2xl border text-left',
-        'transition-all duration-300',
+        POPULAR_CARD_HEIGHT_CLASS,
+        'group relative flex w-56 shrink-0 flex-col overflow-hidden rounded-2xl border text-left',
+        'transition-[transform,box-shadow,border-color] duration-300',
         available
           ? cx(
               'border-white/[0.08] bg-[#1e1b16]',
               'hover:border-amber-400/[0.22] hover:shadow-[0_8px_32px_rgb(0_0_0/0.40),_0_0_24px_rgb(212_175_55/0.08)]',
               'focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/30',
-              'active:scale-[0.97]',
+              'active:scale-[0.98]',
             )
           : 'cursor-not-allowed border-white/[0.05] bg-[#19170f] opacity-55',
       )}
       role="listitem"
       aria-label={`${name}${available ? '' : ', unavailable'} — ${formatCents(priceCents)}`}
     >
+      <div className="relative h-28 w-full shrink-0 overflow-hidden">
+        <MenuFoodImage
+          record={record}
+          name={name}
+          itemId={itemId}
+          variant="rail"
+          priority={isPriority}
+          decorative
+          enableHoverScale={!isPriority}
+          className="h-full w-full"
+        />
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-linear-to-t from-[#1e1b16] to-transparent"
+          aria-hidden="true"
+        />
+      </div>
+
       {/* Warm ambient shimmer — appears on hover */}
       {available && (
         <div
           className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-500 group-hover:opacity-100"
           aria-hidden="true"
         >
-          <div className="absolute -right-8 -top-8 h-24 w-24 rounded-full bg-amber-400/[0.07] blur-2xl" />
-          <div className="absolute -bottom-6 -left-6 h-20 w-20 rounded-full bg-amber-600/[0.05] blur-xl" />
+          <div className="absolute -right-8 top-4 h-24 w-24 rounded-full bg-amber-400/[0.07] blur-2xl" />
         </div>
       )}
 
-      {/* Inner ring — appears on hover */}
-      <div
-        className={cx(
-          'pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-inset transition-all duration-300',
-          available ? 'ring-white/[0.04] group-hover:ring-amber-400/[0.12]' : 'ring-white/[0.03]',
-        )}
-        aria-hidden="true"
-      />
-
       {/* Card content */}
-      <div className="relative z-10 p-4">
+      <div className="relative z-10 flex flex-1 flex-col p-4">
         {/* Name + badge row */}
         <div className="flex items-start justify-between gap-2">
           <p
@@ -278,7 +318,10 @@ function PopularRailImpl<TItem extends BaseItem>({
   // ── between loading / empty / loaded states.                      ──
 
   return (
-    <section className={cx('min-h-[12rem] space-y-4', className)} aria-label={ariaLabel}>
+    <section
+      className={cx(POPULAR_SECTION_MIN_HEIGHT_CLASS, 'space-y-4', className)}
+      aria-label={ariaLabel}
+    >
       {/* ── Section header ── */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -300,25 +343,28 @@ function PopularRailImpl<TItem extends BaseItem>({
           </div>
         </div>
 
-        {/* Scroll arrows */}
-        {hasItems && (
-          <div className="flex items-center gap-1.5">
-            <ScrollArrow direction="left" onClick={() => scrollBy(-360)} />
-            <ScrollArrow direction="right" onClick={() => scrollBy(360)} />
-          </div>
-        )}
+        {/* Scroll arrows — fixed slot prevents header width shift */}
+        <div className="flex h-8 min-w-[4.5rem] items-center justify-end gap-1.5">
+          {hasItems && !loading ? (
+            <>
+              <ScrollArrow direction="left" onClick={() => scrollBy(-360)} />
+              <ScrollArrow direction="right" onClick={() => scrollBy(360)} />
+            </>
+          ) : null}
+        </div>
       </div>
 
-      {/* ── Rail ── */}
+      {/* ── Rail track — fixed height across loading / empty / loaded ── */}
+      <div className={POPULAR_CARD_HEIGHT_CLASS}>
       {loading ? (
-        <div className="flex gap-3 overflow-hidden" aria-hidden="true">
+        <div className="flex h-full gap-3 overflow-hidden" aria-hidden="true">
           {SKELETON_KEYS.map((key) => (
             <SkeletonCard key={key} />
           ))}
         </div>
       ) : !hasItems ? (
         /* Empty state */
-        <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-5">
+        <div className="flex h-full items-center rounded-2xl border border-white/[0.07] bg-white/[0.025] p-5">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="text-sm font-semibold text-white">Nothing trending yet</p>
@@ -339,7 +385,7 @@ function PopularRailImpl<TItem extends BaseItem>({
         /* Scrollable cards — no entry animation, renders immediately */
         <div
           ref={ref}
-          className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1"
+          className="flex h-full gap-3 overflow-x-auto pb-2 -mx-1 px-1"
           style={{ scrollbarWidth: 'none' }}
           role="list"
           tabIndex={0}
@@ -365,11 +411,15 @@ function PopularRailImpl<TItem extends BaseItem>({
               name={safeStr(it?.name, 'Item')}
               priceCents={getPriceCents(it)}
               available={getAvailable(it)}
+              itemId={safeId(it, idx)}
+              record={it as unknown as Record<string, unknown>}
+              isPriority={idx === 0}
               onClick={() => onOpenItem(it)}
             />
           ))}
         </div>
       )}
+      </div>
     </section>
   );
 }

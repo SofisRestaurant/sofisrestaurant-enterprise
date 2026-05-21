@@ -23,6 +23,7 @@
 //   - Nothing else constructs MenuItemBase manually.
 // =============================================================================
 
+import { pickMenuImageUrlFromRecord } from '@/lib/images/menuImageDelivery';
 import type { MenuItemBase, MenuCategory, ModifierGroup } from './menu.types';
 import { parseModifierGroupsFromJson } from './parseModifierGroups';
 
@@ -144,7 +145,7 @@ export function toMenuItemBase(
       : 0,
 
     description: typeof r.description === 'string' ? r.description : null,
-    image_url:   typeof r.image_url   === 'string' ? r.image_url   : null,
+    image_url: pickMenuImageUrlFromRecord(r),
     spicy_level: typeof r.spicy_level === 'number' && Number.isFinite(r.spicy_level)
       ? r.spicy_level
       : null,

@@ -55,10 +55,16 @@ import { MenuPublicService } from '@/domain/menu/menu.service.public';
 import type { MenuCategory, MenuItemPublic } from '@/domain/menu/menu.types';
 import { CategoryTabs } from '@/modules/menu/components/CategoryTabs';
 import { MenuGrid } from '@/modules/menu/components/MenuGrid';
-import { PopularRail } from '@/modules/menu/components/PopularRail';
+import {
+  PopularRail,
+  POPULAR_SECTION_MIN_HEIGHT_CLASS,
+} from '@/modules/menu/components/PopularRail';
 import { useMenuUi } from '@/modules/menu/store/menuUi.store';
 import type { MenuPriceRangeKey, MenuSortKey, MenuTagKey } from '@/types/menu-ui.types';
-import { getMenuLcpPreloadAttrs } from '@/lib/images/menuImageDelivery';
+import {
+  getMenuLcpPreloadAttrs,
+  pickMenuImageUrlFromRecord,
+} from '@/lib/images/menuImageDelivery';
 const MenuFilters = lazy(() => import('@/modules/menu/components/MenuFilters'));
 const MenuItemModal = lazy(() => import('@/modules/menu/components/MenuItemModal'));
 
@@ -169,9 +175,7 @@ function readDescription(item: MenuItemPublic): string {
 
 function readImageUrl(item: MenuItemPublic): string | null {
   const record: UnknownRecord = isRecord(item) ? (item as UnknownRecord) : {};
-  const raw = record.image_url ?? record.imageUrl ?? record.photo_url ?? record.photoUrl;
-  const value = safeStr(raw, '', 2000);
-  return value ? value : null;
+  return pickMenuImageUrlFromRecord(record);
 }
 
 function readPriceCents(item: MenuItemPublic): number {
@@ -602,12 +606,18 @@ function MenuPage() {
   // will request, so it's a cache hit when the component renders.
 
   const firstVisibleImageUrl = useMemo(() => {
+    for (const item of popular) {
+      const url = readImageUrl(item);
+      if (url) return url;
+    }
+
     for (const item of filteredSortedItems) {
       const url = readImageUrl(item);
       if (url) return url;
     }
+
     return null;
-  }, [filteredSortedItems]);
+  }, [popular, filteredSortedItems]);
 
   useEffect(() => {
     if (loading || !firstVisibleImageUrl) return;
@@ -807,26 +817,24 @@ if (!attrs) return;
         )}
       </AnimatePresence>
 
+      {/* Popular rail — always mounted (except error) so LCP image is discoverable early
+          and layout height is reserved before menu data finishes loading. */}
+      {!error && (
+        <div className={cx('mt-6', POPULAR_SECTION_MIN_HEIGHT_CLASS)}>
+          <PopularRail
+            loading={loading}
+            items={popular}
+            onOpenItem={openItem}
+            getPriceCents={getPriceCents}
+            getAvailable={getAvailable}
+            emptyHintActionLabel="Clear all"
+            onEmptyHintAction={clearAll}
+          />
+        </div>
+      )}
+
       {!loading && !error && (
         <>
-          {/* ── PopularRail ─────────────────────────────────────────────
-            PERFORMANCE: Plain <div> — no entrance animation.
-            Previously <m.div initial={{ opacity: 0, y: 14 }} animate={...}>
-            held this section at opacity 0 for 550ms, blocking LCP if the
-            LCP candidate image was inside the rail.
-            PopularRail has its own internal card animations.
-          */}
-          <div className="mt-6">
-            <PopularRail
-              items={popular}
-              onOpenItem={openItem}
-              getPriceCents={getPriceCents}
-              getAvailable={getAvailable}
-              emptyHintActionLabel="Clear all"
-              onEmptyHintAction={clearAll}
-            />
-          </div>
-
           {/* ── Browse categories header + filter buttons ───────────────
             PERFORMANCE: Plain <div> — no entrance animation.
             Previously <m.div initial={{ opacity: 0, y: 10 }} delay={0.08}>
