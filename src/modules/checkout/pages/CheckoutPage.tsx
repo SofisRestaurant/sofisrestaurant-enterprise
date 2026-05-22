@@ -611,7 +611,9 @@ export default function CheckoutPage() {
              />
            </div>
 
-           <CheckoutFooter isAuthenticated={isAuthenticated} />
+           <div className="w-full min-w-0 lg:col-span-2">
+             <CheckoutFooter isAuthenticated={isAuthenticated} />
+           </div>
          </div>
        )}
      </CheckoutShell>
