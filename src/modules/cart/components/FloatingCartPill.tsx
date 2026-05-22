@@ -1,6 +1,8 @@
 // src/modules/cart/components/FloatingCartPill.tsx
 // Floating cart pill, dock slot child only.
 // MobileDockShell owns all scroll movement.
+// Cart slot show/hide is driven by [data-cart-visible] in utilities.css.
+// This component must NOT apply translate-y or transforms based on dockPhase.
 
 import { useCallback, useMemo } from 'react';
 import { ChevronRight, ShoppingBag } from 'lucide-react';
@@ -64,17 +66,14 @@ export function FloatingCartPill() {
         'bg-ink-900 text-white shadow-[0_12px_36px_rgba(28,25,21,0.32)] ring-1 ring-white/10',
         'focus:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]',
 
-        // Important:
-        // The pill does not react to dockPhase.
-        // MobileDockShell is the only element allowed to move on scroll.
+        // No translate-y here. The cart slot in MobileDockShell handles
+        // show/hide via [data-cart-visible] in utilities.css.
         'transform-gpu',
-        'motion-safe:transition-[opacity,box-shadow] motion-safe:duration-200 motion-safe:ease-out',
-        'motion-reduce:transition-none',
-
-        visible ? 'translate-y-1 opacity-100' : 'pointer-events-none translate-y-1 opacity-0',
 
         visible && 'hover:shadow-[0_16px_40px_rgba(28,25,21,0.38)]',
         visible && 'active:scale-[0.985] motion-reduce:active:scale-100',
+
+        !visible && 'pointer-events-none',
       )}
     >
       <span

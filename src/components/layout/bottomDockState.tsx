@@ -1,5 +1,13 @@
 // src/components/layout/bottomDockState.tsx
 // Single source of truth for the mobile commerce dock: BottomNav + FloatingCartPill.
+//
+// MOVEMENT CONTRACT:
+//   This module determines dockPhase (visible | collapsed | hidden) and writes
+//   --mobile-dock-translate-y to :root.  utilities.css .mobile-dock-shell reads
+//   that variable for its transform.  No other element applies scroll transforms.
+//
+//   Page bottom padding stays at --mobile-page-bottom-padding-expanded for both
+//   visible and collapsed phases to prevent layout thrash during scroll.
 
 import {
   createContext,
@@ -61,8 +69,9 @@ const TOP_LOCK_PX = 88;
 const SCROLL_NOISE_PX = 4;
 const MAX_SINGLE_DELTA_PX = 180;
 const DOWN_SCROLL_INTENT_PX = 18;
-const UP_SCROLL_INTENT_PX = 10;
+const UP_SCROLL_INTENT_PX = 16;          // ← raised from 10 to resist inertial bounce
 const MIN_VISIBLE_MS = 180;
+const MIN_COLLAPSED_MS = 300;             // ← cooldown after collapse before allow reveal
 const SCROLL_SETTLE_MS = 180;
 const POINTER_LOCK_MS = 220;
 const ORIENTATION_SETTLE_MS = 180;
@@ -153,6 +162,7 @@ function useBottomDockController(): BottomDockContextValue {
   const downDistanceRef = useRef(0);
   const upDistanceRef = useRef(0);
   const lastShownAtRef = useRef(Date.now());
+  const lastCollapsedAtRef = useRef(0);
 
   const tickingRef = useRef(false);
   const focusWithinDockRef = useRef(false);
@@ -246,6 +256,7 @@ function useBottomDockController(): BottomDockContextValue {
       setPhase('collapsed');
       resetIntent();
 
+      lastCollapsedAtRef.current = Date.now();
       lastYRef.current = currentY;
 
       setIsScrollingDown(true);
@@ -267,6 +278,7 @@ function useBottomDockController(): BottomDockContextValue {
     resetIntent();
 
     lastShownAtRef.current = Date.now();
+    lastCollapsedAtRef.current = 0;
 
     setIsScrollingDown(false);
     setIsScrollingUp(false);
@@ -402,7 +414,12 @@ function useBottomDockController(): BottomDockContextValue {
         setIsScrollingDown(false);
         setIsScrollingUp(true);
 
-        if (upDistanceRef.current >= UP_SCROLL_INTENT_PX) {
+        // Resist inertial bounce: require both distance threshold AND cooldown
+        // since last collapse before allowing reveal.
+        const cooldownElapsed = Date.now() - lastCollapsedAtRef.current >= MIN_COLLAPSED_MS;
+        const hasIntent = upDistanceRef.current >= UP_SCROLL_INTENT_PX;
+
+        if (hasIntent && cooldownElapsed) {
           revealDock(currentY);
           settle();
           return;
@@ -533,6 +550,8 @@ function useBottomDockController(): BottomDockContextValue {
       };
     }
 
+    // Collapsed → slide the shell down via the CSS variable.
+    // Page padding stays at expanded to avoid layout thrash.
     const translateY = dockPhase === 'collapsed' ? 'var(--mobile-bottom-dock-collapse-y)' : '0px';
 
     root.style.setProperty('--mobile-dock-translate-y', translateY);

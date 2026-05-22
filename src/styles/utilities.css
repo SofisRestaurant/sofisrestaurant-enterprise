@@ -17,6 +17,11 @@
 
 /* =============================================================================
    MOBILE DOCK — page clearance + shell layout
+
+   MOVEMENT CONTRACT:
+     Only .mobile-dock-shell applies scroll-driven transform.
+     .mobile-dock-cart-slot uses opacity + max-height only — no transform.
+     BottomNav and FloatingCartPill must not set their own scroll transforms.
    ============================================================================= */
 
 @media (max-width: 767px) {
@@ -31,9 +36,10 @@
     }
   }
 
+  /* ── Shell: the ONE element that moves on scroll ───────────────────────── */
   .mobile-dock-shell {
     padding-bottom: var(--mobile-safe-bottom);
-    transform: translate3d(0, var(--mobile-dock-translate-y), 0);
+    transform: translate3d(0, var(--mobile-dock-translate-y, 0px), 0);
     transition: transform 380ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
@@ -43,21 +49,19 @@
     }
   }
 
+  /* ── Cart slot: opacity + max-height only, NO transform ────────────────── */
   .mobile-dock-cart-slot {
     overflow: hidden;
     max-height: calc(var(--mobile-cart-pill-height) + var(--mobile-cart-pill-gap));
     opacity: 1;
-    transform: translate3d(0, 0, 0);
     transition:
       max-height 320ms cubic-bezier(0.16, 1, 0.3, 1),
-      opacity 260ms cubic-bezier(0.16, 1, 0.3, 1),
-      transform 320ms cubic-bezier(0.16, 1, 0.3, 1);
+      opacity 260ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .mobile-dock-cart-slot[data-cart-visible='false'] {
     max-height: 0;
     opacity: 0;
-    transform: translate3d(0, 0.75rem, 0);
     pointer-events: none;
   }
 
@@ -65,7 +69,6 @@
     .mobile-dock-cart-slot,
     .mobile-dock-cart-slot[data-cart-visible='false'] {
       transition: none;
-      transform: none;
     }
   }
 }
