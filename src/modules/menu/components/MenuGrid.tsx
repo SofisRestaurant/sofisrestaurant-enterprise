@@ -26,11 +26,12 @@
 // All modal, selection, and focus logic unchanged.
 // =============================================================================
 
-import { lazy, memo, Suspense, useCallback, useState } from 'react';
+import { lazy, memo, Suspense, useCallback, useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 
 import { MenuItemCard } from '@/modules/menu/components/MenuItemCard';
 import type { MenuItemPublic } from '@/domain/menu/menu.types';
+import { useMenuUi } from '@/modules/menu/store/menuUi.store';
 
 // ── Lazy modal ─────────────────────────────────────────────────────────────
 
@@ -308,6 +309,12 @@ function MenuGridImpl<TItem extends MenuItemPublic>({
   ariaLabel = 'Menu items',
 }: MenuGridProps<TItem>): ReactElement | null {
   const [selectedItem, setSelectedItem] = useState<TItem | null>(null);
+  const setMenuItemModalOpen = useMenuUi((s) => s.setMenuItemModalOpen);
+
+  useEffect(() => {
+    setMenuItemModalOpen(selectedItem !== null);
+    return () => setMenuItemModalOpen(false);
+  }, [selectedItem, setMenuItemModalOpen]);
 
   const handleOpen = useCallback((item: TItem) => {
     setSelectedItem(item);

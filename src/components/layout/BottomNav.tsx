@@ -9,12 +9,14 @@
 // =============================================================================
 
 import { memo, useMemo, type CSSProperties, type ElementType } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { Home, ShoppingBag, Tag, User, UtensilsCrossed } from 'lucide-react';
 
 import { useActiveOrderId } from '@/app/ActiveOrderContext';
-import { useBottomDockState, type BottomDockTabId } from '@/components/layout/useBottomDockState';
+import { useBottomDock, type BottomDockTabId } from '@/components/layout/useBottomDockState';
 import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
+
+// Scroll + dock movement live in bottomDockState + MobileDockShell — nav is visual only.
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -63,9 +65,6 @@ const TABS = [
   { id: 'deals', path: '/deals', label: 'Deals', icon: Tag },
   { id: 'account', path: '/account', label: 'Account', icon: User },
 ] as const satisfies readonly Tab[];
-
-const DOCK_TRANSITION =
-  'transition-[transform,opacity] duration-700 ease-[cubic-bezier(0.16,1,0.3,1)]';
 
 const FOCUS_RING =
   'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)] focus-visible:ring-inset';
@@ -198,36 +197,16 @@ const CartButton = memo(function CartButton({ badge, onCartClick }: CartButtonPr
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function BottomNav() {
-  const { pathname } = useLocation();
-
   // PERF: Read itemCount from lightweight UI store instead of heavy useCart hook
   const itemCount = useCartUiStore((s) => s.itemCount);
   const openCart = useCartUiStore((state) => state.open);
 
   const activeOrderId = useActiveOrderId();
+  const { activeTab } = useBottomDock();
 
   const cartCount = itemCount ?? 0;
   const hasCartItems = cartCount > 0;
   const hasLiveOrder = Boolean(activeOrderId);
-
-  const { isRouteHidden, dockState, isCollapsed, activeTab, dockTranslateY, dockOpacity } =
-    useBottomDockState({
-      pathname,
-      keepVisible: hasCartItems,
-    });
-
-  const dockStyle = useMemo<CSSProperties>(
-    () => ({
-      transform: `translate3d(0, ${dockTranslateY}, 0)`,
-      WebkitTransform: `translate3d(0, ${dockTranslateY}, 0)`,
-      opacity: dockOpacity,
-      willChange: isCollapsed ? 'transform, opacity' : 'auto',
-      backfaceVisibility: 'hidden',
-      WebkitBackfaceVisibility: 'hidden',
-      contain: 'layout paint style',
-    }),
-    [dockOpacity, dockTranslateY, isCollapsed],
-  );
 
   const resolvedTabs = useMemo<ResolvedTab[]>(
     () =>
@@ -240,49 +219,29 @@ export default function BottomNav() {
     [activeTab, cartCount, hasCartItems, hasLiveOrder],
   );
 
-  if (isRouteHidden) return null;
-
   return (
-    <>
-      <div
-        className="h-[calc(76px+env(safe-area-inset-bottom,0px))] shrink-0 md:hidden"
-        aria-hidden="true"
-      />
-
-      <div
-        data-bottom-nav-dock="true"
-        data-state={dockState}
+    <div data-bottom-nav-dock="true" className="w-full px-3 pt-2 min-[390px]:px-4">
+      <nav
+        role="navigation"
+        aria-label="App navigation"
         className={cx(
-          'fixed bottom-0 left-0 right-0 z-30 md:hidden',
-          DOCK_TRANSITION,
+          'grid grid-cols-5',
+          'rounded-[2.5rem]',
+          'border border-[var(--app-divider)] bg-[var(--app-header)]',
+          'px-1 py-1',
+          'transition-colors duration-200',
           'motion-reduce:transition-none',
         )}
-        style={dockStyle}
+        style={DOCK_SHELL_STYLE}
       >
-        <div className="px-3 pb-[max(env(safe-area-inset-bottom,0px),12px)] pt-2 min-[390px]:px-4">
-          <nav
-            role="navigation"
-            aria-label="App navigation"
-            className={cx(
-              'grid grid-cols-5',
-              'rounded-[2.5rem]',
-              'border border-[var(--app-divider)] bg-[var(--app-header)]',
-              'px-1 py-1',
-              'transition-colors duration-200',
-              'motion-reduce:transition-none',
-            )}
-            style={DOCK_SHELL_STYLE}
-          >
-            {resolvedTabs.map((tab) =>
-              tab.isButton ? (
-                <CartButton key={tab.id} badge={tab.badge} onCartClick={openCart} />
-              ) : (
-                <StandardTab key={tab.id} tab={tab} />
-              ),
-            )}
-          </nav>
-        </div>
-      </div>
-    </>
+        {resolvedTabs.map((tab) =>
+          tab.isButton ? (
+            <CartButton key={tab.id} badge={tab.badge} onCartClick={openCart} />
+          ) : (
+            <StandardTab key={tab.id} tab={tab} />
+          ),
+        )}
+      </nav>
+    </div>
   );
 }

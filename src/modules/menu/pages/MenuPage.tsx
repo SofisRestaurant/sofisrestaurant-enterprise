@@ -393,6 +393,7 @@ function MenuPage() {
 
   const searchText = useMenuUi((state) => state.searchText);
   const setSearchText = useMenuUi((state) => state.setSearchText);
+  const setMenuItemModalOpen = useMenuUi((state) => state.setMenuItemModalOpen);
 
   const [filters, setFilters] = useState<FilterState>({
     tags: new Set<MenuTagKey>(),
@@ -403,6 +404,11 @@ function MenuPage() {
 
   const [modal, setModal] = useState<ModalState>({ open: false });
   const [isPending, startTransition] = useTransition();
+
+  useEffect(() => {
+    setMenuItemModalOpen(modal.open);
+    return () => setMenuItemModalOpen(false);
+  }, [modal.open, setMenuItemModalOpen]);
 
   // ── Progressive rendering state ──────────────────────────────────────────
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ITEMS);
@@ -770,7 +776,7 @@ if (!attrs) return;
 
   return (
     <main
-      className="relative mx-auto w-full max-w-7xl px-4 pb-10 pt-4"
+      className="relative mx-auto w-full max-w-7xl px-4 pt-4 md:pb-10"
       aria-busy={loading}
     >
       <AnimatePresence>

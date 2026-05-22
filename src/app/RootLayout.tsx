@@ -31,6 +31,8 @@ import { ActiveOrderProvider } from '@/app/ActiveOrderContext';
 
 import TopBar from '@/components/layout/TopBar';
 import BottomNav from '@/components/layout/BottomNav';
+import { BottomDockProvider } from '@/components/layout/useBottomDockState';
+import { MobileDockShell } from '@/components/layout/MobileDockShell';
 import ScrollSafety from '@/components/app/ScrollSafety';
 
 import CartDisplaySync from '@/modules/cart/components/CartDisplaySync';
@@ -48,6 +50,7 @@ export default function RootLayout() {
       <MotionConfig reducedMotion="user">
         <AppBoot>
           <ActiveOrderProvider>
+            <BottomDockProvider>
             <div className="flex min-h-dvh flex-col">
               {/*
                 Invisible cart display bridge.
@@ -62,7 +65,10 @@ export default function RootLayout() {
               <TopBar />
 
               {/* Page content */}
-              <main id="main-content" className="flex-1 overscroll-contain">
+              <main
+                id="main-content"
+                className="mobile-fixed-ui-page-pad flex-1 overscroll-contain md:pb-0"
+              >
                 <Outlet />
 
                 {/* Desktop footer only. Do not mount cart here. */}
@@ -73,9 +79,8 @@ export default function RootLayout() {
                 </div>
               </main>
 
-              {/* Fixed mobile UI */}
-              <FloatingCartPill />
-              <BottomNav />
+              {/* Mobile commerce dock — single shell moves cart + nav together */}
+              <MobileDockShell cart={<FloatingCartPill />} nav={<BottomNav />} />
 
               {/* Global overlays, lazy and non-blocking */}
               <Suspense fallback={null}>
@@ -93,6 +98,7 @@ export default function RootLayout() {
               */}
               <LazyCartDrawer />
             </div>
+            </BottomDockProvider>
           </ActiveOrderProvider>
         </AppBoot>
       </MotionConfig>

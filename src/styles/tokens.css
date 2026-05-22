@@ -115,6 +115,40 @@
 
   --btn-glass-bg:        rgb(255 255 255 / 0.05);
   --btn-glass-border:    rgb(255 255 255 / 0.12);
+
+  /* ── Mobile dock system (BottomNav + FloatingCartPill) ──────────────────── */
+  --z-mobile-dock: 30;
+  --z-mobile-floating-cart: 31;
+
+  --mobile-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --mobile-bottom-nav-height: 4.75rem;
+  --mobile-bottom-nav-peek-height: 1rem;
+  --mobile-cart-pill-height: 4.5rem;
+  --mobile-cart-pill-gap: 0.75rem;
+  --mobile-dock-breathing-room: 0.5rem;
+
+  --mobile-dock-expanded-height: calc(
+    var(--mobile-cart-pill-height) + var(--mobile-cart-pill-gap) + var(--mobile-bottom-nav-height)
+  );
+  --mobile-dock-collapsed-height: calc(
+    var(--mobile-bottom-nav-peek-height) + var(--mobile-dock-breathing-room)
+  );
+  --mobile-bottom-dock-collapse-y: calc(
+    var(--mobile-bottom-nav-height) - var(--mobile-bottom-nav-peek-height)
+  );
+
+  --mobile-page-bottom-padding-expanded: calc(
+    var(--mobile-dock-expanded-height) + var(--mobile-safe-bottom) + var(--mobile-dock-breathing-room)
+  );
+  --mobile-page-bottom-padding-collapsed: calc(
+    var(--mobile-dock-collapsed-height) + var(--mobile-safe-bottom)
+  );
+  --mobile-page-bottom-padding: var(--mobile-page-bottom-padding-expanded);
+
+  --mobile-dock-translate-y: 0px;
+
+  --mobile-fixed-gap: var(--mobile-cart-pill-gap);
+  --bottom-nav-offset: var(--mobile-bottom-nav-height);
 }
 
 /* =============================================================================
