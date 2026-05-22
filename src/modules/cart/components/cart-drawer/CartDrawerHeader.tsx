@@ -14,7 +14,7 @@ function CartItemBadge({ itemCount }: { itemCount: number }) {
 
   return (
     <span
-      className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-gold-400 px-2 text-[11px] font-black tabular-nums text-ink-950 shadow-sm ring-1 ring-gold-500/20"
+      className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-gold-400 px-1.5 text-[10px] font-black tabular-nums text-ink-950 shadow-sm ring-1 ring-gold-500/20"
       aria-label={`${itemCount} item${itemCount === 1 ? '' : 's'} in cart`}
     >
       {itemCount > 99 ? '99+' : itemCount}
@@ -22,14 +22,12 @@ function CartItemBadge({ itemCount }: { itemCount: number }) {
   );
 }
 
-function HeaderTitle({
+function DesktopHeaderTitle({
   itemCount,
   subtotalLabel,
-  variant,
 }: {
   itemCount: number;
   subtotalLabel?: string;
-  variant: 'mobile' | 'desktop';
 }) {
   const hasItems = itemCount > 0;
 
@@ -41,7 +39,7 @@ function HeaderTitle({
         </span>
 
         <p className="truncate text-[10px] font-black uppercase tracking-[0.16em] text-ink-400 dark:text-white/45">
-          {variant === 'desktop' ? 'Sofi’s checkout' : 'Your order'}
+          Sofi’s checkout
         </p>
       </div>
 
@@ -67,6 +65,45 @@ function HeaderTitle({
   );
 }
 
+function MobileHeaderTitle({
+  itemCount,
+  subtotalLabel,
+}: {
+  itemCount: number;
+  subtotalLabel?: string;
+}) {
+  const hasItems = itemCount > 0;
+
+  return (
+    <div className="flex min-w-0 items-center gap-2.5">
+      <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-ember-50 text-ember-700 ring-1 ring-ember-100 dark:bg-ember-500/10 dark:text-ember-300 dark:ring-ember-400/15">
+        <ShoppingBag className="h-4 w-4" strokeWidth={2.35} aria-hidden="true" />
+      </span>
+
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <h2
+            id="cart-drawer-title"
+            className="truncate text-base font-black tracking-tight text-ink-950 dark:text-white"
+          >
+            Your bag
+          </h2>
+
+          <CartItemBadge itemCount={itemCount} />
+        </div>
+
+        <p className="mt-0.5 truncate text-[11px] font-medium leading-4 text-ink-500 dark:text-white/55">
+          {hasItems
+            ? subtotalLabel
+              ? `${itemCount} item${itemCount === 1 ? '' : 's'} · ${subtotalLabel}`
+              : `${itemCount} item${itemCount === 1 ? '' : 's'} ready`
+            : 'Start your order'}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function CartDrawerHeader({
   itemCount,
   subtotalLabel,
@@ -84,7 +121,7 @@ export function CartDrawerHeader({
         />
 
         <div className="relative flex items-start justify-between gap-4">
-          <HeaderTitle itemCount={itemCount} subtotalLabel={subtotalLabel} variant="desktop" />
+          <DesktopHeaderTitle itemCount={itemCount} subtotalLabel={subtotalLabel} />
 
           <button
             type="button"
@@ -103,16 +140,16 @@ export function CartDrawerHeader({
   }
 
   return (
-    <header className="relative shrink-0 overflow-hidden border-b border-cream-200/80 bg-white/95 px-5 pb-3 pt-2 shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-ink-950/95">
+    <header className="relative shrink-0 overflow-hidden border-b border-cream-200/80 bg-white/95 px-4 py-2.5 shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-ink-950/95">
       <div className={cartAccentBar} aria-hidden="true" />
 
       <div
-        className="pointer-events-none absolute -right-12 -top-16 h-32 w-32 rounded-full bg-gold-200/45 blur-3xl dark:bg-ember-500/10"
+        className="pointer-events-none absolute -right-10 -top-14 h-24 w-24 rounded-full bg-gold-200/35 blur-3xl dark:bg-ember-500/10"
         aria-hidden="true"
       />
 
-      <div className="relative flex items-start justify-between gap-4">
-        <HeaderTitle itemCount={itemCount} subtotalLabel={subtotalLabel} variant="mobile" />
+      <div className="relative flex items-center justify-between gap-3">
+        <MobileHeaderTitle itemCount={itemCount} subtotalLabel={subtotalLabel} />
 
         <button
           type="button"
@@ -120,7 +157,7 @@ export function CartDrawerHeader({
             event.stopPropagation();
             onClose();
           }}
-          className={`${cartIconButton} mt-1`}
+          className={cartIconButton}
           aria-label="Close cart"
         >
           <X className="h-4 w-4" strokeWidth={2.35} aria-hidden="true" />

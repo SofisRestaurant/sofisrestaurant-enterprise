@@ -1,8 +1,10 @@
 import { Link } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
+
 import type { CartItem } from '@/modules/cart/types/cart.types';
 import CheckoutButton from '@/modules/checkout/components/CheckoutButton';
 import { CheckoutChallengeModal } from '@/modules/checkout/components/CheckoutChallengeModal';
+
 import { fadeUp } from './animations';
 import { BlockedOrderCard } from './BlockedOrderCard';
 import { CheckoutAgreementText } from './CheckoutAgreementText';
@@ -73,6 +75,7 @@ export function CheckoutSummaryRail({
                 {itemCount} item{itemCount === 1 ? '' : 's'}
               </p>
             </div>
+
             <Link
               to="/menu"
               className="shrink-0 rounded-full border border-cream-300 bg-white px-3 py-1.5 text-xs font-black text-ink-500 shadow-sm transition hover:bg-cream-50 hover:text-ember-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember-600/40"
@@ -93,9 +96,13 @@ export function CheckoutSummaryRail({
 
         <div className="border-t border-cream-200 px-5 py-5">
           <div className="mb-4">
-            <p className={checkoutEyebrow}>Payment</p>
-            <h3 className="mt-1 text-lg font-black tracking-tight text-ink-900">Place secure order</h3>
-            <p className="mt-1 text-sm text-ink-500">Stripe confirms the final total before payment.</p>
+            <p className={checkoutEyebrow}>Pickup order</p>
+            <h3 className="mt-1 text-lg font-black tracking-tight text-ink-900">
+              Ready for checkout
+            </h3>
+            <p className="mt-1 text-sm text-ink-500">
+              We’ll prepare your order fresh once it’s placed.
+            </p>
           </div>
 
           <div className="space-y-4">
@@ -136,11 +143,7 @@ export function CheckoutSummaryRail({
             </AnimatePresence>
 
             {!showChallenge && !showBlocked ? (
-              <CheckoutButton
-                onCheckout={onCheckout}
-                isLoading={isLoading}
-                disabled={!hasItems}
-              />
+              <CheckoutButton onCheckout={onCheckout} isLoading={isLoading} disabled={!hasItems} />
             ) : null}
 
             {routerError && !showChallenge && !showBlocked ? (

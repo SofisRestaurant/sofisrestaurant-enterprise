@@ -458,160 +458,162 @@ export default function CheckoutPage() {
     }
 
     lines.push(`Subtotal: ${formatCents(subtotalCents)}`);
-    lines.push(`Final total confirmed by Stripe.`);
+    lines.push(`Estimated total: ${formatCents(estimatedTotalCents)}`);
 
     try {
       await navigator.clipboard.writeText(lines.join('\n'));
     } catch {
       // Clipboard may be unavailable in some browsers.
     }
-  }, [hasItems, items, subtotalCents, effectiveOrderType, pickupTiming, pickupTimingLabel]);
+  }, [
+    hasItems,
+    items,
+    subtotalCents,
+    estimatedTotalCents,
+    effectiveOrderType,
+    pickupTiming,
+    pickupTimingLabel,
+  ]);
 
-  return (
-    <CheckoutShell>
-      <CheckoutHeader
-        isGuest={isGuest}
-        userName={user?.name ?? null}
-        hasItems={hasItems}
-        estimatedTotalCents={estimatedTotalCents}
-        activeStep={CHECKOUT_PROGRESS_STEPS}
-        totalSteps={CHECKOUT_PROGRESS_STEPS}
-      />
+   return (
+     <CheckoutShell>
+       <CheckoutHeader
+         isGuest={isGuest}
+         userName={user?.name ?? null}
+         hasItems={hasItems}
+         estimatedTotalCents={estimatedTotalCents}
+         activeStep={CHECKOUT_PROGRESS_STEPS}
+         totalSteps={CHECKOUT_PROGRESS_STEPS}
+       />
 
-      {/* ── [FIX] Pending checkout recovery for guests ────────────────────────
-           If a Stripe session was already created, show recovery UI instead of
-           allowing a second payment. The user can continue to the existing
-           Stripe session or cancel and start fresh.                           */}
-      {pendingLock && isGuest ? (
-        <div className="mx-auto max-w-md space-y-4 py-10 text-center">
-          <div className="flex justify-center">
-            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-amber-500/15 ring-1 ring-amber-500/30">
-              <span className="text-3xl">💳</span>
-            </div>
-          </div>
+       {pendingLock && isGuest ? (
+         <div className="mx-auto w-full max-w-md space-y-4 py-10 text-center">
+           <div className="flex justify-center">
+             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-amber-500/15 ring-1 ring-amber-500/30">
+               <span className="text-3xl">💳</span>
+             </div>
+           </div>
 
-          <div>
-            <h2 className="text-lg font-bold text-white">Payment already started</h2>
-            <p className="mt-1 text-sm text-neutral-400">
-              A checkout session is already active for this order. You can continue to the payment
-              page or cancel and start over.
-            </p>
-          </div>
+           <div>
+             <h2 className="text-lg font-bold text-white">Checkout already started</h2>
+             <p className="mt-1 text-sm text-neutral-400">
+               A checkout session is already active for this order. You can continue or cancel and
+               start over.
+             </p>
+           </div>
 
-          <div className="flex flex-col gap-2">
-            <button
-              type="button"
-              onClick={handleContinueToPayment}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-xl
-                         bg-amber-500 py-3 text-sm font-bold text-neutral-950
-                         hover:shadow-[0_0_18px_4px_rgba(245,158,11,0.35)]
-                         focus-visible:outline-none focus-visible:ring-2
-                         focus-visible:ring-amber-400 focus-visible:ring-offset-2
-                         focus-visible:ring-offset-neutral-950"
-            >
-              Continue to Payment
-            </button>
-            <button
-              type="button"
-              onClick={handleCancelPendingCheckout}
-              className="inline-flex w-full items-center justify-center rounded-xl
-                         bg-white/8 py-3 text-sm font-semibold text-white
-                         hover:bg-white/12 focus-visible:outline-none
-                         focus-visible:ring-2 focus-visible:ring-white/30"
-            >
-              Cancel &amp; Start Over
-            </button>
-            <p className="text-xs text-neutral-600">
-              If you already completed payment, your order is being confirmed. Check{' '}
-              <button
-                type="button"
-                onClick={() => navigate('/account/orders')}
-                className="text-amber-400 underline underline-offset-2 hover:text-amber-300"
-              >
-                your orders
-              </button>{' '}
-              or{' '}
-              <button
-                type="button"
-                onClick={() => navigate('/find-order')}
-                className="text-amber-400 underline underline-offset-2 hover:text-amber-300"
-              >
-                find your order
-              </button>{' '}
-              for status.
-            </p>
-          </div>
-        </div>
-      ) : !hasItems ? (
-        <CheckoutEmptyState onBrowseMenu={() => navigate('/menu')} />
-      ) : (
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_24rem] lg:items-start">
-          <CheckoutFlowContent
-            isGuest={isGuest}
-            userEmail={user?.email ?? ''}
-            userName={user?.name ?? null}
-            guestEmail={guestEmail}
-            guestPhone={guestPhone}
-            smsOptIn={smsOptIn}
-            onGuestEmailChange={setGuestEmail}
-            onGuestPhoneChange={setGuestPhone}
-            onSmsToggle={() => setSmsOptIn((value) => !value)}
-            effectiveOrderType={effectiveOrderType}
-            pickupTimingLabel={pickupTimingLabel}
-            orderSummarySubtitle={orderSummarySubtitle}
-            fulfillmentType={fulfillmentType}
-            deliveryAvailability={deliveryAvailability}
-            onChangePickup={openOrderIntentSheet}
-            notes={orderDetails.notes}
-            onNotesChange={(notes) => setOrderDetails((current) => ({ ...current, notes }))}
-            onPrint={() => window.print()}
-            onCopySummary={() => void copySummary()}
-            promo={promo}
-            onPromoChange={onPromoChange}
-            onPromoApply={onPromoApply}
-            onPromoClear={onPromoClear}
-            onPromoKeyDown={onPromoKeyDown}
-            loyaltyPreview={loyaltyPreview}
-            recentlyRedeemed={recentlyRedeemed}
-            loyaltyBalance={loyaltyBalance}
-            loyaltyAccountId={loyaltyAccountId}
-            subtotalCents={subtotalCents}
-            onLoyaltyChange={setLoyaltyIntent}
-            credits={credits}
-            creditsLoading={creditsLoading}
-            creditsError={creditsError}
-            creditsAvailableCents={creditsAvailableCents}
-            selectedCredit={selectedCredit}
-            onSelectCredit={setSelectedCredit}
-            onRemoveCredit={() => setSelectedCredit(null)}
-            onRetryCredits={() => void loadCredits()}
-          />
+           <div className="flex flex-col gap-2">
+             <button
+               type="button"
+               onClick={handleContinueToPayment}
+               className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-amber-500 py-3 text-sm font-bold text-neutral-950 hover:shadow-[0_0_18px_4px_rgba(245,158,11,0.35)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950"
+             >
+               Continue Checkout
+             </button>
 
-          <CheckoutSummaryRail
-            items={items}
-            itemCount={itemCount}
-            subtotalCents={subtotalCents}
-            estimatedTaxCents={estimatedTaxCents}
-            estimatedTotalCents={estimatedTotalCents}
-            isGuest={isGuest}
-            guestEmail={guestEmail}
-            hasItems={hasItems}
-            isLoading={isLoading}
-            routerError={routerError}
-            showChallenge={showChallenge}
-            showBlocked={showBlocked}
-            otpChallenge={otpChallenge}
-            challengeEmail={challengeEmail}
-            isAuthenticated={isAuthenticated}
-            userId={user?.id ?? null}
-            onCheckout={handleCheckout}
-            onRetryWithToken={(token) => void retryWithToken(token)}
-            onReset={reset}
-          />
+             <button
+               type="button"
+               onClick={handleCancelPendingCheckout}
+               className="inline-flex w-full items-center justify-center rounded-xl bg-white/8 py-3 text-sm font-semibold text-white hover:bg-white/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+             >
+               Cancel &amp; Start Over
+             </button>
 
-          <CheckoutFooter isAuthenticated={isAuthenticated} />
-        </div>
-      )}
-    </CheckoutShell>
-  );
+             <p className="text-xs text-neutral-600">
+               If you already placed your order, check{' '}
+               <button
+                 type="button"
+                 onClick={() => navigate('/account/orders')}
+                 className="text-amber-400 underline underline-offset-2 hover:text-amber-300"
+               >
+                 your orders
+               </button>{' '}
+               or{' '}
+               <button
+                 type="button"
+                 onClick={() => navigate('/find-order')}
+                 className="text-amber-400 underline underline-offset-2 hover:text-amber-300"
+               >
+                 find your order
+               </button>{' '}
+               for status.
+             </p>
+           </div>
+         </div>
+       ) : !hasItems ? (
+         <CheckoutEmptyState onBrowseMenu={() => navigate('/menu')} />
+       ) : (
+         <div className="mx-auto grid w-full max-w-7xl gap-5 lg:grid-cols-[minmax(0,1fr)_24rem] lg:items-start">
+           <div className="w-full min-w-0">
+             <CheckoutFlowContent
+               isGuest={isGuest}
+               userEmail={user?.email ?? ''}
+               userName={user?.name ?? null}
+               guestEmail={guestEmail}
+               guestPhone={guestPhone}
+               smsOptIn={smsOptIn}
+               onGuestEmailChange={setGuestEmail}
+               onGuestPhoneChange={setGuestPhone}
+               onSmsToggle={() => setSmsOptIn((value) => !value)}
+               effectiveOrderType={effectiveOrderType}
+               pickupTimingLabel={pickupTimingLabel}
+               orderSummarySubtitle={orderSummarySubtitle}
+               fulfillmentType={fulfillmentType}
+               deliveryAvailability={deliveryAvailability}
+               onChangePickup={openOrderIntentSheet}
+               notes={orderDetails.notes}
+               onNotesChange={(notes) => setOrderDetails((current) => ({ ...current, notes }))}
+               onPrint={() => window.print()}
+               onCopySummary={() => void copySummary()}
+               promo={promo}
+               onPromoChange={onPromoChange}
+               onPromoApply={onPromoApply}
+               onPromoClear={onPromoClear}
+               onPromoKeyDown={onPromoKeyDown}
+               loyaltyPreview={loyaltyPreview}
+               recentlyRedeemed={recentlyRedeemed}
+               loyaltyBalance={loyaltyBalance}
+               loyaltyAccountId={loyaltyAccountId}
+               subtotalCents={subtotalCents}
+               onLoyaltyChange={setLoyaltyIntent}
+               credits={credits}
+               creditsLoading={creditsLoading}
+               creditsError={creditsError}
+               creditsAvailableCents={creditsAvailableCents}
+               selectedCredit={selectedCredit}
+               onSelectCredit={setSelectedCredit}
+               onRemoveCredit={() => setSelectedCredit(null)}
+               onRetryCredits={() => void loadCredits()}
+             />
+           </div>
+
+           <div className="w-full min-w-0">
+             <CheckoutSummaryRail
+               items={items}
+               itemCount={itemCount}
+               subtotalCents={subtotalCents}
+               estimatedTaxCents={estimatedTaxCents}
+               estimatedTotalCents={estimatedTotalCents}
+               isGuest={isGuest}
+               guestEmail={guestEmail}
+               hasItems={hasItems}
+               isLoading={isLoading}
+               routerError={routerError}
+               showChallenge={showChallenge}
+               showBlocked={showBlocked}
+               otpChallenge={otpChallenge}
+               challengeEmail={challengeEmail}
+               isAuthenticated={isAuthenticated}
+               userId={user?.id ?? null}
+               onCheckout={handleCheckout}
+               onRetryWithToken={(token) => void retryWithToken(token)}
+               onReset={reset}
+             />
+           </div>
+
+           <CheckoutFooter isAuthenticated={isAuthenticated} />
+         </div>
+       )}
+     </CheckoutShell>
+   );
 }
