@@ -1,12 +1,10 @@
 // src/pages/Account/AccountHome.tsx
 // ============================================================================
-// ACCOUNT HOME — Enterprise Loyalty Dashboard (2026) • Sofi's Restaurant
+// ACCOUNT HOME - Loyalty dashboard for Sofi's Restaurant
 // ============================================================================
-// ✅ Uses Edge Function `loyalty-account` as source of truth
-// ✅ Matches current Edge payload shape:
-//    { ok, meta, account, profile, ledger }
-// ✅ Hardened against runtime crashes (never blanks the route)
-// ✅ Premium UX: QR card, perks, next reward, activity ledger, orders shortcut
+// Uses Edge Function `loyalty-account` as source of truth.
+// Edge payload shape:
+// { ok, meta, account, profile, ledger }
 // ============================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -26,10 +24,6 @@ import {
   type LoyaltyTier,
 } from '@/domain/loyalty/tiers';
 import type { LoyaltyProfile } from '@/modules/checkout/api/checkout.api';
-
-// ─────────────────────────────────────────────────────────────
-// Types (match your Edge Function response)
-// ─────────────────────────────────────────────────────────────
 
 type LedgerMeta = Database['public']['Tables']['loyalty_ledger']['Row']['metadata'];
 
@@ -90,10 +84,6 @@ type LoyaltyAccountEdgeResp = {
   code?: unknown;
 };
 
-// ─────────────────────────────────────────────────────────────
-// Safe helpers
-// ─────────────────────────────────────────────────────────────
-
 function safeStr(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
 }
@@ -122,6 +112,7 @@ function safeIso(value: unknown): string {
 
 function safeId(value: unknown): string {
   const candidate = safeStr(value, '').trim();
+
   if (candidate.length > 0) {
     return candidate;
   }
@@ -180,45 +171,19 @@ function mapEntryType(raw: unknown): LoyaltyTransactionType {
 }
 
 function streakLabel(streak: number): string {
-  if (streak >= 30) {
-    return '🔥 Legendary';
-  }
-
-  if (streak >= 14) {
-    return '🔥 On Fire';
-  }
-
-  if (streak >= 7) {
-    return '⚡ Weekly';
-  }
-
-  if (streak >= 3) {
-    return '✨ Heating up';
-  }
-
-  if (streak >= 1) {
-    return '🌱 Started';
-  }
-
-  return '🌱 Start your streak today';
+  if (streak >= 30) return 'Legendary streak';
+  if (streak >= 14) return 'On fire';
+  if (streak >= 7) return 'Weekly regular';
+  if (streak >= 3) return 'Heating up';
+  if (streak >= 1) return 'Streak started';
+  return 'Start your streak';
 }
 
 function streakBadgeClass(streak: number): string {
-  if (streak >= 30) {
-    return 'text-red-700 bg-red-50 border-red-200';
-  }
-
-  if (streak >= 14) {
-    return 'text-orange-700 bg-orange-50 border-orange-200';
-  }
-
-  if (streak >= 7) {
-    return 'text-amber-700 bg-amber-50 border-amber-200';
-  }
-
-  if (streak >= 3) {
-    return 'text-yellow-700 bg-yellow-50 border-yellow-200';
-  }
+  if (streak >= 30) return 'text-red-700 bg-red-50 border-red-200';
+  if (streak >= 14) return 'text-orange-700 bg-orange-50 border-orange-200';
+  if (streak >= 7) return 'text-amber-700 bg-amber-50 border-amber-200';
+  if (streak >= 3) return 'text-yellow-700 bg-yellow-50 border-yellow-200';
 
   return 'text-gray-600 bg-gray-50 border-gray-200';
 }
@@ -249,28 +214,70 @@ function buildTransactions(ledger: LoyaltyAccountEdgeResp['ledger']): LoyaltyTra
   });
 }
 
-// ─────────────────────────────────────────────────────────────
-// UI: Skeleton
-// ─────────────────────────────────────────────────────────────
-
 function LoadingSkeleton() {
   return (
     <div className="space-y-4 animate-pulse">
-      <div className="h-40 rounded-2xl bg-gray-100" />
-      <div className="grid grid-cols-3 gap-3">
+      <div className="h-44 rounded-3xl bg-gray-100" />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {[0, 1, 2].map((item) => (
-          <div key={item} className="h-24 rounded-xl bg-gray-100" />
+          <div key={item} className="h-24 rounded-2xl bg-gray-100" />
         ))}
       </div>
-      <div className="h-16 rounded-xl bg-gray-100" />
-      <div className="h-52 rounded-xl bg-gray-100" />
+      <div className="h-28 rounded-2xl bg-gray-100" />
+      <div className="h-52 rounded-2xl bg-gray-100" />
     </div>
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// UI: QR Card
-// ─────────────────────────────────────────────────────────────
+function AccountCard({
+  children,
+  className = '',
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <section
+      className={[
+        'w-full min-w-0 rounded-3xl border border-gray-100 bg-white shadow-sm',
+        className,
+      ].join(' ')}
+    >
+      {children}
+    </section>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  helper,
+  tone = 'default',
+}: {
+  label: string;
+  value: React.ReactNode;
+  helper?: React.ReactNode;
+  tone?: 'default' | 'warm';
+}) {
+  return (
+    <div
+      className={[
+        'rounded-2xl border p-4 shadow-sm',
+        tone === 'warm'
+          ? 'border-amber-100 bg-gradient-to-br from-amber-50 to-white'
+          : 'border-gray-100 bg-white',
+      ].join(' ')}
+    >
+      <div className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-400">
+        {label}
+      </div>
+      <div className="mt-1 text-2xl font-black tabular-nums tracking-tight text-gray-950">
+        {value}
+      </div>
+      {helper ? <div className="mt-2 text-xs font-medium text-gray-500">{helper}</div> : null}
+    </div>
+  );
+}
 
 function LoyaltyQRCard({
   loyaltyPublicId,
@@ -286,13 +293,17 @@ function LoyaltyQRCard({
   const [copied, setCopied] = useState(false);
 
   const displayName = useMemo(() => {
-    if (!name) {
-      return 'Member';
-    }
+    if (!name) return 'Member';
 
     const handle = name.split('@')[0]?.trim();
     return handle && handle.length > 0 ? handle : 'Member';
   }, [name]);
+
+  const shortId = useMemo(
+    () =>
+      `${loyaltyPublicId.slice(0, 6).toUpperCase()}...${loyaltyPublicId.slice(-4).toUpperCase()}`,
+    [loyaltyPublicId],
+  );
 
   const handleCopy = useCallback(async (): Promise<void> => {
     try {
@@ -300,12 +311,13 @@ function LoyaltyQRCard({
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1600);
     } catch {
-      // no-op
+      // Clipboard can be unavailable in some browsers.
     }
   }, [loyaltyPublicId]);
 
   const handleDownload = useCallback((): void => {
     const canvas = canvasRef.current?.querySelector('canvas');
+
     if (!(canvas instanceof HTMLCanvasElement)) {
       return;
     }
@@ -317,81 +329,91 @@ function LoyaltyQRCard({
   }, [loyaltyPublicId]);
 
   return (
-    <div
-      className={`overflow-hidden rounded-2xl border ${config.colors.border} bg-white shadow-sm`}
-    >
-      <div className={`bg-linear-to-br ${config.gradient} px-5 py-3`}>
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/70">
-              Loyalty Card
+    <AccountCard className="overflow-hidden">
+      <div className={`bg-linear-to-br ${config.gradient} px-5 py-4 text-white`}>
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-[10px] font-black uppercase tracking-[0.22em] text-white/70">
+              Sofi&apos;s Rewards
             </p>
-            <p className="mt-0.5 text-sm font-semibold text-white">{displayName}</p>
+            <h2 className="mt-1 truncate text-xl font-black tracking-tight">{displayName}</h2>
+            <p className="mt-1 text-xs font-semibold text-white/75">
+              Show your QR code when you visit.
+            </p>
           </div>
-          <span className="text-2xl">{config.icon}</span>
+
+          <div className="shrink-0 rounded-2xl bg-white/15 px-3 py-2 text-center ring-1 ring-white/20">
+            <div className="text-2xl leading-none">{config.icon}</div>
+            <div className="mt-1 text-[10px] font-black uppercase tracking-wide text-white/80">
+              {config.label}
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="flex flex-col items-center gap-4 px-6 py-6">
-        <div className={`rounded-2xl border-2 ${config.colors.border} bg-white p-3 shadow-sm`}>
-          <QRCodeSVG
-            value={loyaltyPublicId}
-            size={184}
-            fgColor={config.qr.fg}
-            bgColor={config.qr.bg}
-            level="H"
-          />
+      <div className="grid gap-5 px-5 py-5 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
+        <div className="flex justify-center sm:justify-start">
+          <div className={`rounded-3xl border-2 ${config.colors.border} bg-white p-3 shadow-sm`}>
+            <QRCodeSVG
+              value={loyaltyPublicId}
+              size={168}
+              fgColor={config.qr.fg}
+              bgColor={config.qr.bg}
+              level="H"
+            />
+          </div>
+
+          <div ref={canvasRef} className="hidden" aria-hidden>
+            <QRCodeCanvas
+              value={loyaltyPublicId}
+              size={420}
+              fgColor={config.qr.fg}
+              bgColor={config.qr.bg}
+              level="H"
+              includeMargin
+            />
+          </div>
         </div>
 
-        <div ref={canvasRef} className="hidden" aria-hidden>
-          <QRCodeCanvas
-            value={loyaltyPublicId}
-            size={420}
-            fgColor={config.qr.fg}
-            bgColor={config.qr.bg}
-            level="H"
-            includeMargin
-          />
-        </div>
-
-        <div className="text-center">
-          <p className="text-xs font-medium text-gray-500">Show this code to staff at any visit</p>
-          <p className="mt-1 select-all break-all font-mono text-[11px] text-gray-400">
-            {loyaltyPublicId}
+        <div className="min-w-0 text-center sm:text-left">
+          <p className="text-sm font-bold text-gray-950">Your loyalty card is ready</p>
+          <p className="mt-1 text-sm leading-6 text-gray-500">
+            Use this at Sofi&apos;s so staff can quickly find your rewards account.
           </p>
 
-          <button
-            type="button"
-            onClick={() => {
-              void handleCopy();
-            }}
-            className="mt-2 inline-flex items-center justify-center rounded-lg px-2 py-1 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
-          >
-            {copied ? '✓ Copied' : 'Copy ID'}
-          </button>
+          <div className="mt-3 rounded-2xl bg-gray-50 px-3 py-2">
+            <p className="text-[10px] font-black uppercase tracking-[0.16em] text-gray-400">
+              Member ID
+            </p>
+            <p className="mt-0.5 select-all truncate font-mono text-xs font-semibold text-gray-700">
+              {shortId}
+            </p>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                void handleCopy();
+              }}
+              className="inline-flex items-center justify-center rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black text-gray-800 transition hover:bg-gray-50 active:scale-95"
+            >
+              {copied ? 'Copied' : 'Copy ID'}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleDownload}
+              className="inline-flex items-center justify-center rounded-xl bg-gray-950 px-3 py-2 text-xs font-black text-white transition hover:bg-black active:scale-95"
+            >
+              Save QR
+            </button>
+          </div>
         </div>
-
-        <button
-          type="button"
-          onClick={handleDownload}
-          className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-gray-200 bg-gray-50 py-2.5 text-xs font-semibold text-gray-800 transition hover:bg-gray-100 active:scale-95"
-        >
-          ↓ Save QR
-        </button>
       </div>
-
-      <div className="border-t border-gray-100 px-5 py-2.5">
-        <p className="text-center text-[10px] text-gray-400">
-          This code is permanent and unique to your account
-        </p>
-      </div>
-    </div>
+    </AccountCard>
   );
 }
-
-// ─────────────────────────────────────────────────────────────
-// UI: Transaction row
-// ─────────────────────────────────────────────────────────────
 
 function TransactionRow({ tx }: { tx: LoyaltyTransaction }) {
   const isPositive = tx.points_delta > 0;
@@ -401,65 +423,67 @@ function TransactionRow({ tx }: { tx: LoyaltyTransaction }) {
     redeemed: 'Points redeemed',
     bonus: 'Bonus awarded',
     expired: 'Points expired',
-    adjusted: 'Manual adjustment',
+    adjusted: 'Account adjustment',
   };
 
   const typeIcon: Record<LoyaltyTransactionType, string> = {
-    earned: '⬆',
-    redeemed: '⬇',
-    bonus: '🎁',
-    expired: '⏱',
-    adjusted: '✏',
+    earned: '+',
+    redeemed: '-',
+    bonus: 'Gift',
+    expired: 'Exp',
+    adjusted: 'Edit',
   };
 
   const date = new Date(tx.created_at).toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
-    year: 'numeric',
   });
 
   return (
-    <div className="flex items-center justify-between py-3">
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-gray-100 text-sm">
+    <div className="flex items-center justify-between gap-3 py-3">
+      <div className="flex min-w-0 items-center gap-3">
+        <div
+          className={[
+            'flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[11px] font-black',
+            isPositive ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600',
+          ].join(' ')}
+        >
           {typeIcon[tx.transaction_type]}
         </div>
 
-        <div>
-          <div className="text-sm font-medium text-gray-900">{typeLabel[tx.transaction_type]}</div>
-          <div className="text-xs text-gray-400">
-            {date}
+        <div className="min-w-0">
+          <div className="truncate text-sm font-bold text-gray-950">
+            {typeLabel[tx.transaction_type]}
+          </div>
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-gray-400">
+            <span>{date}</span>
             {tx.reference_id ? (
               <>
-                <span className="ml-1.5 text-gray-300">·</span>
-                <span className="ml-1.5 font-mono">
-                  ref {tx.reference_id.slice(0, 8).toUpperCase()}
+                <span className="text-gray-300">·</span>
+                <span className="truncate font-mono">
+                  #{tx.reference_id.slice(0, 8).toUpperCase()}
                 </span>
               </>
             ) : null}
           </div>
-          {tx.source !== 'unknown' ? (
-            <div className="mt-0.5 text-[10px] text-gray-300">source: {tx.source}</div>
-          ) : null}
         </div>
       </div>
 
-      <div className="text-right">
+      <div className="shrink-0 text-right">
         <div
-          className={`text-sm font-semibold tabular-nums ${isPositive ? 'text-emerald-600' : 'text-red-500'}`}
+          className={[
+            'text-sm font-black tabular-nums',
+            isPositive ? 'text-emerald-600' : 'text-red-500',
+          ].join(' ')}
         >
           {isPositive ? '+' : '-'}
-          {fmt(Math.abs(tx.points_delta))} pts
+          {fmt(Math.abs(tx.points_delta))}
         </div>
-        <div className="text-xs text-gray-400">Balance: {fmt(tx.points_balance)}</div>
+        <div className="text-[11px] font-medium text-gray-400">{fmt(tx.points_balance)} bal.</div>
       </div>
     </div>
   );
 }
-
-// ─────────────────────────────────────────────────────────────
-// Data hook (never blank the page)
-// ─────────────────────────────────────────────────────────────
 
 function useLoyaltyData() {
   const [profile, setProfile] = useState<LoyaltyProfileWithQR | null>(null);
@@ -483,6 +507,7 @@ function useLoyaltyData() {
       if (!soft) {
         setLoading(true);
       }
+
       setRefreshing(soft);
       setError(null);
     });
@@ -516,7 +541,7 @@ function useLoyaltyData() {
       );
 
       if (response.ok !== true) {
-        setSafe(() => setError('Unable to load loyalty data'));
+        setSafe(() => setError('Unable to load loyalty data.'));
         return;
       }
 
@@ -554,7 +579,7 @@ function useLoyaltyData() {
         setTransactions(buildTransactions(response.ledger));
       });
     } catch (loadError: unknown) {
-      setSafe(() => setError(getErrorMessage(loadError, 'Unable to load loyalty data')));
+      setSafe(() => setError(getErrorMessage(loadError, 'Unable to load loyalty data.')));
     } finally {
       setSafe(() => {
         setLoading(false);
@@ -578,10 +603,6 @@ function useLoyaltyData() {
   return { profile, transactions, loading, refreshing, error, refresh };
 }
 
-// ─────────────────────────────────────────────────────────────
-// Page
-// ─────────────────────────────────────────────────────────────
-
 export default function AccountHome() {
   const { user } = useUserContext();
   const { profile, transactions, loading, refreshing, error, refresh } = useLoyaltyData();
@@ -589,6 +610,7 @@ export default function AccountHome() {
   const email = user?.email ?? null;
   const nextTier = profile ? getNextTier(profile.tier) : null;
   const nextTierConfig = nextTier ? LOYALTY_TIERS[nextTier] : null;
+  const currentTierConfig = profile ? LOYALTY_TIERS[profile.tier] : null;
 
   const progressToNextTier = useMemo(() => {
     if (profile === null || nextTier === null || nextTierConfig === null) {
@@ -613,79 +635,110 @@ export default function AccountHome() {
     };
   }, [nextTier, nextTierConfig, profile]);
 
+  const firstName = useMemo(() => {
+    const raw = profile?.fullName ?? user?.name ?? email ?? '';
+    const clean = raw.split('@')[0]?.trim();
+
+    if (!clean) return 'there';
+
+    return clean.split(' ')[0] ?? clean;
+  }, [email, profile?.fullName, user?.name]);
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold text-gray-900">Account Overview</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Manage your profile and track your loyalty rewards.
-          </p>
-        </div>
+    <div className="mx-auto w-full max-w-6xl space-y-5 px-0 sm:space-y-6">
+      <div className="overflow-hidden rounded-3xl border border-gray-100 bg-gradient-to-br from-white via-amber-50/45 to-white shadow-sm">
+        <div className="px-4 py-5 sm:px-6 sm:py-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-[0.22em] text-amber-700/80">
+                My Sofi&apos;s Account
+              </p>
 
-        <button
-          type="button"
-          onClick={() => {
-            void refresh();
-          }}
-          className="shrink-0 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-50 active:scale-95"
-        >
-          {refreshing ? 'Refreshing…' : 'Refresh'}
-        </button>
-      </div>
+              <h1 className="mt-2 text-2xl font-black tracking-tight text-gray-950 sm:text-3xl">
+                Welcome back, {firstName}
+              </h1>
 
-      <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-        <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-          Signed in as
-        </div>
-        <div className="mt-1 font-medium text-gray-900">{email}</div>
-        <div className="mt-0.5 text-sm text-gray-500">
-          Role:{' '}
-          <span className="font-medium capitalize text-gray-700">
-            {String(user?.role ?? 'user')}
-          </span>
-        </div>
-      </div>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-600">
+                Track your rewards, view your loyalty card, and see your recent activity in one
+                simple place.
+              </p>
+            </div>
 
-      <div>
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-gray-900">Loyalty Rewards</h2>
-          {profile ? (
-            <span
-              className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${LOYALTY_TIERS[profile.tier].badge}`}
-            >
-              {LOYALTY_TIERS[profile.tier].icon} {LOYALTY_TIERS[profile.tier].label}
-            </span>
-          ) : null}
-        </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {profile && currentTierConfig ? (
+                <span
+                  className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-black ${currentTierConfig.badge}`}
+                >
+                  {currentTierConfig.icon} {currentTierConfig.label}
+                </span>
+              ) : null}
 
-        {loading ? <LoadingSkeleton /> : null}
-
-        {error ? (
-          <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
-            <div className="mt-2">
               <button
                 type="button"
                 onClick={() => {
                   void refresh();
                 }}
-                className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-700"
+                className="inline-flex items-center justify-center rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-black text-gray-700 shadow-sm transition hover:bg-gray-50 active:scale-95"
               >
-                Try again
+                {refreshing ? 'Refreshing...' : 'Refresh'}
               </button>
             </div>
           </div>
-        ) : null}
 
-        {!loading && !error && !profile ? (
-          <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-6 text-center text-sm text-gray-500">
-            Place your first order to start earning loyalty points.
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs font-medium text-gray-500">
+            <span className="rounded-full bg-white/80 px-3 py-1 ring-1 ring-gray-100">
+              {email ?? 'Signed in'}
+            </span>
+
+            <span className="rounded-full bg-white/80 px-3 py-1 capitalize ring-1 ring-gray-100">
+              {String(user?.role ?? 'user')} account
+            </span>
           </div>
-        ) : null}
+        </div>
+      </div>
 
-        {!loading && !error && profile ? (
-          <div className="space-y-4">
+      {loading ? <LoadingSkeleton /> : null}
+
+      {error ? (
+        <AccountCard className="border-red-100 bg-red-50 px-4 py-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-black text-red-800">Rewards could not load</p>
+              <p className="mt-1 text-sm text-red-700">{error}</p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                void refresh();
+              }}
+              className="inline-flex items-center justify-center rounded-xl bg-red-600 px-4 py-2 text-xs font-black text-white transition hover:bg-red-700"
+            >
+              Try again
+            </button>
+          </div>
+        </AccountCard>
+      ) : null}
+
+      {!loading && !error && !profile ? (
+        <AccountCard className="px-4 py-8 text-center">
+          <p className="text-lg font-black text-gray-950">Start earning rewards</p>
+          <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-gray-500">
+            Place your first order to activate your Sofi&apos;s rewards account.
+          </p>
+
+          <Link
+            to="/menu"
+            className="mt-4 inline-flex items-center justify-center rounded-2xl bg-gray-950 px-5 py-3 text-sm font-black text-white transition hover:bg-black"
+          >
+            Browse Menu
+          </Link>
+        </AccountCard>
+      ) : null}
+
+      {!loading && !error && profile ? (
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start">
+          <div className="min-w-0 space-y-5">
             {profile.loyaltyPublicId ? (
               <LoyaltyQRCard
                 loyaltyPublicId={profile.loyaltyPublicId}
@@ -693,151 +746,189 @@ export default function AccountHome() {
                 name={profile.fullName ?? email}
               />
             ) : (
-              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4">
-                <div className="text-sm font-semibold text-amber-900">QR card not ready yet</div>
-                <div className="mt-1 text-xs text-amber-800">
-                  Tap Refresh — it should appear once generated.
-                </div>
-              </div>
+              <AccountCard className="border-amber-200 bg-amber-50 px-5 py-4">
+                <p className="text-sm font-black text-amber-900">QR card not ready yet</p>
+                <p className="mt-1 text-sm text-amber-800">
+                  Tap refresh. Your loyalty card should appear once it has been generated.
+                </p>
+              </AccountCard>
             )}
 
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-                <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-                  Spendable
-                </div>
-                <div className="mt-1 text-2xl font-bold tabular-nums text-gray-900">
-                  {fmt(profile.points)}{' '}
-                  <span className="text-sm font-medium text-gray-400">pts</span>
-                </div>
-              </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <StatCard
+                label="Available points"
+                value={
+                  <>
+                    {fmt(profile.points)}{' '}
+                    <span className="text-sm font-bold text-gray-400">pts</span>
+                  </>
+                }
+                helper="Ready to use when eligible."
+                tone="warm"
+              />
 
-              <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-                <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-                  Streak
-                </div>
-                <div className="mt-1 text-2xl font-bold tabular-nums text-gray-900">
-                  {profile.streak}
-                  <span className="ml-0.5 text-sm font-medium text-gray-400">d</span>
-                </div>
-                <div
-                  className={`mt-2 inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${streakBadgeClass(profile.streak)}`}
-                >
-                  {streakLabel(profile.streak)}
-                </div>
-              </div>
+              <StatCard
+                label="Visit streak"
+                value={
+                  <>
+                    {profile.streak}
+                    <span className="ml-1 text-sm font-bold text-gray-400">days</span>
+                  </>
+                }
+                helper={
+                  <span
+                    className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-bold ${streakBadgeClass(
+                      profile.streak,
+                    )}`}
+                  >
+                    {streakLabel(profile.streak)}
+                  </span>
+                }
+              />
 
-              <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-                <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-                  Lifetime
-                </div>
-                <div className="mt-1 text-2xl font-bold tabular-nums text-gray-900">
-                  {fmt(profile.lifetimePoints)}
-                </div>
-                <div className="mt-2 text-xs font-medium text-gray-400">total earned</div>
-              </div>
+              <StatCard
+                label="Lifetime earned"
+                value={fmt(profile.lifetimePoints)}
+                helper="Total points earned."
+              />
             </div>
 
             {progressToNextTier ? (
-              <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-                      Next reward tier
-                    </div>
-                    <div className="mt-1 text-sm font-semibold text-gray-900">
+              <AccountCard className="px-4 py-4 sm:px-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-400">
+                      Next tier
+                    </p>
+                    <h2 className="mt-1 text-base font-black text-gray-950">
                       {progressToNextTier.nextIcon} {progressToNextTier.nextLabel}
-                    </div>
-                    <div className="mt-1 text-xs text-gray-500">
-                      {fmt(progressToNextTier.remaining)} lifetime points to go
-                    </div>
+                    </h2>
+                    <p className="mt-1 text-sm text-gray-500">
+                      {fmt(progressToNextTier.remaining)} lifetime points to go.
+                    </p>
                   </div>
+
                   <Link
                     to="/account/orders"
-                    className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
+                    className="inline-flex items-center justify-center rounded-xl border border-gray-200 bg-white px-4 py-2 text-xs font-black text-gray-700 transition hover:bg-gray-50"
                   >
                     View orders
                   </Link>
                 </div>
 
-                <div className="mt-4 h-2 overflow-hidden rounded-full bg-gray-100">
+                <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-gray-100">
                   <div
-                    className="h-full rounded-full bg-gray-900 transition-all"
+                    className="h-full rounded-full bg-gray-950 transition-all"
                     style={{ width: `${progressToNextTier.percent}%` }}
                     aria-hidden
                   />
                 </div>
-              </div>
-            ) : null}
+              </AccountCard>
+            ) : (
+              <AccountCard className="px-4 py-4 sm:px-5">
+                <p className="text-sm font-black text-gray-950">Top tier status</p>
+                <p className="mt-1 text-sm text-gray-500">
+                  You are currently at the highest available rewards tier.
+                </p>
+              </AccountCard>
+            )}
 
-            {transactions.length > 0 ? (
-              <div className="rounded-xl border border-gray-100 bg-white">
-                <div className="border-b border-gray-100 px-4 py-3">
-                  <h3 className="text-sm font-semibold text-gray-900">Recent Activity</h3>
+            <AccountCard className="overflow-hidden">
+              <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3 sm:px-5">
+                <div>
+                  <h2 className="text-sm font-black text-gray-950">Recent activity</h2>
+                  <p className="mt-0.5 text-xs text-gray-400">Latest rewards updates.</p>
                 </div>
 
-                <div className="divide-y divide-gray-50 px-4">
-                  {transactions.map((transaction) => (
+                <Link
+                  to="/account/orders"
+                  className="text-xs font-black text-gray-700 hover:text-gray-950"
+                >
+                  Orders
+                </Link>
+              </div>
+
+              {transactions.length > 0 ? (
+                <div className="divide-y divide-gray-50 px-4 sm:px-5">
+                  {transactions.slice(0, 6).map((transaction) => (
                     <TransactionRow key={transaction.id} tx={transaction} />
                   ))}
                 </div>
+              ) : (
+                <div className="px-4 py-8 text-center sm:px-5">
+                  <p className="text-sm font-semibold text-gray-500">No rewards activity yet.</p>
 
-                <div className="border-t border-gray-100 px-4 py-3 text-right">
-                  <Link
-                    to="/account/orders"
-                    className="text-xs font-semibold text-gray-700 hover:text-gray-900"
-                  >
-                    View orders →
-                  </Link>
-                </div>
-              </div>
-            ) : (
-              <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-5 text-center">
-                <p className="text-sm text-gray-500">No activity yet.</p>
-                <div className="mt-3">
                   <Link
                     to="/menu"
-                    className="inline-flex items-center justify-center rounded-xl bg-gray-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-black"
+                    className="mt-3 inline-flex items-center justify-center rounded-xl bg-gray-950 px-4 py-2 text-xs font-black text-white transition hover:bg-black"
                   >
                     Order now
                   </Link>
                 </div>
-              </div>
-            )}
+              )}
+            </AccountCard>
+          </div>
 
-            <details className="group rounded-xl border border-gray-100 bg-white">
-              <summary className="flex cursor-pointer select-none items-center justify-between px-4 py-3 text-sm font-medium text-gray-700">
+          <aside className="min-w-0 space-y-4 lg:sticky lg:top-20">
+            <AccountCard className="px-4 py-4 sm:px-5">
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-400">
+                Quick actions
+              </p>
+
+              <div className="mt-3 grid gap-2">
+                <Link
+                  to="/menu"
+                  className="flex items-center justify-between rounded-2xl border border-gray-100 bg-gray-50 px-4 py-3 text-sm font-black text-gray-900 transition hover:bg-gray-100"
+                >
+                  Order again
+                  <span aria-hidden="true">›</span>
+                </Link>
+
+                <Link
+                  to="/account/orders"
+                  className="flex items-center justify-between rounded-2xl border border-gray-100 bg-gray-50 px-4 py-3 text-sm font-black text-gray-900 transition hover:bg-gray-100"
+                >
+                  View orders
+                  <span aria-hidden="true">›</span>
+                </Link>
+              </div>
+            </AccountCard>
+
+            <details className="group rounded-3xl border border-gray-100 bg-white shadow-sm">
+              <summary className="flex cursor-pointer select-none items-center justify-between px-4 py-4 text-sm font-black text-gray-900 sm:px-5">
                 <span>How points work</span>
-                <span className="text-gray-400 transition-transform group-open:rotate-180">▾</span>
+                <span className="text-gray-400 transition-transform group-open:rotate-180">⌄</span>
               </summary>
-              <div className="space-y-2 border-t border-gray-100 px-4 py-3 text-xs text-gray-500">
+
+              <div className="space-y-3 border-t border-gray-100 px-4 py-4 text-sm leading-6 text-gray-500 sm:px-5">
                 <p>
-                  <span className="font-semibold text-gray-700">Base rate</span> — 1 point per $1
-                  spent
+                  <span className="font-black text-gray-800">Base rate:</span> 1 point per $1 spent.
                 </p>
+
                 <p>
-                  <span className="font-semibold text-gray-700">Tier multipliers</span> —{' '}
+                  <span className="font-black text-gray-800">Tier boost:</span>{' '}
                   {TIER_ORDER.map(
                     (tierKey) =>
-                      `${LOYALTY_TIERS[tierKey].label} ${LOYALTY_TIERS[tierKey].multiplier}×`,
+                      `${LOYALTY_TIERS[tierKey].label} ${LOYALTY_TIERS[tierKey].multiplier}x`,
                   ).join(' · ')}
                 </p>
+
                 {nextTierConfig ? (
                   <p>
-                    <span className="font-semibold text-gray-700">Next tier</span> —{' '}
+                    <span className="font-black text-gray-800">Next tier:</span>{' '}
                     {nextTierConfig.icon} {nextTierConfig.label}
                   </p>
                 ) : (
                   <p>
-                    <span className="font-semibold text-gray-700">Status</span> — You are at the top
-                    tier.
+                    <span className="font-black text-gray-800">Status:</span> You are at the top
+                    rewards tier.
                   </p>
                 )}
               </div>
             </details>
-          </div>
-        ) : null}
-      </div>
+          </aside>
+        </div>
+      ) : null}
     </div>
   );
 }
