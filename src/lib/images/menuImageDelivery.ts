@@ -17,7 +17,13 @@
 // =============================================================================
 
 import { env } from '@/lib/config/env';
-import { supabaseImageSrcSet, supabaseImageUrl } from '@/lib/images/supabaseImage';
+import {
+  isSupabaseStorageUrl,
+  supabaseImageSrcSet,
+  supabaseImageUrl,
+} from '@/lib/images/supabaseImage';
+
+export { isSupabaseStorageUrl };
 
 // ─── Feature flags ────────────────────────────────────────────────────────────
 
@@ -55,7 +61,27 @@ export type MenuCardImageAttrs = {
 
 export type FeaturedImageAttrs = MenuCardImageAttrs;
 
+/** Props safe to spread onto <img> — srcSet omitted unless optimized. */
+export type MenuImgElementAttrs = Omit<MenuCardImageAttrs, 'srcSet'> & { srcSet?: string };
+
 export type MenuImageDeliveryMode = 'optimized' | 'direct';
+
+/** Delivery stage for MenuFoodImage state machine. */
+export type MenuImageDeliveryStage = MenuImageDeliveryMode | 'unavailable';
+
+/**
+ * Priority / LCP images use direct Supabase public URLs first (wsrv.nl is best-effort).
+ * Non-priority images try wsrv optimization first, then fall back to direct.
+ */
+export function getInitialMenuImageDeliveryStage(options: {
+  priority: boolean;
+  skipOptimized?: boolean;
+}): MenuImageDeliveryMode {
+  if (options.priority || options.skipOptimized) {
+    return 'direct';
+  }
+  return 'optimized';
+}
 
 // ─── Menu card layout sizes ───────────────────────────────────────────────────
 
@@ -414,6 +440,7 @@ function buildAttrs(
     };
   }
 
+  // Direct mode: plain Supabase public (or other) URL — never attach wsrv/transform srcSet.
   return {
     src: url,
     srcSet: undefined,
@@ -425,6 +452,12 @@ function buildAttrs(
     decoding: 'async',
     referrerPolicy: 'no-referrer',
   };
+}
+
+/** Strip srcSet when absent so direct fallback never forwards wsrv candidates. */
+export function toImgElementAttrs(attrs: MenuCardImageAttrs): MenuImgElementAttrs {
+  const { srcSet, ...rest } = attrs;
+  return srcSet ? { ...rest, srcSet } : rest;
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
