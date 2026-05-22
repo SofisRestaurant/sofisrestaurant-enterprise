@@ -64,22 +64,14 @@ export type FeaturedImageAttrs = MenuCardImageAttrs;
 /** Props safe to spread onto <img> — srcSet omitted unless optimized. */
 export type MenuImgElementAttrs = Omit<MenuCardImageAttrs, 'srcSet'> & { srcSet?: string };
 
-export type MenuImageDeliveryMode = 'optimized' | 'direct';
+/** optimized = sized wsrv; direct = sized fallback (transform or wsrv n=fb); raw = public object URL. */
+export type MenuImageDeliveryMode = 'optimized' | 'direct' | 'raw';
 
 /** Delivery stage for MenuFoodImage state machine. */
 export type MenuImageDeliveryStage = MenuImageDeliveryMode | 'unavailable';
 
-/**
- * Priority / LCP images use direct Supabase public URLs first (wsrv.nl is best-effort).
- * Non-priority images try wsrv optimization first, then fall back to direct.
- */
-export function getInitialMenuImageDeliveryStage(options: {
-  priority: boolean;
-  skipOptimized?: boolean;
-}): MenuImageDeliveryMode {
-  if (options.priority || options.skipOptimized) {
-    return 'direct';
-  }
+/** Every image starts on sized wsrv (reliable dimensions, no full-original download). */
+export function getInitialMenuImageDeliveryStage(): MenuImageDeliveryMode {
   return 'optimized';
 }
 
@@ -333,12 +325,15 @@ function buildProxyUrl({
   height,
   quality,
   fit = 'cover',
+  cacheKey = 'primary',
 }: {
   rawUrl: string;
   width: number;
   height: number;
   quality: number;
   fit?: 'cover' | 'contain' | 'inside';
+  /** Partition browser cache: primary vs fallback (deterministic, not random). */
+  cacheKey?: 'primary' | 'fb';
 }): string {
   const source = unwrapProxyUrl(rawUrl);
 
@@ -349,7 +344,7 @@ function buildProxyUrl({
     fit,
     output: 'webp',
     q: String(quality),
-    n: '-1',
+    n: cacheKey === 'fb' ? 'fb' : '-1',
   });
 
   return `${PROXY_BASE}?${params.toString()}`;
@@ -371,6 +366,30 @@ function buildProxySrcSet(
       return `${src} ${w}w`;
     })
     .join(', ');
+}
+
+/** Sized fallback when optimized wsrv fails — never the multi-MB original. */
+function buildSizedFallbackSrc(
+  url: string,
+  width: number,
+  height: number,
+  quality: number,
+): string {
+  if (ENABLE_SUPABASE_TRANSFORMS && isSupabaseStorageUrl(url)) {
+    return supabaseImageUrl(url, width, quality);
+  }
+
+  if (USE_IMAGE_PROXY) {
+    return buildProxyUrl({
+      rawUrl: url,
+      width,
+      height,
+      quality,
+      cacheKey: 'fb',
+    });
+  }
+
+  return url;
 }
 
 function buildCardProxySrcSet(rawUrl: string): string {
@@ -397,16 +416,18 @@ function buildAttrs(
     sizes: string;
     srcSet?: readonly { w: number; h: number; q: number }[];
     cardSrcSet?: boolean;
+    /** Menu cards/rail: single sized src avoids stale failed srcSet cache on reload. */
+    allowSrcSet?: boolean;
   },
   options: { isAboveFold: boolean; mode: MenuImageDeliveryMode },
 ): MenuCardImageAttrs {
   const { isAboveFold, mode } = options;
-  const useOptimized = mode === 'optimized';
+  const allowSrcSet = config.allowSrcSet ?? false;
 
-  if (useOptimized && ENABLE_SUPABASE_TRANSFORMS) {
+  if (mode === 'raw') {
     return {
-      src: supabaseImageUrl(url, config.width, config.quality),
-      srcSet: supabaseImageSrcSet(url),
+      src: url,
+      srcSet: undefined,
       sizes: config.sizes,
       width: config.width,
       height: config.height,
@@ -417,19 +438,49 @@ function buildAttrs(
     };
   }
 
-  if (useOptimized && USE_IMAGE_PROXY) {
+  if (mode === 'direct') {
+    return {
+      src: buildSizedFallbackSrc(url, config.width, config.height, config.quality),
+      srcSet: undefined,
+      sizes: config.sizes,
+      width: config.width,
+      height: config.height,
+      loading: isAboveFold ? 'eager' : 'lazy',
+      fetchPriority: isAboveFold ? 'high' : 'auto',
+      decoding: 'async',
+      referrerPolicy: 'no-referrer',
+    };
+  }
+
+  if (ENABLE_SUPABASE_TRANSFORMS) {
+    return {
+      src: supabaseImageUrl(url, config.width, config.quality),
+      srcSet: allowSrcSet ? supabaseImageSrcSet(url) : undefined,
+      sizes: config.sizes,
+      width: config.width,
+      height: config.height,
+      loading: isAboveFold ? 'eager' : 'lazy',
+      fetchPriority: isAboveFold ? 'high' : 'auto',
+      decoding: 'async',
+      referrerPolicy: 'no-referrer',
+    };
+  }
+
+  if (USE_IMAGE_PROXY) {
     return {
       src: buildProxyUrl({
         rawUrl: url,
         width: config.width,
         height: config.height,
         quality: config.quality,
+        cacheKey: 'primary',
       }),
-      srcSet: config.srcSet
-        ? buildProxySrcSet(url, config.srcSet)
-        : config.cardSrcSet
-          ? buildCardProxySrcSet(url)
-          : undefined,
+      srcSet:
+        allowSrcSet && config.srcSet
+          ? buildProxySrcSet(url, config.srcSet)
+          : allowSrcSet && config.cardSrcSet
+            ? buildCardProxySrcSet(url)
+            : undefined,
       sizes: config.sizes,
       width: config.width,
       height: config.height,
@@ -440,7 +491,6 @@ function buildAttrs(
     };
   }
 
-  // Direct mode: plain Supabase public (or other) URL — never attach wsrv/transform srcSet.
   return {
     src: url,
     srcSet: undefined,
@@ -475,16 +525,25 @@ export function getMenuImageSrc(
 
   const mode = options.mode ?? 'optimized';
 
-  if (mode === 'optimized' && ENABLE_SUPABASE_TRANSFORMS) {
+  if (mode === 'raw') {
+    return url;
+  }
+
+  if (mode === 'direct') {
+    return buildSizedFallbackSrc(url, options.width, options.width, options.quality);
+  }
+
+  if (ENABLE_SUPABASE_TRANSFORMS) {
     return supabaseImageUrl(url, options.width, options.quality);
   }
 
-  if (mode === 'optimized' && USE_IMAGE_PROXY) {
+  if (USE_IMAGE_PROXY) {
     return buildProxyUrl({
       rawUrl: url,
       width: options.width,
       height: options.width,
       quality: options.quality,
+      cacheKey: 'primary',
     });
   }
 
@@ -500,11 +559,15 @@ export function getMenuImageSrcSet(
 
   const mode = options.mode ?? 'optimized';
 
-  if (mode === 'optimized' && ENABLE_SUPABASE_TRANSFORMS) {
+  if (mode !== 'optimized') {
+    return undefined;
+  }
+
+  if (ENABLE_SUPABASE_TRANSFORMS) {
     return supabaseImageSrcSet(url);
   }
 
-  if (mode === 'optimized' && USE_IMAGE_PROXY) {
+  if (USE_IMAGE_PROXY) {
     return buildCardProxySrcSet(url);
   }
 
@@ -529,6 +592,7 @@ export function getMenuCardImageAttrs(
       quality: isAboveFold ? CARD_QUALITY_ABOVE : CARD_QUALITY_BELOW,
       sizes: CARD_SIZES,
       cardSrcSet: true,
+      allowSrcSet: false,
     },
     { isAboveFold, mode },
   );
@@ -556,6 +620,7 @@ export function getFeaturedImageAttrs(
       quality: config.quality,
       sizes: config.sizes,
       srcSet: config.srcSet,
+      allowSrcSet: options.variant === 'hero',
     },
     { isAboveFold: options.isAboveFold, mode },
   );
@@ -582,6 +647,7 @@ export function getModalImageAttrs(
         { w: 720, h: 450, q: 76 },
         { w: 960, h: 600, q: 78 },
       ],
+      allowSrcSet: false,
     },
     { isAboveFold: true, mode },
   );

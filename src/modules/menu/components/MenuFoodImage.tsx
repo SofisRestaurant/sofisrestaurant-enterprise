@@ -2,12 +2,13 @@
 // Shared menu food image — reliable delivery, branded fallback, subtle motion.
 // =============================================================================
 //
-// Delivery state machine (per resolved image URL):
-//   1. optimized — wsrv.nl proxy (non-priority only)
-//   2. direct    — Supabase public object URL, no srcSet
-//   3. unavailable — branded gradient (missing/invalid only)
+// Candidate chain (per resolved image URL):
+//   1. optimized — single sized wsrv URL (no srcSet on menu cards/rail)
+//   2. direct    — sized fallback (Supabase transform or wsrv n=fb), no srcSet
+//   3. raw       — public object URL (last resort for reload reliability)
+//   4. unavailable — branded gradient (missing/invalid only)
 //
-// Priority/LCP: starts at direct (most reliable). Non-priority: optimized → direct.
+// Priority/LCP: still eager + fetchPriority high; uses sized wsrv, not full original.
 // =============================================================================
 
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
@@ -17,12 +18,12 @@ import {
   getInitialMenuImageDeliveryStage,
   getMenuCardImageAttrs,
   getModalImageAttrs,
+  isSupabaseStorageUrl,
   pickMenuImageFallbackGradient,
   pickMenuImageUrlFromRecord,
   resolveMenuImageUrl,
   toImgElementAttrs,
   type FeaturedImageVariant,
-  type MenuImageDeliveryMode,
   type MenuImageDeliveryStage,
 } from '@/lib/images/menuImageDelivery';
 import { cx } from '@/modules/menu/utils/uiHelpers';
@@ -37,17 +38,13 @@ export type MenuFoodImageProps = {
   variant: MenuFoodImageVariant;
   /** @deprecated Prefer `priority` — kept for FeaturedMenu hero wiring. */
   isAboveFold?: boolean;
-  /** LCP / above-the-fold candidate: eager + fetchPriority high, direct URL first. */
+  /** LCP candidate: eager + fetchPriority high + sized wsrv (not full original). */
   priority?: boolean;
   className?: string;
   imageClassName?: string;
-  /** Decorative thumbnail on cards — use item name in parent aria-label. */
   decorative?: boolean;
   enableHoverScale?: boolean;
 };
-
-/** In-memory: skip wsrv for URLs that already failed this session (reload-safe). */
-const wsrvFailedSourceUrls = new Set<string>();
 
 function prefersReducedMotion(): boolean {
   try {
@@ -57,16 +54,8 @@ function prefersReducedMotion(): boolean {
   }
 }
 
-function resolveInitialStage(
-  isPriority: boolean,
-  resolvedUrl: string | null,
-): MenuImageDeliveryStage {
-  if (!resolvedUrl) return 'unavailable';
-
-  const skipOptimized = wsrvFailedSourceUrls.has(resolvedUrl);
-  const mode = getInitialMenuImageDeliveryStage({ priority: isPriority, skipOptimized });
-
-  return mode;
+function imageIdentity(resolvedUrl: string | null, itemId: string): string {
+  return `${itemId}::${resolvedUrl ?? ''}`;
 }
 
 function MenuFoodImageInner({
@@ -92,35 +81,34 @@ function MenuFoodImageInner({
     return resolveMenuImageUrl(rawUrl);
   }, [record, rawUrl]);
 
+  const identity = imageIdentity(resolvedUrl, itemId);
+
   const [stage, setStage] = useState<MenuImageDeliveryStage>(() =>
-    resolveInitialStage(isPriority, resolvedUrl),
+    resolvedUrl ? getInitialMenuImageDeliveryStage() : 'unavailable',
   );
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    setStage(resolveInitialStage(isPriority, resolvedUrl));
+    setStage(resolvedUrl ? getInitialMenuImageDeliveryStage() : 'unavailable');
     setLoaded(false);
-  }, [resolvedUrl, isPriority]);
-
-  const deliveryMode: MenuImageDeliveryMode =
-    stage === 'optimized' ? 'optimized' : 'direct';
+  }, [identity, resolvedUrl, isPriority]);
 
   const imageAttrs = useMemo(() => {
     if (!resolvedUrl || stage === 'unavailable') return null;
 
     const attrs =
       variant === 'card'
-        ? getMenuCardImageAttrs(resolvedUrl, { isAboveFold: isPriority, mode: deliveryMode })
+        ? getMenuCardImageAttrs(resolvedUrl, { isAboveFold: isPriority, mode: stage })
         : variant === 'modal'
-          ? getModalImageAttrs(resolvedUrl, { mode: deliveryMode })
+          ? getModalImageAttrs(resolvedUrl, { mode: stage })
           : getFeaturedImageAttrs(resolvedUrl, {
               variant,
               isAboveFold: isPriority,
-              mode: deliveryMode,
+              mode: stage,
             });
 
     return attrs ? toImgElementAttrs(attrs) : null;
-  }, [resolvedUrl, stage, variant, isPriority, deliveryMode]);
+  }, [resolvedUrl, stage, variant, isPriority]);
 
   const handleLoad = useCallback(() => {
     setLoaded(true);
@@ -131,10 +119,11 @@ function MenuFoodImageInner({
 
     setStage((current) => {
       if (current === 'optimized') {
-        if (resolvedUrl) {
-          wsrvFailedSourceUrls.add(resolvedUrl);
-        }
         return 'direct';
+      }
+
+      if (current === 'direct' && resolvedUrl && isSupabaseStorageUrl(resolvedUrl)) {
+        return 'raw';
       }
 
       return 'unavailable';
@@ -190,7 +179,7 @@ function MenuFoodImageInner({
       )}
 
       <img
-        key={`${stage}:${imgRest.src}`}
+        key={`${identity}:${stage}:${imgRest.src}`}
         {...imgRest}
         {...(srcSet ? { srcSet } : {})}
         alt={decorative ? '' : name}

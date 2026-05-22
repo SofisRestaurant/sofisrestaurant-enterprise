@@ -376,7 +376,6 @@ export function CategoryTabs({
                       type="button"
                       role="tab"
                       aria-selected={active}
-                      aria-pressed={active}
                       aria-label={`Show ${label}`}
                       onClick={() => onSelectCategory(value)}
                       initial={{ opacity: 0, y: 8 }}
