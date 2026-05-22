@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MutableRefObject,
   type ReactNode,
 } from 'react';
 import { useLocation } from 'react-router-dom';
@@ -16,8 +17,6 @@ import { useLocation } from 'react-router-dom';
 import { ModalContext } from '@/components/ui/ModalContext';
 import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
 import { useMenuUi } from '@/modules/menu/store/menuUi.store';
-
-// Types
 
 export type BottomDockTabId = 'home' | 'menu' | 'cart' | 'deals' | 'account';
 export type DockPhase = 'visible' | 'collapsed' | 'hidden';
@@ -33,8 +32,6 @@ export type BottomDockContextValue = {
   isDockInteractive: boolean;
   activeTab: BottomDockTabId | null;
 };
-
-// Routes
 
 const DOCK_HIDDEN_PREFIXES = [
   '/admin',
@@ -59,8 +56,6 @@ const CART_HIDDEN_PREFIXES = [
 
 const CART_HIDDEN_EXACT = ['/auth/callback'] as const;
 
-// Scroll tuning
-
 const MOBILE_MAX_WIDTH_PX = 767;
 const TOP_LOCK_PX = 88;
 const SCROLL_NOISE_PX = 4;
@@ -71,10 +66,7 @@ const MIN_VISIBLE_MS = 180;
 const SCROLL_SETTLE_MS = 180;
 const POINTER_LOCK_MS = 220;
 const ORIENTATION_SETTLE_MS = 180;
-const ROUTE_SETTLE_FRAMES = 2;
 const KEYBOARD_THRESHOLD_PX = 140;
-
-// Helpers
 
 function matchesPrefix(pathname: string, prefixes: readonly string[]): boolean {
   return prefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
@@ -103,14 +95,14 @@ function getScrollY(): number {
   return Math.max(window.scrollY || window.pageYOffset || 0, 0);
 }
 
-function prefersReducedMotion(): boolean {
-  if (typeof window === 'undefined' || !window.matchMedia) return false;
-  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-}
-
 function readIsMobile(): boolean {
   if (typeof window === 'undefined' || !window.matchMedia) return false;
   return window.matchMedia(`(max-width: ${MOBILE_MAX_WIDTH_PX}px)`).matches;
+}
+
+function readReducedMotion(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 function readKeyboardLikelyOpen(): boolean {
@@ -122,7 +114,7 @@ function readKeyboardLikelyOpen(): boolean {
   return window.innerHeight - viewport.height > KEYBOARD_THRESHOLD_PX;
 }
 
-function clearWindowTimer(timerRef: React.MutableRefObject<number | null>): void {
+function clearTimer(timerRef: MutableRefObject<number | null>): void {
   if (typeof window === 'undefined') return;
 
   if (timerRef.current !== null) {
@@ -131,7 +123,7 @@ function clearWindowTimer(timerRef: React.MutableRefObject<number | null>): void
   }
 }
 
-function cancelWindowFrame(frameRef: React.MutableRefObject<number | null>): void {
+function cancelFrame(frameRef: MutableRefObject<number | null>): void {
   if (typeof window === 'undefined') return;
 
   if (frameRef.current !== null) {
@@ -139,8 +131,6 @@ function cancelWindowFrame(frameRef: React.MutableRefObject<number | null>): voi
     frameRef.current = null;
   }
 }
-
-// Context
 
 const BottomDockContext = createContext<BottomDockContextValue | null>(null);
 
@@ -165,14 +155,14 @@ function useBottomDockController(): BottomDockContextValue {
   const lastShownAtRef = useRef(Date.now());
 
   const tickingRef = useRef(false);
+  const focusWithinDockRef = useRef(false);
+  const pointerWithinDockRef = useRef(false);
+
   const settleTimerRef = useRef<number | null>(null);
-  const releasePointerTimerRef = useRef<number | null>(null);
+  const pointerTimerRef = useRef<number | null>(null);
   const orientationTimerRef = useRef<number | null>(null);
   const routeFrameOneRef = useRef<number | null>(null);
   const routeFrameTwoRef = useRef<number | null>(null);
-
-  const focusWithinDockRef = useRef(false);
-  const pointerWithinDockRef = useRef(false);
 
   const routeHidesDock = useMemo(() => isDockHiddenRoute(pathname), [pathname]);
   const routeHidesCart = useMemo(() => isCartHiddenRoute(pathname), [pathname]);
@@ -181,10 +171,10 @@ function useBottomDockController(): BottomDockContextValue {
   const cartCount = Math.max(0, Math.round(Number.isFinite(itemCount) ? itemCount : 0));
   const globalModalOpen = Boolean(modalContext?.activeModal);
 
+  const dockPhase: DockPhase = !isMobile || routeHidesDock ? 'hidden' : scrollPhase;
+
   const overlaySuppressesCart =
     cartDrawerOpen || menuItemModalOpen || globalModalOpen || isKeyboardLikelyOpen;
-
-  const dockPhase: DockPhase = !isMobile || routeHidesDock ? 'hidden' : scrollPhase;
 
   const shouldHideFloatingCart =
     !isMobile ||
@@ -197,31 +187,31 @@ function useBottomDockController(): BottomDockContextValue {
   const shouldShowFloatingCart = !shouldHideFloatingCart;
   const isDockInteractive = dockPhase !== 'hidden' && !cartDrawerOpen && !isKeyboardLikelyOpen;
 
-  const resetScrollIntent = useCallback(() => {
+  const resetIntent = useCallback(() => {
     downDistanceRef.current = 0;
     upDistanceRef.current = 0;
   }, []);
 
-  const setScrollPhaseSafely = useCallback((next: 'visible' | 'collapsed') => {
+  const setPhase = useCallback((next: 'visible' | 'collapsed') => {
     if (scrollPhaseRef.current === next) return;
 
     scrollPhaseRef.current = next;
     setScrollPhase(next);
   }, []);
 
-  const clearMotionTimers = useCallback(() => {
-    clearWindowTimer(settleTimerRef);
-    clearWindowTimer(releasePointerTimerRef);
-    clearWindowTimer(orientationTimerRef);
-    cancelWindowFrame(routeFrameOneRef);
-    cancelWindowFrame(routeFrameTwoRef);
+  const clearAsyncWork = useCallback(() => {
+    clearTimer(settleTimerRef);
+    clearTimer(pointerTimerRef);
+    clearTimer(orientationTimerRef);
+    cancelFrame(routeFrameOneRef);
+    cancelFrame(routeFrameTwoRef);
   }, []);
 
-  const syncLastScrollPositionAfterPaint = useCallback(() => {
+  const syncScrollYAfterPaint = useCallback(() => {
     if (typeof window === 'undefined') return;
 
-    cancelWindowFrame(routeFrameOneRef);
-    cancelWindowFrame(routeFrameTwoRef);
+    cancelFrame(routeFrameOneRef);
+    cancelFrame(routeFrameTwoRef);
 
     routeFrameOneRef.current = window.requestAnimationFrame(() => {
       routeFrameOneRef.current = null;
@@ -230,15 +220,15 @@ function useBottomDockController(): BottomDockContextValue {
         routeFrameTwoRef.current = null;
         lastYRef.current = getScrollY();
         tickingRef.current = false;
-        resetScrollIntent();
+        resetIntent();
       });
     });
-  }, [resetScrollIntent]);
+  }, [resetIntent]);
 
   const revealDock = useCallback(
     (currentY = getScrollY()) => {
-      setScrollPhaseSafely('visible');
-      resetScrollIntent();
+      setPhase('visible');
+      resetIntent();
 
       lastShownAtRef.current = Date.now();
       lastYRef.current = currentY;
@@ -246,26 +236,26 @@ function useBottomDockController(): BottomDockContextValue {
       setIsScrollingDown(false);
       setIsScrollingUp(false);
     },
-    [resetScrollIntent, setScrollPhaseSafely],
+    [resetIntent, setPhase],
   );
 
   const collapseDock = useCallback(
     (currentY = getScrollY()) => {
       if (focusWithinDockRef.current || pointerWithinDockRef.current) return;
 
-      setScrollPhaseSafely('collapsed');
-      resetScrollIntent();
+      setPhase('collapsed');
+      resetIntent();
 
       lastYRef.current = currentY;
 
       setIsScrollingDown(true);
       setIsScrollingUp(false);
     },
-    [resetScrollIntent, setScrollPhaseSafely],
+    [resetIntent, setPhase],
   );
 
-  const resetDockForCurrentRoute = useCallback(() => {
-    clearMotionTimers();
+  const resetDockForRoute = useCallback(() => {
+    clearAsyncWork();
 
     tickingRef.current = false;
     focusWithinDockRef.current = false;
@@ -274,7 +264,7 @@ function useBottomDockController(): BottomDockContextValue {
     scrollPhaseRef.current = 'visible';
     setScrollPhase('visible');
 
-    resetScrollIntent();
+    resetIntent();
 
     lastShownAtRef.current = Date.now();
 
@@ -282,40 +272,42 @@ function useBottomDockController(): BottomDockContextValue {
     setIsScrollingUp(false);
     setIsKeyboardLikelyOpen(readKeyboardLikelyOpen());
 
-    syncLastScrollPositionAfterPaint();
-  }, [clearMotionTimers, resetScrollIntent, syncLastScrollPositionAfterPaint]);
+    syncScrollYAfterPaint();
+  }, [clearAsyncWork, resetIntent, syncScrollYAfterPaint]);
 
   useEffect(() => {
-    resetDockForCurrentRoute();
+    resetDockForRoute();
 
     return () => {
-      cancelWindowFrame(routeFrameOneRef);
-      cancelWindowFrame(routeFrameTwoRef);
+      cancelFrame(routeFrameOneRef);
+      cancelFrame(routeFrameTwoRef);
     };
-  }, [pathname, routeHidesDock, isMobile, resetDockForCurrentRoute]);
+  }, [pathname, isMobile, routeHidesDock, resetDockForRoute]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.matchMedia) return undefined;
 
     const media = window.matchMedia(`(max-width: ${MOBILE_MAX_WIDTH_PX}px)`);
 
-    const onChange = () => {
+    const sync = () => {
       setIsMobile(media.matches);
-      syncLastScrollPositionAfterPaint();
+      syncScrollYAfterPaint();
     };
 
-    onChange();
-    media.addEventListener('change', onChange);
+    sync();
+    media.addEventListener('change', sync);
 
-    return () => media.removeEventListener('change', onChange);
-  }, [syncLastScrollPositionAfterPaint]);
+    return () => {
+      media.removeEventListener('change', sync);
+    };
+  }, [syncScrollYAfterPaint]);
 
   useEffect(() => {
     if (!isMobile || typeof window === 'undefined') return undefined;
 
     const viewport = window.visualViewport;
 
-    const sync = () => {
+    const syncKeyboard = () => {
       const keyboardOpen = readKeyboardLikelyOpen();
 
       setIsKeyboardLikelyOpen(keyboardOpen);
@@ -325,48 +317,42 @@ function useBottomDockController(): BottomDockContextValue {
       }
     };
 
-    sync();
+    syncKeyboard();
 
-    viewport?.addEventListener('resize', sync);
-    viewport?.addEventListener('scroll', sync);
-    window.addEventListener('resize', sync);
+    viewport?.addEventListener('resize', syncKeyboard);
+    viewport?.addEventListener('scroll', syncKeyboard);
+    window.addEventListener('resize', syncKeyboard);
 
     return () => {
-      viewport?.removeEventListener('resize', sync);
-      viewport?.removeEventListener('scroll', sync);
-      window.removeEventListener('resize', sync);
+      viewport?.removeEventListener('resize', syncKeyboard);
+      viewport?.removeEventListener('scroll', syncKeyboard);
+      window.removeEventListener('resize', syncKeyboard);
     };
   }, [isMobile, pathname, revealDock]);
 
   useEffect(() => {
     if (!isMobile || routeHidesDock || typeof window === 'undefined') return undefined;
 
-    const reducedMotion = prefersReducedMotion();
+    const reducedMotion = readReducedMotion();
 
-    function scheduleSettle() {
-      clearWindowTimer(settleTimerRef);
+    const settle = () => {
+      clearTimer(settleTimerRef);
 
       settleTimerRef.current = window.setTimeout(() => {
         setIsScrollingDown(false);
         setIsScrollingUp(false);
         settleTimerRef.current = null;
       }, SCROLL_SETTLE_MS);
-    }
+    };
 
-    function updateDockState() {
+    const updateFromScroll = () => {
       tickingRef.current = false;
 
       const currentY = getScrollY();
 
-      if (reducedMotion) {
+      if (reducedMotion || isKeyboardLikelyOpen) {
         revealDock(currentY);
-        scheduleSettle();
-        return;
-      }
-
-      if (isKeyboardLikelyOpen) {
-        revealDock(currentY);
-        scheduleSettle();
+        settle();
         return;
       }
 
@@ -376,19 +362,19 @@ function useBottomDockController(): BottomDockContextValue {
 
       if (currentY < TOP_LOCK_PX) {
         revealDock(currentY);
-        scheduleSettle();
+        settle();
         return;
       }
 
       if (absDelta < SCROLL_NOISE_PX) {
-        scheduleSettle();
+        settle();
         return;
       }
 
       if (absDelta > MAX_SINGLE_DELTA_PX) {
         lastYRef.current = currentY;
-        resetScrollIntent();
-        scheduleSettle();
+        resetIntent();
+        settle();
         return;
       }
 
@@ -399,12 +385,12 @@ function useBottomDockController(): BottomDockContextValue {
         setIsScrollingDown(true);
         setIsScrollingUp(false);
 
-        const visibleLongEnough = Date.now() - lastShownAtRef.current >= MIN_VISIBLE_MS;
-        const hasDownIntent = downDistanceRef.current >= DOWN_SCROLL_INTENT_PX;
+        const canCollapse = Date.now() - lastShownAtRef.current >= MIN_VISIBLE_MS;
+        const hasIntent = downDistanceRef.current >= DOWN_SCROLL_INTENT_PX;
 
-        if (visibleLongEnough && hasDownIntent) {
+        if (canCollapse && hasIntent) {
           collapseDock(currentY);
-          scheduleSettle();
+          settle();
           return;
         }
       }
@@ -418,87 +404,87 @@ function useBottomDockController(): BottomDockContextValue {
 
         if (upDistanceRef.current >= UP_SCROLL_INTENT_PX) {
           revealDock(currentY);
-          scheduleSettle();
+          settle();
           return;
         }
       }
 
       lastYRef.current = currentY;
-      scheduleSettle();
-    }
+      settle();
+    };
 
-    function onScroll() {
+    const onScroll = () => {
       if (tickingRef.current) return;
 
       tickingRef.current = true;
-      window.requestAnimationFrame(updateDockState);
-    }
+      window.requestAnimationFrame(updateFromScroll);
+    };
 
-    function onResize() {
+    const onResize = () => {
       revealDock(getScrollY());
-      syncLastScrollPositionAfterPaint();
-    }
+      syncScrollYAfterPaint();
+    };
 
-    function onOrientationChange() {
-      clearWindowTimer(orientationTimerRef);
+    const onOrientationChange = () => {
+      clearTimer(orientationTimerRef);
 
       orientationTimerRef.current = window.setTimeout(() => {
         revealDock(getScrollY());
-        syncLastScrollPositionAfterPaint();
+        syncScrollYAfterPaint();
         orientationTimerRef.current = null;
       }, ORIENTATION_SETTLE_MS);
-    }
+    };
 
-    function onVisibilityChange() {
-      if (document.visibilityState === 'visible') {
-        revealDock(getScrollY());
-        syncLastScrollPositionAfterPaint();
-      }
-    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
 
-    function onFocusIn(event: FocusEvent) {
+      revealDock(getScrollY());
+      syncScrollYAfterPaint();
+    };
+
+    const onFocusIn = (event: FocusEvent) => {
       const target = event.target as HTMLElement | null;
 
-      if (target?.closest?.('[data-mobile-dock="true"]')) {
-        focusWithinDockRef.current = true;
-        revealDock(getScrollY());
-      }
-    }
+      if (!target?.closest?.('[data-mobile-dock="true"]')) return;
 
-    function onFocusOut(event: FocusEvent) {
+      focusWithinDockRef.current = true;
+      revealDock(getScrollY());
+    };
+
+    const onFocusOut = (event: FocusEvent) => {
       const related = event.relatedTarget as HTMLElement | null;
 
-      if (!related?.closest?.('[data-mobile-dock="true"]')) {
-        focusWithinDockRef.current = false;
-      }
-    }
+      if (related?.closest?.('[data-mobile-dock="true"]')) return;
 
-    function onPointerDown(event: PointerEvent) {
+      focusWithinDockRef.current = false;
+    };
+
+    const onPointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null;
 
-      if (target?.closest?.('[data-mobile-dock="true"]')) {
-        pointerWithinDockRef.current = true;
-        revealDock(getScrollY());
-      }
-    }
+      if (!target?.closest?.('[data-mobile-dock="true"]')) return;
 
-    function releasePointerLock() {
-      clearWindowTimer(releasePointerTimerRef);
+      pointerWithinDockRef.current = true;
+      revealDock(getScrollY());
+    };
 
-      releasePointerTimerRef.current = window.setTimeout(() => {
+    const releasePointer = () => {
+      clearTimer(pointerTimerRef);
+
+      pointerTimerRef.current = window.setTimeout(() => {
         pointerWithinDockRef.current = false;
-        releasePointerTimerRef.current = null;
+        pointerTimerRef.current = null;
       }, POINTER_LOCK_MS);
-    }
+    };
 
-    syncLastScrollPositionAfterPaint();
+    syncScrollYAfterPaint();
 
     window.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('resize', onResize);
     window.addEventListener('orientationchange', onOrientationChange);
     window.addEventListener('pointerdown', onPointerDown, { passive: true });
-    window.addEventListener('pointerup', releasePointerLock, { passive: true });
-    window.addEventListener('pointercancel', releasePointerLock, { passive: true });
+    window.addEventListener('pointerup', releasePointer, { passive: true });
+    window.addEventListener('pointercancel', releasePointer, { passive: true });
     document.addEventListener('visibilitychange', onVisibilityChange);
     document.addEventListener('focusin', onFocusIn);
     document.addEventListener('focusout', onFocusOut);
@@ -508,25 +494,26 @@ function useBottomDockController(): BottomDockContextValue {
       window.removeEventListener('resize', onResize);
       window.removeEventListener('orientationchange', onOrientationChange);
       window.removeEventListener('pointerdown', onPointerDown);
-      window.removeEventListener('pointerup', releasePointerLock);
-      window.removeEventListener('pointercancel', releasePointerLock);
+      window.removeEventListener('pointerup', releasePointer);
+      window.removeEventListener('pointercancel', releasePointer);
       document.removeEventListener('visibilitychange', onVisibilityChange);
       document.removeEventListener('focusin', onFocusIn);
       document.removeEventListener('focusout', onFocusOut);
 
-      clearWindowTimer(settleTimerRef);
-      clearWindowTimer(releasePointerTimerRef);
-      clearWindowTimer(orientationTimerRef);
+      clearTimer(settleTimerRef);
+      clearTimer(pointerTimerRef);
+      clearTimer(orientationTimerRef);
+
       tickingRef.current = false;
     };
   }, [
     collapseDock,
     isKeyboardLikelyOpen,
     isMobile,
-    resetScrollIntent,
+    resetIntent,
     revealDock,
     routeHidesDock,
-    syncLastScrollPositionAfterPaint,
+    syncScrollYAfterPaint,
   ]);
 
   useEffect(() => {
@@ -546,16 +533,13 @@ function useBottomDockController(): BottomDockContextValue {
       };
     }
 
-    const translateY =
-      dockPhase === 'collapsed' ? 'var(--mobile-bottom-dock-collapse-y)' : '0px';
-
-    const pagePadding =
-      dockPhase === 'collapsed'
-        ? 'var(--mobile-page-bottom-padding-collapsed)'
-        : 'var(--mobile-page-bottom-padding-expanded)';
+    const translateY = dockPhase === 'collapsed' ? 'var(--mobile-bottom-dock-collapse-y)' : '0px';
 
     root.style.setProperty('--mobile-dock-translate-y', translateY);
-    root.style.setProperty('--mobile-page-bottom-padding', pagePadding);
+    root.style.setProperty(
+      '--mobile-page-bottom-padding',
+      'var(--mobile-page-bottom-padding-expanded)',
+    );
     root.dataset.mobileDock = dockPhase;
 
     return () => {
@@ -565,17 +549,32 @@ function useBottomDockController(): BottomDockContextValue {
     };
   }, [dockPhase]);
 
-  return {
-    isMobile,
-    dockPhase,
-    isScrollingDown,
-    isScrollingUp,
-    isKeyboardLikelyOpen,
-    shouldShowFloatingCart,
-    shouldHideFloatingCart,
-    isDockInteractive,
-    activeTab,
-  };
+  const value = useMemo<BottomDockContextValue>(
+    () => ({
+      isMobile,
+      dockPhase,
+      isScrollingDown,
+      isScrollingUp,
+      isKeyboardLikelyOpen,
+      shouldShowFloatingCart,
+      shouldHideFloatingCart,
+      isDockInteractive,
+      activeTab,
+    }),
+    [
+      activeTab,
+      dockPhase,
+      isDockInteractive,
+      isKeyboardLikelyOpen,
+      isMobile,
+      isScrollingDown,
+      isScrollingUp,
+      shouldHideFloatingCart,
+      shouldShowFloatingCart,
+    ],
+  );
+
+  return value;
 }
 
 export function BottomDockProvider({ children }: { children: ReactNode }) {
@@ -596,7 +595,7 @@ export function useBottomDock(): BottomDockContextValue {
 
 /**
  * @deprecated Use useBottomDock instead.
- * Kept for older BottomNav/FloatingCartPill imports while the dock system is migrated.
+ * Kept for older imports while the dock system is migrated.
  */
 export function useBottomDockState(options: { pathname: string; keepVisible?: boolean }) {
   const { pathname } = options;
