@@ -58,95 +58,108 @@ export const MenuItemModalModifierGroup = memo<MenuItemModalModifierGroupProps>(
 
     return (
       <div style={{ animation: MODAL_ANIM.stagger(staggerIndex * 45) }}>
-      <ModalGroupWrapper valid={valid} className="transition-colors duration-150">
-        <button
-          type="button"
-          onClick={onToggle}
-          className={cx(
-            'flex w-full items-start gap-3 px-4 py-4 text-left',
-            'transition-colors hover:bg-(--menu-modal-card-hover)',
-            'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-(--menu-modal-focus-ring)',
-          )}
-          aria-expanded={expanded}
-          aria-controls={`group-${group.id}`}
-        >
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="font-sans text-base font-semibold tracking-[-0.02em] text-ink-900">
-                {safeName}
+        <ModalGroupWrapper valid={valid} className="transition-colors duration-200">
+          <button
+            type="button"
+            onClick={onToggle}
+            className={cx(
+              'flex w-full items-start gap-3 px-4 py-4 text-left',
+              'transition-[background-color,color] duration-200 ease-out',
+              'hover:bg-[rgba(255,255,255,0.52)]',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#c79a3b]/35',
+              'dark:hover:bg-white/[0.06]',
+            )}
+            aria-expanded={expanded}
+            aria-controls={`group-${group.id}`}
+          >
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="font-sans text-base font-semibold leading-snug tracking-[-0.02em] text-[#2f1f18] dark:text-white">
+                  {safeName}
+                </p>
+
+                <MenuItemModalRequiredBadge
+                  variant={group.required || min > 0 ? 'required' : 'optional'}
+                />
+              </div>
+
+              <p className="mt-1.5 text-xs font-medium leading-relaxed text-[#7c6559] dark:text-white/56">
+                {safeDescription || subline}
               </p>
-              <MenuItemModalRequiredBadge
-                variant={group.required || min > 0 ? 'required' : 'optional'}
-              />
+
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <MenuItemModalChoiceProgress
+                  valid={valid}
+                  selectedCount={selectedCount}
+                  max={max}
+                  rangeLabel={rangeLabel}
+                />
+
+                {validationMsg ? (
+                  <span
+                    className="text-[11px] font-semibold text-[#8a3a24] dark:text-[#f4dec0]"
+                    role="alert"
+                  >
+                    {validationMsg}
+                  </span>
+                ) : null}
+              </div>
             </div>
 
-            <p className="mt-1.5 text-xs text-ink-500">
-              {safeDescription || subline}
-            </p>
-
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <MenuItemModalChoiceProgress
-                valid={valid}
-                selectedCount={selectedCount}
-                max={max}
-                rangeLabel={rangeLabel}
-              />
-              {validationMsg ? (
-                <span className="text-[11px] font-semibold text-ember-700" role="alert">
-                  {validationMsg}
+            <div className="flex shrink-0 items-center gap-2 pt-0.5">
+              {selectedCount > 0 && valid ? (
+                <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-[#3f2418]/10 px-2 text-[11px] font-semibold tabular-nums text-[#3f2418] dark:bg-[#f4dec0]/14 dark:text-[#f4dec0]">
+                  {selectedCount}
                 </span>
               ) : null}
+
+              <ChevronDown
+                className={cx(
+                  'h-5 w-5 text-[#8a7468] transition-transform duration-200 dark:text-white/42',
+                  expanded && 'rotate-180 text-[#3f2418] dark:text-[#f4dec0]',
+                )}
+                aria-hidden="true"
+              />
             </div>
-          </div>
+          </button>
 
-          <div className="flex shrink-0 items-center gap-2 pt-0.5">
-            {selectedCount > 0 && valid ? (
-              <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-ember-600/12 px-2 text-[11px] font-bold tabular-nums text-ember-700">
-                {selectedCount}
-              </span>
-            ) : null}
-            <ChevronDown
-              className={cx(
-                'h-5 w-5 text-ink-400 transition-transform duration-200',
-                expanded && 'rotate-180',
-              )}
-              aria-hidden="true"
-            />
-          </div>
-        </button>
+          {expanded ? (
+            <div
+              id={`group-${group.id}`}
+              className="border-t border-[rgba(61,42,32,0.08)] px-3 pb-3 pt-2 dark:border-white/10"
+              style={{ animation: MODAL_ANIM.accordion }}
+            >
+              <div className="space-y-2">
+                {modifiers.length === 0 ? (
+                  <p className="px-1 py-2 text-xs font-medium text-[#8a7468] dark:text-white/50">
+                    No options available
+                  </p>
+                ) : null}
 
-        {expanded ? (
-          <div
-            id={`group-${group.id}`}
-            className="border-t border-(--menu-modal-border) px-3 pb-3 pt-2"
-            style={{ animation: MODAL_ANIM.accordion }}
-          >
-            <div className="space-y-2">
-              {modifiers.length === 0 ? (
-                <p className="px-1 py-2 text-xs text-ink-500">No options available</p>
+                {modifiers.map((m) => {
+                  if (!m?.id) return null;
+
+                  return (
+                    <MenuItemModifierOption
+                      key={m.id}
+                      modifier={m}
+                      isSelected={sels?.some((s) => s?.id === m.id) ?? false}
+                      isBlocked={selectionBlockedIds.has(m.id)}
+                      selectionType={selectionType}
+                      onSelect={() => onSetSelection(group, m)}
+                    />
+                  );
+                })}
+              </div>
+
+              {maxSelectionHint ? (
+                <p className="mt-2 px-1 text-[11px] font-medium leading-relaxed text-[#8a7468] dark:text-white/50">
+                  {maxSelectionHint}
+                </p>
               ) : null}
-
-              {modifiers.map((m) => {
-                if (!m?.id) return null;
-                return (
-                  <MenuItemModifierOption
-                    key={m.id}
-                    modifier={m}
-                    isSelected={sels?.some((s) => s?.id === m.id) ?? false}
-                    isBlocked={selectionBlockedIds.has(m.id)}
-                    selectionType={selectionType}
-                    onSelect={() => onSetSelection(group, m)}
-                  />
-                );
-              })}
             </div>
-
-            {maxSelectionHint ? (
-              <p className="mt-2 px-1 text-[11px] font-medium text-ink-500">{maxSelectionHint}</p>
-            ) : null}
-          </div>
-        ) : null}
-      </ModalGroupWrapper>
+          ) : null}
+        </ModalGroupWrapper>
       </div>
     );
   },

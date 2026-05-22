@@ -1,5 +1,6 @@
 // =============================================================================
 // Sticky add-to-cart bar with quantity stepper and primary CTA.
+// Mobile full-screen item sheet optimized, desktop dialog compatible.
 // =============================================================================
 
 import { memo } from 'react';
@@ -43,7 +44,7 @@ export const MenuItemModalStickyFooter = memo<MenuItemModalStickyFooterProps>(
       <div
         className={cx(
           'shrink-0 border-t border-(--menu-modal-border)',
-          'bg-(--menu-modal-footer-bg) backdrop-blur-xl',
+          'bg-(--menu-modal-footer-bg)',
           'px-4 pt-3 sm:px-5',
         )}
         style={{
@@ -51,7 +52,7 @@ export const MenuItemModalStickyFooter = memo<MenuItemModalStickyFooterProps>(
           paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 14px)',
         }}
       >
-        <div className="flex items-stretch gap-3">
+        <div className="mx-auto flex w-full max-w-xl items-stretch gap-3 sm:max-w-none">
           <div
             className={cx(
               'flex shrink-0 items-center rounded-2xl',
@@ -63,10 +64,11 @@ export const MenuItemModalStickyFooter = memo<MenuItemModalStickyFooterProps>(
               onClick={() => onSetQty((q) => clampInt(q - 1, 1, maxQty))}
               disabled={safeQty <= 1 || preflightLoading}
               className={cx(
-                'flex h-12 w-12 items-center justify-center text-ink-600',
-                'transition-colors hover:text-ink-900 active:scale-95',
+                'flex h-13 w-12 items-center justify-center text-(--menu-modal-muted)',
+                'transition-colors hover:text-(--menu-modal-text) active:scale-95',
                 'disabled:opacity-30 disabled:active:scale-100',
                 'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-(--menu-modal-focus-ring)',
+                'sm:h-12',
               )}
               aria-label="Decrease quantity"
             >
@@ -75,9 +77,9 @@ export const MenuItemModalStickyFooter = memo<MenuItemModalStickyFooterProps>(
 
             <span
               className={cx(
-                'flex h-12 min-w-10 items-center justify-center',
+                'flex h-13 min-w-10 items-center justify-center sm:h-12',
                 'border-x border-(--menu-modal-border)',
-                'text-base font-bold tabular-nums text-ink-900',
+                'text-base font-extrabold tabular-nums text-(--menu-modal-text)',
               )}
               aria-live="polite"
               aria-label={`Quantity: ${safeQty}`}
@@ -90,10 +92,11 @@ export const MenuItemModalStickyFooter = memo<MenuItemModalStickyFooterProps>(
               onClick={() => onSetQty((q) => clampInt(q + 1, 1, maxQty))}
               disabled={safeQty >= maxQty || preflightLoading}
               className={cx(
-                'flex h-12 w-12 items-center justify-center text-ink-600',
-                'transition-colors hover:text-ink-900 active:scale-95',
+                'flex h-13 w-12 items-center justify-center text-(--menu-modal-muted)',
+                'transition-colors hover:text-(--menu-modal-text) active:scale-95',
                 'disabled:opacity-30 disabled:active:scale-100',
                 'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-(--menu-modal-focus-ring)',
+                'sm:h-12',
               )}
               aria-label="Increase quantity"
             >
@@ -116,16 +119,15 @@ export const MenuItemModalStickyFooter = memo<MenuItemModalStickyFooterProps>(
                     : ctaLabel
             }
             className={cx(
-              'relative flex min-h-12 min-w-0 flex-1 items-center justify-between gap-3',
-              'rounded-2xl px-5 text-sm font-semibold tracking-[-0.01em]',
-              'transition-all duration-200',
+              'relative flex min-h-13 min-w-0 flex-1 items-center justify-between gap-3 sm:min-h-12',
+              'rounded-2xl px-5 text-sm font-extrabold tracking-[-0.01em]',
+              'transition-transform duration-150',
               'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--menu-modal-focus-ring)',
-              isSuccess &&
-                'bg-emerald-600 text-white shadow-[0_4px_20px_rgb(5_150_105/0.35)]',
-              canAdd &&
+              isSuccess && 'bg-emerald-600 text-white',
+              canAdd && isIdle && 'bg-ember-600 text-white active:scale-[0.985]',
+              !canAdd &&
                 isIdle &&
-                'bg-ember-600 text-white shadow-[0_6px_24px_rgb(180_83_9/0.28)] hover:bg-ember-700 active:scale-[0.98]',
-              !canAdd && isIdle && 'cursor-not-allowed bg-cream-200 text-ink-500',
+                'cursor-not-allowed bg-(--menu-modal-control-bg) text-(--menu-modal-subtle)',
               isAdding && 'cursor-wait bg-ember-600/85 text-white',
             )}
           >
@@ -148,7 +150,7 @@ export const MenuItemModalStickyFooter = memo<MenuItemModalStickyFooterProps>(
             </span>
 
             {canAdd && isIdle ? (
-              <span className="shrink-0 rounded-lg bg-white/20 px-2.5 py-1 text-xs font-bold tabular-nums">
+              <span className="shrink-0 rounded-lg bg-white/20 px-2.5 py-1 text-xs font-extrabold tabular-nums">
                 {preflightLoading ? (
                   <span className="inline-block h-3.5 w-12 animate-pulse rounded bg-white/25" />
                 ) : (
@@ -158,7 +160,7 @@ export const MenuItemModalStickyFooter = memo<MenuItemModalStickyFooterProps>(
             ) : null}
 
             {!modifierRulesOk && isIdle && !canAdd ? (
-              <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-ink-500">
+              <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide text-(--menu-modal-subtle)">
                 Required ↑
               </span>
             ) : null}

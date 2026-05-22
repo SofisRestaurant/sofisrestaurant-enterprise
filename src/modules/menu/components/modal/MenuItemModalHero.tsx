@@ -1,11 +1,12 @@
 // =============================================================================
 // Item title, category, price, description, and badges below the hero image.
+// Mobile-first item detail screen layout, desktop dialog compatible.
+// Token-driven light/dark typography.
 // =============================================================================
 
 import { memo } from 'react';
 import { Star } from 'lucide-react';
 import { cx } from '../../utils/uiHelpers';
-import { MODAL_ANIM } from './menuItemModalAnimations';
 
 interface MenuItemModalHeroProps {
   titleId: string;
@@ -31,27 +32,19 @@ export const MenuItemModalHero = memo<MenuItemModalHeroProps>(function MenuItemM
   preflightLoading,
 }) {
   return (
-    <header
-      className="pt-5"
-      style={{ animation: MODAL_ANIM.stagger(40) }}
-    >
-      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-500">
-        {categoryLabel}
-      </p>
+    <header className="relative z-10 pt-5 sm:pt-5">
+      <div className="flex items-center justify-between gap-3">
+        <p className="min-w-0 truncate text-[11px] font-extrabold uppercase tracking-[0.18em] text-(--menu-modal-subtle)">
+          {categoryLabel}
+        </p>
 
-      <div className="mt-2 flex flex-wrap items-start gap-2.5">
-        <h2
-          id={titleId}
-          className="font-sans text-2xl font-semibold leading-tight tracking-[-0.03em] text-ink-900 sm:text-[1.75rem]"
-        >
-          {name}
-        </h2>
         {isPopular ? (
           <span
             className={cx(
-              'inline-flex items-center gap-1 rounded-full px-2.5 py-1',
-              'text-[10px] font-bold uppercase tracking-wider',
-              'bg-gold-100 text-ember-700 ring-1 ring-gold-200',
+              'inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1',
+              'text-[10px] font-extrabold uppercase tracking-wider',
+              'border border-(--menu-modal-pill-popular-border)',
+              'bg-(--menu-modal-pill-popular-bg) text-(--menu-modal-pill-popular-text)',
             )}
           >
             <Star className="h-3 w-3 fill-current" aria-hidden="true" />
@@ -60,22 +53,45 @@ export const MenuItemModalHero = memo<MenuItemModalHeroProps>(function MenuItemM
         ) : null}
       </div>
 
-      <div className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="text-xl font-semibold tabular-nums text-ember-700">{basePriceLabel}</span>
+      <h2
+        id={titleId}
+        className={cx(
+          'mt-2 font-sans font-extrabold leading-[1.02] tracking-[-0.045em]',
+          'text-[clamp(2rem,9vw,3.15rem)] text-(--menu-modal-text)',
+          'sm:text-[1.85rem] sm:leading-tight sm:tracking-[-0.035em]',
+        )}
+      >
+        {name}
+      </h2>
+
+      <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <span className="text-2xl font-extrabold tabular-nums tracking-[-0.03em] text-(--menu-modal-accent) sm:text-xl">
+          {basePriceLabel}
+        </span>
+
         {preflightOk ? (
-          <span className="rounded-md bg-emerald-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest text-emerald-700 ring-1 ring-emerald-200/80">
+          <span
+            className={cx(
+              'rounded-full px-2 py-1 text-[9px] font-extrabold uppercase tracking-widest',
+              'border border-(--menu-modal-pill-verified-bg)',
+              'bg-(--menu-modal-pill-verified-bg) text-(--menu-modal-pill-verified-text)',
+            )}
+          >
             Verified
           </span>
         ) : preflightLoading ? (
-          <span className="inline-block h-3.5 w-14 animate-pulse rounded-md bg-cream-200" />
+          <span className="inline-block h-4 w-16 animate-pulse rounded-full bg-(--menu-modal-control-bg)" />
         ) : null}
+
         {extrasLabel ? (
-          <span className="text-sm font-medium text-ink-500">{extrasLabel}</span>
+          <span className="text-sm font-bold text-(--menu-modal-muted)">{extrasLabel}</span>
         ) : null}
       </div>
 
       {description ? (
-        <p className="mt-4 text-sm leading-relaxed text-ink-600">{description}</p>
+        <p className="mt-4 max-w-[46ch] text-[0.95rem] font-medium leading-7 text-(--menu-modal-muted) sm:text-sm sm:leading-relaxed">
+          {description}
+        </p>
       ) : null}
     </header>
   );

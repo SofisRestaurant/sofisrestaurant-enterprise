@@ -1,14 +1,6 @@
 // src/components/layout/TopBar.tsx
 // =============================================================================
-// TOP BAR — Premium Mobile-First Shell
-// =============================================================================
-// Goals:
-//   - Keep initial shell lightweight.
-//   - Keep cart UI lightweight through useCartUiStore.
-//   - Use TopBarBrand for real logo + identity + kitchen status.
-//   - Prevent mobile controls from squeezing the brand.
-//   - Preserve order intent, search, auth, cart, and modal behavior.
-//   - Preserve dark/light theme support.
+// TOP BAR — Lightweight Premium Shell
 // =============================================================================
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -22,7 +14,6 @@ import { useModal } from '@/components/ui/useModal';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { useTranslation } from '@/i18n/useTranslation';
 import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
-import MenuHeaderSearch from '@/modules/menu/components/MenuHeaderSearch';
 import { useMenuUi } from '@/modules/menu/store/menuUi.store';
 import {
   getPickupTimingLabel,
@@ -44,7 +35,7 @@ const NAV_LINKS: NavLink[] = [
   { path: '/contact', key: 'contact' },
 ];
 
-const SEARCH_DEBOUNCE_MS = 150;
+const SEARCH_DEBOUNCE_MS = 120;
 const HIDDEN_ON = ['/admin', '/kitchen', '/expo'];
 
 function cx(...classes: Array<string | false | null | undefined>): string {
@@ -58,6 +49,24 @@ function isHiddenRoute(pathname: string): boolean {
 function readCount(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
   return Math.max(0, Math.round(value));
+}
+
+const surfaceButtonClass = cx(
+  'border border-[rgba(61,42,32,0.08)] bg-[rgba(255,255,255,0.58)] text-[#4d382e]',
+  'shadow-[0_8px_18px_rgba(46,24,12,0.055)] backdrop-blur-xl',
+  'transition-[background-color,color,box-shadow,transform] duration-200 ease-out',
+  'hover:bg-white/78 hover:text-[#2f1f18] active:scale-[0.985]',
+  'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#c79a3b]/35 focus-visible:ring-offset-2 focus-visible:ring-offset-white',
+  'dark:border-white/10 dark:bg-white/[0.065] dark:text-white/72 dark:hover:bg-white/10 dark:hover:text-white dark:focus-visible:ring-offset-[#0f0d0c]',
+);
+
+function StatusDot() {
+  return (
+    <span className="relative flex h-1.5 w-1.5 shrink-0" aria-hidden="true">
+      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#c79a3b] opacity-45" />
+      <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[#8a5a24] dark:bg-[#f4dec0]" />
+    </span>
+  );
 }
 
 export default function TopBar() {
@@ -79,21 +88,6 @@ export default function TopBar() {
 
   const pickupTiming = useOrderIntentStore((state) => state.pickupTiming);
   const mobileSheetOpen = useOrderIntentStore((state) => state.mobileSheetOpen);
-  const [isDesktopNav, setIsDesktopNav] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return window.matchMedia('(min-width: 768px)').matches;
-  });
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-
-    const media = window.matchMedia('(min-width: 768px)');
-    const sync = () => setIsDesktopNav(media.matches);
-
-    sync();
-    media.addEventListener('change', sync);
-    return () => media.removeEventListener('change', sync);
-  }, []);
   const fulfillmentType = useOrderIntentStore((state) => state.fulfillmentType);
   const deliveryAvailability = useOrderIntentStore((state) => state.deliveryAvailability);
   const openOrderIntentSheet = useOrderIntentStore((state) => state.openMobileSheet);
@@ -184,6 +178,8 @@ export default function TopBar() {
   useEffect(() => {
     if (!mobileSearchOpen) return;
 
+    queueMicrotask(() => mobileSearchInputRef.current?.focus());
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -191,27 +187,21 @@ export default function TopBar() {
       }
     };
 
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [mobileSearchOpen, closeMobileSearch]);
-
-  useEffect(() => {
-    if (!mobileSearchOpen) return;
-
-    queueMicrotask(() => mobileSearchInputRef.current?.focus());
-
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
       if (!target) return;
-
       if (mobileSearchPanelRef.current?.contains(target)) return;
       if (mobileSearchBtnRef.current?.contains(target)) return;
-
       closeMobileSearch();
     };
 
+    window.addEventListener('keydown', onKeyDown);
     window.addEventListener('pointerdown', onPointerDown);
-    return () => window.removeEventListener('pointerdown', onPointerDown);
+
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('pointerdown', onPointerDown);
+    };
   }, [mobileSearchOpen, closeMobileSearch]);
 
   useEffect(() => {
@@ -239,35 +229,49 @@ export default function TopBar() {
     <>
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-60 focus:rounded-2xl focus:bg-white focus:px-4 focus:py-2 focus:shadow-(--shadow-xl) focus:ring-2 focus:ring-(--color-gold-400)"
+        className={cx(
+          'sr-only focus:not-sr-only',
+          'focus:fixed focus:left-4 focus:top-4 focus:z-[60]',
+          'focus:rounded-2xl focus:bg-white focus:px-4 focus:py-2',
+          'focus:text-sm focus:font-semibold focus:text-[#2f1f18]',
+          'focus:shadow-[0_16px_40px_rgba(46,24,12,0.16)] focus:ring-2 focus:ring-[#c79a3b]/40',
+        )}
       >
         {t('nav.skipToContent')}
       </a>
 
       <header
         className={cx(
-          'sticky top-0 z-30',
-          'border-b border-white/40',
-          'bg-white/72 shadow-[0_1px_0_rgba(255,255,255,0.55),0_14px_40px_rgba(46,24,12,0.075)]',
-          'backdrop-blur-2xl supports-[backdrop-filter]:bg-white/64',
-          'dark:border-white/10 dark:bg-(--color-ink-950)/70',
-          'dark:shadow-[0_1px_0_rgba(255,255,255,0.06),0_18px_44px_rgba(0,0,0,0.32)]',
+          'sticky top-0 z-50',
+          'border-b border-[rgba(61,42,32,0.08)]',
+          'bg-[rgba(255,250,244,0.78)] shadow-[0_1px_0_rgba(255,255,255,0.72),0_10px_28px_rgba(46,24,12,0.06)]',
+          'backdrop-blur-2xl supports-[backdrop-filter]:bg-[rgba(255,250,244,0.66)]',
+          'dark:border-white/10 dark:bg-[rgba(15,13,12,0.74)]',
+          'dark:shadow-[0_1px_0_rgba(255,255,255,0.06),0_16px_34px_rgba(0,0,0,0.30)]',
         )}
       >
         <div className="mx-auto max-w-7xl px-2.5 py-1.5 sm:px-4">
           <div
             className={cx(
-              'flex h-12 items-center gap-2 rounded-[1.35rem] px-1.5',
-              'bg-white/52 ring-1 ring-white/70',
-              'shadow-[inset_0_1px_0_rgba(255,255,255,0.72)]',
-              'dark:bg-white/[0.035] dark:ring-white/10 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]',
+              'flex h-12 items-center gap-2 rounded-[1.45rem] px-1.5',
+              'border border-[rgba(61,42,32,0.07)] bg-[rgba(255,255,255,0.50)]',
+              'shadow-[inset_0_1px_0_rgba(255,255,255,0.82)]',
+              'dark:border-white/10 dark:bg-white/[0.045]',
+              'dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.07)]',
               'md:h-13 md:px-2',
             )}
           >
             <TopBarBrand ariaLabel={t('header.logo.aria')} />
 
             <nav
-              className="hidden items-center gap-1 md:flex"
+              className={cx(
+                'hidden items-center gap-0.5 rounded-full p-1 md:flex',
+                'border border-[rgba(61,42,32,0.08)] bg-[rgba(255,255,255,0.58)]',
+                'shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_26px_rgba(46,24,12,0.055)]',
+                'backdrop-blur-2xl supports-[backdrop-filter]:bg-[rgba(255,255,255,0.52)]',
+                'dark:border-white/10 dark:bg-white/[0.055]',
+                'dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.07),0_14px_32px_rgba(0,0,0,0.28)]',
+              )}
               role="navigation"
               aria-label="Primary links"
             >
@@ -281,14 +285,28 @@ export default function TopBar() {
                     aria-label={t(`nav.links.${key}.aria`)}
                     aria-current={active ? 'page' : undefined}
                     className={cx(
-                      'rounded-full px-3 py-2 text-sm font-bold transition-all',
-                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2',
+                      'relative inline-flex min-h-10 items-center justify-center rounded-full',
+                      'px-3.5 text-[13px] font-semibold tracking-[-0.01em]',
+                      'transition-[color,background-color,box-shadow,transform] duration-200 ease-out',
+                      'touch-manipulation select-none',
+                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#c79a3b]/35 focus-visible:ring-offset-2',
+                      'focus-visible:ring-offset-white dark:focus-visible:ring-offset-[#0f0d0c]',
                       active
-                        ? 'bg-(--color-ember-600) text-white shadow-[0_8px_18px_rgba(168,69,32,0.22)]'
-                        : 'text-(--color-ink-600) hover:bg-white/85 hover:text-(--color-ember-700) dark:text-white/70 dark:hover:bg-white/10 dark:hover:text-white',
+                        ? [
+                            'bg-[#3f2418] text-[#fff8ee]',
+                            'shadow-[0_8px_18px_rgba(63,36,24,0.18),inset_0_1px_0_rgba(255,255,255,0.16)]',
+                            'dark:bg-[#f4dec0] dark:text-[#21130d]',
+                            'dark:shadow-[0_10px_22px_rgba(0,0,0,0.30),inset_0_1px_0_rgba(255,255,255,0.50)]',
+                          ].join(' ')
+                        : [
+                            'text-[#4d382e]',
+                            'hover:bg-[rgba(255,255,255,0.72)] hover:text-[#2f1f18]',
+                            'active:scale-[0.985]',
+                            'dark:text-white/72 dark:hover:bg-white/10 dark:hover:text-white',
+                          ].join(' '),
                     )}
                   >
-                    {t(`nav.links.${key}.label`)}
+                    <span className="relative z-10">{t(`nav.links.${key}.label`)}</span>
                   </Link>
                 );
               })}
@@ -297,10 +315,12 @@ export default function TopBar() {
                 <Link
                   to="/admin"
                   className={cx(
-                    'rounded-full px-3 py-2 text-sm font-bold text-(--color-gold-700)',
-                    'transition-colors hover:bg-(--color-gold-50) hover:text-(--color-gold-600)',
-                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2',
-                    'dark:text-(--color-gold-300) dark:hover:bg-white/10',
+                    'inline-flex min-h-10 items-center justify-center rounded-full px-3.5',
+                    'text-[13px] font-semibold tracking-[-0.01em]',
+                    'text-[#6b4a19] transition-[color,background-color,box-shadow,transform] duration-200 ease-out',
+                    'hover:bg-[rgba(255,255,255,0.72)] hover:text-[#4a3413] active:scale-[0.985]',
+                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#c79a3b]/35 focus-visible:ring-offset-2 focus-visible:ring-offset-white',
+                    'dark:text-[#f4dec0] dark:hover:bg-white/10 dark:hover:text-white dark:focus-visible:ring-offset-[#0f0d0c]',
                   )}
                 >
                   {t('header.auth.admin')}
@@ -310,16 +330,6 @@ export default function TopBar() {
 
             <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
               {isMenu && (
-                <div className="hidden w-64 max-w-[30vw] lg:block">
-                  <MenuHeaderSearch
-                    value={draftSearch}
-                    onChange={setDraftSearch}
-                    placeholder={t('header.search.placeholder')}
-                  />
-                </div>
-              )}
-
-              {isMenu && (
                 <button
                   ref={mobileSearchBtnRef}
                   type="button"
@@ -328,13 +338,8 @@ export default function TopBar() {
                   aria-haspopup="dialog"
                   aria-expanded={mobileSearchOpen}
                   className={cx(
-                    'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full',
-                    'border border-white/70 bg-white/82 text-(--color-ink-700)',
-                    'shadow-[0_8px_20px_rgba(46,24,12,0.08)] backdrop-blur-xl',
-                    'transition hover:bg-white active:scale-95',
-                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40',
-                    'dark:border-white/10 dark:bg-white/8 dark:text-white/80 dark:hover:bg-white/12',
-                    'lg:hidden',
+                    'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full',
+                    surfaceButtonClass,
                   )}
                 >
                   <Search className="h-4 w-4" aria-hidden="true" />
@@ -347,54 +352,43 @@ export default function TopBar() {
                 aria-label="Open order setup"
                 aria-haspopup="dialog"
                 className={cx(
-                  'inline-flex h-9 max-w-[7.35rem] shrink-0 touch-manipulation items-center gap-1.5 rounded-full',
-                  'border border-white/70 bg-white/82 px-2 text-(--color-ink-700)',
-                  'shadow-[0_8px_20px_rgba(46,24,12,0.08)] backdrop-blur-xl',
-                  'transition hover:bg-white active:scale-95',
-                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40',
-                  'dark:border-white/10 dark:bg-white/8 dark:text-white/80 dark:hover:bg-white/12',
+                  'inline-flex h-10 max-w-[7.75rem] shrink-0 touch-manipulation items-center gap-1.5 rounded-full px-2',
+                  surfaceButtonClass,
                   'md:hidden',
                 )}
               >
                 <span
-                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-(--color-ember-50) dark:bg-(--color-ember-500)/15"
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#f6eadc] text-[#4d382e] dark:bg-white/10 dark:text-white/80"
                   aria-hidden="true"
                 >
-                  <Clock3 className="h-3.5 w-3.5 text-(--color-ember-600) dark:text-(--color-ember-300)" />
+                  <Clock3 className="h-3.5 w-3.5" />
                 </span>
 
                 <span className="min-w-0 flex-1 text-left">
-                  <span className="block text-[8px] font-black uppercase leading-none tracking-[0.14em] text-(--color-ink-600) dark:text-white/70">
+                  <span className="block text-[8px] font-bold uppercase leading-none tracking-[0.14em] text-[#7c6559] dark:text-white/52">
                     Pickup
                   </span>
-                  <span className="mt-0.5 block truncate text-[10.5px] font-black leading-none">
+                  <span className="mt-0.5 block truncate text-[10.5px] font-semibold leading-none text-current">
                     {mobileTriggerLabel}
                   </span>
                 </span>
               </button>
 
-              {isDesktopNav ? (
+              <div className="hidden md:block">
                 <Suspense fallback={null}>
                   <OrderIntentSelector />
                 </Suspense>
-              ) : null}
+              </div>
 
               {!isAuthed && (
                 <Link
                   to="/find-order"
                   className={cx(
-                    'hidden items-center gap-1.5 rounded-full border border-white/70',
-                    'bg-white/82 px-3 py-1.5 text-xs font-bold text-(--color-ink-600)',
-                    'shadow-[0_8px_20px_rgba(46,24,12,0.08)] transition',
-                    'hover:bg-white hover:text-(--color-ember-700)',
-                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2',
-                    'md:flex',
+                    'hidden h-10 items-center gap-1.5 rounded-full px-3 text-xs font-semibold md:flex',
+                    surfaceButtonClass,
                   )}
                 >
-                  <span className="relative flex h-1.5 w-1.5">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-(--color-ember-400) opacity-60" />
-                    <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-(--color-ember-500)" />
-                  </span>
+                  <StatusDot />
                   Track Order
                 </Link>
               )}
@@ -402,12 +396,12 @@ export default function TopBar() {
               {isAuthed && activeOrderId && (
                 <Link
                   to={`/order-status/${activeOrderId}`}
-                  className="hidden items-center gap-1.5 rounded-full border border-(--color-ember-200) bg-(--color-ember-50) px-3 py-1.5 text-xs font-bold text-(--color-ember-700) transition hover:bg-(--color-ember-100) md:flex"
+                  className={cx(
+                    'hidden h-10 items-center gap-1.5 rounded-full px-3 text-xs font-semibold md:flex',
+                    surfaceButtonClass,
+                  )}
                 >
-                  <span className="relative flex h-1.5 w-1.5">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-(--color-ember-400) opacity-75" />
-                    <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-(--color-ember-500)" />
-                  </span>
+                  <StatusDot />
                   {t('header.auth.trackOrder')}
                 </Link>
               )}
@@ -417,18 +411,15 @@ export default function TopBar() {
                 type="button"
                 aria-label={cartAriaLabel}
                 className={cx(
-                  'relative rounded-full p-2 text-(--color-ink-700) transition-all',
-                  'hover:bg-white/85 hover:text-(--color-ember-700)',
-                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2',
-                  'dark:text-white/75 dark:hover:bg-white/10 dark:hover:text-white',
-                  'hidden md:inline-flex',
+                  'relative hidden h-10 w-10 items-center justify-center rounded-full md:inline-flex',
+                  surfaceButtonClass,
                 )}
               >
                 <ShoppingCart className="h-5 w-5" aria-hidden="true" />
 
                 {count > 0 && (
                   <span
-                    className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-(--color-ember-600) px-1 text-[9px] font-black leading-none text-white shadow-(--shadow-xs)"
+                    className="absolute -right-1 -top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[#3f2418] px-1 text-[9px] font-black leading-none text-[#fff8ee] shadow-[0_4px_10px_rgba(63,36,24,0.24)] dark:bg-[#f4dec0] dark:text-[#21130d]"
                     aria-hidden="true"
                   >
                     {count > 99 ? '99+' : count}
@@ -442,14 +433,15 @@ export default function TopBar() {
                     <Link
                       to="/account"
                       aria-label={t('header.auth.account')}
-                      className="flex items-center gap-2 rounded-full bg-white/72 px-3 py-1.5 shadow-[0_8px_20px_rgba(46,24,12,0.06)] transition hover:bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 dark:bg-white/8 dark:hover:bg-white/12"
+                      className={cx(
+                        'flex h-10 items-center gap-2 rounded-full px-3 text-sm font-semibold',
+                        surfaceButtonClass,
+                      )}
                     >
-                      <User className="h-4 w-4 text-(--color-ink-500)" aria-hidden="true" />
+                      <User className="h-4 w-4 text-current opacity-70" aria-hidden="true" />
 
                       {displayName && (
-                        <span className="max-w-120px truncate text-sm font-bold text-(--color-ink-700) dark:text-white/75">
-                          {displayName}
-                        </span>
+                        <span className="max-w-[120px] truncate text-current">{displayName}</span>
                       )}
                     </Link>
 
@@ -457,7 +449,15 @@ export default function TopBar() {
                       type="button"
                       onClick={() => void handleSignOut()}
                       aria-label={t('header.auth.signOut')}
-                      className="flex items-center gap-1.5 rounded-full border border-white/70 bg-white/60 px-2.5 py-1.5 text-xs font-bold text-(--color-ink-500) transition hover:bg-white hover:text-(--color-ink-800) focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400) focus-visible:ring-offset-2 dark:border-white/10 dark:bg-white/6 dark:text-white/55 dark:hover:bg-white/10 dark:hover:text-white"
+                      className={cx(
+                        'flex h-10 items-center gap-1.5 rounded-full px-3 text-xs font-semibold',
+                        'border border-[rgba(61,42,32,0.08)] bg-[rgba(255,255,255,0.46)] text-[#6a5145]',
+                        'shadow-[0_8px_18px_rgba(46,24,12,0.045)]',
+                        'transition-[background-color,color,box-shadow,transform] duration-200 ease-out',
+                        'hover:bg-white/74 hover:text-[#2f1f18] active:scale-[0.985]',
+                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#c79a3b]/35 focus-visible:ring-offset-2 focus-visible:ring-offset-white',
+                        'dark:border-white/10 dark:bg-white/[0.055] dark:text-white/62 dark:hover:bg-white/10 dark:hover:text-white dark:focus-visible:ring-offset-[#0f0d0c]',
+                      )}
                     >
                       <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
                       {t('header.auth.signOut')}
@@ -470,6 +470,7 @@ export default function TopBar() {
                       variant="secondary"
                       size="sm"
                       type="button"
+                      className="rounded-full"
                     >
                       {t('header.auth.logIn')}
                     </Button>
@@ -479,6 +480,7 @@ export default function TopBar() {
                       variant="primary"
                       size="sm"
                       type="button"
+                      className="rounded-full"
                     >
                       {t('header.auth.signUp')}
                     </Button>
@@ -497,22 +499,26 @@ export default function TopBar() {
           aria-modal="true"
           aria-label={t('header.search.aria')}
         >
-          <div className="absolute inset-0 bg-black/45 backdrop-blur-[3px]" aria-hidden="true" />
+          <div
+            className="absolute inset-0 bg-[rgba(47,31,24,0.34)] backdrop-blur-[5px]"
+            aria-hidden="true"
+          />
 
           <div className="absolute inset-x-0 top-0 p-3">
             <div
               ref={mobileSearchPanelRef}
               className={cx(
-                'mx-auto max-w-2xl overflow-hidden rounded-[1.5rem]',
-                'border border-white/10 bg-stone-950/96 text-white',
-                'shadow-[0_26px_80px_rgba(0,0,0,0.45)] backdrop-blur-2xl',
+                'mx-auto max-w-2xl overflow-hidden rounded-[1.65rem]',
+                'border border-[rgba(61,42,32,0.10)] bg-[rgba(255,250,244,0.94)] text-[#2f1f18]',
+                'shadow-[0_24px_70px_rgba(46,24,12,0.18)] backdrop-blur-2xl',
+                'dark:border-white/10 dark:bg-[rgba(15,13,12,0.92)] dark:text-white',
               )}
             >
-              <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
+              <div className="flex items-center gap-2 border-b border-[rgba(61,42,32,0.08)] px-4 py-3 dark:border-white/10">
                 <div className="min-w-0 flex-1">
                   <div className="relative">
                     <Search
-                      className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/45"
+                      className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#8a7468] dark:text-white/45"
                       aria-hidden="true"
                     />
 
@@ -521,7 +527,13 @@ export default function TopBar() {
                       value={draftSearch}
                       onChange={(event) => setDraftSearch(event.target.value)}
                       placeholder={t('header.search.placeholder')}
-                      className="h-11 w-full rounded-2xl border border-white/10 bg-white/8 pl-10 pr-10 text-sm font-semibold text-white outline-none placeholder:text-white/35 focus:border-(--color-gold-400)/40 focus:ring-2 focus:ring-(--color-gold-400)/20"
+                      className={cx(
+                        'h-11 w-full rounded-2xl border border-[rgba(61,42,32,0.10)] bg-white/70',
+                        'pl-10 pr-10 text-sm font-semibold text-[#2f1f18] outline-none',
+                        'placeholder:text-[#8a7468] transition',
+                        'focus:border-[#c79a3b]/45 focus:ring-2 focus:ring-[#c79a3b]/20',
+                        'dark:border-white/10 dark:bg-white/[0.075] dark:text-white dark:placeholder:text-white/35',
+                      )}
                       type="search"
                       inputMode="search"
                       autoComplete="off"
@@ -532,7 +544,13 @@ export default function TopBar() {
                       <button
                         type="button"
                         onClick={() => setDraftSearch('')}
-                        className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-white/8 text-white/80 transition hover:bg-white/12 focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40"
+                        className={cx(
+                          'absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full',
+                          'border border-[rgba(61,42,32,0.10)] bg-white/64 text-[#6a5145]',
+                          'transition hover:bg-white hover:text-[#2f1f18]',
+                          'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#c79a3b]/35',
+                          'dark:border-white/10 dark:bg-white/[0.075] dark:text-white/70 dark:hover:bg-white/12 dark:hover:text-white',
+                        )}
                         aria-label={t('header.search.clear')}
                       >
                         <X className="h-4 w-4" aria-hidden="true" />
@@ -544,7 +562,13 @@ export default function TopBar() {
                 <button
                   type="button"
                   onClick={closeMobileSearch}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/8 text-white transition hover:bg-white/12 focus:outline-none focus-visible:ring-2 focus-visible:ring-(--color-gold-400)/40"
+                  className={cx(
+                    'inline-flex h-10 w-10 items-center justify-center rounded-full',
+                    'border border-[rgba(61,42,32,0.10)] bg-white/64 text-[#6a5145]',
+                    'transition hover:bg-white hover:text-[#2f1f18]',
+                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#c79a3b]/35',
+                    'dark:border-white/10 dark:bg-white/[0.075] dark:text-white/70 dark:hover:bg-white/12 dark:hover:text-white',
+                  )}
                   aria-label={t('header.search.close')}
                 >
                   <X className="h-5 w-5" aria-hidden="true" />
@@ -552,7 +576,7 @@ export default function TopBar() {
               </div>
 
               <div className="px-4 py-3">
-                <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-white/40">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#8a7468] dark:text-white/40">
                   {t('header.search.tip')}
                 </p>
               </div>

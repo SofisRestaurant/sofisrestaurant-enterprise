@@ -332,7 +332,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
               : 'Add to cart';
 
   return (
-  <>
+    <>
       <div className="sr-only" aria-live="polite" aria-atomic="true">
         {liveStatus}
       </div>
@@ -350,7 +350,16 @@ export default function MenuItemModal({ item, onClose }: Props) {
                 description={description}
                 tags={tags}
               />
-              <MenuItemModalCloseButton closeBtnRef={closeBtnRef} onClose={close} />
+
+              <MenuItemModalCloseButton
+                closeBtnRef={closeBtnRef}
+                onClose={close}
+                className={cx(
+                  'right-4 z-50',
+                  'top-[calc(0.85rem+env(safe-area-inset-top))]',
+                  'sm:top-4',
+                )}
+              />
             </div>
           ) : undefined
         }
@@ -449,17 +458,13 @@ export default function MenuItemModal({ item, onClose }: Props) {
               onRetryLoad={loadModifierGroups}
             />
 
-            <MenuItemModalNotes
-              notes={notes}
-              maxLength={MAX_NOTES_LENGTH}
-              onChange={setNotes}
-            />
+            <MenuItemModalNotes notes={notes} maxLength={MAX_NOTES_LENGTH} onChange={setNotes} />
 
             {requiredHint ? (
               <MenuItemModalAlertBanner variant="warning">{requiredHint}</MenuItemModalAlertBanner>
             ) : null}
 
-            <div className="h-6" aria-hidden="true" />
+            <div className="h-10 sm:h-6" aria-hidden="true" />
           </>
         )}
       </MenuItemModalShell>
