@@ -1,6 +1,6 @@
 // src/modules/cart/components/FloatingCartPill.tsx
-// Floating cart pill — dock-aware cart CTA.
-// It is not independently fixed. MobileDockShell owns the movement.
+// Floating cart pill, dock slot child only.
+// MobileDockShell owns all scroll movement.
 
 import { useCallback, useMemo } from 'react';
 import { ChevronRight, ShoppingBag } from 'lucide-react';
@@ -24,7 +24,7 @@ function readCents(value: unknown): number {
 }
 
 export function FloatingCartPill() {
-  const { isMobile, shouldShowFloatingCart, shouldHideFloatingCart, dockPhase } = useBottomDock();
+  const { isMobile, shouldShowFloatingCart, shouldHideFloatingCart } = useBottomDock();
 
   const itemCount = useCartUiStore((s) => s.itemCount);
   const subtotalCents = useCartUiStore((s) => s.subtotalCents);
@@ -34,7 +34,6 @@ export function FloatingCartPill() {
   const subtotal = readCents(subtotalCents);
 
   const visible = isMobile && count > 0 && shouldShowFloatingCart && !shouldHideFloatingCart;
-  const isCollapsed = dockPhase === 'collapsed';
 
   const formattedSubtotal = useMemo(() => formatCents(subtotal), [subtotal]);
 
@@ -58,7 +57,7 @@ export function FloatingCartPill() {
       aria-hidden={visible ? undefined : true}
       aria-label={`View cart, ${itemLabel}, ${formattedSubtotal}`}
       data-floating-cart-pill="true"
-      data-dock-phase={dockPhase}
+      data-cart-visible={visible ? 'true' : 'false'}
       className={cx(
         'group relative flex min-h-11 w-full touch-manipulation select-none items-center justify-between gap-3',
         'overflow-hidden rounded-2xl border border-gold-300/35 px-4 py-3.5 text-left',
@@ -66,14 +65,13 @@ export function FloatingCartPill() {
         'focus:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--app-bg)]',
 
         // Important:
-        // This pill is intentionally lowered slightly at rest.
-        // It still follows the bottom nav because MobileDockShell moves the parent.
-        'transform-gpu will-change-transform',
-        'motion-safe:transition-[opacity,transform,box-shadow] motion-safe:duration-300 motion-safe:ease-[cubic-bezier(0.16,1,0.3,1)]',
+        // The pill does not react to dockPhase.
+        // MobileDockShell is the only element allowed to move on scroll.
+        'transform-gpu',
+        'motion-safe:transition-[opacity,box-shadow] motion-safe:duration-200 motion-safe:ease-out',
+        'motion-reduce:transition-none',
 
-        visible && !isCollapsed && 'translate-y-1 opacity-100',
-        visible && isCollapsed && 'translate-y-2 opacity-95',
-        !visible && 'pointer-events-none translate-y-5 opacity-0',
+        visible ? 'translate-y-1 opacity-100' : 'pointer-events-none translate-y-1 opacity-0',
 
         visible && 'hover:shadow-[0_16px_40px_rgba(28,25,21,0.38)]',
         visible && 'active:scale-[0.985] motion-reduce:active:scale-100',

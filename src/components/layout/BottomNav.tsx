@@ -1,12 +1,6 @@
 // src/components/layout/BottomNav.tsx
-// =============================================================================
-// Premium floating dock — 5-tab mobile navigation
-// =============================================================================
-// PERF FIX:
-//   - Removed `useCart` import → replaced with `useCartUiStore` selector.
-//     This removes cart.store.ts / Supabase / auth from the initial shell bundle.
-//   - All other behavior preserved exactly.
-// =============================================================================
+// Premium floating dock, 5-tab mobile navigation.
+// Visual only. MobileDockShell owns all scroll movement.
 
 import { memo, useMemo, type CSSProperties, type ElementType } from 'react';
 import { Link } from 'react-router-dom';
@@ -15,10 +9,6 @@ import { Home, ShoppingBag, Tag, User, UtensilsCrossed } from 'lucide-react';
 import { useActiveOrderId } from '@/app/ActiveOrderContext';
 import { useBottomDock, type BottomDockTabId } from '@/components/layout/useBottomDockState';
 import { useCartUiStore } from '@/modules/cart/store/cartUi.store';
-
-// Scroll + dock movement live in bottomDockState + MobileDockShell — nav is visual only.
-
-// ── Types ─────────────────────────────────────────────────────────────────────
 
 type TabId = BottomDockTabId;
 
@@ -45,18 +35,19 @@ type CartButtonProps = {
   onCartClick: () => void;
 };
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
 function cx(...classes: Array<string | false | null | undefined>): string {
   return classes.filter(Boolean).join(' ');
 }
 
-function formatCartLabel(count: number | null): string {
-  if (count == null || count <= 0) return 'Cart';
-  return `Cart — ${count} item${count === 1 ? '' : 's'}`;
+function readCount(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.round(value));
 }
 
-// ── Config ────────────────────────────────────────────────────────────────────
+function formatCartLabel(count: number | null): string {
+  if (count == null || count <= 0) return 'Cart';
+  return `Cart, ${count} item${count === 1 ? '' : 's'}`;
+}
 
 const TABS = [
   { id: 'home', path: '/', label: 'Home', icon: Home },
@@ -84,8 +75,6 @@ const CART_BUTTON_STYLE: CSSProperties = {
   boxShadow: '0 4px 16px rgba(212,175,55,0.42), 0 1px 4px rgba(0,0,0,0.22)',
 };
 
-// ── Standard tab ──────────────────────────────────────────────────────────────
-
 const StandardTab = memo(function StandardTab({ tab }: StandardTabProps) {
   const Icon = tab.icon;
 
@@ -94,7 +83,6 @@ const StandardTab = memo(function StandardTab({ tab }: StandardTabProps) {
       to={tab.path}
       aria-label={tab.label}
       aria-current={tab.isActive ? 'page' : undefined}
-      prefetch="intent"
       className={cx(TAB_BASE, 'transition-colors duration-200 active:scale-95', FOCUS_RING)}
     >
       <span
@@ -145,8 +133,6 @@ const StandardTab = memo(function StandardTab({ tab }: StandardTabProps) {
   );
 });
 
-// ── Center cart button ────────────────────────────────────────────────────────
-
 const CartButton = memo(function CartButton({ badge, onCartClick }: CartButtonProps) {
   const hasItems = badge != null && badge > 0;
 
@@ -194,17 +180,14 @@ const CartButton = memo(function CartButton({ badge, onCartClick }: CartButtonPr
   );
 });
 
-// ── Component ─────────────────────────────────────────────────────────────────
-
 export default function BottomNav() {
-  // PERF: Read itemCount from lightweight UI store instead of heavy useCart hook
   const itemCount = useCartUiStore((s) => s.itemCount);
-  const openCart = useCartUiStore((state) => state.open);
+  const openCart = useCartUiStore((s) => s.open);
 
   const activeOrderId = useActiveOrderId();
   const { activeTab } = useBottomDock();
 
-  const cartCount = itemCount ?? 0;
+  const cartCount = readCount(itemCount);
   const hasCartItems = cartCount > 0;
   const hasLiveOrder = Boolean(activeOrderId);
 
@@ -224,6 +207,7 @@ export default function BottomNav() {
       <nav
         role="navigation"
         aria-label="App navigation"
+        data-bottom-nav="true"
         className={cx(
           'grid grid-cols-5',
           'rounded-[2.5rem]',
