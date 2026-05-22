@@ -2,24 +2,20 @@
 // =============================================================================
 // ROOT LAYOUT — 2026
 // =============================================================================
-// Secure + performance-safe root shell:
-//   - Keeps the initial app shell small
-//   - Does NOT directly import CartDrawer
-//   - Mounts LazyCartDrawer only once
-//   - Mounts CartDisplaySync globally so cart badges / FloatingCartPill restore
-//     immediately after page reload
-//   - Keeps auth/session/modal systems lazy
-//   - Avoids duplicate portals and duplicate dialogs
+//
+// MOBILE DOCK CONTRACT:
+//   Only ONE mobile dock system exists: MobileDockShell.
+//   It wraps both FloatingCartPill and BottomNav.
+//   No other component (MobileNav, etc.) may render a fixed bottom bar.
 //
 // Layer order:
-//   1. CartDisplaySync, invisible sync bridge
+//   1. CartDisplaySync — invisible sync bridge
 //   2. TopBar
 //   3. main / Outlet
-//   4. Footer, lazy on desktop
-//   5. FloatingCartPill
-//   6. BottomNav
-//   7. SessionExpiryWarning, AuthModals, ModalRenderer
-//   8. LazyCartDrawer, once only, last
+//   4. Footer (desktop only, lazy)
+//   5. MobileDockShell (cart + nav, single scroll-moving wrapper)
+//   6. Global overlays (lazy)
+//   7. LazyCartDrawer (once only, last)
 // =============================================================================
 
 import { lazy, Suspense } from 'react';
@@ -39,6 +35,9 @@ import CartDisplaySync from '@/modules/cart/components/CartDisplaySync';
 import { FloatingCartPill } from '@/modules/cart/components/FloatingCartPill';
 import { LazyCartDrawer } from '@/modules/cart/components/LazyCartDrawer';
 
+// DO NOT import MobileNav — it is a deprecated duplicate of BottomNav.
+// See MobileNav.tsx for details.
+
 const Footer = lazy(() => import('@/components/layout/Footer'));
 const AuthModals = lazy(() => import('@/features/auth/components/AuthModals'));
 const SessionExpiryWarning = lazy(() => import('@/components/auth/SessionExpiryWarning'));
@@ -51,53 +50,46 @@ export default function RootLayout() {
         <AppBoot>
           <ActiveOrderProvider>
             <BottomDockProvider>
-            <div className="flex min-h-dvh flex-col">
-              {/*
-                Invisible cart display bridge.
+              <div className="flex min-h-dvh flex-col">
+                {/* Invisible cart display bridge — restores cart badge after reload */}
+                <CartDisplaySync />
 
-                This must stay mounted at the root level so mobile shell UI
-                can restore cart itemCount/subtotalCents after a hard reload
-                without waiting for the user to open the cart drawer.
-              */}
-              <CartDisplaySync />
+                {/* Header */}
+                <TopBar />
 
-              {/* Header */}
-              <TopBar />
+                {/* Page content */}
+                <main
+                  id="main-content"
+                  className="mobile-fixed-ui-page-pad flex-1 overscroll-contain md:pb-0"
+                >
+                  <Outlet />
 
-              {/* Page content */}
-              <main
-                id="main-content"
-                className="mobile-fixed-ui-page-pad flex-1 overscroll-contain md:pb-0"
-              >
-                <Outlet />
+                  {/* Desktop footer only */}
+                  <div className="hidden md:block">
+                    <Suspense fallback={null}>
+                      <Footer />
+                    </Suspense>
+                  </div>
+                </main>
 
-                {/* Desktop footer only. Do not mount cart here. */}
-                <div className="hidden md:block">
-                  <Suspense fallback={null}>
-                    <Footer />
-                  </Suspense>
-                </div>
-              </main>
+                {/* ── Mobile commerce dock ─────────────────────────────────────
+                    Single shell moves cart pill + bottom nav as one unit.
+                    No other fixed bottom bar may exist.
+                    ──────────────────────────────────────────────────────────── */}
+                <MobileDockShell cart={<FloatingCartPill />} nav={<BottomNav />} />
 
-              {/* Mobile commerce dock — single shell moves cart + nav together */}
-              <MobileDockShell cart={<FloatingCartPill />} nav={<BottomNav />} />
+                {/* Global overlays, lazy and non-blocking */}
+                <Suspense fallback={null}>
+                  <SessionExpiryWarning />
+                  <AuthModals />
+                  <ModalRenderer />
+                </Suspense>
 
-              {/* Global overlays, lazy and non-blocking */}
-              <Suspense fallback={null}>
-                <SessionExpiryWarning />
-                <AuthModals />
-                <ModalRenderer />
-              </Suspense>
+                <ScrollSafety />
 
-              <ScrollSafety />
-
-              {/*
-                Cart drawer must be mounted once only.
-                LazyCartDrawer should lazy-load the heavy drawer code and ideally
-                only render the real drawer when the cart is opened.
-              */}
-              <LazyCartDrawer />
-            </div>
+                {/* Cart drawer — mounted once only, lazy */}
+                <LazyCartDrawer />
+              </div>
             </BottomDockProvider>
           </ActiveOrderProvider>
         </AppBoot>
