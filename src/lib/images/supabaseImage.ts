@@ -72,6 +72,42 @@ export function isSupabaseStorageUrl(url: string | null | undefined): boolean {
   return url.includes(OBJECT_SEGMENT) || url.includes(RENDER_SEGMENT);
 }
 
+/**
+ * Normalize any Supabase storage URL to a true object URL (never render/image).
+ *
+ * Example:
+ *   /storage/v1/render/image/public/menu-images/x.webp?width=448
+ *     → /storage/v1/object/public/menu-images/x.webp
+ *
+ * Transform query params (width, quality, resize) are stripped so the public URL
+ * is stable across reloads and safe to use as the canonical image identity.
+ * Signed URL `token` and other non-transform params are preserved.
+ */
+export function toSupabasePublicObjectUrl(url: string): string {
+  if (!url) return url;
+
+  const isStorage = url.includes(OBJECT_SEGMENT) || url.includes(RENDER_SEGMENT);
+  if (!isStorage) return url;
+
+  try {
+    const parsed = new URL(url);
+
+    if (parsed.pathname.includes(RENDER_SEGMENT)) {
+      parsed.pathname = parsed.pathname.replace(RENDER_SEGMENT, OBJECT_SEGMENT);
+    }
+
+    for (const key of ['width', 'quality', 'resize'] as const) {
+      parsed.searchParams.delete(key);
+    }
+
+    return parsed.toString();
+  } catch {
+    return url.includes(RENDER_SEGMENT)
+      ? url.replace(RENDER_SEGMENT, OBJECT_SEGMENT)
+      : url;
+  }
+}
+
 // ─── Single-URL transform ─────────────────────────────────────────────────────
 
 /**

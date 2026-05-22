@@ -2,10 +2,10 @@
 // Shared menu food image — Supabase-only delivery, branded fallback always visible.
 // =============================================================================
 //
-// Per image (stable identity = itemId + resolved public URL):
-//   1. Try Supabase render/image at layout width (single src, no srcSet, no wsrv).
-//   2. On error → public object URL (only when different from step 1).
-//   3. On error → branded placeholder (always visible, never blank).
+// Per image (identity = itemId + canonical object/public URL):
+//   - Transforms OFF (default): single /object/public/... src only.
+//   - Transforms ON: render/image first, then true object/public on error.
+//   - Branded placeholder always visible while loading or on failure.
 //
 // Priority: loading=eager, fetchPriority=high. Non-priority: lazy, fetchPriority=auto.
 // =============================================================================
@@ -137,10 +137,10 @@ function MenuFoodImageInner({
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    setAttempt('sized');
+    setAttempt(sources?.hasPublicFallback ? 'sized' : 'public');
     setLoaded(false);
     setFailed(false);
-  }, [identity]);
+  }, [identity, sources?.hasPublicFallback]);
 
   const activeSrc = useMemo(() => {
     if (!sources) return '';
@@ -185,7 +185,7 @@ function MenuFoodImageInner({
       <BrandedFallback className="absolute inset-0" gradient={fallbackGradient} showLabel={!loaded} />
 
       <img
-        key={`${identity}:${attempt}:${activeSrc}`}
+        key={`${identity}:${attempt}`}
         src={activeSrc}
         sizes={sources.sizes}
         width={sources.width}

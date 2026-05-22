@@ -5,20 +5,25 @@
 // =============================================================================
 //
 // Menu UI (cards, rail, featured, modal):
-//   - NO wsrv.nl — avoids browser cache poisoning on failed proxy responses.
-//   - NO srcSet — one stable src per item per attempt.
-//   - Attempt 1: Supabase render/image at layout width (when storage URL).
-//   - Attempt 2: public /storage/v1/object/public/... URL (MenuFoodImage onError).
-//   - Branded fallback when both fail or URL missing.
+//   - NO wsrv.nl.
+//   - NO srcSet — one stable src per item.
+//   - Canonical URL: /storage/v1/object/public/... (render URLs normalized away).
+//   - Default: object/public only (VITE_ENABLE_SUPABASE_IMAGE_TRANSFORMS !== 'true').
+//   - If transforms explicitly enabled: render/image first, object/public on error.
+//   - Branded fallback always visible on failure.
 //
 // wsrv remains in this file only for legacy getMenuImageSrc(..., mode: 'optimized')
 // callers outside menu UI; menu components do not use it.
 // =============================================================================
 
 import { env } from '@/lib/config/env';
-import { isSupabaseStorageUrl, supabaseImageUrl } from '@/lib/images/supabaseImage';
+import {
+  isSupabaseStorageUrl,
+  supabaseImageUrl,
+  toSupabasePublicObjectUrl,
+} from '@/lib/images/supabaseImage';
 
-export { isSupabaseStorageUrl };
+export { isSupabaseStorageUrl, toSupabasePublicObjectUrl };
 
 const PROXY_HOST_PATTERN = /(^|\.)wsrv\.nl$/i;
 const STORAGE_OBJECT_SEGMENT = '/storage/v1/object/public/';
@@ -216,6 +221,7 @@ export function resolveMenuImageUrl(raw: string | null | undefined): string | nu
   url = decodeRepeatedly(url);
   url = unwrapProxyUrl(url);
   url = absolutizeStorageUrl(url);
+  url = toSupabasePublicObjectUrl(url);
 
   if (!isRenderableHttpUrl(url)) return null;
 
@@ -254,14 +260,6 @@ function cleanUrl(url: string | null | undefined): string | null {
   return resolveMenuImageUrl(url);
 }
 
-/** Sized Supabase render URL — never wsrv. */
-function buildSizedSupabaseSrc(url: string, width: number, quality: number): string {
-  if (isSupabaseStorageUrl(url)) {
-    return supabaseImageUrl(url, width, quality);
-  }
-  return url;
-}
-
 function buildReliableSources(
   publicUrl: string,
   config: {
@@ -272,11 +270,17 @@ function buildReliableSources(
   },
   isPriority: boolean,
 ): MenuImageSources {
-  const sizedSrc = buildSizedSupabaseSrc(publicUrl, config.width, config.quality);
-  const hasPublicFallback = isSupabaseStorageUrl(publicUrl) && sizedSrc !== publicUrl;
+  const transformsEnabled = menuImageTransformsEnabled();
+  const canTransform = transformsEnabled && isSupabaseStorageUrl(publicUrl);
+
+  const primarySrc = canTransform
+    ? supabaseImageUrl(publicUrl, config.width, config.quality)
+    : publicUrl;
+
+  const hasPublicFallback = canTransform && primarySrc !== publicUrl;
 
   return {
-    src: sizedSrc,
+    src: primarySrc,
     publicSrc: publicUrl,
     hasPublicFallback,
     sizes: config.sizes,
@@ -408,11 +412,15 @@ export function getMenuImageSrc(
   const url = cleanUrl(rawUrl);
   if (!url) return '';
 
-  if (options.mode === 'raw') {
+  if (options.mode === 'raw' || !menuImageTransformsEnabled()) {
     return url;
   }
 
-  return buildSizedSupabaseSrc(url, options.width, options.quality);
+  if (isSupabaseStorageUrl(url)) {
+    return supabaseImageUrl(url, options.width, options.quality);
+  }
+
+  return url;
 }
 
 export function getMenuImageSrcSet(
