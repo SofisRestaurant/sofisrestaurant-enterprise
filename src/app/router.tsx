@@ -6,9 +6,9 @@
 //   They are co-loaded inside the lazy handlers of routes that need them
 //   (/admin, /kitchen, /expo). A /menu visitor never pays for auth-guard JS.
 //
-// CHUNK STALENESS STRATEGY (unchanged):
-//   resilientLazy() catches chunk-fetch 404s and triggers a hard reload once
-//   per session. See handleStaleChunk() below.
+// CHUNK STALENESS STRATEGY:
+//   Route lazy loaders use recoverFromChunkLoadError() to reload once when
+//   Vite/Vercel stale hashed chunks fail after a new deploy.
 // =============================================================================
 
 import React from 'react';
@@ -16,37 +16,11 @@ import { createBrowserRouter, Navigate } from 'react-router-dom';
 
 import RootLayout from '@/app/RootLayout';
 import { Providers } from '@/app/Providers';
-
+import { recoverFromChunkLoadError } from '@/lib/runtime/chunkLoadRecovery';
 // NOTE: AuthGuard and RoleGuard are intentionally NOT imported here.
 // They are co-loaded inside the lazy route handlers that need them
 // to keep them out of the initial bundle for public routes like /menu.
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Chunk-staleness recovery
-// ─────────────────────────────────────────────────────────────────────────────
-
-const STALE_RELOAD_KEY = 'chunk_stale_reload';
-
-function handleStaleChunk(err: unknown): boolean {
-  const isChunkError =
-    err instanceof Error &&
-    (err.message.includes('Failed to fetch dynamically imported module') ||
-      err.message.includes('Importing a module script failed') ||
-      err.message.includes('error loading dynamically imported module'));
-
-  if (!isChunkError) return false;
-
-  if (typeof window === 'undefined' || typeof sessionStorage === 'undefined') {
-    return false;
-  }
-
-  const alreadyReloaded = sessionStorage.getItem(STALE_RELOAD_KEY) === '1';
-  if (alreadyReloaded) return false;
-
-  sessionStorage.setItem(STALE_RELOAD_KEY, '1');
-  window.location.reload();
-  return true;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Route error display
@@ -103,9 +77,9 @@ function lazyRoute(importer: () => Promise<{ default: React.ComponentType }>) {
       const mod = await importer();
       return { Component: mod.default };
     } catch (err) {
-      if (handleStaleChunk(err)) {
-        return { Component: () => null };
-      }
+if (recoverFromChunkLoadError(err)) {
+  return { Component: () => null };
+}
       const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
       return {
         Component: () => (
@@ -139,9 +113,9 @@ function lazyPick(
 
       return { Component: Cmp };
     } catch (err) {
-      if (handleStaleChunk(err)) {
-        return { Component: () => null };
-      }
+if (recoverFromChunkLoadError(err)) {
+  return { Component: () => null };
+}
       const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
       return {
         Component: () => <RouteLoadError title={`Failed to load: ${label}`} details={msg} />,
@@ -177,9 +151,9 @@ function lazyWithAdmin(pageImporter: () => Promise<{ default: React.ComponentTyp
 
       return { Component: Wrapped };
     } catch (err) {
-      if (handleStaleChunk(err)) {
-        return { Component: () => null };
-      }
+if (recoverFromChunkLoadError(err)) {
+  return { Component: () => null };
+}
       const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
       return {
         Component: () => <RouteLoadError title="Failed to load admin page" details={msg} />,
@@ -210,9 +184,9 @@ function lazyWithRole(
 
       return { Component: Wrapped };
     } catch (err) {
-      if (handleStaleChunk(err)) {
-        return { Component: () => null };
-      }
+if (recoverFromChunkLoadError(err)) {
+  return { Component: () => null };
+}
       const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
       return {
         Component: () => <RouteLoadError title="Failed to load page" details={msg} />,
