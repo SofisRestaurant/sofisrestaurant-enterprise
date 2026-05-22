@@ -216,6 +216,38 @@
     0 30px 90px rgba(28, 18, 8, 0.22),
     0 -8px 24px rgba(28, 18, 8, 0.08);
   --menu-modal-focus-ring:      rgba(212, 175, 55, 0.45);
+    /* ── PopularRail semantic tokens - iOS 2026 glass rail ───────────────────── */
+  --popular-rail-card-bg:              rgba(255, 255, 255, 0.72);
+  --popular-rail-card-bg-hover:        rgba(255, 255, 255, 0.92);
+  --popular-rail-card-border:          rgba(61, 42, 32, 0.10);
+  --popular-rail-card-shadow:
+    0 18px 45px rgba(46, 24, 12, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  --popular-rail-card-shadow-hover:
+    0 24px 60px rgba(46, 24, 12, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.86);
+
+  --popular-rail-surface-bg:           rgba(255, 255, 255, 0.68);
+  --popular-rail-surface-bg-hover:     rgba(255, 255, 255, 0.88);
+  --popular-rail-surface-border:       rgba(61, 42, 32, 0.09);
+
+  --popular-rail-text:                 var(--color-ink-900);
+  --popular-rail-muted:                var(--color-ink-700);
+  --popular-rail-subtle:               var(--color-ink-600);
+  --popular-rail-accent:               #b45309;
+
+  --popular-rail-icon-bg:              #3f2418;
+  --popular-rail-icon-text:            #fff8ee;
+  --popular-rail-icon-glow:            rgba(199, 154, 59, 0.24);
+
+  --popular-rail-pill-bg:              rgba(255, 250, 244, 0.92);
+  --popular-rail-pill-text:            #92400e;
+  --popular-rail-pill-border:          rgba(61, 42, 32, 0.10);
+
+  --popular-rail-image-fade:
+    linear-gradient(180deg, transparent 0%, rgba(255, 250, 244, 0.98) 100%);
+  --popular-rail-image-shade:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.02) 0%, transparent 44%, rgba(46, 24, 12, 0.12) 100%);
 }
 
 :root[data-theme='dark'] {
@@ -317,4 +349,36 @@
     0 30px 90px rgba(0, 0, 0, 0.78),
     0 -18px 70px rgba(0, 0, 0, 0.72);
   --menu-modal-focus-ring:      rgba(212, 175, 55, 0.45);
+    /* ── PopularRail semantic tokens - iOS 2026 glass rail ───────────────────── */
+  --popular-rail-card-bg:              rgba(255, 255, 255, 0.075);
+  --popular-rail-card-bg-hover:        rgba(255, 255, 255, 0.115);
+  --popular-rail-card-border:          rgba(255, 255, 255, 0.11);
+  --popular-rail-card-shadow:
+    0 20px 55px rgba(0, 0, 0, 0.44),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --popular-rail-card-shadow-hover:
+    0 26px 70px rgba(0, 0, 0, 0.56),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+
+  --popular-rail-surface-bg:           rgba(255, 255, 255, 0.065);
+  --popular-rail-surface-bg-hover:     rgba(255, 255, 255, 0.105);
+  --popular-rail-surface-border:       rgba(255, 255, 255, 0.10);
+
+  --popular-rail-text:                 rgba(255, 255, 255, 0.95);
+  --popular-rail-muted:                rgba(255, 255, 255, 0.78);
+  --popular-rail-subtle:               rgba(255, 255, 255, 0.60);
+  --popular-rail-accent:               #ecc84a;
+
+  --popular-rail-icon-bg:              #f4dec0;
+  --popular-rail-icon-text:            #21130d;
+  --popular-rail-icon-glow:            rgba(236, 200, 74, 0.20);
+
+  --popular-rail-pill-bg:              rgba(0, 0, 0, 0.42);
+  --popular-rail-pill-text:            rgb(252, 211, 77);
+  --popular-rail-pill-border:          rgba(255, 255, 255, 0.12);
+
+  --popular-rail-image-fade:
+    linear-gradient(180deg, transparent 0%, rgba(15, 13, 12, 0.95) 100%);
+  --popular-rail-image-shade:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.10) 0%, transparent 42%, rgba(0, 0, 0, 0.34) 100%);
 }

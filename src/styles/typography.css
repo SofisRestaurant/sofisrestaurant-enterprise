@@ -242,6 +242,21 @@ small,
   font-weight: 400;
 }
 
+/* =============================================================================
+   UI Component escape hatch
+   Custom UI components (cards, rails, modals) manage their own text colors via
+   semantic CSS variables.  Global prose color rules must not compete.
+
+   Mark any component root with data-ui-component to opt its subtree out of
+   the global p / small / .text-caption color declarations above.
+   ============================================================================= */
+
+[data-ui-component] p,
+[data-ui-component] small,
+[data-ui-component] .text-caption {
+  color: inherit;
+}
+
 /* ── Prevent orphans in large headings ──────────────────────────────────── */
 h1, h2, h3, .section-title {
   text-wrap: balance;
