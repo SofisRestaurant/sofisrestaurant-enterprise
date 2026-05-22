@@ -20,26 +20,7 @@
      SofiBody (DM Sans Variable) is the workhorse for everything else.
    ============================================================================= */
 
-/* ── Display Face — brand wordmark only ───────────────────────────────────
-   font-display: block  →  invisible until loaded (prevents FOUT on logo).
-   The LogoWordmark component controls actual visibility via JS.
-   ──────────────────────────────────────────────────────────────────────── */
-
-@font-face {
-  font-family: 'SofiDisplay';
-  src: url('/fonts/display/SofiDisplay-Regular.woff2') format('woff2');
-  font-weight: 400;
-  font-style: normal;
-  font-display: block;
-}
-
-@font-face {
-  font-family: 'SofiDisplay';
-  src: url('/fonts/display/SofiDisplay-Bold.woff2') format('woff2');
-  font-weight: 700;
-  font-style: normal;
-  font-display: block;
-}
+/* SofiDisplay @font-face lives in fonts-display.css (deferred.css) — logo only */
 
 /* ── Body Face ────────────────────────────────────────────────────────────── */
 

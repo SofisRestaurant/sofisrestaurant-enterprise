@@ -11,6 +11,19 @@ import './i18n';
 // Design system — must load before any component styles
 import '@/styles/app.css';
 
+// Non-critical CSS (animations, effects, logo display font) — after first paint
+if (typeof window !== 'undefined') {
+  const loadDeferredStyles = () => {
+    void import('@/styles/deferred.css');
+  };
+
+  if (document.readyState === 'complete') {
+    loadDeferredStyles();
+  } else {
+    window.addEventListener('load', loadDeferredStyles, { once: true });
+  }
+}
+
 // Application router (defines all routes + lazy loading)
 import { router } from '@/app/router';
 

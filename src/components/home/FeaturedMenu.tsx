@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
 import type { MenuItemPublic } from '@/domain/menu/menu.types';
 import { pickMenuImageUrlFromRecord } from '@/lib/images/menuImageDelivery';
 import { MenuFoodImage } from '@/modules/menu/components/MenuFoodImage';
-import { invokeEdge } from '@/lib/supabase/invoke';
+import { invokePublicEdge } from '@/lib/supabase/invokePublic';
 
 export type MenuItem = MenuItemPublic;
 
@@ -20,6 +20,32 @@ type FeaturedMenuResponse =
   | MenuItem[];
 
 type FeaturedImageVariant = 'hero' | 'circle' | 'mini';
+
+const FEATURED_MENU_CACHE_KEY = 'sofis:featured-menu:v1';
+
+function readCachedFeaturedItems(): MenuItem[] {
+  if (typeof window === 'undefined') return [];
+
+  try {
+    const raw = sessionStorage.getItem(FEATURED_MENU_CACHE_KEY);
+    if (!raw) return [];
+
+    const parsed = JSON.parse(raw) as unknown;
+    return readFeaturedItems(parsed as FeaturedMenuResponse).slice(0, 12);
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedFeaturedItems(items: MenuItem[]): void {
+  if (typeof window === 'undefined' || items.length === 0) return;
+
+  try {
+    sessionStorage.setItem(FEATURED_MENU_CACHE_KEY, JSON.stringify(items.slice(0, 12)));
+  } catch {
+    // Quota/private mode — ignore
+  }
+}
 
 // ─── Safe readers ─────────────────────────────────────────────────────────────
 
@@ -147,7 +173,7 @@ function FeaturedMenuMessage({
       style={{ background: 'var(--color-cream-100, #faf6ef)' }}
     >
       <div className="mx-auto max-w-xl rounded-[1.5rem] bg-white p-6 text-center shadow-sm ring-1 ring-black/5">
-        <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-700">
+        <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-800">
           Sofi&apos;s Restaurant
         </p>
 
@@ -176,7 +202,7 @@ function FeaturedHeader() {
   return (
     <div className="mb-8 flex flex-col gap-4 lg:mb-10 lg:flex-row lg:items-end lg:justify-between">
       <div className="max-w-2xl">
-        <p className="text-xs font-black uppercase tracking-[0.22em] text-orange-700">
+        <p className="text-xs font-black uppercase tracking-[0.22em] text-orange-800">
           Sofi&apos;s favorites
         </p>
 
@@ -213,7 +239,7 @@ function HeroFeature({ item }: { item: MenuItem }) {
       <FeaturedImage item={item} index={0} variant="hero" />
 
       <div className="p-3 pt-5 sm:p-5">
-        <div className="mb-3 inline-flex items-center rounded-full bg-orange-50 px-3 py-1 text-[11px] font-black uppercase tracking-[0.16em] text-orange-700">
+        <div className="mb-3 inline-flex items-center rounded-full bg-orange-50 px-3 py-1 text-[11px] font-black uppercase tracking-[0.16em] text-orange-800">
           Guest favorite
         </div>
 
@@ -270,7 +296,7 @@ function BestSellerGrid({ items }: { items: MenuItem[] }) {
     <section aria-label="Best sellers">
       <div className="mb-3 flex items-end justify-between gap-4">
         <div>
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-700">
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-800">
             Best sellers
           </p>
           <h2 className="mt-1 text-2xl font-black tracking-[-0.045em] text-stone-950">
@@ -297,7 +323,7 @@ function BestSellerGrid({ items }: { items: MenuItem[] }) {
                 {name}
               </h3>
 
-              {price && <p className="mt-1 text-xs font-bold text-orange-700">{price}</p>}
+              {price && <p className="mt-1 text-xs font-bold text-orange-800">{price}</p>}
             </a>
           );
         })}
@@ -352,7 +378,7 @@ function SoftFeaturedList({ items }: { items: MenuItem[] }) {
                 </p>
               )}
 
-              {price && <p className="mt-1 text-xs font-black text-orange-700">{price}</p>}
+              {price && <p className="mt-1 text-xs font-black text-orange-800">{price}</p>}
             </div>
 
             <span className="text-lg font-black text-stone-300" aria-hidden="true">
@@ -368,7 +394,7 @@ function SoftFeaturedList({ items }: { items: MenuItem[] }) {
 function FinalSoftCTA() {
   return (
     <div className="rounded-[1.5rem] bg-[#ede0ce] p-5 text-center ring-1 ring-black/5">
-      <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-700">
+      <p className="text-xs font-black uppercase tracking-[0.18em] text-orange-800">
         Still deciding?
       </p>
 
@@ -389,28 +415,35 @@ function FinalSoftCTA() {
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function FeaturedMenu() {
-  const [featuredItems, setFeaturedItems] = useState<MenuItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [featuredItems, setFeaturedItems] = useState<MenuItem[]>(() => readCachedFeaturedItems());
+  const [loading, setLoading] = useState(() => featuredItems.length === 0);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
+    const hadCache = featuredItems.length > 0;
 
     async function loadFeatured() {
       try {
-        setLoading(true);
+        if (!hadCache) {
+          setLoading(true);
+        }
         setError(null);
 
-        const response = await invokeEdge<FeaturedMenuResponse>('get-featured-menu');
+        const response = await invokePublicEdge<FeaturedMenuResponse>('get-featured-menu');
 
         if (!mounted) return;
 
-        setFeaturedItems(readFeaturedItems(response).slice(0, 12));
+        const items = readFeaturedItems(response).slice(0, 12);
+        setFeaturedItems(items);
+        writeCachedFeaturedItems(items);
       } catch (err: unknown) {
         if (!mounted) return;
 
-        setFeaturedItems([]);
-        setError(err instanceof Error ? err.message : 'Failed to load featured menu.');
+        if (!hadCache) {
+          setFeaturedItems([]);
+          setError(err instanceof Error ? err.message : 'Failed to load featured menu.');
+        }
       } finally {
         if (mounted) {
           setLoading(false);
@@ -423,6 +456,7 @@ export function FeaturedMenu() {
     return () => {
       mounted = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- cache seed only on mount
   }, []);
 
   if (loading) {

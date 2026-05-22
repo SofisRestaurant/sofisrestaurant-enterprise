@@ -1,0 +1,4 @@
+/* Non-critical styles — animations, effects, display font (logo-only) */
+@import "./animations.css";
+@import "./effects.css";
+@import "./fonts-display.css";

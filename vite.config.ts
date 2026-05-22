@@ -92,6 +92,14 @@ export default defineConfig({
             return 'vendor-icons';
           }
 
+          // ── Charts (admin dashboard only — keep off homepage vendor blob) ──
+          if (
+            id.includes('node_modules/recharts/') ||
+            id.includes('node_modules/decimal.js-light/')
+          ) {
+            return 'vendor-recharts';
+          }
+
           // ── QR (admin / account only — keep off homepage vendor blob) ──
           if (id.includes('node_modules/html5-qrcode/')) {
             return 'vendor-qrcode-scanner';

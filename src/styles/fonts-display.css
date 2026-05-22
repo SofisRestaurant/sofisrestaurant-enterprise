@@ -1,0 +1,20 @@
+/* =============================================================================
+   SOFIS — fonts-display.css (non-critical)
+   SofiDisplay is logo-only. Loaded after first paint via deferred.css.
+   ============================================================================= */
+
+@font-face {
+  font-family: 'SofiDisplay';
+  src: url('/fonts/display/SofiDisplay-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'SofiDisplay';
+  src: url('/fonts/display/SofiDisplay-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}

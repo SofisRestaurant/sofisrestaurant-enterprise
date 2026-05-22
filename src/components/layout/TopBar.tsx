@@ -364,7 +364,7 @@ export default function TopBar() {
                 </span>
 
                 <span className="min-w-0 flex-1 text-left">
-                  <span className="block text-[8px] font-black uppercase leading-none tracking-[0.14em] text-(--color-ink-500) dark:text-white/55">
+                  <span className="block text-[8px] font-black uppercase leading-none tracking-[0.14em] text-(--color-ink-600) dark:text-white/70">
                     Pickup
                   </span>
                   <span className="mt-0.5 block truncate text-[10.5px] font-black leading-none">
