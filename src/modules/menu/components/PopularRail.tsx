@@ -3,6 +3,8 @@
 // =============================================================================
 // Popular rail - Sofi's premium horizontal item rail.
 // iOS 2026 glass design. Theme values live in tokens.css.
+// Typography intentionally avoids <p> inside cards so global typography.css
+// paragraph color rules cannot override component text colors.
 // =============================================================================
 
 import React, { memo, useCallback, useEffect, useMemo, useRef } from 'react';
@@ -106,6 +108,45 @@ const SCROLL_DESKTOP_AMOUNT = 360;
 const SCROLL_KEYBOARD_AMOUNT = 240;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function cx(...classes: Array<string | false | null | undefined>): string {
+  return classes.filter(Boolean).join(' ');
+}
+
+function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined') return true;
+
+  try {
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  } catch {
+    return true;
+  }
+}
+
+function safeStr(value: unknown, fallback = ''): string {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function safeId(item: BaseItem, index: number): string {
+  const id = safeStr(item.id).trim();
+  if (id) return id;
+
+  const name = safeStr(item.name).trim();
+  return name ? `name:${name}:${index}` : `idx:${index}`;
+}
+
+function formatCents(cents: number): string {
+  const safeCents = Number.isFinite(cents) ? Math.max(0, Math.round(cents)) : 0;
+
+  return (safeCents / 100).toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Class recipes
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -149,59 +190,43 @@ const railListClass = cx(
   'overscroll-x-contain overscroll-y-none -mx-1 px-1 pb-1 [-webkit-overflow-scrolling:touch]',
 );
 
+const railTextBaseClass = 'font-sans antialiased';
+
 const itemTitleClass = cx(
-  'line-clamp-1 text-[0.98rem] font-black leading-snug tracking-[-0.02em]',
-  'text-[var(--popular-rail-text)] antialiased',
+  railTextBaseClass,
+  'block line-clamp-1 text-[1rem] font-black leading-[1.15] tracking-[-0.025em]',
+  'text-[var(--popular-rail-text)]',
 );
 
 const itemPriceClass = cx(
-  'min-w-0 truncate text-[1.12rem] font-black leading-none tabular-nums tracking-[-0.035em]',
-  'text-[var(--popular-rail-accent)] antialiased',
+  railTextBaseClass,
+  'block min-w-0 truncate text-[1.15rem] font-black leading-none tabular-nums tracking-[-0.04em]',
+  'text-[var(--popular-rail-accent)]',
 );
 
 const itemMetaClass = cx(
-  'inline-flex min-w-0 items-center gap-1.5 text-[10.5px] font-extrabold leading-none',
-  'text-[var(--popular-rail-muted)] antialiased',
+  railTextBaseClass,
+  'inline-flex min-w-0 items-center gap-1.5 text-[10.75px] font-black leading-none',
+  'text-[var(--popular-rail-muted)]',
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
+const itemMutedClass = cx(
+  railTextBaseClass,
+  'block truncate text-[10.75px] font-black leading-none',
+  'text-[var(--popular-rail-muted)]',
+);
 
-function cx(...classes: Array<string | false | null | undefined>): string {
-  return classes.filter(Boolean).join(' ');
-}
+const headerTitleClass = cx(
+  railTextBaseClass,
+  'block truncate text-base font-black leading-none tracking-[-0.025em]',
+  'text-[var(--popular-rail-text)]',
+);
 
-function prefersReducedMotion(): boolean {
-  if (typeof window === 'undefined') return true;
-
-  try {
-    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  } catch {
-    return true;
-  }
-}
-
-function safeStr(value: unknown, fallback = ''): string {
-  return typeof value === 'string' ? value : fallback;
-}
-
-function safeId(item: BaseItem, index: number): string {
-  const id = safeStr(item.id).trim();
-  if (id) return id;
-
-  const name = safeStr(item.name).trim();
-  return name ? `name:${name}:${index}` : `idx:${index}`;
-}
-
-function formatCents(cents: number): string {
-  const safeCents = Number.isFinite(cents) ? Math.max(0, Math.round(cents)) : 0;
-
-  return (safeCents / 100).toLocaleString('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  });
-}
+const headerSubtitleClass = cx(
+  railTextBaseClass,
+  'mt-1 block truncate text-xs font-bold leading-tight',
+  'text-[var(--popular-rail-muted)]',
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hooks
@@ -236,8 +261,9 @@ const PopularBadge = memo(function PopularBadge({ available }: { available: bool
   return (
     <span
       className={cx(
+        railTextBaseClass,
         'inline-flex max-w-full items-center gap-1 rounded-full px-2.5 py-1',
-        'truncate text-[9.5px] font-black uppercase tracking-[0.11em]',
+        'truncate text-[9.5px] font-black uppercase leading-none tracking-[0.11em]',
         'bg-[var(--popular-rail-pill-bg)] text-[var(--popular-rail-pill-text)]',
         'ring-1 ring-[var(--popular-rail-pill-border)]',
         'shadow-[0_10px_24px_rgba(0,0,0,0.10)] backdrop-blur-2xl',
@@ -253,10 +279,11 @@ const FreshPill = memo(function FreshPill() {
   return (
     <span
       className={cx(
+        railTextBaseClass,
         'inline-flex max-w-[5.35rem] shrink-0 items-center gap-1 rounded-full px-2.5 py-1',
         'border border-[var(--popular-rail-card-border)]',
         'bg-[var(--popular-rail-surface-bg)] text-[9.5px] font-black leading-none',
-        'text-[var(--popular-rail-subtle)] backdrop-blur-xl antialiased',
+        'text-[var(--popular-rail-muted)] backdrop-blur-xl',
       )}
     >
       <Sparkles className="h-3 w-3 shrink-0 text-[var(--popular-rail-accent)]" aria-hidden="true" />
@@ -378,19 +405,19 @@ const PopularCard = memo(function PopularCard<TItem extends BaseItem>({
           className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-500 group-hover:opacity-100"
           aria-hidden="true"
         >
-          <div className="absolute -right-8 top-8 h-28 w-28 rounded-full bg-[var(--popular-rail-accent)]/12 blur-3xl" />
+          <div className="absolute -right-8 top-8 h-28 w-28 rounded-full bg-[var(--popular-rail-accent-glow)] blur-3xl" />
           <div className="absolute -left-10 bottom-2 h-24 w-24 rounded-full bg-black/8 blur-3xl dark:bg-white/8" />
         </div>
       ) : null}
 
       <div className="relative z-10 flex min-h-0 flex-1 flex-col px-3.5 pb-3.5 pt-3">
         <div className="min-w-0 shrink-0">
-          <p className={itemTitleClass} title={name}>
+          <span className={itemTitleClass} title={name}>
             {name}
-          </p>
+          </span>
 
           <div className="mt-2 flex min-w-0 items-center justify-between gap-2">
-            <p className={itemPriceClass}>{priceLabel}</p>
+            <span className={itemPriceClass}>{priceLabel}</span>
             {available ? <FreshPill /> : null}
           </div>
         </div>
@@ -409,9 +436,7 @@ const PopularCard = memo(function PopularCard<TItem extends BaseItem>({
               <CardArrow />
             </div>
           ) : (
-            <span className="block truncate text-[10.5px] font-extrabold leading-none text-[var(--popular-rail-subtle)] antialiased">
-              Currently unavailable
-            </span>
+            <span className={itemMutedClass}>Currently unavailable</span>
           )}
         </div>
       </div>
@@ -431,20 +456,33 @@ const EmptyRail = memo(function EmptyRail({
     <div className={cx('flex h-full items-center rounded-[1.55rem] p-4 sm:p-5', glassSurfaceClass)}>
       <div className="flex w-full min-w-0 items-start justify-between gap-4">
         <div className="min-w-0">
-          <p className="truncate text-sm font-black tracking-[-0.015em] text-[var(--popular-rail-text)] antialiased">
+          <span
+            className={cx(
+              railTextBaseClass,
+              'block truncate text-sm font-black tracking-[-0.015em]',
+              'text-[var(--popular-rail-text)]',
+            )}
+          >
             Nothing trending yet
-          </p>
+          </span>
 
-          <p className="mt-1 line-clamp-2 text-xs font-semibold leading-relaxed text-[var(--popular-rail-muted)] antialiased">
+          <span
+            className={cx(
+              railTextBaseClass,
+              'mt-1 block line-clamp-2 text-xs font-semibold leading-relaxed',
+              'text-[var(--popular-rail-muted)]',
+            )}
+          >
             Browse the full menu or clear active filters.
-          </p>
+          </span>
         </div>
 
         <button
           type="button"
           onClick={onEmptyHintAction}
           className={cx(
-            'shrink-0 rounded-full px-3.5 py-2 text-xs font-black antialiased',
+            railTextBaseClass,
+            'shrink-0 rounded-full px-3.5 py-2 text-xs font-black',
             'bg-[var(--popular-rail-icon-bg)] text-[var(--popular-rail-icon-text)]',
             'shadow-[0_10px_22px_rgba(63,36,24,0.20)]',
             'transition-[background-color,color,box-shadow,transform] duration-200 ease-out',
@@ -486,13 +524,8 @@ const PopularRailHeader = memo(function PopularRailHeader({
         </div>
 
         <div className="min-w-0">
-          <p className="truncate text-base font-black leading-none tracking-[-0.025em] text-[var(--popular-rail-text)] antialiased">
-            {title}
-          </p>
-
-          <p className="mt-1 truncate text-xs font-bold text-[var(--popular-rail-muted)] antialiased">
-            {subtitle}
-          </p>
+          <span className={headerTitleClass}>{title}</span>
+          <span className={headerSubtitleClass}>{subtitle}</span>
         </div>
       </div>
 
@@ -580,6 +613,7 @@ function PopularRailImpl<TItem extends BaseItem>({
 
   return (
     <section
+      data-ui-component="popular-rail"
       className={cx(
         POPULAR_SECTION_HEIGHT_CLASS,
         'relative flex flex-col gap-4 overflow-hidden overscroll-contain',
