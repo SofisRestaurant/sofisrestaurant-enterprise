@@ -4,18 +4,10 @@
 // =============================================================================
 //
 // MOBILE DOCK CONTRACT:
-//   Only ONE mobile dock system exists: MobileDockShell.
-//   It wraps both FloatingCartPill and BottomNav.
-//   No other component (MobileNav, etc.) may render a fixed bottom bar.
-//
-// Layer order:
-//   1. CartDisplaySync — invisible sync bridge
-//   2. TopBar
-//   3. main / Outlet
-//   4. Footer (desktop only, lazy)
-//   5. MobileDockShell (cart + nav, single scroll-moving wrapper)
-//   6. Global overlays (lazy)
-//   7. LazyCartDrawer (once only, last)
+//   Only ONE mobile dock exists: MobileDockShell.
+//   It wraps FloatingCartPill + BottomNav as a single scroll-moving unit.
+//   No other component may render a fixed bottom bar.
+//   DO NOT import MobileNav — it is a deprecated duplicate.
 // =============================================================================
 
 import { lazy, Suspense } from 'react';
@@ -35,9 +27,6 @@ import CartDisplaySync from '@/modules/cart/components/CartDisplaySync';
 import { FloatingCartPill } from '@/modules/cart/components/FloatingCartPill';
 import { LazyCartDrawer } from '@/modules/cart/components/LazyCartDrawer';
 
-// DO NOT import MobileNav — it is a deprecated duplicate of BottomNav.
-// See MobileNav.tsx for details.
-
 const Footer = lazy(() => import('@/components/layout/Footer'));
 const AuthModals = lazy(() => import('@/features/auth/components/AuthModals'));
 const SessionExpiryWarning = lazy(() => import('@/components/auth/SessionExpiryWarning'));
@@ -51,7 +40,7 @@ export default function RootLayout() {
           <ActiveOrderProvider>
             <BottomDockProvider>
               <div className="flex min-h-dvh flex-col">
-                {/* Invisible cart display bridge — restores cart badge after reload */}
+                {/* Invisible cart display bridge */}
                 <CartDisplaySync />
 
                 {/* Header */}
@@ -64,7 +53,6 @@ export default function RootLayout() {
                 >
                   <Outlet />
 
-                  {/* Desktop footer only */}
                   <div className="hidden md:block">
                     <Suspense fallback={null}>
                       <Footer />
@@ -72,13 +60,10 @@ export default function RootLayout() {
                   </div>
                 </main>
 
-                {/* ── Mobile commerce dock ─────────────────────────────────────
-                    Single shell moves cart pill + bottom nav as one unit.
-                    No other fixed bottom bar may exist.
-                    ──────────────────────────────────────────────────────────── */}
+                {/* Single mobile dock — only scroll-moving element */}
                 <MobileDockShell cart={<FloatingCartPill />} nav={<BottomNav />} />
 
-                {/* Global overlays, lazy and non-blocking */}
+                {/* Global overlays */}
                 <Suspense fallback={null}>
                   <SessionExpiryWarning />
                   <AuthModals />
@@ -86,8 +71,6 @@ export default function RootLayout() {
                 </Suspense>
 
                 <ScrollSafety />
-
-                {/* Cart drawer — mounted once only, lazy */}
                 <LazyCartDrawer />
               </div>
             </BottomDockProvider>

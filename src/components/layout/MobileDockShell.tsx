@@ -9,7 +9,7 @@
 //   This component does NOT set any inline transform or Tailwind translate.
 //
 //   Cart slot show/hide is handled by utilities.css via [data-cart-visible].
-//   This component only sets the data attribute — no Tailwind opacity/translate.
+//   This component only sets the data attribute.
 // =============================================================================
 
 import type { ReactNode } from 'react';
@@ -36,12 +36,10 @@ export function MobileDockShell({ cart, nav }: Props) {
         'mobile-dock-shell',
         'pointer-events-none fixed inset-x-0 bottom-0 z-[var(--z-mobile-dock)]',
         'flex transform-gpu flex-col justify-end md:hidden',
-        // Transition is defined in utilities.css on .mobile-dock-shell.
-        // Do NOT add motion-safe:transition-transform here.
       ].join(' ')}
       aria-hidden={false}
     >
-      {/* Cart pill slot — show/hide animated by utilities.css [data-cart-visible] */}
+      {/* Cart pill slot — animated by utilities.css [data-cart-visible] */}
       <div
         className={[
           'mobile-dock-cart-slot px-3 min-[390px]:px-4',

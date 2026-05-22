@@ -2,13 +2,11 @@
 // =============================================================================
 // DEPRECATED — Legacy mobile nav, replaced by BottomNav inside MobileDockShell.
 //
-// This component previously rendered its own `fixed bottom-0` nav bar, which
-// created a DUPLICATE fixed dock underneath the MobileDockShell system.
-// Two fixed bottom bars with independent positioning caused the scroll bounce.
+// This component previously rendered its own `fixed bottom-0 z-50` nav bar,
+// creating a DUPLICATE fixed dock. Now renders nothing.
 //
-// Now renders nothing.  The export is kept so any existing imports compile
-// without error.  Remove all <MobileNav /> usage from layouts/pages, then
-// delete this file entirely.
+// The export is kept so existing imports compile without error.
+// Remove all <MobileNav /> usage from layouts/pages, then delete this file.
 // =============================================================================
 
 export function MobileNav() {
