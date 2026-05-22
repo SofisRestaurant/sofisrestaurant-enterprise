@@ -1,50 +1,40 @@
 // =============================================================================
 // src/lib/images/menuImageDelivery.ts
 // =============================================================================
-// Menu + featured image delivery — single source of truth.
+// Menu + featured image delivery — production reliability first (2026).
 // =============================================================================
 //
-// Responsibilities:
-//   - Normalize image URLs from every legacy DB / API field name.
-//   - Convert Supabase storage paths → public object URLs.
-//   - Unwrap accidental wsrv.nl double-proxy URLs before re-wrapping.
-//   - Deliver layout-specific sizes (card, hero, circle, mini, rail).
-//   - Keep wsrv.nl as the default optimizer (Supabase /render/image 403s here).
-//   - Support a direct-URL delivery mode for onError fallback in UI.
+// Menu UI (cards, rail, featured, modal):
+//   - NO wsrv.nl — avoids browser cache poisoning on failed proxy responses.
+//   - NO srcSet — one stable src per item per attempt.
+//   - Attempt 1: Supabase render/image at layout width (when storage URL).
+//   - Attempt 2: public /storage/v1/object/public/... URL (MenuFoodImage onError).
+//   - Branded fallback when both fail or URL missing.
 //
-// LCP: priority images use fetchPriority="high" + loading="eager" on the <img>.
-// Manual <link rel="preload"> stays disabled (dimension mismatch with srcSet).
+// wsrv remains in this file only for legacy getMenuImageSrc(..., mode: 'optimized')
+// callers outside menu UI; menu components do not use it.
 // =============================================================================
 
 import { env } from '@/lib/config/env';
-import {
-  isSupabaseStorageUrl,
-  supabaseImageSrcSet,
-  supabaseImageUrl,
-} from '@/lib/images/supabaseImage';
+import { isSupabaseStorageUrl, supabaseImageUrl } from '@/lib/images/supabaseImage';
 
 export { isSupabaseStorageUrl };
 
-// ─── Feature flags ────────────────────────────────────────────────────────────
-
-const ENABLE_SUPABASE_TRANSFORMS =
-  import.meta.env.VITE_ENABLE_SUPABASE_IMAGE_TRANSFORMS === 'true';
-
-const USE_IMAGE_PROXY = import.meta.env.VITE_USE_IMAGE_PROXY !== 'false';
-
-// ─── Proxy configuration ──────────────────────────────────────────────────────
-
-const PROXY_BASE = 'https://wsrv.nl/';
 const PROXY_HOST_PATTERN = /(^|\.)wsrv\.nl$/i;
-
 const STORAGE_OBJECT_SEGMENT = '/storage/v1/object/public/';
 
 const KNOWN_IMAGE_BUCKETS = ['menu-images', 'hero-images', 'gallery-images', 'banner-images'] as const;
 
-// ─── Image variants ───────────────────────────────────────────────────────────
+// Legacy types — MenuFoodImage uses attempt-based delivery, not these stages.
+export type MenuImageDeliveryMode = 'optimized' | 'direct' | 'raw';
+export type MenuImageDeliveryStage = MenuImageDeliveryMode | 'unavailable';
+
+/** @deprecated MenuFoodImage no longer uses stage machine; always starts sized attempt. */
+export function getInitialMenuImageDeliveryStage(): MenuImageDeliveryMode {
+  return 'optimized';
+}
 
 export type MenuImagePriority = 'high' | 'auto';
-
 export type FeaturedImageVariant = 'hero' | 'circle' | 'mini' | 'rail';
 
 export type MenuCardImageAttrs = {
@@ -60,104 +50,58 @@ export type MenuCardImageAttrs = {
 };
 
 export type FeaturedImageAttrs = MenuCardImageAttrs;
-
-/** Props safe to spread onto <img> — srcSet omitted unless optimized. */
 export type MenuImgElementAttrs = Omit<MenuCardImageAttrs, 'srcSet'> & { srcSet?: string };
 
-/** optimized = sized wsrv; direct = sized fallback (transform or wsrv n=fb); raw = public object URL. */
-export type MenuImageDeliveryMode = 'optimized' | 'direct' | 'raw';
+/** Sized Supabase transform URL for first load attempt (never wsrv). */
+export type MenuImageSources = MenuImgElementAttrs & {
+  /** Public object URL — second attempt when sized transform fails. */
+  publicSrc: string;
+  /** True when sized and public URLs differ (retry is worthwhile). */
+  hasPublicFallback: boolean;
+};
 
-/** Delivery stage for MenuFoodImage state machine. */
-export type MenuImageDeliveryStage = MenuImageDeliveryMode | 'unavailable';
-
-/** Every image starts on sized wsrv (reliable dimensions, no full-original download). */
-export function getInitialMenuImageDeliveryStage(): MenuImageDeliveryMode {
-  return 'optimized';
-}
-
-// ─── Menu card layout sizes ───────────────────────────────────────────────────
+// ─── Layout sizes ─────────────────────────────────────────────────────────────
 
 const CARD_SIZES = '(min-width: 640px) 112px, 92px';
-
 const CARD_WIDTH_ABOVE_FOLD = 224;
 const CARD_WIDTH_BELOW_FOLD = 184;
 const CARD_QUALITY_ABOVE = 78;
 const CARD_QUALITY_BELOW = 72;
 
-const CARD_SRCSET_WIDTHS = [
-  { w: 92, q: 72 },
-  { w: 112, q: 74 },
-  { w: 184, q: 72 },
-  { w: 224, q: 76 },
-] as const;
-
 const MODAL_SIZES = '(max-width: 640px) 100vw, 540px';
 const MODAL_WIDTH = 960;
 const MODAL_QUALITY = 78;
 
-// ─── Featured / rail sizes ────────────────────────────────────────────────────
-
 const FEATURED_VARIANTS: Record<
   FeaturedImageVariant,
-  {
-    width: number;
-    height: number;
-    quality: number;
-    sizes: string;
-    srcSet: readonly { w: number; h: number; q: number }[];
-  }
+  { width: number; height: number; quality: number; sizes: string }
 > = {
   hero: {
     width: 360,
     height: 288,
     quality: 74,
     sizes: '(max-width: 640px) 92vw, (min-width: 1280px) 520px, (min-width: 1024px) 46vw, 92vw',
-    srcSet: [
-      { w: 280, h: 224, q: 70 },
-      { w: 360, h: 288, q: 72 },
-      { w: 480, h: 384, q: 74 },
-      { w: 720, h: 576, q: 78 },
-    ],
   },
-
   circle: {
-    width: 320,
-    height: 320,
-    quality: 78,
-    sizes: '(min-width: 640px) 128px, 112px',
-    srcSet: [
-      { w: 160, h: 160, q: 72 },
-      { w: 224, h: 224, q: 76 },
-      { w: 320, h: 320, q: 78 },
-    ],
-  },
-
-  mini: {
-    width: 240,
-    height: 172,
+    width: 224,
+    height: 224,
     quality: 76,
-    sizes: '106px',
-    srcSet: [
-      { w: 106, h: 76, q: 70 },
-      { w: 212, h: 152, q: 74 },
-      { w: 240, h: 172, q: 76 },
-    ],
+    sizes: '(min-width: 640px) 128px, 112px',
   },
-
+  mini: {
+    width: 212,
+    height: 152,
+    quality: 74,
+    sizes: '106px',
+  },
   rail: {
     width: 448,
     height: 224,
     quality: 78,
     sizes: '224px',
-    srcSet: [
-      { w: 224, h: 112, q: 74 },
-      { w: 336, h: 168, q: 76 },
-      { w: 448, h: 224, q: 78 },
-    ],
   },
 };
 
-/** Field names seen across menu_items, RPC payloads, and admin forms. */
 export const MENU_IMAGE_FIELD_KEYS = [
   'image_url',
   'imageUrl',
@@ -263,10 +207,6 @@ function isRenderableHttpUrl(url: string): boolean {
   }
 }
 
-/**
- * Normalize any raw menu image reference into a fetchable absolute URL.
- * Returns null when the value is empty, unsafe, or cannot be resolved.
- */
 export function resolveMenuImageUrl(raw: string | null | undefined): string | null {
   if (typeof raw !== 'string') return null;
 
@@ -282,9 +222,6 @@ export function resolveMenuImageUrl(raw: string | null | undefined): string | nu
   return url;
 }
 
-/**
- * Read the first valid image URL from a menu item / API record.
- */
 export function pickMenuImageUrlFromRecord(
   record: Record<string, unknown> | null | undefined,
 ): string | null {
@@ -317,287 +254,106 @@ function cleanUrl(url: string | null | undefined): string | null {
   return resolveMenuImageUrl(url);
 }
 
-// ─── Delivery builders ──────────────────────────────────────────────────────────
-
-function buildProxyUrl({
-  rawUrl,
-  width,
-  height,
-  quality,
-  fit = 'cover',
-  cacheKey = 'primary',
-}: {
-  rawUrl: string;
-  width: number;
-  height: number;
-  quality: number;
-  fit?: 'cover' | 'contain' | 'inside';
-  /** Partition browser cache: primary vs fallback (deterministic, not random). */
-  cacheKey?: 'primary' | 'fb';
-}): string {
-  const source = unwrapProxyUrl(rawUrl);
-
-  const params = new URLSearchParams({
-    url: source,
-    w: String(width),
-    h: String(height),
-    fit,
-    output: 'webp',
-    q: String(quality),
-    n: cacheKey === 'fb' ? 'fb' : '-1',
-  });
-
-  return `${PROXY_BASE}?${params.toString()}`;
-}
-
-function buildProxySrcSet(
-  rawUrl: string,
-  widths: readonly { w: number; h: number; q: number }[],
-): string {
-  return widths
-    .map(({ w, h, q }) => {
-      const src = buildProxyUrl({
-        rawUrl,
-        width: w,
-        height: h,
-        quality: q,
-      });
-
-      return `${src} ${w}w`;
-    })
-    .join(', ');
-}
-
-/** Sized fallback when optimized wsrv fails — never the multi-MB original. */
-function buildSizedFallbackSrc(
-  url: string,
-  width: number,
-  height: number,
-  quality: number,
-): string {
-  if (ENABLE_SUPABASE_TRANSFORMS && isSupabaseStorageUrl(url)) {
+/** Sized Supabase render URL — never wsrv. */
+function buildSizedSupabaseSrc(url: string, width: number, quality: number): string {
+  if (isSupabaseStorageUrl(url)) {
     return supabaseImageUrl(url, width, quality);
   }
-
-  if (USE_IMAGE_PROXY) {
-    return buildProxyUrl({
-      rawUrl: url,
-      width,
-      height,
-      quality,
-      cacheKey: 'fb',
-    });
-  }
-
   return url;
 }
 
-function buildCardProxySrcSet(rawUrl: string): string {
-  return CARD_SRCSET_WIDTHS
-    .map(({ w, q }) => {
-      const src = buildProxyUrl({
-        rawUrl,
-        width: w,
-        height: w,
-        quality: q,
-      });
-
-      return `${src} ${w}w`;
-    })
-    .join(', ');
-}
-
-function buildAttrs(
-  url: string,
+function buildReliableSources(
+  publicUrl: string,
   config: {
     width: number;
     height: number;
     quality: number;
     sizes: string;
-    srcSet?: readonly { w: number; h: number; q: number }[];
-    cardSrcSet?: boolean;
-    /** Menu cards/rail: single sized src avoids stale failed srcSet cache on reload. */
-    allowSrcSet?: boolean;
   },
-  options: { isAboveFold: boolean; mode: MenuImageDeliveryMode },
-): MenuCardImageAttrs {
-  const { isAboveFold, mode } = options;
-  const allowSrcSet = config.allowSrcSet ?? false;
-
-  if (mode === 'raw') {
-    return {
-      src: url,
-      srcSet: undefined,
-      sizes: config.sizes,
-      width: config.width,
-      height: config.height,
-      loading: isAboveFold ? 'eager' : 'lazy',
-      fetchPriority: isAboveFold ? 'high' : 'auto',
-      decoding: 'async',
-      referrerPolicy: 'no-referrer',
-    };
-  }
-
-  if (mode === 'direct') {
-    return {
-      src: buildSizedFallbackSrc(url, config.width, config.height, config.quality),
-      srcSet: undefined,
-      sizes: config.sizes,
-      width: config.width,
-      height: config.height,
-      loading: isAboveFold ? 'eager' : 'lazy',
-      fetchPriority: isAboveFold ? 'high' : 'auto',
-      decoding: 'async',
-      referrerPolicy: 'no-referrer',
-    };
-  }
-
-  if (ENABLE_SUPABASE_TRANSFORMS) {
-    return {
-      src: supabaseImageUrl(url, config.width, config.quality),
-      srcSet: allowSrcSet ? supabaseImageSrcSet(url) : undefined,
-      sizes: config.sizes,
-      width: config.width,
-      height: config.height,
-      loading: isAboveFold ? 'eager' : 'lazy',
-      fetchPriority: isAboveFold ? 'high' : 'auto',
-      decoding: 'async',
-      referrerPolicy: 'no-referrer',
-    };
-  }
-
-  if (USE_IMAGE_PROXY) {
-    return {
-      src: buildProxyUrl({
-        rawUrl: url,
-        width: config.width,
-        height: config.height,
-        quality: config.quality,
-        cacheKey: 'primary',
-      }),
-      srcSet:
-        allowSrcSet && config.srcSet
-          ? buildProxySrcSet(url, config.srcSet)
-          : allowSrcSet && config.cardSrcSet
-            ? buildCardProxySrcSet(url)
-            : undefined,
-      sizes: config.sizes,
-      width: config.width,
-      height: config.height,
-      loading: isAboveFold ? 'eager' : 'lazy',
-      fetchPriority: isAboveFold ? 'high' : 'auto',
-      decoding: 'async',
-      referrerPolicy: 'no-referrer',
-    };
-  }
+  isPriority: boolean,
+): MenuImageSources {
+  const sizedSrc = buildSizedSupabaseSrc(publicUrl, config.width, config.quality);
+  const hasPublicFallback = isSupabaseStorageUrl(publicUrl) && sizedSrc !== publicUrl;
 
   return {
-    src: url,
-    srcSet: undefined,
+    src: sizedSrc,
+    publicSrc: publicUrl,
+    hasPublicFallback,
     sizes: config.sizes,
     width: config.width,
     height: config.height,
-    loading: isAboveFold ? 'eager' : 'lazy',
-    fetchPriority: isAboveFold ? 'high' : 'auto',
+    loading: isPriority ? 'eager' : 'lazy',
+    fetchPriority: isPriority ? 'high' : 'auto',
     decoding: 'async',
     referrerPolicy: 'no-referrer',
   };
 }
 
-/** Strip srcSet when absent so direct fallback never forwards wsrv candidates. */
-export function toImgElementAttrs(attrs: MenuCardImageAttrs): MenuImgElementAttrs {
-  const { srcSet, ...rest } = attrs;
-  return srcSet ? { ...rest, srcSet } : rest;
+/** Props for <img> — never includes srcSet. */
+export function toImgElementAttrs(attrs: MenuImageSources): MenuImgElementAttrs {
+  const { publicSrc: _publicSrc, hasPublicFallback: _hasPublicFallback, ...img } = attrs;
+  return img;
 }
-
-// ─── Public API ───────────────────────────────────────────────────────────────
 
 export function menuImageTransformsEnabled(): boolean {
-  return ENABLE_SUPABASE_TRANSFORMS;
+  return import.meta.env.VITE_ENABLE_SUPABASE_IMAGE_TRANSFORMS === 'true';
 }
 
-export function getMenuImageSrc(
+export function getMenuCardImageSources(
   rawUrl: string | null | undefined,
-  options: { width: number; quality: number; mode?: MenuImageDeliveryMode },
-): string {
+  options: { isAboveFold: boolean },
+): MenuImageSources | null {
   const url = cleanUrl(rawUrl);
-  if (!url) return '';
+  if (!url) return null;
 
-  const mode = options.mode ?? 'optimized';
-
-  if (mode === 'raw') {
-    return url;
-  }
-
-  if (mode === 'direct') {
-    return buildSizedFallbackSrc(url, options.width, options.width, options.quality);
-  }
-
-  if (ENABLE_SUPABASE_TRANSFORMS) {
-    return supabaseImageUrl(url, options.width, options.quality);
-  }
-
-  if (USE_IMAGE_PROXY) {
-    return buildProxyUrl({
-      rawUrl: url,
-      width: options.width,
-      height: options.width,
-      quality: options.quality,
-      cacheKey: 'primary',
-    });
-  }
-
-  return url;
+  return buildReliableSources(
+    url,
+    {
+      width: options.isAboveFold ? CARD_WIDTH_ABOVE_FOLD : CARD_WIDTH_BELOW_FOLD,
+      height: options.isAboveFold ? CARD_WIDTH_ABOVE_FOLD : CARD_WIDTH_BELOW_FOLD,
+      quality: options.isAboveFold ? CARD_QUALITY_ABOVE : CARD_QUALITY_BELOW,
+      sizes: CARD_SIZES,
+    },
+    options.isAboveFold,
+  );
 }
 
-export function getMenuImageSrcSet(
-  rawUrl: string | null | undefined,
-  options: { mode?: MenuImageDeliveryMode } = {},
-): string | undefined {
-  const url = cleanUrl(rawUrl);
-  if (!url) return undefined;
-
-  const mode = options.mode ?? 'optimized';
-
-  if (mode !== 'optimized') {
-    return undefined;
-  }
-
-  if (ENABLE_SUPABASE_TRANSFORMS) {
-    return supabaseImageSrcSet(url);
-  }
-
-  if (USE_IMAGE_PROXY) {
-    return buildCardProxySrcSet(url);
-  }
-
-  return undefined;
-}
-
+/** @deprecated Use getMenuCardImageSources */
 export function getMenuCardImageAttrs(
   rawUrl: string | null | undefined,
   options: { isAboveFold: boolean; mode?: MenuImageDeliveryMode },
 ): MenuCardImageAttrs | null {
+  void options.mode;
+  const sources = getMenuCardImageSources(rawUrl, { isAboveFold: options.isAboveFold });
+  if (!sources) return null;
+  return { ...toImgElementAttrs(sources), srcSet: undefined };
+}
+
+export function getFeaturedImageSources(
+  rawUrl: string | null | undefined,
+  options: {
+    variant: FeaturedImageVariant;
+    isAboveFold: boolean;
+  },
+): MenuImageSources | null {
   const url = cleanUrl(rawUrl);
   if (!url) return null;
 
-  const { isAboveFold } = options;
-  const mode = options.mode ?? 'optimized';
+  const config = FEATURED_VARIANTS[options.variant];
 
-  return buildAttrs(
+  return buildReliableSources(
     url,
     {
-      width: isAboveFold ? CARD_WIDTH_ABOVE_FOLD : CARD_WIDTH_BELOW_FOLD,
-      height: isAboveFold ? CARD_WIDTH_ABOVE_FOLD : CARD_WIDTH_BELOW_FOLD,
-      quality: isAboveFold ? CARD_QUALITY_ABOVE : CARD_QUALITY_BELOW,
-      sizes: CARD_SIZES,
-      cardSrcSet: true,
-      allowSrcSet: false,
+      width: config.width,
+      height: config.height,
+      quality: config.quality,
+      sizes: config.sizes,
     },
-    { isAboveFold, mode },
+    options.isAboveFold,
   );
 }
 
+/** @deprecated Use getFeaturedImageSources */
 export function getFeaturedImageAttrs(
   rawUrl: string | null | undefined,
   options: {
@@ -606,54 +362,66 @@ export function getFeaturedImageAttrs(
     mode?: MenuImageDeliveryMode;
   },
 ): FeaturedImageAttrs | null {
-  const url = cleanUrl(rawUrl);
-  if (!url) return null;
-
-  const config = FEATURED_VARIANTS[options.variant];
-  const mode = options.mode ?? 'optimized';
-
-  return buildAttrs(
-    url,
-    {
-      width: config.width,
-      height: config.height,
-      quality: config.quality,
-      sizes: config.sizes,
-      srcSet: config.srcSet,
-      allowSrcSet: options.variant === 'hero',
-    },
-    { isAboveFold: options.isAboveFold, mode },
-  );
+  void options.mode;
+  const sources = getFeaturedImageSources(rawUrl, {
+    variant: options.variant,
+    isAboveFold: options.isAboveFold,
+  });
+  if (!sources) return null;
+  return { ...toImgElementAttrs(sources), srcSet: undefined };
 }
 
-export function getModalImageAttrs(
+export function getModalImageSources(
   rawUrl: string | null | undefined,
-  options: { mode?: MenuImageDeliveryMode } = {},
-): MenuCardImageAttrs | null {
+): MenuImageSources | null {
   const url = cleanUrl(rawUrl);
   if (!url) return null;
 
-  const mode = options.mode ?? 'optimized';
-
-  return buildAttrs(
+  return buildReliableSources(
     url,
     {
       width: MODAL_WIDTH,
       height: Math.round((MODAL_WIDTH * 10) / 16),
       quality: MODAL_QUALITY,
       sizes: MODAL_SIZES,
-      srcSet: [
-        { w: 480, h: 300, q: 72 },
-        { w: 720, h: 450, q: 76 },
-        { w: 960, h: 600, q: 78 },
-      ],
-      allowSrcSet: false,
     },
-    { isAboveFold: true, mode },
+    true,
   );
 }
 
-/** Stable warm gradient for branded fallbacks (keyed by item id). */
+/** @deprecated Use getModalImageSources */
+export function getModalImageAttrs(
+  rawUrl: string | null | undefined,
+  options: { mode?: MenuImageDeliveryMode } = {},
+): MenuCardImageAttrs | null {
+  void options;
+  const sources = getModalImageSources(rawUrl);
+  if (!sources) return null;
+  return { ...toImgElementAttrs(sources), srcSet: undefined };
+}
+
+/** Legacy helper — menu UI does not call this. */
+export function getMenuImageSrc(
+  rawUrl: string | null | undefined,
+  options: { width: number; quality: number; mode?: MenuImageDeliveryMode },
+): string {
+  const url = cleanUrl(rawUrl);
+  if (!url) return '';
+
+  if (options.mode === 'raw') {
+    return url;
+  }
+
+  return buildSizedSupabaseSrc(url, options.width, options.quality);
+}
+
+export function getMenuImageSrcSet(
+  _rawUrl: string | null | undefined,
+  _options: { mode?: MenuImageDeliveryMode } = {},
+): string | undefined {
+  return undefined;
+}
+
 export function pickMenuImageFallbackGradient(seed: string): string {
   const gradients = [
     'radial-gradient(ellipse at 38% 28%, rgba(245,158,11,0.22) 0%, rgba(250,246,239,1) 48%, rgba(237,224,206,1) 100%)',
@@ -672,18 +440,12 @@ export function pickMenuImageFallbackGradient(seed: string): string {
   return gradients[Math.abs(hash) % gradients.length];
 }
 
-/**
- * @deprecated Manual preload removed — use fetchpriority="high" on the img.
- */
 export function getMenuLcpPreloadAttrs(
   _rawUrl: string | null | undefined,
 ): Record<string, string> | null {
   return null;
 }
 
-/**
- * @deprecated Manual preload removed — use fetchpriority="high" on the img.
- */
 export function getFeaturedLcpPreloadAttrs(
   _rawUrl: string | null | undefined,
 ): Record<string, string> | null {

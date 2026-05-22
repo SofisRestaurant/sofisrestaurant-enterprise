@@ -1,30 +1,26 @@
 // =============================================================================
-// Shared menu food image — reliable delivery, branded fallback, subtle motion.
+// Shared menu food image — Supabase-only delivery, branded fallback always visible.
 // =============================================================================
 //
-// Candidate chain (per resolved image URL):
-//   1. optimized — single sized wsrv URL (no srcSet on menu cards/rail)
-//   2. direct    — sized fallback (Supabase transform or wsrv n=fb), no srcSet
-//   3. raw       — public object URL (last resort for reload reliability)
-//   4. unavailable — branded gradient (missing/invalid only)
+// Per image (stable identity = itemId + resolved public URL):
+//   1. Try Supabase render/image at layout width (single src, no srcSet, no wsrv).
+//   2. On error → public object URL (only when different from step 1).
+//   3. On error → branded placeholder (always visible, never blank).
 //
-// Priority/LCP: still eager + fetchPriority high; uses sized wsrv, not full original.
+// Priority: loading=eager, fetchPriority=high. Non-priority: lazy, fetchPriority=auto.
 // =============================================================================
 
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 
 import {
-  getFeaturedImageAttrs,
-  getInitialMenuImageDeliveryStage,
-  getMenuCardImageAttrs,
-  getModalImageAttrs,
-  isSupabaseStorageUrl,
+  getFeaturedImageSources,
+  getMenuCardImageSources,
+  getModalImageSources,
   pickMenuImageFallbackGradient,
   pickMenuImageUrlFromRecord,
   resolveMenuImageUrl,
-  toImgElementAttrs,
   type FeaturedImageVariant,
-  type MenuImageDeliveryStage,
+  type MenuImageSources,
 } from '@/lib/images/menuImageDelivery';
 import { cx } from '@/modules/menu/utils/uiHelpers';
 
@@ -36,15 +32,16 @@ export type MenuFoodImageProps = {
   name: string;
   itemId?: string;
   variant: MenuFoodImageVariant;
-  /** @deprecated Prefer `priority` — kept for FeaturedMenu hero wiring. */
+  /** @deprecated Prefer `priority`. */
   isAboveFold?: boolean;
-  /** LCP candidate: eager + fetchPriority high + sized wsrv (not full original). */
   priority?: boolean;
   className?: string;
   imageClassName?: string;
   decorative?: boolean;
   enableHoverScale?: boolean;
 };
+
+type LoadAttempt = 'sized' | 'public';
 
 function prefersReducedMotion(): boolean {
   try {
@@ -56,6 +53,53 @@ function prefersReducedMotion(): boolean {
 
 function imageIdentity(resolvedUrl: string | null, itemId: string): string {
   return `${itemId}::${resolvedUrl ?? ''}`;
+}
+
+function resolveSources(
+  resolvedUrl: string,
+  variant: MenuFoodImageVariant,
+  isPriority: boolean,
+): MenuImageSources | null {
+  if (variant === 'card') {
+    return getMenuCardImageSources(resolvedUrl, { isAboveFold: isPriority });
+  }
+
+  if (variant === 'modal') {
+    return getModalImageSources(resolvedUrl);
+  }
+
+  return getFeaturedImageSources(resolvedUrl, { variant, isAboveFold: isPriority });
+}
+
+function BrandedFallback({
+  className,
+  gradient,
+  showLabel = true,
+}: {
+  className?: string;
+  gradient: string;
+  showLabel?: boolean;
+}) {
+  return (
+    <div
+      className={cx('relative h-full w-full overflow-hidden', className)}
+      style={{ background: gradient }}
+      aria-hidden={showLabel ? true : undefined}
+    >
+      {showLabel && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center px-3 text-center">
+          <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-amber-800/70">
+            Sofi&rsquo;s
+          </p>
+          <p className="mt-1 font-serif text-sm font-medium text-stone-700/90">Fresh daily</p>
+        </div>
+      )}
+      <div
+        className="pointer-events-none absolute inset-0 ring-1 ring-inset ring-black/[0.04]"
+        aria-hidden="true"
+      />
+    </div>
+  );
 }
 
 function MenuFoodImageInner({
@@ -83,52 +127,44 @@ function MenuFoodImageInner({
 
   const identity = imageIdentity(resolvedUrl, itemId);
 
-  const [stage, setStage] = useState<MenuImageDeliveryStage>(() =>
-    resolvedUrl ? getInitialMenuImageDeliveryStage() : 'unavailable',
-  );
+  const sources = useMemo(() => {
+    if (!resolvedUrl) return null;
+    return resolveSources(resolvedUrl, variant, isPriority);
+  }, [resolvedUrl, variant, isPriority]);
+
+  const [attempt, setAttempt] = useState<LoadAttempt>('sized');
   const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    setStage(resolvedUrl ? getInitialMenuImageDeliveryStage() : 'unavailable');
+    setAttempt('sized');
     setLoaded(false);
-  }, [identity, resolvedUrl, isPriority]);
+    setFailed(false);
+  }, [identity]);
 
-  const imageAttrs = useMemo(() => {
-    if (!resolvedUrl || stage === 'unavailable') return null;
-
-    const attrs =
-      variant === 'card'
-        ? getMenuCardImageAttrs(resolvedUrl, { isAboveFold: isPriority, mode: stage })
-        : variant === 'modal'
-          ? getModalImageAttrs(resolvedUrl, { mode: stage })
-          : getFeaturedImageAttrs(resolvedUrl, {
-              variant,
-              isAboveFold: isPriority,
-              mode: stage,
-            });
-
-    return attrs ? toImgElementAttrs(attrs) : null;
-  }, [resolvedUrl, stage, variant, isPriority]);
+  const activeSrc = useMemo(() => {
+    if (!sources) return '';
+    if (attempt === 'public') {
+      return sources.publicSrc;
+    }
+    return sources.src;
+  }, [sources, attempt]);
 
   const handleLoad = useCallback(() => {
     setLoaded(true);
+    setFailed(false);
   }, []);
 
   const handleError = useCallback(() => {
     setLoaded(false);
 
-    setStage((current) => {
-      if (current === 'optimized') {
-        return 'direct';
-      }
+    if (sources?.hasPublicFallback && attempt === 'sized') {
+      setAttempt('public');
+      return;
+    }
 
-      if (current === 'direct' && resolvedUrl && isSupabaseStorageUrl(resolvedUrl)) {
-        return 'raw';
-      }
-
-      return 'unavailable';
-    });
-  }, [resolvedUrl]);
+    setFailed(true);
+  }, [sources, attempt]);
 
   const fallbackGradient = useMemo(
     () => pickMenuImageFallbackGradient(itemId || name),
@@ -140,53 +176,26 @@ function MenuFoodImageInner({
       ? 'motion-safe:transition-[transform,opacity] motion-safe:duration-500 motion-safe:ease-out motion-safe:group-hover:scale-[1.035]'
       : '';
 
-  if (!imageAttrs || stage === 'unavailable') {
-    return (
-      <div
-        className={cx('relative h-full w-full overflow-hidden', className)}
-        style={{ background: fallbackGradient }}
-        aria-hidden="true"
-      >
-        <div className="absolute inset-0 flex flex-col items-center justify-center px-3 text-center">
-          <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-amber-800/70">
-            Sofi&rsquo;s
-          </p>
-          <p className="mt-1 font-serif text-sm font-medium text-stone-700/90">Fresh daily</p>
-        </div>
-        <div
-          className="pointer-events-none absolute inset-0 ring-1 ring-inset ring-black/[0.04]"
-          aria-hidden="true"
-        />
-      </div>
-    );
+  if (!resolvedUrl || !sources || failed) {
+    return <BrandedFallback className={className} gradient={fallbackGradient} />;
   }
-
-  const { srcSet, ...imgRest } = imageAttrs;
 
   return (
     <div className={cx('relative h-full w-full overflow-hidden', className)}>
-      <div
-        className="absolute inset-0"
-        style={{ background: fallbackGradient }}
-        aria-hidden="true"
-      />
-
-      {!loaded && (
-        <div
-          className="absolute inset-0 bg-[linear-gradient(135deg,#f5f1ef_0%,#ede0ce_50%,#f5f1ef_100%)]"
-          aria-hidden="true"
-        />
-      )}
+      <BrandedFallback className="absolute inset-0" gradient={fallbackGradient} showLabel={!loaded} />
 
       <img
-        key={`${identity}:${stage}:${imgRest.src}`}
-        {...imgRest}
-        {...(srcSet ? { srcSet } : {})}
+        key={`${identity}:${attempt}:${activeSrc}`}
+        src={activeSrc}
+        sizes={sources.sizes}
+        width={sources.width}
+        height={sources.height}
         alt={decorative ? '' : name}
         aria-hidden={decorative ? true : undefined}
-        loading={isPriority ? 'eager' : imgRest.loading}
-        fetchPriority={isPriority ? 'high' : imgRest.fetchPriority}
+        loading={isPriority ? 'eager' : sources.loading}
+        fetchPriority={isPriority ? 'high' : sources.fetchPriority}
         decoding="async"
+        referrerPolicy="no-referrer"
         className={cx(
           'absolute inset-0 h-full w-full object-cover',
           !isPriority && 'transition-opacity duration-500 ease-out',
