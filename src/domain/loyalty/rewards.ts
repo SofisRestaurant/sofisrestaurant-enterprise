@@ -1,13 +1,25 @@
 // src/domain/loyalty/rewards.ts
 // =============================================================================
-// SOFI'S LOYALTY REWARDS
+// SOFI'S LOYALTY REWARDS — display-only milestones
 // =============================================================================
-// Single source of truth for customer-facing reward milestones.
-// Earning stays: 1 point per $1 spent.
-// Redemption enforcement should happen server-side later.
+// Customer-facing progress labels and icons. Must stay aligned with reward IDs
+// in supabase/functions/_shared/loyalty-rewards.ts (server catalog).
+//
+// Earning: 1 point per $1 spent (enforced server-side).
+// Redemption: not implemented here — no discounts, dollar conversion, or
+// checkout payloads.
 // =============================================================================
 
+export type LoyaltyRewardId =
+  | 'fountain_drink'
+  | 'coffee_or_agua'
+  | 'rolled_tacos'
+  | 'classic_plate'
+  | 'family_breakfast'
+  | 'merch_reward';
+
 export type LoyaltyRewardMilestone = {
+  id: LoyaltyRewardId;
   points: number;
   label: string;
   shortLabel: string;
@@ -16,49 +28,87 @@ export type LoyaltyRewardMilestone = {
   exclusions?: string;
 };
 
+export const LOYALTY_REWARD_IDS: readonly LoyaltyRewardId[] = [
+  'fountain_drink',
+  'coffee_or_agua',
+  'rolled_tacos',
+  'classic_plate',
+  'family_breakfast',
+  'merch_reward',
+] as const;
+
+const LOYALTY_REWARD_ID_SET: ReadonlySet<string> = new Set(LOYALTY_REWARD_IDS);
+
 export const LOYALTY_REWARD_MILESTONES = [
   {
+    id: 'fountain_drink',
     points: 150,
-    label: 'Free fountain drink',
+    label: 'Free Fountain Drink',
     shortLabel: 'Drink',
-    description: 'A refreshing drink on us.',
+    description: 'A refreshing fountain drink on us.',
     icon: '🥤',
   },
   {
+    id: 'coffee_or_agua',
     points: 300,
-    label: 'Free coffee or agua fresca',
+    label: 'Free Coffee or Agua Fresca',
     shortLabel: 'Coffee / Agua',
     description: 'Choose a coffee or agua fresca reward.',
     icon: '☕',
   },
   {
+    id: 'rolled_tacos',
     points: 500,
-    label: 'Free rolled tacos',
+    label: 'Free Rolled Tacos',
     shortLabel: 'Rolled tacos',
-    description: 'A Sofi’s favorite reward for your next visit.',
+    description: "A Sofi's favorite reward for your next visit.",
     icon: '🌮',
   },
   {
+    id: 'classic_plate',
     points: 750,
     label: 'Choose 1 Classic Plate',
     shortLabel: 'Classic Plate',
-    description: 'Choose from selected Sofi’s favorites.',
+    description: "Choose from selected Sofi's favorites.",
     icon: '🍽',
     exclusions:
       'Premium items, upgrades, seafood, birria, limited specials, delivery orders, and third-party app orders may be excluded.',
   },
   {
+    id: 'family_breakfast',
     points: 1200,
     label: 'Family Breakfast Reward',
     shortLabel: 'Breakfast Reward',
-    description: 'A bigger reward for loyal Sofi’s guests.',
+    description: 'A bigger reward for loyal guests — staff approval required.',
     icon: '🔥',
     exclusions:
       'Final eligible reward options may vary by availability and restaurant approval.',
   },
+  {
+    id: 'merch_reward',
+    points: 1500,
+    label: "Sofi's Merch Reward",
+    shortLabel: 'Merch',
+    description: 'Exclusive Sofi\'s merch — staff approval required.',
+    icon: '👕',
+    exclusions: 'Available merch may vary by stock and restaurant approval.',
+  },
 ] as const satisfies readonly LoyaltyRewardMilestone[];
 
 export type LoyaltyReward = (typeof LOYALTY_REWARD_MILESTONES)[number];
+
+export function isLoyaltyRewardId(value: unknown): value is LoyaltyRewardId {
+  return typeof value === 'string' && LOYALTY_REWARD_ID_SET.has(value);
+}
+
+export function getLoyaltyRewardMilestoneById(
+  rewardId: string,
+): LoyaltyRewardMilestone | null {
+  if (!isLoyaltyRewardId(rewardId)) {
+    return null;
+  }
+  return LOYALTY_REWARD_MILESTONES.find((reward) => reward.id === rewardId) ?? null;
+}
 
 export function getNextLoyaltyReward(
   balance: number,

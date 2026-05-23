@@ -865,21 +865,12 @@ async function reserveLoyalty(
 // Returns null if any required loyalty field is absent or invalid.
 // The loyaltyAccountId in the returned intent is guaranteed non-empty.
 
-function buildLoyaltyIntent(body: RequestBody): LoyaltyIntent | null {
-  if (
-    body.loyalty_redeem_points &&
-    body.loyalty_redeem_points > 0 &&
-    body.loyalty_account_id
-  ) {
-    return {
-      applyPoints: true,
-      pointsToRedeem: body.loyalty_redeem_points,
-      loyaltyAccountId: body.loyalty_account_id,
-    };
-  }
+function buildLoyaltyIntent(_body: RequestBody): LoyaltyIntent | null {
+  // PHASE 1: Cash-like point redemption disabled.
+  // Points-to-dollar conversion removed pending reward-based upgrade.
+  // Main handler guard rejects explicit loyalty_redeem_points > 0 with 422.
   return null;
 }
-
 // ─── checkLoyaltyCooldown ─────────────────────────────────────────────────────
 
 async function checkLoyaltyCooldown(
@@ -1631,7 +1622,24 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // buildPreSessionKey throws on empty input — a failure here indicates a
   // programmer error upstream (cart.cartId or userId unexpectedly empty).
   const preSessionKey = buildPreSessionKey(userId, cart.cartId, requestId);
-
+// ── Guard: cash-like point redemption disabled (Phase 1) ───────────────
+  if (
+    parsed.body.loyalty_redeem_points != null &&
+    parsed.body.loyalty_redeem_points > 0
+  ) {
+    log("info", "checkout_redemption_disabled", {
+      requestId,
+      userId: prefix(userId),
+      pointsRequested: parsed.body.loyalty_redeem_points,
+    });
+    return errorResponse(
+      requestId,
+      422,
+      "validation_failed",
+      "Reward redemption is being upgraded. Your points are safe and can still be earned.",
+      corsHeaders,
+    );
+  }
   // ── Stage: Loyalty reservation ─────────────────────────────────────────────
   // Failure contract: any failure returned by reserveLoyalty() either:
   //   (a) occurred before any reserve was committed (no cleanup needed), or

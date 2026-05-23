@@ -162,26 +162,12 @@ export async function awardLoyaltyPoints(
 }
 
 export async function redeemLoyaltyPoints(
-  accountId: string,
-  pointsToRedeem: number,
-  sb?: SupabaseClient,
+  _accountId: string,
+  _pointsToRedeem: number,
+  _sb?: SupabaseClient,
 ): Promise<RedeemResult> {
-  const id = accountId.trim();
-  if (!id) throw new Error('Missing account id.');
-
-  if (!Number.isFinite(pointsToRedeem) || pointsToRedeem <= 0) {
-    throw new Error('Points to redeem must be a positive number.');
-  }
-
-  const raw = await invokeEdge<unknown>(
-    'redeem-loyalty',
-    {
-      account_id: id,
-      points_to_redeem: Math.floor(pointsToRedeem),
-      mode: 'dine_in',
-    },
-    sb as never,
+  throw new Error(
+    'Reward redemption is being upgraded. Your points are safe and still earning.',
   );
-
-  return parseRedeemResult(raw);
 }
+
