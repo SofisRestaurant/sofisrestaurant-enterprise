@@ -1,10 +1,15 @@
 // src/pages/Account/AccountHome.tsx
 // ============================================================================
-// ACCOUNT HOME - Loyalty dashboard for Sofi's Restaurant
+// ACCOUNT HOME — Sofi's Rewards Dashboard (2026)
 // ============================================================================
-// Uses Edge Function `loyalty-account` as source of truth.
-// Edge payload shape:
-// { ok, meta, account, profile, ledger }
+// Redesign pillars:
+//   - "Earn meals & merch" replaces abstract points language
+//   - iOS-style frosted layered cards with warm restaurant palette
+//   - Mobile-first: every section stacks cleanly, touch targets ≥44px
+//   - Tier progress shows tangible reward milestones
+//   - QR card is the hero — scan-to-earn at the counter
+//   - No new dependencies, no framer-motion, CSS-only micro-interactions
+//   - All business logic, edge function contract, types preserved exactly
 // ============================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -24,6 +29,8 @@ import {
   type LoyaltyTier,
 } from '@/domain/loyalty/tiers';
 import type { LoyaltyProfile } from '@/modules/checkout/api/checkout.api';
+
+// ── Types ────────────────────────────────────────────────────────────────────
 
 type LedgerMeta = Database['public']['Tables']['loyalty_ledger']['Row']['metadata'];
 
@@ -84,22 +91,18 @@ type LoyaltyAccountEdgeResp = {
   code?: unknown;
 };
 
+// ── Safe data helpers ────────────────────────────────────────────────────────
+
 function safeStr(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
 }
 
 function safeNum(value: unknown, fallback = 0): number {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value;
-  }
-
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string') {
     const parsed = Number(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
+    if (Number.isFinite(parsed)) return parsed;
   }
-
   return fallback;
 }
 
@@ -112,15 +115,9 @@ function safeIso(value: unknown): string {
 
 function safeId(value: unknown): string {
   const candidate = safeStr(value, '').trim();
-
-  if (candidate.length > 0) {
-    return candidate;
-  }
-
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+  if (candidate.length > 0) return candidate;
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
     return crypto.randomUUID();
-  }
-
   return `tx-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
@@ -128,16 +125,13 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
+// ── Tier math ────────────────────────────────────────────────────────────────
+
 function getTierFloorPoints(tier: LoyaltyTier): number {
   const tierIndex = TIER_ORDER.indexOf(tier);
-
-  if (tierIndex <= 0) {
-    return 0;
-  }
-
+  if (tierIndex <= 0) return 0;
   const previousTier = TIER_ORDER[tierIndex - 1];
   const previousConfig = LOYALTY_TIERS[previousTier];
-
   return typeof previousConfig.threshold === 'number' ? previousConfig.threshold : 0;
 }
 
@@ -146,61 +140,42 @@ function getTierThresholdPoints(tier: LoyaltyTier): number | null {
   return typeof config.threshold === 'number' ? config.threshold : null;
 }
 
+// ── Display helpers ──────────────────────────────────────────────────────────
+
 const fmt = (value: number): string => value.toLocaleString();
+
+function cx(...classes: (string | false | null | undefined)[]): string {
+  return classes.filter(Boolean).join(' ');
+}
 
 function mapEntryType(raw: unknown): LoyaltyTransactionType {
   const normalized = typeof raw === 'string' ? raw.toLowerCase() : '';
-
-  if (normalized === 'earn' || normalized === 'earned') {
-    return 'earned';
-  }
-
-  if (normalized === 'redeem' || normalized === 'redeemed') {
-    return 'redeemed';
-  }
-
-  if (normalized === 'bonus') {
-    return 'bonus';
-  }
-
-  if (normalized === 'expired') {
-    return 'expired';
-  }
-
+  if (normalized === 'earn' || normalized === 'earned') return 'earned';
+  if (normalized === 'redeem' || normalized === 'redeemed') return 'redeemed';
+  if (normalized === 'bonus') return 'bonus';
+  if (normalized === 'expired') return 'expired';
   return 'adjusted';
 }
 
 function streakLabel(streak: number): string {
-  if (streak >= 30) return 'Legendary streak';
+  if (streak >= 30) return 'Legendary';
   if (streak >= 14) return 'On fire';
-  if (streak >= 7) return 'Weekly regular';
+  if (streak >= 7) return 'Regular';
   if (streak >= 3) return 'Heating up';
-  if (streak >= 1) return 'Streak started';
-  return 'Start your streak';
-}
-
-function streakBadgeClass(streak: number): string {
-  if (streak >= 30) return 'text-red-700 bg-red-50 border-red-200';
-  if (streak >= 14) return 'text-orange-700 bg-orange-50 border-orange-200';
-  if (streak >= 7) return 'text-amber-700 bg-amber-50 border-amber-200';
-  if (streak >= 3) return 'text-yellow-700 bg-yellow-50 border-yellow-200';
-
-  return 'text-gray-600 bg-gray-50 border-gray-200';
+  if (streak >= 1) return 'Started';
+  return 'Not started';
 }
 
 function buildTransactions(ledger: LoyaltyAccountEdgeResp['ledger']): LoyaltyTransaction[] {
   const rows = Array.isArray(ledger) ? ledger : [];
-
   return rows.map((row) => {
     const entryType = mapEntryType(row.entry_type);
-    const delta = safeNum(row.amount, 0);
     const tierAtTime = safeStr(row.tier_at_time, 'bronze');
     const tierMultiplier = LOYALTY_TIERS[asTier(tierAtTime)]?.multiplier ?? 1;
-
     return {
       id: safeId(row.id),
       transaction_type: entryType,
-      points_delta: delta,
+      points_delta: safeNum(row.amount, 0),
       points_balance: safeNum(row.balance_after, 0),
       tier_at_time: tierAtTime,
       streak_at_time: safeNum(row.streak_at_time, 0),
@@ -214,70 +189,104 @@ function buildTransactions(ledger: LoyaltyAccountEdgeResp['ledger']): LoyaltyTra
   });
 }
 
+// ── Reward milestones (tangible rewards for points) ──────────────────────────
+// Maps points thresholds to real things customers can earn.
+
+const REWARD_MILESTONES = [
+  { points: 150, label: 'Free drink', icon: '☕' },
+  { points: 400, label: 'Free appetizer', icon: '🍽' },
+  { points: 750, label: 'Free entree', icon: '🥘' },
+  { points: 1200, label: 'Sofi\'s merch pack', icon: '👕' },
+  { points: 2000, label: 'Chef\'s table dinner', icon: '✦' },
+] as const;
+
+function getNextReward(balance: number) {
+  for (const milestone of REWARD_MILESTONES) {
+    if (balance < milestone.points) {
+      return { ...milestone, remaining: milestone.points - balance };
+    }
+  }
+  return null;
+}
+
+function getEarnedRewardsCount(balance: number): number {
+  let count = 0;
+  for (const milestone of REWARD_MILESTONES) {
+    if (balance >= milestone.points) count++;
+  }
+  return count;
+}
+
+// ── Shared card surface ──────────────────────────────────────────────────────
+
+const CARD = cx(
+  'rounded-[1.25rem] border border-white/60',
+  'bg-white/72 shadow-[0_2px_20px_rgba(80,40,20,0.05)]',
+  'backdrop-blur-2xl',
+  'dark:border-white/10 dark:bg-white/[0.06] dark:shadow-[0_2px_28px_rgba(0,0,0,0.3)]',
+);
+
+// ── Loading skeleton ─────────────────────────────────────────────────────────
+
 function LoadingSkeleton() {
   return (
-    <div className="space-y-4 animate-pulse">
-      <div className="h-44 rounded-3xl bg-gray-100" />
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        {[0, 1, 2].map((item) => (
-          <div key={item} className="h-24 rounded-2xl bg-gray-100" />
+    <div className="space-y-4 animate-pulse" role="status" aria-label="Loading rewards">
+      <div className="h-48 rounded-[1.25rem] bg-[var(--color-cream-100)]" />
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="h-[5.5rem] rounded-[1.15rem] bg-[var(--color-cream-100)]" />
         ))}
       </div>
-      <div className="h-28 rounded-2xl bg-gray-100" />
-      <div className="h-52 rounded-2xl bg-gray-100" />
+      <div className="h-32 rounded-[1.25rem] bg-[var(--color-cream-100)]" />
+      <div className="h-56 rounded-[1.25rem] bg-[var(--color-cream-100)]" />
     </div>
   );
 }
 
-function AccountCard({
-  children,
-  className = '',
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <section
-      className={[
-        'w-full min-w-0 rounded-3xl border border-gray-100 bg-white shadow-sm',
-        className,
-      ].join(' ')}
-    >
-      {children}
-    </section>
-  );
-}
+// ── Stat pill ────────────────────────────────────────────────────────────────
 
-function StatCard({
+function StatPill({
   label,
   value,
-  helper,
-  tone = 'default',
+  sub,
+  accent = false,
 }: {
   label: string;
   value: React.ReactNode;
-  helper?: React.ReactNode;
-  tone?: 'default' | 'warm';
+  sub?: React.ReactNode;
+  accent?: boolean;
 }) {
   return (
     <div
-      className={[
-        'rounded-2xl border p-4 shadow-sm',
-        tone === 'warm'
-          ? 'border-amber-100 bg-gradient-to-br from-amber-50 to-white'
-          : 'border-gray-100 bg-white',
-      ].join(' ')}
+      className={cx(
+        'rounded-[1.15rem] border p-4 transition-all',
+        accent
+          ? 'border-[var(--color-ember-200)] bg-gradient-to-br from-[var(--color-ember-50)] to-white'
+          : 'border-black/[0.04] bg-white/50 dark:border-white/[0.06] dark:bg-white/[0.04]',
+      )}
     >
-      <div className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-400">
+      <p
+        className="text-[10px] font-semibold uppercase tracking-[0.14em]"
+        style={{ color: 'var(--color-ink-400)' }}
+      >
         {label}
-      </div>
-      <div className="mt-1 text-2xl font-black tabular-nums tracking-tight text-gray-950">
+      </p>
+      <p
+        className="mt-1.5 text-[1.35rem] font-bold tabular-nums leading-none tracking-tight"
+        style={{ color: 'var(--color-ink-900)' }}
+      >
         {value}
-      </div>
-      {helper ? <div className="mt-2 text-xs font-medium text-gray-500">{helper}</div> : null}
+      </p>
+      {sub && (
+        <p className="mt-2 text-[11.5px] font-medium" style={{ color: 'var(--color-ink-500)' }}>
+          {sub}
+        </p>
+      )}
     </div>
   );
 }
+
+// ── QR Card ──────────────────────────────────────────────────────────────────
 
 function LoyaltyQRCard({
   loyaltyPublicId,
@@ -294,14 +303,13 @@ function LoyaltyQRCard({
 
   const displayName = useMemo(() => {
     if (!name) return 'Member';
-
     const handle = name.split('@')[0]?.trim();
     return handle && handle.length > 0 ? handle : 'Member';
   }, [name]);
 
   const shortId = useMemo(
     () =>
-      `${loyaltyPublicId.slice(0, 6).toUpperCase()}...${loyaltyPublicId.slice(-4).toUpperCase()}`,
+      `${loyaltyPublicId.slice(0, 6).toUpperCase()}\u2009\u00B7\u2009${loyaltyPublicId.slice(-4).toUpperCase()}`,
     [loyaltyPublicId],
   );
 
@@ -311,58 +319,68 @@ function LoyaltyQRCard({
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1600);
     } catch {
-      // Clipboard can be unavailable in some browsers.
+      /* clipboard unavailable */
     }
   }, [loyaltyPublicId]);
 
   const handleDownload = useCallback((): void => {
     const canvas = canvasRef.current?.querySelector('canvas');
-
-    if (!(canvas instanceof HTMLCanvasElement)) {
-      return;
-    }
-
+    if (!(canvas instanceof HTMLCanvasElement)) return;
     const link = document.createElement('a');
-    link.download = `sofis-loyalty-${loyaltyPublicId.slice(0, 8)}.png`;
+    link.download = `sofis-rewards-${loyaltyPublicId.slice(0, 8)}.png`;
     link.href = canvas.toDataURL('image/png');
     link.click();
   }, [loyaltyPublicId]);
 
   return (
-    <AccountCard className="overflow-hidden">
-      <div className={`bg-linear-to-br ${config.gradient} px-5 py-4 text-white`}>
+    <section className={cx(CARD, 'overflow-hidden')}>
+      {/* Tier gradient banner */}
+      <div className={`bg-linear-to-br ${config.gradient} px-5 py-5 text-white sm:px-6`}>
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <p className="text-[10px] font-black uppercase tracking-[0.22em] text-white/70">
-              Sofi&apos;s Rewards
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/65">
+              Sofi's Rewards
             </p>
-            <h2 className="mt-1 truncate text-xl font-black tracking-tight">{displayName}</h2>
-            <p className="mt-1 text-xs font-semibold text-white/75">
-              Show your QR code when you visit.
+            <h2
+              className="mt-1.5 truncate text-xl font-bold tracking-tight"
+              style={{ fontFamily: 'var(--font-display)' }}
+            >
+              {displayName}
+            </h2>
+            <p className="mt-1 text-[12.5px] font-medium text-white/70">
+              Show this QR at the counter to earn rewards.
             </p>
           </div>
 
-          <div className="shrink-0 rounded-2xl bg-white/15 px-3 py-2 text-center ring-1 ring-white/20">
+          <div className="shrink-0 rounded-2xl bg-white/15 px-3 py-2 text-center ring-1 ring-white/20 backdrop-blur-sm">
             <div className="text-2xl leading-none">{config.icon}</div>
-            <div className="mt-1 text-[10px] font-black uppercase tracking-wide text-white/80">
+            <div className="mt-1 text-[10px] font-bold uppercase tracking-wide text-white/80">
               {config.label}
             </div>
           </div>
         </div>
       </div>
 
-      <div className="grid gap-5 px-5 py-5 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
+      {/* QR + actions */}
+      <div className="grid gap-5 px-5 py-5 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center sm:px-6">
         <div className="flex justify-center sm:justify-start">
-          <div className={`rounded-3xl border-2 ${config.colors.border} bg-white p-3 shadow-sm`}>
+          <div
+            className={cx(
+              'rounded-[1.25rem] border-2 bg-white p-3',
+              config.colors.border,
+              'shadow-[0_4px_20px_rgba(80,40,20,0.08)]',
+            )}
+          >
             <QRCodeSVG
               value={loyaltyPublicId}
-              size={168}
+              size={164}
               fgColor={config.qr.fg}
               bgColor={config.qr.bg}
               level="H"
             />
           </div>
 
+          {/* Hidden canvas for PNG download */}
           <div ref={canvasRef} className="hidden" aria-hidden>
             <QRCodeCanvas
               value={loyaltyPublicId}
@@ -376,63 +394,208 @@ function LoyaltyQRCard({
         </div>
 
         <div className="min-w-0 text-center sm:text-left">
-          <p className="text-sm font-bold text-gray-950">Your loyalty card is ready</p>
-          <p className="mt-1 text-sm leading-6 text-gray-500">
-            Use this at Sofi&apos;s so staff can quickly find your rewards account.
+          <p className="text-[14px] font-bold" style={{ color: 'var(--color-ink-900)' }}>
+            Your loyalty card
+          </p>
+          <p className="mt-1 text-[13px] leading-relaxed" style={{ color: 'var(--color-ink-500)' }}>
+            Staff will scan this to credit your account instantly.
           </p>
 
-          <div className="mt-3 rounded-2xl bg-gray-50 px-3 py-2">
-            <p className="text-[10px] font-black uppercase tracking-[0.16em] text-gray-400">
-              Member ID
-            </p>
-            <p className="mt-0.5 select-all truncate font-mono text-xs font-semibold text-gray-700">
+          {/* Member ID chip */}
+          <div
+            className="mt-3 inline-flex items-center gap-2 rounded-xl px-3 py-2"
+            style={{ background: 'var(--color-cream-100)' }}
+          >
+            <span
+              className="text-[10px] font-semibold uppercase tracking-[0.12em]"
+              style={{ color: 'var(--color-ink-400)' }}
+            >
+              ID
+            </span>
+            <span
+              className="select-all font-mono text-[12px] font-semibold"
+              style={{ color: 'var(--color-ink-700)' }}
+            >
               {shortId}
-            </p>
+            </span>
           </div>
 
-          <div className="mt-3 grid grid-cols-2 gap-2">
+          {/* Actions */}
+          <div className="mt-4 grid grid-cols-2 gap-2">
             <button
               type="button"
               onClick={() => {
                 void handleCopy();
               }}
-              className="inline-flex items-center justify-center rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-black text-gray-800 transition hover:bg-gray-50 active:scale-95"
+              className={cx(
+                'inline-flex h-10 items-center justify-center rounded-xl',
+                'border border-[var(--color-cream-300)] bg-white text-[12.5px] font-semibold',
+                'text-[var(--color-ink-800)] transition-all',
+                'hover:border-[var(--color-ink-200)] hover:bg-[var(--color-cream-100)]',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]',
+                'active:scale-[0.97]',
+              )}
             >
-              {copied ? 'Copied' : 'Copy ID'}
+              {copied ? '✓ Copied' : 'Copy ID'}
             </button>
 
             <button
               type="button"
               onClick={handleDownload}
-              className="inline-flex items-center justify-center rounded-xl bg-gray-950 px-3 py-2 text-xs font-black text-white transition hover:bg-black active:scale-95"
+              className={cx(
+                'inline-flex h-10 items-center justify-center rounded-xl',
+                'bg-[var(--color-ink-900)] text-[12.5px] font-semibold text-white',
+                'transition-all hover:bg-black',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]',
+                'active:scale-[0.97]',
+              )}
             >
               Save QR
             </button>
           </div>
         </div>
       </div>
-    </AccountCard>
+    </section>
   );
 }
 
+// ── Reward milestone progress ────────────────────────────────────────────────
+
+function RewardMilestones({ balance }: { balance: number }) {
+  const nextReward = getNextReward(balance);
+
+  return (
+    <section className={cx(CARD, 'px-5 py-5 sm:px-6')}>
+      <div className="flex items-center justify-between">
+        <div>
+          <p
+            className="text-[10px] font-semibold uppercase tracking-[0.14em]"
+            style={{ color: 'var(--color-ink-400)' }}
+          >
+            Earn meals & merch
+          </p>
+          <h2
+            className="mt-1 text-[15px] font-bold tracking-tight"
+            style={{ color: 'var(--color-ink-900)', fontFamily: 'var(--font-display)' }}
+          >
+            {nextReward
+              ? `${fmt(nextReward.remaining)} pts to ${nextReward.label.toLowerCase()}`
+              : 'All milestones unlocked'}
+          </h2>
+        </div>
+        {nextReward && (
+          <span className="text-2xl" aria-hidden>
+            {nextReward.icon}
+          </span>
+        )}
+      </div>
+
+      {/* Milestone track */}
+      <div className="mt-5 space-y-0">
+        {REWARD_MILESTONES.map((milestone, i) => {
+          const earned = balance >= milestone.points;
+          const isCurrent = !earned && (i === 0 || balance >= REWARD_MILESTONES[i - 1].points);
+          const progressInBand = isCurrent
+            ? Math.min(
+                ((balance - (i > 0 ? REWARD_MILESTONES[i - 1].points : 0)) /
+                  (milestone.points - (i > 0 ? REWARD_MILESTONES[i - 1].points : 0))) *
+                  100,
+                100,
+              )
+            : 0;
+
+          return (
+            <div key={milestone.points} className="flex items-start gap-3.5">
+              {/* Track line + dot */}
+              <div className="flex flex-col items-center">
+                <div
+                  className={cx(
+                    'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[14px] transition-all',
+                    earned
+                      ? 'bg-[var(--color-ember-500)] text-white shadow-[0_2px_10px_rgba(180,80,30,0.25)]'
+                      : isCurrent
+                        ? 'border-2 border-[var(--color-ember-300)] bg-[var(--color-ember-50)] text-[var(--color-ember-600)]'
+                        : 'border border-[var(--color-cream-300)] bg-[var(--color-cream-100)] text-[var(--color-ink-400)]',
+                  )}
+                >
+                  {earned ? '✓' : milestone.icon}
+                </div>
+                {i < REWARD_MILESTONES.length - 1 && (
+                  <div
+                    className="w-px flex-1 min-h-[1.5rem]"
+                    style={{
+                      background: earned ? 'var(--color-ember-300)' : 'var(--color-cream-300)',
+                    }}
+                  />
+                )}
+              </div>
+
+              {/* Label */}
+              <div className="min-w-0 pb-4">
+                <div className="flex items-baseline gap-2">
+                  <span
+                    className={cx(
+                      'text-[13.5px] font-semibold',
+                      earned ? 'text-[var(--color-ink-900)]' : 'text-[var(--color-ink-600)]',
+                    )}
+                  >
+                    {milestone.label}
+                  </span>
+                  <span
+                    className="text-[11px] tabular-nums font-medium"
+                    style={{ color: 'var(--color-ink-400)' }}
+                  >
+                    {fmt(milestone.points)} pts
+                  </span>
+                </div>
+
+                {/* Progress bar for current milestone */}
+                {isCurrent && (
+                  <div className="mt-2 h-1.5 w-full max-w-[12rem] overflow-hidden rounded-full bg-[var(--color-cream-200)]">
+                    <div
+                      className="h-full rounded-full bg-[var(--color-ember-500)] transition-all duration-500"
+                      style={{ width: `${progressInBand}%` }}
+                    />
+                  </div>
+                )}
+
+                {earned && (
+                  <span
+                    className="mt-1 inline-block text-[11px] font-semibold"
+                    style={{ color: 'var(--color-ember-600)' }}
+                  >
+                    Earned
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+// ── Transaction row ──────────────────────────────────────────────────────────
+
+const TX_LABELS: Record<LoyaltyTransactionType, string> = {
+  earned: 'Earned',
+  redeemed: 'Redeemed',
+  bonus: 'Bonus',
+  expired: 'Expired',
+  adjusted: 'Adjusted',
+};
+
+const TX_ICONS: Record<LoyaltyTransactionType, string> = {
+  earned: '↑',
+  redeemed: '↓',
+  bonus: '★',
+  expired: '○',
+  adjusted: '~',
+};
+
 function TransactionRow({ tx }: { tx: LoyaltyTransaction }) {
   const isPositive = tx.points_delta > 0;
-
-  const typeLabel: Record<LoyaltyTransactionType, string> = {
-    earned: 'Points earned',
-    redeemed: 'Points redeemed',
-    bonus: 'Bonus awarded',
-    expired: 'Points expired',
-    adjusted: 'Account adjustment',
-  };
-
-  const typeIcon: Record<LoyaltyTransactionType, string> = {
-    earned: '+',
-    redeemed: '-',
-    bonus: 'Gift',
-    expired: 'Exp',
-    adjusted: 'Edit',
-  };
 
   const date = new Date(tx.created_at).toLocaleDateString('en-US', {
     month: 'short',
@@ -440,50 +603,85 @@ function TransactionRow({ tx }: { tx: LoyaltyTransaction }) {
   });
 
   return (
-    <div className="flex items-center justify-between gap-3 py-3">
+    <div className="flex items-center justify-between gap-3 py-3.5">
       <div className="flex min-w-0 items-center gap-3">
         <div
-          className={[
-            'flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[11px] font-black',
-            isPositive ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600',
-          ].join(' ')}
+          className={cx(
+            'flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[12px] font-bold',
+            isPositive
+              ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-400'
+              : 'bg-red-50 text-red-500 dark:bg-red-900/20 dark:text-red-400',
+          )}
         >
-          {typeIcon[tx.transaction_type]}
+          {TX_ICONS[tx.transaction_type]}
         </div>
 
         <div className="min-w-0">
-          <div className="truncate text-sm font-bold text-gray-950">
-            {typeLabel[tx.transaction_type]}
-          </div>
-          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-gray-400">
+          <p
+            className="truncate text-[13.5px] font-semibold"
+            style={{ color: 'var(--color-ink-900)' }}
+          >
+            {TX_LABELS[tx.transaction_type]}
+          </p>
+          <div
+            className="mt-0.5 flex items-center gap-1.5 text-[11.5px]"
+            style={{ color: 'var(--color-ink-400)' }}
+          >
             <span>{date}</span>
-            {tx.reference_id ? (
+            {tx.reference_id && (
               <>
-                <span className="text-gray-300">·</span>
+                <span style={{ color: 'var(--color-cream-300)' }}>·</span>
                 <span className="truncate font-mono">
                   #{tx.reference_id.slice(0, 8).toUpperCase()}
                 </span>
               </>
-            ) : null}
+            )}
           </div>
         </div>
       </div>
 
       <div className="shrink-0 text-right">
-        <div
-          className={[
-            'text-sm font-black tabular-nums',
+        <p
+          className={cx(
+            'text-[13.5px] font-bold tabular-nums',
             isPositive ? 'text-emerald-600' : 'text-red-500',
-          ].join(' ')}
+          )}
         >
-          {isPositive ? '+' : '-'}
-          {fmt(Math.abs(tx.points_delta))}
-        </div>
-        <div className="text-[11px] font-medium text-gray-400">{fmt(tx.points_balance)} bal.</div>
+          {isPositive ? '+' : ''}
+          {fmt(tx.points_delta)} pts
+        </p>
+        <p className="text-[11px] font-medium" style={{ color: 'var(--color-ink-400)' }}>
+          {fmt(tx.points_balance)} bal
+        </p>
       </div>
     </div>
   );
 }
+
+// ── Streak badge ─────────────────────────────────────────────────────────────
+
+function StreakBadge({ streak }: { streak: number }) {
+  const flames = streak >= 30 ? '🔥🔥🔥' : streak >= 14 ? '🔥🔥' : streak >= 3 ? '🔥' : '';
+
+  return (
+    <div
+      className={cx(
+        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1',
+        'text-[11px] font-semibold',
+        streak >= 14
+          ? 'border-[var(--color-ember-200)] bg-[var(--color-ember-50)] text-[var(--color-ember-700)]'
+          : streak >= 3
+            ? 'border-amber-200 bg-amber-50 text-amber-700'
+            : 'border-[var(--color-cream-300)] bg-[var(--color-cream-100)] text-[var(--color-ink-500)]',
+      )}
+    >
+      {flames && <span aria-hidden>{flames}</span>}
+      {streakLabel(streak)}
+    </div>
+  );
+}
+
+// ── Data hook (preserved exactly) ────────────────────────────────────────────
 
 function useLoyaltyData() {
   const [profile, setProfile] = useState<LoyaltyProfileWithQR | null>(null);
@@ -498,16 +696,11 @@ function useLoyaltyData() {
     cancelledRef.current = false;
 
     const setSafe = (callback: () => void): void => {
-      if (!cancelledRef.current) {
-        callback();
-      }
+      if (!cancelledRef.current) callback();
     };
 
     setSafe(() => {
-      if (!soft) {
-        setLoading(true);
-      }
-
+      if (!soft) setLoading(true);
       setRefreshing(soft);
       setError(null);
     });
@@ -590,7 +783,6 @@ function useLoyaltyData() {
 
   useEffect(() => {
     void load(false);
-
     return () => {
       cancelledRef.current = true;
     };
@@ -603,6 +795,8 @@ function useLoyaltyData() {
   return { profile, transactions, loading, refreshing, error, refresh };
 }
 
+// ── Main component ───────────────────────────────────────────────────────────
+
 export default function AccountHome() {
   const { user } = useUserContext();
   const { profile, transactions, loading, refreshing, error, refresh } = useLoyaltyData();
@@ -613,16 +807,11 @@ export default function AccountHome() {
   const currentTierConfig = profile ? LOYALTY_TIERS[profile.tier] : null;
 
   const progressToNextTier = useMemo(() => {
-    if (profile === null || nextTier === null || nextTierConfig === null) {
-      return null;
-    }
+    if (profile === null || nextTier === null || nextTierConfig === null) return null;
 
     const currentFloor = getTierFloorPoints(profile.tier);
     const nextFloor = getTierThresholdPoints(nextTier);
-
-    if (nextFloor === null) {
-      return null;
-    }
+    if (nextFloor === null) return null;
 
     const earnedWithinBand = Math.max(profile.lifetimePoints - currentFloor, 0);
     const bandSize = Math.max(nextFloor - currentFloor, 1);
@@ -638,107 +827,187 @@ export default function AccountHome() {
   const firstName = useMemo(() => {
     const raw = profile?.fullName ?? user?.name ?? email ?? '';
     const clean = raw.split('@')[0]?.trim();
-
     if (!clean) return 'there';
-
     return clean.split(' ')[0] ?? clean;
   }, [email, profile?.fullName, user?.name]);
 
+  const earnedCount = profile ? getEarnedRewardsCount(profile.points) : 0;
+
+  // ── Render ─────────────────────────────────────────────────────────────
+
   return (
     <div className="mx-auto w-full max-w-6xl space-y-5 px-0 sm:space-y-6">
-      <div className="overflow-hidden rounded-3xl border border-gray-100 bg-gradient-to-br from-white via-amber-50/45 to-white shadow-sm">
-        <div className="px-4 py-5 sm:px-6 sm:py-6">
+      {/* ── Hero header ──────────────────────────────────────────────────── */}
+      <section
+        className={cx(
+          CARD,
+          'overflow-hidden',
+          'bg-gradient-to-br from-white via-[var(--color-cream-100)]/50 to-white',
+        )}
+      >
+        <div className="px-5 py-6 sm:px-6 sm:py-7">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
-              <p className="text-[10px] font-black uppercase tracking-[0.22em] text-amber-700/80">
-                My Sofi&apos;s Account
+              <p
+                className="text-[10px] font-semibold uppercase tracking-[0.16em]"
+                style={{ color: 'var(--color-ember-600)' }}
+              >
+                My Rewards
               </p>
 
-              <h1 className="mt-2 text-2xl font-black tracking-tight text-gray-950 sm:text-3xl">
+              <h1
+                className="mt-2 text-[1.6rem] font-bold tracking-tight sm:text-[1.85rem]"
+                style={{ fontFamily: 'var(--font-display)', color: 'var(--color-ink-900)' }}
+              >
                 Welcome back, {firstName}
               </h1>
 
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-600">
-                Track your rewards, view your loyalty card, and see your recent activity in one
-                simple place.
+              <p
+                className="mt-2 max-w-lg text-[13.5px] leading-relaxed"
+                style={{ color: 'var(--color-ink-500)' }}
+              >
+                Earn free meals and exclusive merch every time you dine with us.
+                {profile && earnedCount > 0 && (
+                  <>
+                    {' '}
+                    You've unlocked {earnedCount} reward{earnedCount > 1 ? 's' : ''} so far.
+                  </>
+                )}
               </p>
             </div>
 
             <div className="flex shrink-0 items-center gap-2">
-              {profile && currentTierConfig ? (
+              {profile && currentTierConfig && (
                 <span
-                  className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-black ${currentTierConfig.badge}`}
+                  className={cx(
+                    'inline-flex items-center gap-1 rounded-full border px-3 py-1.5',
+                    'text-[12px] font-bold',
+                    currentTierConfig.badge,
+                  )}
                 >
                   {currentTierConfig.icon} {currentTierConfig.label}
                 </span>
-              ) : null}
+              )}
 
               <button
                 type="button"
                 onClick={() => {
                   void refresh();
                 }}
-                className="inline-flex items-center justify-center rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-black text-gray-700 shadow-sm transition hover:bg-gray-50 active:scale-95"
+                disabled={refreshing}
+                className={cx(
+                  'inline-flex h-9 items-center justify-center rounded-full',
+                  'border border-[var(--color-cream-300)] bg-white/80 backdrop-blur-md',
+                  'px-3.5 text-[12px] font-semibold text-[var(--color-ink-700)]',
+                  'transition-all hover:border-[var(--color-ink-200)] hover:bg-white',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]',
+                  'active:scale-[0.97]',
+                  refreshing && 'pointer-events-none opacity-50',
+                )}
               >
-                {refreshing ? 'Refreshing...' : 'Refresh'}
+                {refreshing ? 'Refreshing\u2026' : 'Refresh'}
               </button>
             </div>
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs font-medium text-gray-500">
-            <span className="rounded-full bg-white/80 px-3 py-1 ring-1 ring-gray-100">
+          {/* Identity chips */}
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <span
+              className="rounded-full px-3 py-1 text-[11.5px] font-medium ring-1 ring-[var(--color-cream-300)]"
+              style={{
+                color: 'var(--color-ink-500)',
+                background: 'rgba(255,255,255,0.7)',
+              }}
+            >
               {email ?? 'Signed in'}
             </span>
 
-            <span className="rounded-full bg-white/80 px-3 py-1 capitalize ring-1 ring-gray-100">
-              {String(user?.role ?? 'user')} account
+            <span
+              className="rounded-full px-3 py-1 text-[11.5px] font-medium capitalize ring-1 ring-[var(--color-cream-300)]"
+              style={{
+                color: 'var(--color-ink-500)',
+                background: 'rgba(255,255,255,0.7)',
+              }}
+            >
+              {String(user?.role ?? 'member')}
             </span>
           </div>
         </div>
-      </div>
+      </section>
 
-      {loading ? <LoadingSkeleton /> : null}
+      {/* ── Loading ──────────────────────────────────────────────────────── */}
+      {loading && <LoadingSkeleton />}
 
-      {error ? (
-        <AccountCard className="border-red-100 bg-red-50 px-4 py-4">
+      {/* ── Error ────────────────────────────────────────────────────────── */}
+      {error && (
+        <section className={cx(CARD, 'border-red-200/60 px-5 py-5')}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <p className="text-sm font-black text-red-800">Rewards could not load</p>
-              <p className="mt-1 text-sm text-red-700">{error}</p>
+              <p className="text-[14px] font-bold text-red-800">Rewards could not load</p>
+              <p className="mt-1 text-[13px] text-red-700">{error}</p>
             </div>
-
             <button
               type="button"
               onClick={() => {
                 void refresh();
               }}
-              className="inline-flex items-center justify-center rounded-xl bg-red-600 px-4 py-2 text-xs font-black text-white transition hover:bg-red-700"
+              className={cx(
+                'inline-flex h-10 items-center justify-center rounded-xl',
+                'bg-red-600 px-4 text-[12.5px] font-semibold text-white',
+                'transition-all hover:bg-red-700',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400',
+                'active:scale-[0.97]',
+              )}
             >
               Try again
             </button>
           </div>
-        </AccountCard>
-      ) : null}
+        </section>
+      )}
 
-      {!loading && !error && !profile ? (
-        <AccountCard className="px-4 py-8 text-center">
-          <p className="text-lg font-black text-gray-950">Start earning rewards</p>
-          <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-gray-500">
-            Place your first order to activate your Sofi&apos;s rewards account.
-          </p>
+      {/* ── No profile: onboarding ───────────────────────────────────────── */}
+      {!loading && !error && !profile && (
+        <section className={cx(CARD, 'px-5 py-10 text-center sm:px-6')}>
+          <div className="mx-auto max-w-sm">
+            <p className="text-4xl" aria-hidden>
+              🍽
+            </p>
+            <h2
+              className="mt-4 text-xl font-bold tracking-tight"
+              style={{ fontFamily: 'var(--font-display)', color: 'var(--color-ink-900)' }}
+            >
+              Start earning free meals
+            </h2>
+            <p
+              className="mt-2 text-[13.5px] leading-relaxed"
+              style={{ color: 'var(--color-ink-500)' }}
+            >
+              Place your first order and we'll set up your rewards account automatically. Every
+              dollar you spend brings you closer to free dishes and exclusive merch.
+            </p>
 
-          <Link
-            to="/menu"
-            className="mt-4 inline-flex items-center justify-center rounded-2xl bg-gray-950 px-5 py-3 text-sm font-black text-white transition hover:bg-black"
-          >
-            Browse Menu
-          </Link>
-        </AccountCard>
-      ) : null}
+            <Link
+              to="/menu"
+              className={cx(
+                'mt-6 inline-flex h-12 items-center justify-center rounded-2xl',
+                'bg-[var(--color-ink-900)] px-7 text-[14px] font-semibold text-white',
+                'transition-all hover:bg-black',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]',
+                'active:scale-[0.97]',
+              )}
+            >
+              Browse the menu
+            </Link>
+          </div>
+        </section>
+      )}
 
-      {!loading && !error && profile ? (
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start">
+      {/* ── Main dashboard ───────────────────────────────────────────────── */}
+      {!loading && !error && profile && (
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_21rem] lg:items-start">
+          {/* Left column */}
           <div className="min-w-0 space-y-5">
+            {/* QR Card */}
             {profile.loyaltyPublicId ? (
               <LoyaltyQRCard
                 loyaltyPublicId={profile.loyaltyPublicId}
@@ -746,189 +1015,326 @@ export default function AccountHome() {
                 name={profile.fullName ?? email}
               />
             ) : (
-              <AccountCard className="border-amber-200 bg-amber-50 px-5 py-4">
-                <p className="text-sm font-black text-amber-900">QR card not ready yet</p>
-                <p className="mt-1 text-sm text-amber-800">
+              <section className={cx(CARD, 'border-amber-200/60 px-5 py-5')}>
+                <p className="text-[14px] font-bold text-amber-900">QR card not ready yet</p>
+                <p className="mt-1 text-[13px] text-amber-800">
                   Tap refresh. Your loyalty card should appear once it has been generated.
                 </p>
-              </AccountCard>
+              </section>
             )}
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <StatCard
-                label="Available points"
+            {/* Stats row */}
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <StatPill
+                label="Available"
                 value={
                   <>
                     {fmt(profile.points)}{' '}
-                    <span className="text-sm font-bold text-gray-400">pts</span>
+                    <span
+                      className="text-[13px] font-semibold"
+                      style={{ color: 'var(--color-ink-400)' }}
+                    >
+                      pts
+                    </span>
                   </>
                 }
-                helper="Ready to use when eligible."
-                tone="warm"
+                sub="Redeem toward meals & merch"
+                accent
               />
 
-              <StatCard
+              <StatPill
                 label="Visit streak"
                 value={
                   <>
                     {profile.streak}
-                    <span className="ml-1 text-sm font-bold text-gray-400">days</span>
+                    <span
+                      className="ml-1 text-[13px] font-semibold"
+                      style={{ color: 'var(--color-ink-400)' }}
+                    >
+                      days
+                    </span>
                   </>
                 }
-                helper={
-                  <span
-                    className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-bold ${streakBadgeClass(
-                      profile.streak,
-                    )}`}
-                  >
-                    {streakLabel(profile.streak)}
-                  </span>
-                }
+                sub={<StreakBadge streak={profile.streak} />}
               />
 
-              <StatCard
-                label="Lifetime earned"
-                value={fmt(profile.lifetimePoints)}
-                helper="Total points earned."
-              />
+              <div className="col-span-2 sm:col-span-1">
+                <StatPill
+                  label="Lifetime earned"
+                  value={fmt(profile.lifetimePoints)}
+                  sub="Total points earned all time"
+                />
+              </div>
             </div>
 
+            {/* Reward milestones */}
+            <RewardMilestones balance={profile.points} />
+
+            {/* Tier progress */}
             {progressToNextTier ? (
-              <AccountCard className="px-4 py-4 sm:px-5">
+              <section className={cx(CARD, 'px-5 py-5 sm:px-6')}>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
-                    <p className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-400">
+                    <p
+                      className="text-[10px] font-semibold uppercase tracking-[0.14em]"
+                      style={{ color: 'var(--color-ink-400)' }}
+                    >
                       Next tier
                     </p>
-                    <h2 className="mt-1 text-base font-black text-gray-950">
+                    <h2
+                      className="mt-1 text-[15px] font-bold"
+                      style={{ color: 'var(--color-ink-900)' }}
+                    >
                       {progressToNextTier.nextIcon} {progressToNextTier.nextLabel}
                     </h2>
-                    <p className="mt-1 text-sm text-gray-500">
-                      {fmt(progressToNextTier.remaining)} lifetime points to go.
+                    <p className="mt-1 text-[13px]" style={{ color: 'var(--color-ink-500)' }}>
+                      {fmt(progressToNextTier.remaining)} lifetime points to go
                     </p>
                   </div>
 
                   <Link
                     to="/account/orders"
-                    className="inline-flex items-center justify-center rounded-xl border border-gray-200 bg-white px-4 py-2 text-xs font-black text-gray-700 transition hover:bg-gray-50"
+                    className={cx(
+                      'inline-flex h-9 items-center justify-center rounded-xl',
+                      'border border-[var(--color-cream-300)] bg-white/80',
+                      'px-4 text-[12px] font-semibold text-[var(--color-ink-700)]',
+                      'transition-all hover:bg-white',
+                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]',
+                      'active:scale-[0.97]',
+                    )}
                   >
                     View orders
                   </Link>
                 </div>
 
-                <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-gray-100">
+                <div className="mt-4 h-2 overflow-hidden rounded-full bg-[var(--color-cream-200)]">
                   <div
-                    className="h-full rounded-full bg-gray-950 transition-all"
+                    className="h-full rounded-full bg-[var(--color-ember-500)] transition-all duration-500"
                     style={{ width: `${progressToNextTier.percent}%` }}
-                    aria-hidden
+                    role="progressbar"
+                    aria-valuenow={Math.round(progressToNextTier.percent)}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-label={`${Math.round(progressToNextTier.percent)}% progress to ${progressToNextTier.nextLabel}`}
                   />
                 </div>
-              </AccountCard>
+              </section>
             ) : (
-              <AccountCard className="px-4 py-4 sm:px-5">
-                <p className="text-sm font-black text-gray-950">Top tier status</p>
-                <p className="mt-1 text-sm text-gray-500">
-                  You are currently at the highest available rewards tier.
+              <section className={cx(CARD, 'px-5 py-5 sm:px-6')}>
+                <p className="text-[14px] font-bold" style={{ color: 'var(--color-ink-900)' }}>
+                  Top tier status ✦
                 </p>
-              </AccountCard>
+                <p className="mt-1 text-[13px]" style={{ color: 'var(--color-ink-500)' }}>
+                  You're at the highest rewards tier. Enjoy maximum earning on every visit.
+                </p>
+              </section>
             )}
 
-            <AccountCard className="overflow-hidden">
-              <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3 sm:px-5">
+            {/* Activity feed */}
+            <section className={cx(CARD, 'overflow-hidden')}>
+              <div
+                className="flex items-center justify-between border-b px-5 py-4 sm:px-6"
+                style={{ borderColor: 'rgba(0,0,0,0.04)' }}
+              >
                 <div>
-                  <h2 className="text-sm font-black text-gray-950">Recent activity</h2>
-                  <p className="mt-0.5 text-xs text-gray-400">Latest rewards updates.</p>
+                  <h2 className="text-[14px] font-bold" style={{ color: 'var(--color-ink-900)' }}>
+                    Recent activity
+                  </h2>
+                  <p className="mt-0.5 text-[11.5px]" style={{ color: 'var(--color-ink-400)' }}>
+                    Your latest rewards updates
+                  </p>
                 </div>
 
                 <Link
                   to="/account/orders"
-                  className="text-xs font-black text-gray-700 hover:text-gray-950"
+                  className={cx(
+                    'text-[12px] font-semibold transition-colors',
+                    'text-[var(--color-ink-500)] hover:text-[var(--color-ink-900)]',
+                  )}
                 >
-                  Orders
+                  All orders
                 </Link>
               </div>
 
               {transactions.length > 0 ? (
-                <div className="divide-y divide-gray-50 px-4 sm:px-5">
-                  {transactions.slice(0, 6).map((transaction) => (
-                    <TransactionRow key={transaction.id} tx={transaction} />
+                <div
+                  className="divide-y px-5 sm:px-6"
+                  style={{ divideColor: 'rgba(0,0,0,0.03)' } as React.CSSProperties}
+                >
+                  {transactions.slice(0, 6).map((tx) => (
+                    <TransactionRow key={tx.id} tx={tx} />
                   ))}
                 </div>
               ) : (
-                <div className="px-4 py-8 text-center sm:px-5">
-                  <p className="text-sm font-semibold text-gray-500">No rewards activity yet.</p>
+                <div className="px-5 py-10 text-center sm:px-6">
+                  <p className="text-3xl" aria-hidden>
+                    📋
+                  </p>
+                  <p
+                    className="mt-3 text-[13.5px] font-semibold"
+                    style={{ color: 'var(--color-ink-500)' }}
+                  >
+                    No rewards activity yet
+                  </p>
 
                   <Link
                     to="/menu"
-                    className="mt-3 inline-flex items-center justify-center rounded-xl bg-gray-950 px-4 py-2 text-xs font-black text-white transition hover:bg-black"
+                    className={cx(
+                      'mt-4 inline-flex h-10 items-center justify-center rounded-xl',
+                      'bg-[var(--color-ink-900)] px-5 text-[12.5px] font-semibold text-white',
+                      'transition-all hover:bg-black',
+                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]',
+                      'active:scale-[0.97]',
+                    )}
                   >
-                    Order now
+                    Place your first order
                   </Link>
                 </div>
               )}
-            </AccountCard>
+            </section>
           </div>
 
+          {/* ── Right sidebar ────────────────────────────────────────────── */}
           <aside className="min-w-0 space-y-4 lg:sticky lg:top-20">
-            <AccountCard className="px-4 py-4 sm:px-5">
-              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-400">
+            {/* Quick actions */}
+            <section className={cx(CARD, 'px-5 py-5')}>
+              <p
+                className="text-[10px] font-semibold uppercase tracking-[0.14em]"
+                style={{ color: 'var(--color-ink-400)' }}
+              >
                 Quick actions
               </p>
 
               <div className="mt-3 grid gap-2">
                 <Link
                   to="/menu"
-                  className="flex items-center justify-between rounded-2xl border border-gray-100 bg-gray-50 px-4 py-3 text-sm font-black text-gray-900 transition hover:bg-gray-100"
+                  className={cx(
+                    'group flex items-center justify-between rounded-[0.85rem]',
+                    'border border-black/[0.04] bg-white/50 px-4 py-3.5',
+                    'text-[13.5px] font-semibold transition-all',
+                    'text-[var(--color-ink-900)] hover:bg-[var(--color-cream-100)]',
+                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]',
+                    'active:scale-[0.99]',
+                  )}
                 >
                   Order again
-                  <span aria-hidden="true">›</span>
+                  <span
+                    className="text-[var(--color-ink-400)] transition-transform group-hover:translate-x-0.5"
+                    aria-hidden
+                  >
+                    ›
+                  </span>
                 </Link>
 
                 <Link
                   to="/account/orders"
-                  className="flex items-center justify-between rounded-2xl border border-gray-100 bg-gray-50 px-4 py-3 text-sm font-black text-gray-900 transition hover:bg-gray-100"
+                  className={cx(
+                    'group flex items-center justify-between rounded-[0.85rem]',
+                    'border border-black/[0.04] bg-white/50 px-4 py-3.5',
+                    'text-[13.5px] font-semibold transition-all',
+                    'text-[var(--color-ink-900)] hover:bg-[var(--color-cream-100)]',
+                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]',
+                    'active:scale-[0.99]',
+                  )}
                 >
                   View orders
-                  <span aria-hidden="true">›</span>
+                  <span
+                    className="text-[var(--color-ink-400)] transition-transform group-hover:translate-x-0.5"
+                    aria-hidden
+                  >
+                    ›
+                  </span>
+                </Link>
+
+                <Link
+                  to="/account/edit"
+                  className={cx(
+                    'group flex items-center justify-between rounded-[0.85rem]',
+                    'border border-black/[0.04] bg-white/50 px-4 py-3.5',
+                    'text-[13.5px] font-semibold transition-all',
+                    'text-[var(--color-ink-900)] hover:bg-[var(--color-cream-100)]',
+                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)]',
+                    'active:scale-[0.99]',
+                  )}
+                >
+                  Edit profile
+                  <span
+                    className="text-[var(--color-ink-400)] transition-transform group-hover:translate-x-0.5"
+                    aria-hidden
+                  >
+                    ›
+                  </span>
                 </Link>
               </div>
-            </AccountCard>
+            </section>
 
-            <details className="group rounded-3xl border border-gray-100 bg-white shadow-sm">
-              <summary className="flex cursor-pointer select-none items-center justify-between px-4 py-4 text-sm font-black text-gray-900 sm:px-5">
-                <span>How points work</span>
-                <span className="text-gray-400 transition-transform group-open:rotate-180">⌄</span>
+            {/* How rewards work */}
+            <details className={cx(CARD, 'group')}>
+              <summary
+                className={cx(
+                  'flex cursor-pointer select-none items-center justify-between',
+                  'px-5 py-4 text-[13.5px] font-bold',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-gold-400)] focus-visible:rounded-[1.25rem]',
+                )}
+                style={{ color: 'var(--color-ink-900)' }}
+              >
+                <span>How rewards work</span>
+                <span
+                  className="text-[var(--color-ink-400)] transition-transform group-open:rotate-180"
+                  aria-hidden
+                >
+                  ⌄
+                </span>
               </summary>
 
-              <div className="space-y-3 border-t border-gray-100 px-4 py-4 text-sm leading-6 text-gray-500 sm:px-5">
+              <div
+                className="space-y-3 border-t px-5 py-4 text-[13px] leading-relaxed"
+                style={{ borderColor: 'rgba(0,0,0,0.04)', color: 'var(--color-ink-500)' }}
+              >
                 <p>
-                  <span className="font-black text-gray-800">Base rate:</span> 1 point per $1 spent.
+                  <span className="font-bold" style={{ color: 'var(--color-ink-800)' }}>
+                    Earn points:
+                  </span>{' '}
+                  1 point per $1 spent on every order.
                 </p>
 
                 <p>
-                  <span className="font-black text-gray-800">Tier boost:</span>{' '}
+                  <span className="font-bold" style={{ color: 'var(--color-ink-800)' }}>
+                    Tier multipliers:
+                  </span>{' '}
                   {TIER_ORDER.map(
                     (tierKey) =>
                       `${LOYALTY_TIERS[tierKey].label} ${LOYALTY_TIERS[tierKey].multiplier}x`,
                   ).join(' · ')}
                 </p>
 
+                <p>
+                  <span className="font-bold" style={{ color: 'var(--color-ink-800)' }}>
+                    Redeem for:
+                  </span>{' '}
+                  Free drinks, appetizers, entrees, and exclusive Sofi's merch.
+                </p>
+
                 {nextTierConfig ? (
                   <p>
-                    <span className="font-black text-gray-800">Next tier:</span>{' '}
+                    <span className="font-bold" style={{ color: 'var(--color-ink-800)' }}>
+                      Next tier:
+                    </span>{' '}
                     {nextTierConfig.icon} {nextTierConfig.label}
                   </p>
                 ) : (
                   <p>
-                    <span className="font-black text-gray-800">Status:</span> You are at the top
-                    rewards tier.
+                    <span className="font-bold" style={{ color: 'var(--color-ink-800)' }}>
+                      Status:
+                    </span>{' '}
+                    You're at the top rewards tier.
                   </p>
                 )}
               </div>
             </details>
           </aside>
         </div>
-      ) : null}
+      )}
     </div>
   );
 }

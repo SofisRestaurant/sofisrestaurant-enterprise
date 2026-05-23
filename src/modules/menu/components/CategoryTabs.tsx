@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { Check, ChevronRight, X } from 'lucide-react';
+import { Check, ChevronRight, SlidersHorizontal, X } from 'lucide-react';
 
 import type { MenuCategory } from '@/domain/menu/menu.types';
 
@@ -19,6 +19,8 @@ interface CategoryTabsProps {
   selectedCategory: MenuCategory | 'all';
   onSelectCategory: (category: MenuCategory | 'all') => void;
   availableCategories?: Set<MenuCategory>;
+  onOpenFilters?: () => void;
+  filtersActive?: boolean;
 }
 
 type VisibleCategory = (typeof CATEGORIES)[number];
@@ -89,6 +91,7 @@ const CategorySheet = memo(function CategorySheet({
   titleId: string;
   categories: ReadonlyArray<VisibleCategory>;
   selectedCategory: MenuCategory | 'all';
+  filtersActive?: boolean;
   selectedLabel: string;
   onSelectCategory: (category: MenuCategory | 'all') => void;
   onClose: () => void;
@@ -255,6 +258,8 @@ export function CategoryTabs({
   selectedCategory,
   onSelectCategory,
   availableCategories,
+  onOpenFilters,
+  filtersActive,
 }: CategoryTabsProps) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const sheetId = useId();
@@ -373,12 +378,42 @@ export function CategoryTabs({
               </div>
             </div>
 
-            <div
-              className="hidden h-11 w-9 shrink-0 items-center justify-center rounded-full text-[#8a7468] dark:text-white/40 sm:flex"
-              aria-hidden="true"
-            >
-              <ChevronRight className="h-4 w-4" strokeWidth={2.4} />
-            </div>
+            {/* ── Filters button ─────────────────────────────────────── */}
+            {onOpenFilters ? (
+              <button
+                type="button"
+                onClick={onOpenFilters}
+                className={cx(
+                  'group relative flex h-10 shrink-0 items-center gap-1.5 rounded-full px-2.5 sm:h-11 sm:gap-2 sm:px-3',
+                  filtersActive
+                    ? [
+                        'border border-orange-500 bg-orange-50 text-orange-700',
+                        'shadow-[0_8px_18px_rgba(46,24,12,0.055)]',
+                        'dark:border-orange-400/40 dark:bg-orange-500/15 dark:text-orange-300',
+                      ].join(' ')
+                    : surfaceClass,
+                )}
+                aria-label="Open filters"
+              >
+                <SlidersHorizontal className="h-4 w-4" strokeWidth={2.4} />
+                <span className="hidden text-xs font-semibold tracking-[-0.01em] sm:inline">
+                  Filters
+                </span>
+                {filtersActive && (
+                  <span
+                    className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-[rgba(255,250,244,0.72)] bg-orange-500 dark:border-[#0f0d0c] dark:bg-orange-400"
+                    aria-hidden="true"
+                  />
+                )}
+              </button>
+            ) : (
+              <div
+                className="hidden h-11 w-9 shrink-0 items-center justify-center rounded-full text-[#8a7468] dark:text-white/40 sm:flex"
+                aria-hidden="true"
+              >
+                <ChevronRight className="h-4 w-4" strokeWidth={2.4} />
+              </div>
+            )}
           </div>
 
           <div className="border-t border-[rgba(61,42,32,0.08)] bg-white/28 px-3 py-1.5 sm:hidden dark:border-white/10 dark:bg-white/[0.04]">
