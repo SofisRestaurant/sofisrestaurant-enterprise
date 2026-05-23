@@ -1,14 +1,11 @@
 import { useCallback, useEffect, useId, useMemo, useRef } from 'react';
 import { m, AnimatePresence } from 'framer-motion';
 import { SlidersHorizontal, X } from 'lucide-react';
-import { MenuPriceRangeKey, MenuSortKey, MenuTagKey } from '@/types/menu-ui.types';
 
-// ── Animation constants ───────────────────────────────────────────────────────
+import { MenuPriceRangeKey, MenuSortKey, MenuTagKey } from '@/types/menu-ui.types';
 
 const EL = [0.16, 1, 0.3, 1] as const;
 const ES = [0.34, 1.56, 0.64, 1] as const;
-
-// ── Types & helpers — all preserved exactly ───────────────────────────────────
 
 export type MenuFiltersProps = {
   open: boolean;
@@ -33,8 +30,8 @@ function cx(...c: Array<string | false | null | undefined>) {
 function getFocusable(container: HTMLElement): HTMLElement[] {
   const selector =
     'a[href],button:not([disabled]),textarea,input,select,[tabindex]:not([tabindex="-1"])';
-  const nodes = Array.from(container.querySelectorAll<HTMLElement>(selector));
-  return nodes.filter(
+
+  return Array.from(container.querySelectorAll<HTMLElement>(selector)).filter(
     (el) => !el.hasAttribute('disabled') && el.getAttribute('aria-hidden') !== 'true',
   );
 }
@@ -50,7 +47,7 @@ function labelForTag(tag: MenuTagKey): string {
     case 'kids':
       return 'Kids';
     default:
-      return tag; // fallback (prevents TS error)
+      return tag;
   }
 }
 
@@ -61,9 +58,9 @@ function labelForPriceRange(key: MenuPriceRangeKey): string {
     case 'under_10':
       return 'Under $10';
     case '10_20':
-      return '$10–$20';
+      return '$10-$20';
     case '20_30':
-      return '$20–$30';
+      return '$20-$30';
     case '30_plus':
       return '$30+';
     default:
@@ -88,8 +85,6 @@ function labelForSort(key: MenuSortKey): string {
   }
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
-
 export default function MenuFilters(props: MenuFiltersProps) {
   const {
     open,
@@ -109,6 +104,9 @@ export default function MenuFilters(props: MenuFiltersProps) {
 
   const searchId = useId();
   const dialogId = useId();
+  const priceRangeId = useId();
+  const sortId = useId();
+
   const lastFocusRef = useRef<HTMLElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -136,21 +134,31 @@ export default function MenuFilters(props: MenuFiltersProps) {
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
   const openPanel = useCallback(() => onOpenChange(true), [onOpenChange]);
 
+  const handleClearAll = useCallback(() => {
+    onClearAll();
+  }, [onClearAll]);
+
   const toggleTag = useCallback(
     (tag: MenuTagKey) => {
       const next = new Set<MenuTagKey>(selectedTags);
-      if (next.has(tag)) next.delete(tag);
-      else next.add(tag);
+
+      if (next.has(tag)) {
+        next.delete(tag);
+      } else {
+        next.add(tag);
+      }
+
       onSelectedTagsChange(next);
     },
     [selectedTags, onSelectedTagsChange],
   );
 
-  // Focus trap + ESC — unchanged
   useEffect(() => {
     if (!open) return;
+
     lastFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
     queueMicrotask(() => {
       closeBtnRef.current?.focus();
     });
@@ -161,30 +169,35 @@ export default function MenuFilters(props: MenuFiltersProps) {
         close();
         return;
       }
+
       if (e.key !== 'Tab') return;
+
       const dialog = dialogRef.current;
       if (!dialog) return;
+
       const focusables = getFocusable(dialog);
       if (focusables.length === 0) return;
+
       const active = document.activeElement;
       const idx = focusables.findIndex((x) => x === active);
       const lastIdx = focusables.length - 1;
+
       if (e.shiftKey) {
         if (idx <= 0) {
           e.preventDefault();
           focusables[lastIdx]?.focus();
         }
-      } else {
-        if (idx === -1 || idx >= lastIdx) {
-          e.preventDefault();
-          focusables[0]?.focus();
-        }
+      } else if (idx === -1 || idx >= lastIdx) {
+        e.preventDefault();
+        focusables[0]?.focus();
       }
     };
 
     document.addEventListener('keydown', onKeyDown);
+
     return () => {
       document.removeEventListener('keydown', onKeyDown);
+
       queueMicrotask(() => {
         const el = lastFocusRef.current;
         if (el && document.contains(el)) el.focus();
@@ -194,12 +207,12 @@ export default function MenuFilters(props: MenuFiltersProps) {
 
   return (
     <section aria-label="Menu filters" className="w-full">
-      {/* Top bar */}
       <div className="flex items-center gap-2">
         <div className="flex-1">
           <label htmlFor={searchId} className="sr-only">
             Search menu
           </label>
+
           <div className="relative">
             <input
               id={searchId}
@@ -208,15 +221,16 @@ export default function MenuFilters(props: MenuFiltersProps) {
               autoComplete="off"
               value={searchText}
               onChange={(e) => onSearchTextChange(e.target.value)}
-              placeholder="Search dishes…"
+              placeholder="Search dishes..."
               className={cx(
                 'h-11 w-full rounded-2xl border border-white/10 bg-white/5 px-4 pr-10 text-sm text-white outline-none',
-                'placeholder:text-zinc-500 focus-visible:ring-2 focus-visible:ring-amber-500/25 focus-visible:border-amber-500/30',
+                'placeholder:text-zinc-500 focus-visible:border-amber-500/30 focus-visible:ring-2 focus-visible:ring-amber-500/25',
                 'transition-[border-color,box-shadow] duration-200',
               )}
             />
+
             <AnimatePresence>
-              {searchText.trim().length > 0 && (
+              {searchText.trim().length > 0 ? (
                 <m.button
                   type="button"
                   onClick={() => onSearchTextChange('')}
@@ -233,7 +247,7 @@ export default function MenuFilters(props: MenuFiltersProps) {
                 >
                   <X className="h-4 w-4" aria-hidden="true" />
                 </m.button>
-              )}
+              ) : null}
             </AnimatePresence>
           </div>
         </div>
@@ -257,7 +271,7 @@ export default function MenuFilters(props: MenuFiltersProps) {
           <SlidersHorizontal className="h-4 w-4 text-zinc-300" aria-hidden="true" />
           Filters
           <AnimatePresence>
-            {hasAnyFilters && (
+            {hasAnyFilters ? (
               <m.span
                 key="dot"
                 initial={{ scale: 0, opacity: 0 }}
@@ -267,14 +281,13 @@ export default function MenuFilters(props: MenuFiltersProps) {
                 className="ml-1 inline-flex h-2 w-2 rounded-full bg-amber-400"
                 aria-hidden="true"
               />
-            )}
+            ) : null}
           </AnimatePresence>
         </m.button>
       </div>
 
-      {/* Animated overlay + dialog */}
       <AnimatePresence>
-        {open && (
+        {open ? (
           <m.div
             key="filters-overlay"
             className="fixed inset-0 z-50"
@@ -284,7 +297,6 @@ export default function MenuFilters(props: MenuFiltersProps) {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.22 }}
           >
-            {/* Backdrop */}
             <m.div
               className="absolute inset-0 bg-black/60"
               aria-hidden="true"
@@ -294,7 +306,6 @@ export default function MenuFilters(props: MenuFiltersProps) {
               transition={{ duration: 0.25 }}
             />
 
-            {/* Click-outside */}
             <div
               className="absolute inset-0 flex items-end justify-center p-3 sm:items-center"
               onMouseDown={(e) => {
@@ -303,7 +314,6 @@ export default function MenuFilters(props: MenuFiltersProps) {
                 close();
               }}
             >
-              {/* Dialog — slides up from bottom on mobile, scales in on desktop */}
               <m.div
                 id={dialogId}
                 ref={dialogRef}
@@ -311,8 +321,8 @@ export default function MenuFilters(props: MenuFiltersProps) {
                 aria-modal="true"
                 aria-label="Filter menu items"
                 className={cx(
-                  'w-full max-w-xl overflow-hidden rounded-2xl border border-white/10 bg-neutral-950 text-white shadow-2xl',
-                  'max-h-[92vh] flex flex-col min-h-0',
+                  'flex max-h-[88vh] min-h-0 w-full max-w-lg flex-col overflow-hidden rounded-2xl',
+                  'border border-white/10 bg-neutral-950 text-white shadow-2xl',
                 )}
                 initial={{ opacity: 0, y: 40, scale: 0.97 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -320,15 +330,13 @@ export default function MenuFilters(props: MenuFiltersProps) {
                 transition={{ duration: 0.35, ease: EL }}
                 onMouseDown={(e) => e.stopPropagation()}
               >
-                {/* Header */}
                 <div className="shrink-0 border-b border-white/10 bg-neutral-950/90 backdrop-blur supports-backdrop-filter:bg-neutral-950/70">
-                  <div className="flex items-center justify-between gap-3 px-5 py-4">
+                  <div className="flex items-center justify-between gap-3 px-4 py-3">
                     <div className="min-w-0">
-                      <h2 className="truncate text-lg font-semibold">Filters</h2>
-                      <p className="mt-0.5 text-xs text-zinc-500">
-                        Refine by tags, price, sort, and promos.
-                      </p>
+                      <h2 className="truncate text-base font-black">Filters</h2>
+                      <p className="mt-0.5 text-xs text-zinc-500">Find what you are craving.</p>
                     </div>
+
                     <m.button
                       ref={closeBtnRef}
                       type="button"
@@ -336,137 +344,124 @@ export default function MenuFilters(props: MenuFiltersProps) {
                       whileHover={{ scale: 1.08, rotate: 90 }}
                       whileTap={{ scale: 0.92 }}
                       transition={{ duration: 0.2, ease: ES }}
-                      className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25"
+                      className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25"
                       aria-label="Close filters"
                     >
-                      <X className="h-5 w-5" aria-hidden="true" />
+                      <X className="h-4 w-4" aria-hidden="true" />
                     </m.button>
                   </div>
                 </div>
 
-                {/* Body */}
-                <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 py-5 [-webkit-overflow-scrolling:touch]">
-                  {/* Tags */}
-                  <div>
-                    <p className="text-sm font-semibold text-white">Tags</p>
-                    <p className="mt-1 text-xs text-zinc-500">Pick any that match what you want.</p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {allTags.map((t, i) => {
-                        const active = selectedTags.has(t);
-                        return (
-                          <m.button
-                            key={t}
-                            type="button"
-                            onClick={() => toggleTag(t)}
-                            aria-pressed={active ? 'true' : 'false'}
-                            initial={{ opacity: 0, scale: 0.85 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            transition={{ duration: 0.25, ease: ES, delay: i * 0.04 }}
-                            whileHover={{ scale: 1.06, y: -1 }}
-                            whileTap={{ scale: 0.94 }}
-                            className={cx(
-                              'rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors duration-200',
-                              active
-                                ? 'border-amber-500/30 bg-amber-500/10 text-amber-200'
-                                : 'border-white/10 bg-white/5 text-zinc-200 hover:bg-white/8',
-                              'focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25',
-                            )}
-                          >
-                            {/* Active check mark */}
-                            <AnimatePresence>
-                              {active && (
-                                <m.span
-                                  key="check"
-                                  initial={{ width: 0, opacity: 0 }}
-                                  animate={{ width: 'auto', opacity: 1 }}
-                                  exit={{ width: 0, opacity: 0 }}
-                                  transition={{ duration: 0.18 }}
-                                  className="mr-1 inline-block overflow-hidden"
-                                >
-                                  ✓
-                                </m.span>
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 [-webkit-overflow-scrolling:touch]">
+                  <div className="space-y-5">
+                    <div>
+                      <p className="text-sm font-black text-white">Tags</p>
+
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {allTags.map((t, i) => {
+                          const active = selectedTags.has(t);
+
+                          return (
+                            <m.button
+                              key={t}
+                              type="button"
+                              onClick={() => toggleTag(t)}
+                              aria-pressed={active ? 'true' : 'false'}
+                              initial={{ opacity: 0, scale: 0.85 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              transition={{ duration: 0.25, ease: ES, delay: i * 0.04 }}
+                              whileHover={{ scale: 1.06, y: -1 }}
+                              whileTap={{ scale: 0.94 }}
+                              className={cx(
+                                'rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors duration-200',
+                                active
+                                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+                                  : 'border-white/10 bg-white/5 text-zinc-200 hover:bg-white/8',
+                                'focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25',
                               )}
-                            </AnimatePresence>
-                            {labelForTag(t)}
-                          </m.button>
-                        );
-                      })}
+                            >
+                              {active ? <span className="mr-1">✓</span> : null}
+                              {labelForTag(t)}
+                            </m.button>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
 
-                  {/* Price range */}
-                  <div className="mt-6">
-                    <label className="text-sm font-semibold text-white" htmlFor="menu-price-range">
-                      Price range
-                    </label>
-                    <p className="mt-1 text-xs text-zinc-500">Quickly narrow by typical price.</p>
-                    <select
-                      id="menu-price-range"
-                      value={priceRange}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        if (
-                          v === 'any' ||
-                          v === 'under_10' ||
-                          v === '10_20' ||
-                          v === '20_30' ||
-                          v === '30_plus'
-                        ) {
-                          onPriceRangeChange(v);
-                        } else {
-                          onPriceRangeChange('any');
-                        }
-                      }}
-                      className={cx(
-                        'mt-2 h-11 w-full rounded-2xl border border-white/10 bg-white/5 px-3 text-sm text-white outline-none',
-                        'focus-visible:ring-2 focus-visible:ring-amber-500/25 focus-visible:border-amber-500/30',
-                        'transition-[border-color] duration-200',
-                      )}
-                      aria-label="Price range"
-                    >
-                      {allPriceRanges.map((k) => (
-                        <option key={k} value={k}>
-                          {labelForPriceRange(k)}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                    <div>
+                      <label className="text-sm font-black text-white" htmlFor={priceRangeId}>
+                        Price range
+                      </label>
 
-                  {/* Sort */}
-                  <div className="mt-6">
-                    <label className="text-sm font-semibold text-white" htmlFor="menu-sort">
-                      Sort
-                    </label>
-                    <p className="mt-1 text-xs text-zinc-500">Choose how items are ordered.</p>
-                    <select
-                      id="menu-sort"
-                      value={sort}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        const allowed = new Set<MenuSortKey>(allSorts);
-                        if (allowed.has(v as MenuSortKey)) onSortChange(v as MenuSortKey);
-                      }}
-                      className={cx(
-                        'mt-2 h-11 w-full rounded-2xl border border-white/10 bg-white/5 px-3 text-sm text-white outline-none',
-                        'focus-visible:ring-2 focus-visible:ring-amber-500/25 focus-visible:border-amber-500/30',
-                        'transition-[border-color] duration-200',
-                      )}
-                      aria-label="Sort menu items"
-                    >
-                      {allSorts.map((k) => (
-                        <option key={k} value={k}>
-                          {labelForSort(k)}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                      <select
+                        id={priceRangeId}
+                        value={priceRange}
+                        onChange={(e) => {
+                          const v = e.target.value;
 
-                  {/* Promo only */}
-                  <div className="mt-6">
-                    <p className="text-sm font-semibold text-white">Promotions</p>
-                    <p className="mt-1 text-xs text-zinc-500">Show only items with promos.</p>
+                          if (
+                            v === 'any' ||
+                            v === 'under_10' ||
+                            v === '10_20' ||
+                            v === '20_30' ||
+                            v === '30_plus'
+                          ) {
+                            onPriceRangeChange(v);
+                          } else {
+                            onPriceRangeChange('any');
+                          }
+                        }}
+                        className={cx(
+                          'mt-2 h-11 w-full rounded-2xl border border-white/10 bg-white/5 px-3 text-sm text-white outline-none',
+                          'focus-visible:border-amber-500/30 focus-visible:ring-2 focus-visible:ring-amber-500/25',
+                          'transition-[border-color] duration-200',
+                        )}
+                        aria-label="Price range"
+                      >
+                        {allPriceRanges.map((k) => (
+                          <option key={k} value={k}>
+                            {labelForPriceRange(k)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-sm font-black text-white" htmlFor={sortId}>
+                        Sort
+                      </label>
+
+                      <select
+                        id={sortId}
+                        value={sort}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          const allowed = new Set<MenuSortKey>(allSorts);
+
+                          if (allowed.has(v as MenuSortKey)) {
+                            onSortChange(v as MenuSortKey);
+                          }
+                        }}
+                        className={cx(
+                          'mt-2 h-11 w-full rounded-2xl border border-white/10 bg-white/5 px-3 text-sm text-white outline-none',
+                          'focus-visible:border-amber-500/30 focus-visible:ring-2 focus-visible:ring-amber-500/25',
+                          'transition-[border-color] duration-200',
+                        )}
+                        aria-label="Sort menu items"
+                      >
+                        {allSorts.map((k) => (
+                          <option key={k} value={k}>
+                            {labelForSort(k)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
                     <m.label
-                      className="mt-3 inline-flex cursor-pointer items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 transition-colors duration-200 hover:bg-white/8"
+                      className={cx(
+                        'flex cursor-pointer items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3',
+                        'transition-colors duration-200 hover:bg-white/8',
+                      )}
                       whileTap={{ scale: 0.98 }}
                     >
                       <input
@@ -476,9 +471,11 @@ export default function MenuFilters(props: MenuFiltersProps) {
                         className="h-4 w-4"
                         aria-label="Promo only"
                       />
-                      <span className="text-sm font-semibold text-zinc-200">Promo only</span>
+
+                      <span className="text-sm font-black text-zinc-200">Promo only</span>
+
                       <AnimatePresence>
-                        {promoOnly && (
+                        {promoOnly ? (
                           <m.span
                             initial={{ opacity: 0, scale: 0.6 }}
                             animate={{ opacity: 1, scale: 1 }}
@@ -489,28 +486,27 @@ export default function MenuFilters(props: MenuFiltersProps) {
                           >
                             ✓
                           </m.span>
-                        )}
+                        ) : null}
                       </AnimatePresence>
                     </m.label>
                   </div>
                 </div>
 
-                {/* Footer */}
                 <div className="shrink-0 border-t border-white/10 bg-neutral-950/90 backdrop-blur supports-backdrop-filter:bg-neutral-950/70">
-                  <div className="flex items-center justify-between gap-3 px-5 py-4">
+                  <div className="flex items-center justify-between gap-3 px-4 py-3">
                     <m.button
                       type="button"
-                      onClick={onClearAll}
+                      onClick={handleClearAll}
                       whileHover={{ scale: 1.03 }}
                       whileTap={{ scale: 0.97 }}
                       transition={{ duration: 0.15 }}
                       className={cx(
-                        'inline-flex h-11 items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 text-sm font-semibold text-white',
+                        'inline-flex h-10 items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 text-sm font-semibold text-white',
                         'hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25',
                       )}
                       aria-label="Clear all filters"
                     >
-                      Clear all
+                      Clear
                     </m.button>
 
                     <m.button
@@ -520,7 +516,7 @@ export default function MenuFilters(props: MenuFiltersProps) {
                       whileTap={{ scale: 0.97 }}
                       transition={{ duration: 0.18, ease: ES }}
                       className={cx(
-                        'inline-flex h-11 items-center justify-center rounded-2xl bg-amber-500 px-5 text-sm font-semibold text-black',
+                        'inline-flex h-10 items-center justify-center rounded-2xl bg-amber-500 px-5 text-sm font-black text-black',
                         'hover:opacity-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25',
                       )}
                       aria-label="Apply filters"
@@ -532,7 +528,7 @@ export default function MenuFilters(props: MenuFiltersProps) {
               </m.div>
             </div>
           </m.div>
-        )}
+        ) : null}
       </AnimatePresence>
     </section>
   );

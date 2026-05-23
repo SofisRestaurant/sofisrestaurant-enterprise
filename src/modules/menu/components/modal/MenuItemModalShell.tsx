@@ -457,10 +457,11 @@ export const MenuItemModalShell: FC<MenuItemModalShellProps> = ({
         aria-modal="true"
         aria-labelledby={titleId}
         data-menu-modal-panel
+        data-ui-component
         className={cx(
-          'pointer-events-auto relative z-10 flex w-full max-w-none flex-col font-sans',
+          'pointer-events-auto relative z-10 flex w-full max-w-none flex-col',
           'h-[100dvh] max-h-[100dvh]',
-          'overflow-hidden text-(--menu-modal-text)',
+          'overflow-hidden text-[#171312] dark:text-white',
           'rounded-none',
           'border-0 border-(--menu-modal-border) ring-0 ring-(--menu-modal-ring)',
           'will-change-transform transform-gpu',
@@ -471,6 +472,7 @@ export const MenuItemModalShell: FC<MenuItemModalShellProps> = ({
           background: 'var(--menu-modal-bg)',
           boxShadow: 'var(--menu-modal-shadow)',
           contain: 'layout paint style',
+          fontFamily: 'var(--font-sans)',
         }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -495,13 +497,15 @@ export const MenuItemModalShell: FC<MenuItemModalShellProps> = ({
           />
         </div>
 
-        {hero ? <div className="shrink-0">{hero}</div> : null}
+        {hero ? (
+          <div className="relative z-20 shrink-0 text-[#171312] dark:text-white">{hero}</div>
+        ) : null}
 
         <div
           ref={scrollRef}
           data-menu-modal-scroll
           className={cx(
-            'relative min-h-0 flex-1 overflow-y-auto overscroll-contain',
+            'relative z-20 min-h-0 flex-1 overflow-y-auto overscroll-contain text-[#171312] dark:text-white',
             'px-5 pb-6 pt-[env(safe-area-inset-top)] sm:px-6 sm:pt-0',
             '[-webkit-overflow-scrolling:touch]',
           )}

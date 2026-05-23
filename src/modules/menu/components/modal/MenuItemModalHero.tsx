@@ -1,11 +1,12 @@
 // =============================================================================
 // Item title, category, price, description, and badges below the hero image.
 // Mobile-first item detail screen layout, desktop dialog compatible.
-// Token-driven light/dark typography.
+// Uses Sofi's project typography system with stronger readable colors.
 // =============================================================================
 
 import { memo } from 'react';
 import { Star } from 'lucide-react';
+
 import { cx } from '../../utils/uiHelpers';
 
 interface MenuItemModalHeroProps {
@@ -32,9 +33,16 @@ export const MenuItemModalHero = memo<MenuItemModalHeroProps>(function MenuItemM
   preflightLoading,
 }) {
   return (
-    <header className="relative z-10 pt-5 sm:pt-5">
+    <header className="relative z-10 pt-4 sm:pt-5" data-ui-component>
       <div className="flex items-center justify-between gap-3">
-        <p className="min-w-0 truncate text-[11px] font-extrabold uppercase tracking-[0.18em] text-(--menu-modal-subtle)">
+        <p
+          className={cx(
+            'min-w-0 truncate uppercase',
+            'text-[11px] font-black leading-none tracking-[0.16em]',
+            'text-[#5a4638] dark:text-white/70',
+          )}
+          style={{ fontFamily: 'var(--font-sans)' }}
+        >
           {categoryLabel}
         </p>
 
@@ -42,10 +50,11 @@ export const MenuItemModalHero = memo<MenuItemModalHeroProps>(function MenuItemM
           <span
             className={cx(
               'inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1',
-              'text-[10px] font-extrabold uppercase tracking-wider',
-              'border border-(--menu-modal-pill-popular-border)',
-              'bg-(--menu-modal-pill-popular-bg) text-(--menu-modal-pill-popular-text)',
+              'border border-amber-700/20 bg-amber-100 text-amber-900',
+              'dark:border-amber-300/25 dark:bg-amber-300/12 dark:text-amber-200',
+              'text-[10px] font-black uppercase leading-none tracking-[0.12em]',
             )}
+            style={{ fontFamily: 'var(--font-sans)' }}
           >
             <Star className="h-3 w-3 fill-current" aria-hidden="true" />
             Popular
@@ -56,26 +65,37 @@ export const MenuItemModalHero = memo<MenuItemModalHeroProps>(function MenuItemM
       <h2
         id={titleId}
         className={cx(
-          'mt-2 font-sans font-extrabold leading-[1.02] tracking-[-0.045em]',
-          'text-[clamp(2rem,9vw,3.15rem)] text-(--menu-modal-text)',
-          'sm:text-[1.85rem] sm:leading-tight sm:tracking-[-0.035em]',
+          'mt-2 max-w-[13ch]',
+          'text-[clamp(1.85rem,7.8vw,2.7rem)] font-black leading-[1.08] tracking-[-0.025em]',
+          'text-[#171312] dark:text-white',
+          'sm:max-w-none sm:text-[2.15rem] sm:leading-[1.08]',
         )}
+        style={{ fontFamily: 'var(--font-sans)' }}
       >
         {name}
       </h2>
 
-      <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2">
-        <span className="text-2xl font-extrabold tabular-nums tracking-[-0.03em] text-(--menu-modal-accent) sm:text-xl">
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <span
+          className={cx(
+            'text-2xl font-black leading-none tabular-nums tracking-[-0.02em]',
+            'text-[#b45309] dark:text-[#ecc84a]',
+            'sm:text-xl',
+          )}
+          style={{ fontFamily: 'var(--font-sans)' }}
+        >
           {basePriceLabel}
         </span>
 
         {preflightOk ? (
           <span
             className={cx(
-              'rounded-full px-2 py-1 text-[9px] font-extrabold uppercase tracking-widest',
-              'border border-(--menu-modal-pill-verified-bg)',
-              'bg-(--menu-modal-pill-verified-bg) text-(--menu-modal-pill-verified-text)',
+              'rounded-full px-2 py-1',
+              'border border-emerald-700/20 bg-emerald-100 text-emerald-800',
+              'dark:border-emerald-300/25 dark:bg-emerald-300/12 dark:text-emerald-200',
+              'text-[9px] font-black uppercase leading-none tracking-[0.14em]',
             )}
+            style={{ fontFamily: 'var(--font-sans)' }}
           >
             Verified
           </span>
@@ -84,12 +104,24 @@ export const MenuItemModalHero = memo<MenuItemModalHeroProps>(function MenuItemM
         ) : null}
 
         {extrasLabel ? (
-          <span className="text-sm font-bold text-(--menu-modal-muted)">{extrasLabel}</span>
+          <span
+            className="text-sm font-bold leading-none text-[#4b403b] dark:text-white/70"
+            style={{ fontFamily: 'var(--font-sans)' }}
+          >
+            {extrasLabel}
+          </span>
         ) : null}
       </div>
 
       {description ? (
-        <p className="mt-4 max-w-[46ch] text-[0.95rem] font-medium leading-7 text-(--menu-modal-muted) sm:text-sm sm:leading-relaxed">
+        <p
+          className={cx(
+            'mt-3 max-w-[48ch]',
+            'text-[0.95rem] font-medium leading-6 text-[#3f3632] dark:text-white/70',
+            'sm:text-sm sm:leading-6',
+          )}
+          style={{ fontFamily: 'var(--font-sans)' }}
+        >
           {description}
         </p>
       ) : null}

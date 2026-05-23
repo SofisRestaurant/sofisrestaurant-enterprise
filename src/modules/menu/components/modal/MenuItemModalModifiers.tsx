@@ -27,10 +27,10 @@ export function MenuItemModalModifiers({
     <ModalSection>
       <div className="flex items-end justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-500">
+          <h3 className="text-[11px] font-black uppercase tracking-[0.18em] text-[#171312] dark:text-white">
             Customize
           </h3>
-          <p className="mt-1 text-xs text-ink-500">
+          <p className="mt-1 text-xs font-medium text-[#5f534e] dark:text-white/65">
             Required choices must be completed before adding to cart.
           </p>
         </div>
@@ -39,8 +39,8 @@ export function MenuItemModalModifiers({
             type="button"
             onClick={onClearSelections}
             className={cx(
-              'shrink-0 rounded-lg px-3 py-2 text-xs font-semibold text-ink-500',
-              'transition-colors hover:bg-cream-100 hover:text-ink-800 active:scale-95',
+              'shrink-0 rounded-lg px-3 py-2 text-xs font-bold text-[#5f534e] dark:text-white/65',
+              'transition-colors hover:bg-(--menu-modal-control-hover) hover:text-[#171312] dark:hover:text-white active:scale-95',
               'focus:outline-none focus-visible:ring-2 focus-visible:ring-(--menu-modal-focus-ring)',
             )}
             aria-label="Clear all selections"
