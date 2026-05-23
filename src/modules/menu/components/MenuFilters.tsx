@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef } from 'react';
-import { m, AnimatePresence } from 'framer-motion';
+import { AnimatePresence, m } from 'framer-motion';
 import { SlidersHorizontal, X } from 'lucide-react';
 
 import { MenuPriceRangeKey, MenuSortKey, MenuTagKey } from '@/types/menu-ui.types';
@@ -83,6 +83,26 @@ function labelForSort(key: MenuSortKey): string {
     default:
       return key;
   }
+}
+
+function isPriceRangeKey(value: string): value is MenuPriceRangeKey {
+  return (
+    value === 'any' ||
+    value === 'under_10' ||
+    value === '10_20' ||
+    value === '20_30' ||
+    value === '30_plus'
+  );
+}
+
+function isSortKey(value: string): value is MenuSortKey {
+  return (
+    value === 'recommended' ||
+    value === 'price_low' ||
+    value === 'price_high' ||
+    value === 'name_az' ||
+    value === 'name_za'
+  );
 }
 
 export default function MenuFilters(props: MenuFiltersProps) {
@@ -206,9 +226,9 @@ export default function MenuFilters(props: MenuFiltersProps) {
   }, [open, close]);
 
   return (
-    <section aria-label="Menu filters" className="w-full">
-      <div className="flex items-center gap-2">
-        <div className="flex-1">
+    <section aria-label="Menu filters" className="w-full" data-ui-component>
+      <div className="flex items-center gap-2 sm:gap-3">
+        <div className="hidden min-w-0 flex-1 sm:block">
           <label htmlFor={searchId} className="sr-only">
             Search menu
           </label>
@@ -259,7 +279,7 @@ export default function MenuFilters(props: MenuFiltersProps) {
           whileTap={{ scale: 0.96 }}
           transition={{ duration: 0.18, ease: ES }}
           className={cx(
-            'inline-flex h-11 items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 text-sm font-semibold text-white',
+            'inline-flex h-11 w-full shrink-0 items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 text-sm font-semibold text-white sm:w-auto',
             'hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25',
             'transition-colors duration-200',
           )}
@@ -333,8 +353,10 @@ export default function MenuFilters(props: MenuFiltersProps) {
                 <div className="shrink-0 border-b border-white/10 bg-neutral-950/90 backdrop-blur supports-backdrop-filter:bg-neutral-950/70">
                   <div className="flex items-center justify-between gap-3 px-4 py-3">
                     <div className="min-w-0">
-                      <h2 className="truncate text-base font-black">Filters</h2>
-                      <p className="mt-0.5 text-xs text-zinc-500">Find what you are craving.</p>
+                      <h2 className="truncate text-base font-black text-white">Filters</h2>
+                      <p className="mt-0.5 text-xs font-medium text-zinc-400">
+                        Find what you are craving.
+                      </p>
                     </div>
 
                     <m.button
@@ -358,18 +380,18 @@ export default function MenuFilters(props: MenuFiltersProps) {
                       <p className="text-sm font-black text-white">Tags</p>
 
                       <div className="mt-2 flex flex-wrap gap-2">
-                        {allTags.map((t, i) => {
-                          const active = selectedTags.has(t);
+                        {allTags.map((tag, index) => {
+                          const active = selectedTags.has(tag);
 
                           return (
                             <m.button
-                              key={t}
+                              key={tag}
                               type="button"
-                              onClick={() => toggleTag(t)}
+                              onClick={() => toggleTag(tag)}
                               aria-pressed={active ? 'true' : 'false'}
                               initial={{ opacity: 0, scale: 0.85 }}
                               animate={{ opacity: 1, scale: 1 }}
-                              transition={{ duration: 0.25, ease: ES, delay: i * 0.04 }}
+                              transition={{ duration: 0.25, ease: ES, delay: index * 0.04 }}
                               whileHover={{ scale: 1.06, y: -1 }}
                               whileTap={{ scale: 0.94 }}
                               className={cx(
@@ -381,7 +403,7 @@ export default function MenuFilters(props: MenuFiltersProps) {
                               )}
                             >
                               {active ? <span className="mr-1">✓</span> : null}
-                              {labelForTag(t)}
+                              {labelForTag(tag)}
                             </m.button>
                           );
                         })}
@@ -397,30 +419,19 @@ export default function MenuFilters(props: MenuFiltersProps) {
                         id={priceRangeId}
                         value={priceRange}
                         onChange={(e) => {
-                          const v = e.target.value;
-
-                          if (
-                            v === 'any' ||
-                            v === 'under_10' ||
-                            v === '10_20' ||
-                            v === '20_30' ||
-                            v === '30_plus'
-                          ) {
-                            onPriceRangeChange(v);
-                          } else {
-                            onPriceRangeChange('any');
-                          }
+                          const value = e.target.value;
+                          onPriceRangeChange(isPriceRangeKey(value) ? value : 'any');
                         }}
                         className={cx(
-                          'mt-2 h-11 w-full rounded-2xl border border-white/10 bg-white/5 px-3 text-sm text-white outline-none',
+                          'mt-2 h-11 w-full appearance-none rounded-2xl border border-white/10 bg-neutral-900 px-3 text-sm font-semibold text-white outline-none',
                           'focus-visible:border-amber-500/30 focus-visible:ring-2 focus-visible:ring-amber-500/25',
-                          'transition-[border-color] duration-200',
+                          'transition-[border-color,box-shadow] duration-200',
                         )}
                         aria-label="Price range"
                       >
-                        {allPriceRanges.map((k) => (
-                          <option key={k} value={k}>
-                            {labelForPriceRange(k)}
+                        {allPriceRanges.map((key) => (
+                          <option key={key} value={key} className="bg-neutral-950 text-white">
+                            {labelForPriceRange(key)}
                           </option>
                         ))}
                       </select>
@@ -435,60 +446,59 @@ export default function MenuFilters(props: MenuFiltersProps) {
                         id={sortId}
                         value={sort}
                         onChange={(e) => {
-                          const v = e.target.value;
-                          const allowed = new Set<MenuSortKey>(allSorts);
+                          const value = e.target.value;
 
-                          if (allowed.has(v as MenuSortKey)) {
-                            onSortChange(v as MenuSortKey);
+                          if (isSortKey(value)) {
+                            onSortChange(value);
                           }
                         }}
                         className={cx(
-                          'mt-2 h-11 w-full rounded-2xl border border-white/10 bg-white/5 px-3 text-sm text-white outline-none',
+                          'mt-2 h-11 w-full appearance-none rounded-2xl border border-white/10 bg-neutral-900 px-3 text-sm font-semibold text-white outline-none',
                           'focus-visible:border-amber-500/30 focus-visible:ring-2 focus-visible:ring-amber-500/25',
-                          'transition-[border-color] duration-200',
+                          'transition-[border-color,box-shadow] duration-200',
                         )}
                         aria-label="Sort menu items"
                       >
-                        {allSorts.map((k) => (
-                          <option key={k} value={k}>
-                            {labelForSort(k)}
+                        {allSorts.map((key) => (
+                          <option key={key} value={key} className="bg-neutral-950 text-white">
+                            {labelForSort(key)}
                           </option>
                         ))}
                       </select>
                     </div>
 
-                    <m.label
-                      className={cx(
-                        'flex cursor-pointer items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3',
-                        'transition-colors duration-200 hover:bg-white/8',
-                      )}
+                    <m.button
+                      type="button"
+                      onClick={() => onPromoOnlyChange(!promoOnly)}
+                      aria-pressed={promoOnly ? 'true' : 'false'}
                       whileTap={{ scale: 0.98 }}
+                      className={cx(
+                        'flex w-full cursor-pointer items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left',
+                        'transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25',
+                        promoOnly
+                          ? 'border-amber-500/30 bg-amber-500/10'
+                          : 'border-white/10 bg-white/5 hover:bg-white/8',
+                      )}
                     >
-                      <input
-                        type="checkbox"
-                        checked={promoOnly}
-                        onChange={(e) => onPromoOnlyChange(e.target.checked)}
-                        className="h-4 w-4"
-                        aria-label="Promo only"
-                      />
+                      <span className="text-sm font-black text-zinc-100">Promo only</span>
 
-                      <span className="text-sm font-black text-zinc-200">Promo only</span>
-
-                      <AnimatePresence>
-                        {promoOnly ? (
-                          <m.span
-                            initial={{ opacity: 0, scale: 0.6 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.6 }}
-                            transition={{ duration: 0.2, ease: ES }}
-                            className="ml-auto text-amber-300"
-                            aria-hidden="true"
-                          >
-                            ✓
-                          </m.span>
-                        ) : null}
-                      </AnimatePresence>
-                    </m.label>
+                      <span
+                        className={cx(
+                          'inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors duration-200',
+                          promoOnly
+                            ? 'border-amber-400/40 bg-amber-400/25'
+                            : 'border-white/10 bg-white/5',
+                        )}
+                        aria-hidden="true"
+                      >
+                        <span
+                          className={cx(
+                            'ml-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform duration-200',
+                            promoOnly ? 'translate-x-5' : 'translate-x-0',
+                          )}
+                        />
+                      </span>
+                    </m.button>
                   </div>
                 </div>
 

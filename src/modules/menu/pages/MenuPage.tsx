@@ -624,8 +624,8 @@ function MenuPage() {
   useEffect(() => {
     if (loading || !firstVisibleImageUrl) return;
 
-const attrs = getMenuLcpPreloadAttrs(firstVisibleImageUrl);
-if (!attrs) return;
+    const attrs = getMenuLcpPreloadAttrs(firstVisibleImageUrl);
+    if (!attrs) return;
 
     // Remove previous preload if it exists (filter change scenario).
     const existing = document.getElementById(LCP_PRELOAD_ID);
@@ -775,10 +775,7 @@ if (!attrs) return;
   // ── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <main
-      className="relative mx-auto w-full max-w-7xl px-4 pt-4 md:pb-10"
-      aria-busy={loading}
-    >
+    <main className="relative mx-auto w-full max-w-7xl px-4 pt-4 md:pb-10" aria-busy={loading}>
       <AnimatePresence>
         {!loading && error && (
           <m.div
@@ -831,11 +828,7 @@ if (!attrs) return;
             delayed this text by 530ms. Interaction animations on buttons
             (whileHover/whileTap) are kept — they're not entrance-blocking.
           */}
-          <div className="mt-8 flex items-center justify-between gap-3">
-            <div className="mt-5 flex items-center justify-between gap-3 rounded-2xl border border-cream-200/70 bg-white/70 px-4 py-3 shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
-              <div className="min-w-0"></div>
-            </div>
-
+          <div className="mt-8 flex items-center justify-end gap-2">
             <div className="flex items-center gap-2">
               <m.button
                 ref={filtersBtnRef}
