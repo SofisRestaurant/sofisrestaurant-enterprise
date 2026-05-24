@@ -12,31 +12,6 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.1"
   }
-  graphql_public: {
-    Tables: {
-      [_ in never]: never
-    }
-    Views: {
-      [_ in never]: never
-    }
-    Functions: {
-      graphql: {
-        Args: {
-          extensions?: Json
-          operationName?: string
-          query?: string
-          variables?: Json
-        }
-        Returns: Json
-      }
-    }
-    Enums: {
-      [_ in never]: never
-    }
-    CompositeTypes: {
-      [_ in never]: never
-    }
-  }
   public: {
     Tables: {
       abandoned_cart_sessions: {
@@ -1231,6 +1206,141 @@ export type Database = {
             columns: ["ledger_id"]
             isOneToOne: false
             referencedRelation: "v2_loyalty_ledger_enriched"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      loyalty_redemptions: {
+        Row: {
+          account_id: string
+          applied_at: string | null
+          created_at: string
+          discount_cents: number
+          id: string
+          idempotency_key: string | null
+          ledger_id: string | null
+          metadata: Json
+          order_id: string | null
+          order_item_id: string | null
+          points_spent: number
+          reward_id: string
+          reward_label: string
+          status: string
+          user_id: string | null
+          voided_at: string | null
+        }
+        Insert: {
+          account_id: string
+          applied_at?: string | null
+          created_at?: string
+          discount_cents?: number
+          id?: string
+          idempotency_key?: string | null
+          ledger_id?: string | null
+          metadata?: Json
+          order_id?: string | null
+          order_item_id?: string | null
+          points_spent: number
+          reward_id: string
+          reward_label: string
+          status?: string
+          user_id?: string | null
+          voided_at?: string | null
+        }
+        Update: {
+          account_id?: string
+          applied_at?: string | null
+          created_at?: string
+          discount_cents?: number
+          id?: string
+          idempotency_key?: string | null
+          ledger_id?: string | null
+          metadata?: Json
+          order_id?: string | null
+          order_item_id?: string | null
+          points_spent?: number
+          reward_id?: string
+          reward_label?: string
+          status?: string
+          user_id?: string | null
+          voided_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "loyalty_redemptions_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "loyalty_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_redemptions_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v2_account_summary"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_redemptions_ledger_id_fkey"
+            columns: ["ledger_id"]
+            isOneToOne: false
+            referencedRelation: "loyalty_ledger"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_redemptions_ledger_id_fkey"
+            columns: ["ledger_id"]
+            isOneToOne: false
+            referencedRelation: "v2_loyalty_activity"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_redemptions_ledger_id_fkey"
+            columns: ["ledger_id"]
+            isOneToOne: false
+            referencedRelation: "v2_loyalty_ledger_enriched"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_redemptions_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "admin_tax_order_breakdown"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "loyalty_redemptions_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "financial_revenue_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_redemptions_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "order_performance"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "loyalty_redemptions_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "order_timeline"
+            referencedColumns: ["order_id"]
+          },
+          {
+            foreignKeyName: "loyalty_redemptions_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "loyalty_redemptions_order_item_id_fkey"
+            columns: ["order_item_id"]
+            isOneToOne: false
+            referencedRelation: "order_items"
             referencedColumns: ["id"]
           },
         ]
@@ -2932,6 +3042,27 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      restaurant_ordering_settings: {
+        Row: {
+          id: string
+          online_ordering_enabled: boolean
+          pause_message: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          online_ordering_enabled?: boolean
+          pause_message?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          online_ordering_enabled?: boolean
+          pause_message?: string
+          updated_at?: string
+        }
+        Relationships: []
       }
       security_events: {
         Row: {
@@ -4939,9 +5070,6 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
-  graphql_public: {
-    Enums: {},
-  },
   public: {
     Enums: {
       avs_check_enum: ["pass", "fail", "unavailable", "unchecked", "unknown"],

@@ -42,15 +42,27 @@ import {
 } from "../shared/idempotency.ts";
 
 // ─── Loyalty finalization ─────────────────────────────────────────────────────
+//
+// For PAID orders, the checkout_reserve ledger entry (negative points) IS the
+// permanent deduction. No additional ledger row is needed.
+//
+// This function writes an 'applied' row to loyalty_redemptions as the
+// finalization marker. The release path (v2_release_loyalty_reserve and
+// releaseStaleReserves) must check for this marker before restoring points.
+//
+// PREVIOUS BUG: inserted amount=0 into loyalty_ledger, which was blocked by
+// CHECK (amount <> 0). The finalization marker was never written, leaving
+// paid reserves vulnerable to stale-reserve cleanup restoring points.
 
 async function finalizeLoyaltyReserve(args: {
   db:        DbClient;
   sessionId: string;
   userId:    string;
+  orderId:   string;
   meta:      ParsedCheckoutMetadata;
   requestId: string;
 }): Promise<void> {
-  const { db, sessionId, userId, meta, requestId } = args;
+  const { db, sessionId, userId, orderId, meta, requestId } = args;
   const {
     loyaltyAccountId,
     loyaltyPreSessionKey,
@@ -66,37 +78,82 @@ async function finalizeLoyaltyReserve(args: {
     return;
   }
 
-  const { error: flipError } = await db
-    .from("loyalty_ledger")
+  // Find the original checkout_reserve ledger entry for the ledger_id FK.
+  const reserveIdemKey = `reserve:${loyaltyPreSessionKey}`;
+  let reserveLedgerId: string | null = null;
+  try {
+    const { data: reserveEntry } = await db
+      .from("loyalty_ledger")
+      .select("id")
+      .eq("idempotency_key", reserveIdemKey)
+      .maybeSingle();
+    reserveLedgerId = reserveEntry?.id ?? null;
+  } catch {
+    // Non-fatal — the FK is informational. Proceed without it.
+  }
+
+  const finalizeIdemKey = `finalize:${loyaltyPreSessionKey}`;
+
+  // Insert an 'applied' loyalty_redemptions row as the finalization marker.
+  // This does NOT change the customer's balance — the reserve deduction
+  // (checkout_reserve with -points) IS the permanent deduction.
+  // Idempotent via UNIQUE index on idempotency_key.
+  const { error: insertError } = await db
+    .from("loyalty_redemptions")
     .insert({
       account_id:      loyaltyAccountId,
-      amount:          0,
-      balance_after:   0,
-      entry_type:      "checkout_release",
-      source:          "online_checkout",
-      idempotency_key: `release:${loyaltyPreSessionKey}`,
+      user_id:         userId,
+      order_id:        orderId,
+      ledger_id:       reserveLedgerId,
+      reward_id:       "legacy_checkout_points",
+      reward_label:    "Checkout Points Redemption",
+      points_spent:    loyaltyReservedPoints,
+      discount_cents:  loyaltyDiscountCents ?? 0,
+      status:          "applied",
+      idempotency_key: finalizeIdemKey,
+      applied_at:      nowIso(),
       metadata: {
-        stripe_session_id: sessionId,
-        reason:            "payment_completed",
-        loyalty_points:    loyaltyReservedPoints,
-        loyalty_cents:     loyaltyDiscountCents,
-        user_id:           userId,
+        stripe_session_id:       sessionId,
+        pre_session_key:         loyaltyPreSessionKey,
+        reserve_idempotency_key: reserveIdemKey,
+        source:                  "webhook_finalization",
       },
     });
 
-  if (flipError) {
-    log("warn", "webhook_loyalty_ledger_flip_failed", {
+  if (insertError) {
+    // 23505 = unique violation on idempotency_key → already finalized (safe).
+    if (insertError.code === "23505") {
+      log("info", "webhook_loyalty_finalize_already_applied", {
+        requestId,
+        sessionId: prefix(sessionId),
+        accountId: prefix(loyaltyAccountId),
+      });
+      return;
+    }
+    log("warn", "webhook_loyalty_finalize_failed", {
       requestId,
       sessionId: prefix(sessionId),
       accountId: prefix(loyaltyAccountId),
-      error:     flipError.message,
+      code:      insertError.code ?? null,
+      error:     insertError.message,
     });
+    return;
   }
 
+  // Update last_redeem_at for cooldown tracking (preserves existing behavior).
   await db
     .from("loyalty_accounts")
     .update({ last_redeem_at: nowIso(), updated_at: nowIso() })
     .eq("id", loyaltyAccountId);
+
+  log("info", "webhook_loyalty_finalized", {
+    requestId,
+    sessionId: prefix(sessionId),
+    orderId:   prefix(orderId),
+    accountId: prefix(loyaltyAccountId),
+    points:    loyaltyReservedPoints,
+    cents:     loyaltyDiscountCents,
+  });
 }
 
 // ─── Verification status helper ───────────────────────────────────────────────
@@ -417,6 +474,7 @@ export async function handleCheckoutSessionCompleted(
         db,
         sessionId: session.id,
         userId,
+        orderId,
         meta,
         requestId,
       }),
