@@ -4,7 +4,13 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { invokeEdge } from '@/lib/supabase/invoke';
-import type { CustomerProfile, AwardResult, RedeemResult } from './loyalty.types';
+import type {
+  CustomerProfile,
+  AwardResult,
+  RedeemResult,
+  RewardRedemptionResult,
+} from './loyalty.types';
+import type { LoyaltyRewardId } from './rewards';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -55,21 +61,14 @@ function parseCustomerProfile(payload: unknown): CustomerProfile {
 
   if (!isRecord(raw)) throw new Error('Invalid response from server.');
 
-  // verify-loyalty-qr returns:
-  // { account_id, profile_id, full_name, balance, lifetime_earned, tier, streak, ... }
   const accountId = asString(raw.account_id).trim();
   if (!accountId) throw new Error('Invalid response from server: missing account_id');
 
-  // Optional but VERY useful for admin tooling & debugging
   const profileId = asNullableString(raw.profile_id);
 
   return {
-    // required
     account_id: accountId,
-
-    // optional / helpful
     profile_id: profileId,
-
     full_name: asNullableString(raw.full_name),
     tier: asString(raw.tier, 'bronze'),
     balance: asNumber(raw.balance, 0),
@@ -84,12 +83,7 @@ function parseAwardResult(payload: unknown): AwardResult {
 
   if (!isRecord(raw)) throw new Error('Invalid response from server.');
 
-  // Expected from v2_award_points:
-  // { new_balance, new_lifetime, new_tier, points_earned, streak, tier_changed, was_duplicate }
-  // If your RPC returns an array, unwrapEdgeResult() should already have fixed it,
-  // but we still guard a bit:
   if (!('new_balance' in raw) || !('points_earned' in raw)) {
-    // some RPCs can come back as array even after envelope
     if (Array.isArray(raw) && raw.length > 0 && isRecord(raw[0])) {
       return raw[0] as unknown as AwardResult;
     }
@@ -99,15 +93,29 @@ function parseAwardResult(payload: unknown): AwardResult {
   return raw as unknown as AwardResult;
 }
 
-function parseRedeemResult(payload: unknown): RedeemResult {
+
+function parseRewardRedemptionResult(payload: unknown): RewardRedemptionResult {
   const raw = unwrapEdgeResult(payload);
 
   if (!isRecord(raw)) throw new Error('Invalid response from server.');
 
-  if (raw.was_duplicate === true) throw new Error('DUPLICATE');
-  if (!('new_balance' in raw)) throw new Error('Invalid redeem response: missing new_balance');
+  const redemptionId = asString(raw.redemption_id).trim();
+  if (!redemptionId) throw new Error('Invalid response: missing redemption_id');
 
-  return raw as unknown as RedeemResult;
+  const rewardId = asString(raw.reward_id).trim();
+  if (!rewardId) throw new Error('Invalid response: missing reward_id');
+
+  return {
+    redemption_id: redemptionId,
+    ledger_id: asString(raw.ledger_id),
+    reward_id: rewardId as LoyaltyRewardId,
+    reward_label: asString(raw.reward_label),
+    points_spent: asNumber(raw.points_spent, 0),
+    discount_cents: asNumber(raw.discount_cents, 0),
+    new_balance: asNumber(raw.new_balance, 0),
+    status: raw.status === 'staff_required' ? 'staff_required' : 'applied',
+    was_duplicate: raw.was_duplicate === true,
+  };
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -133,8 +141,8 @@ export async function verifyLoyaltyQR(
  * Award points from an admin scan.
  *
  * scanId is optional but strongly recommended:
- * - deterministic idempotency (“scan once”)
- * - cleaner ledger metadata (“why this award happened”)
+ * - deterministic idempotency ("scan once")
+ * - cleaner ledger metadata ("why this award happened")
  */
 export async function awardLoyaltyPoints(
   accountId: string,
@@ -161,13 +169,60 @@ export async function awardLoyaltyPoints(
   return parseAwardResult(raw);
 }
 
+// ─── Legacy: cash-like point redemption (Phase 1 disabled) ────────────────────
+
 export async function redeemLoyaltyPoints(
   _accountId: string,
   _pointsToRedeem: number,
   _sb?: SupabaseClient,
 ): Promise<RedeemResult> {
+  // PHASE 1: Cash-like point redemption disabled.
+  // No edge function call is made. Callers receive a clear error.
   throw new Error(
     'Reward redemption is being upgraded. Your points are safe and still earning.',
   );
 }
 
+// ─── Reward-based redemption (Phase 5D) ───────────────────────────────────────
+//
+// Calls the redeem-loyalty-reward Edge Function, which validates the reward_id
+// against the server catalog and calls v2_redeem_loyalty_reward RPC.
+//
+// The frontend ONLY sends:
+//   - reward_id   (which catalog reward)
+//   - idempotency_key (optional, for dedup)
+//   - account_id  (admin/staff path only)
+//
+// The frontend NEVER sends:
+//   points, pointsToRedeem, points_to_redeem, discountAmount, discount_cents,
+//   maxDiscountCents, pointsCost, points_cost, rewardLabel, reward_label
+
+export async function redeemLoyaltyReward(args: {
+  rewardId: LoyaltyRewardId;
+  idempotencyKey?: string;
+  /** Required for admin/staff path (staff_required rewards). */
+  accountId?: string;
+}): Promise<RewardRedemptionResult> {
+  const { rewardId, idempotencyKey, accountId } = args;
+
+  if (!rewardId || typeof rewardId !== 'string' || !rewardId.trim()) {
+    throw new Error('reward_id is required.');
+  }
+
+  // Build payload — only safe fields, never points/discount/label.
+  const payload: Record<string, unknown> = {
+    reward_id: rewardId.trim(),
+  };
+
+  if (idempotencyKey && typeof idempotencyKey === 'string' && idempotencyKey.trim()) {
+    payload.idempotency_key = idempotencyKey.trim();
+  }
+
+  if (accountId && typeof accountId === 'string' && accountId.trim()) {
+    payload.account_id = accountId.trim();
+  }
+
+  const raw = await invokeEdge<unknown>('redeem-loyalty-reward', payload);
+
+  return parseRewardRedemptionResult(raw);
+}

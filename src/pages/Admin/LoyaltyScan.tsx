@@ -33,16 +33,18 @@ import { formatCurrency } from '@/utils/currency';
 import {
   verifyLoyaltyQR,
   awardLoyaltyPoints,
-  redeemLoyaltyPoints,
+  redeemLoyaltyReward,
 } from '@/domain/loyalty/loyalty.service';
 
 import type {
   AwardResult,
   CustomerProfile,
-  RedeemResult,
+  RewardRedemptionResult,
   ScanMode,
   ScanState,
 } from '@/domain/loyalty/loyalty.types';
+
+import type { LoyaltyRewardId } from '@/domain/loyalty/rewards';
 
 import { CustomerCard } from '@/features/loyalty/components/CustomerCard';
 import { AwardSection } from '@/features/loyalty/components/AwardSection';
@@ -140,12 +142,6 @@ function parseDollarsToCents(value: string): number | null {
   return Math.round(dollars * 100);
 }
 
-function parseRedeemPoints(value: string): number | null {
-  const points = Number.parseInt(value, 10);
-  if (!Number.isFinite(points) || points < 100 || points > 50_000) return null;
-  return points;
-}
-
 function sanitizeCurrencyInput(value: string): string {
   const normalized = value.replace(/[^\d.]/g, '');
   const firstDotIndex = normalized.indexOf('.');
@@ -161,10 +157,6 @@ function sanitizeCurrencyInput(value: string): string {
     .slice(0, 2);
 
   return `${whole || '0'}.${fraction}`;
-}
-
-function sanitizePointsInput(value: string): string {
-  return value.replace(/\D/g, '').slice(0, 5);
 }
 
 function sanitizeManualLoyaltyId(value: string): string {
@@ -213,18 +205,19 @@ export default function LoyaltyScan() {
   const [scannedId, setScannedId] = useState<string | null>(null);
   const [customer, setCustomer] = useState<CustomerProfile | null>(null);
   const [awardResult, setAwardResult] = useState<AwardResult | null>(null);
-  const [redeemResult, setRedeemResult] = useState<RedeemResult | null>(null);
+const [rewardRedemptionResult, setRewardRedemptionResult] = useState<RewardRedemptionResult | null>(
+  null,
+);
 
   // inputs
   const [amountDollars, setAmountDollars] = useState('');
-  const [redeemPoints, setRedeemPoints] = useState('');
+  const [selectedRewardId, setSelectedRewardId] = useState<LoyaltyRewardId | null>(null);
   const [manualLoyaltyId, setManualLoyaltyId] = useState('');
 
   // ui
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [manualErrorMsg, setManualErrorMsg] = useState<string | null>(null);
   const [lastAwardAmountCents, setLastAwardAmountCents] = useState<number | null>(null);
-  const [lastRedeemedPoints, setLastRedeemedPoints] = useState<number | null>(null);
 
   // refs
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -353,29 +346,28 @@ export default function LoyaltyScan() {
   // Reset helpers
   // ───────────────────────────────────────────────────────────────────────────
 
-  const reset = useCallback(() => {
-    scanRunIdRef.current += 1;
-    verifyRequestRef.current += 1;
-    mutationRequestRef.current += 1;
-    hasScannedRef.current = false;
+const reset = useCallback(() => {
+  scanRunIdRef.current += 1;
+  verifyRequestRef.current += 1;
+  mutationRequestRef.current += 1;
+  hasScannedRef.current = false;
 
-    setScanId(null);
-    setScannedId(null);
-    setCustomer(null);
-    setAwardResult(null);
-    setRedeemResult(null);
-    setAmountDollars('');
-    setRedeemPoints('');
-    setManualLoyaltyId('');
-    setErrorMsg(null);
-    setManualErrorMsg(null);
-    setLastAwardAmountCents(null);
-    setLastRedeemedPoints(null);
-    setScannerStarted(false);
-    setScanState('scanning');
+  setScanId(null);
+  setScannedId(null);
+  setCustomer(null);
+  setAwardResult(null);
+  setRewardRedemptionResult(null);
+  setAmountDollars('');
+  setSelectedRewardId(null);
+  setManualLoyaltyId('');
+  setErrorMsg(null);
+  setManualErrorMsg(null);
+  setLastAwardAmountCents(null);
+  setScannerStarted(false);
+  setScanState('scanning');
 
-    void requestStopScanner();
-  }, [requestStopScanner]);
+  void requestStopScanner();
+}, [requestStopScanner]);
 
   const handleModeSwitch = useCallback(
     (next: ScanMode) => {
@@ -395,10 +387,10 @@ export default function LoyaltyScan() {
     setErrorMsg(null);
   }, []);
 
-  const handleRedeemPointsChange = useCallback((nextValue: string) => {
-    setRedeemPoints(sanitizePointsInput(nextValue));
-    setErrorMsg(null);
-  }, []);
+const handleSelectReward = useCallback((rewardId: LoyaltyRewardId) => {
+  setSelectedRewardId(rewardId);
+  setErrorMsg(null);
+}, []);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Admin auth gate
@@ -559,16 +551,16 @@ export default function LoyaltyScan() {
     const requestId = verifyRequestRef.current + 1;
     verifyRequestRef.current = requestId;
 
-    setErrorMsg(null);
-    setManualErrorMsg(null);
-    setAwardResult(null);
-    setRedeemResult(null);
-    setLastAwardAmountCents(null);
-    setLastRedeemedPoints(null);
-    setCustomer(null);
-    setScannedId(null);
-    setScanId(null);
-    setScanState('loading');
+setErrorMsg(null);
+setManualErrorMsg(null);
+setAwardResult(null);
+setRewardRedemptionResult(null);
+setLastAwardAmountCents(null);
+setSelectedRewardId(null);
+setCustomer(null);
+setScannedId(null);
+setScanId(null);
+setScanState('loading');
 
     try {
       const nextScanId = crypto.randomUUID();
@@ -845,56 +837,46 @@ export default function LoyaltyScan() {
   // Redeem flow
   // ───────────────────────────────────────────────────────────────────────────
 
-  const handleRedeem = useCallback(async () => {
-    if (!customer) return;
+const handleRedeem = useCallback(async () => {
+  if (!customer) return;
 
-    const points = parseRedeemPoints(redeemPoints);
-    if (points === null) {
-      setErrorMsg('Enter a valid point amount (min 100, max 50,000)');
-      return;
-    }
+  if (!selectedRewardId) {
+    setErrorMsg('Select a reward to redeem.');
+    return;
+  }
 
-    if (points > customer.balance) {
-      setErrorMsg(`Customer only has ${Number(customer.balance).toLocaleString()} points`);
-      return;
-    }
+  const requestId = mutationRequestRef.current + 1;
+  mutationRequestRef.current = requestId;
 
-    const requestId = mutationRequestRef.current + 1;
-    mutationRequestRef.current = requestId;
+  setScanState('awarding');
+  setErrorMsg(null);
 
-    setScanState('awarding');
-    setErrorMsg(null);
+  try {
+    const result = await redeemLoyaltyReward({
+      rewardId: selectedRewardId,
+      accountId: customer.account_id,
+    });
 
-    try {
-      const result = await redeemLoyaltyPoints(customer.account_id, points);
+    if (!mountedRef.current || mutationRequestRef.current !== requestId) return;
 
-      if (!mountedRef.current || mutationRequestRef.current !== requestId) return;
+    setCustomer((prev) =>
+      prev
+        ? {
+            ...prev,
+            balance: result.new_balance,
+          }
+        : prev,
+    );
 
-      setCustomer((prev) =>
-        prev
-          ? {
-              ...prev,
-              balance: result.new_balance,
-            }
-          : prev,
-      );
+    setRewardRedemptionResult(result);
+    setScanState('success');
+  } catch (error) {
+    if (!mountedRef.current || mutationRequestRef.current !== requestId) return;
 
-      setRedeemResult(result);
-      setLastRedeemedPoints(points);
-      setScanState('success');
-    } catch (error) {
-      if (!mountedRef.current || mutationRequestRef.current !== requestId) return;
-
-      if (error instanceof Error && error.message === 'DUPLICATE') {
-        setErrorMsg('This redemption was already processed.');
-        setScanState('found');
-        return;
-      }
-
-      setErrorMsg(getErrorMessage(error, 'Redemption failed. Try again.'));
-      setScanState('found');
-    }
-  }, [customer, redeemPoints]);
+    setErrorMsg(getErrorMessage(error, 'Unable to redeem this reward. Please try again.'));
+    setScanState('found');
+  }
+}, [customer, selectedRewardId]);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Derived UI
@@ -1084,9 +1066,9 @@ export default function LoyaltyScan() {
             ) : (
               <RedeemSection
                 balance={customer.balance}
-                redeemPoints={redeemPoints}
+                selectedRewardId={selectedRewardId}
                 errorMsg={errorMsg}
-                onChange={handleRedeemPointsChange}
+                onSelectReward={handleSelectReward}
                 onRedeem={() => {
                   void handleRedeem();
                 }}
@@ -1168,7 +1150,7 @@ export default function LoyaltyScan() {
           </div>
         ) : null}
 
-        {scanState === 'success' && mode === 'redeem' && redeemResult && customer ? (
+        {scanState === 'success' && mode === 'redeem' && rewardRedemptionResult && customer ? (
           <div ref={successSectionRef} tabIndex={-1} className="space-y-4 outline-none">
             <div className="overflow-hidden rounded-2xl border border-emerald-500/20 bg-gray-900">
               <div className="flex flex-col items-center gap-3 bg-emerald-500/10 px-6 py-8">
@@ -1177,11 +1159,11 @@ export default function LoyaltyScan() {
                 </div>
 
                 <div className="text-center">
-                  <p className="text-sm font-medium text-emerald-400">Redemption Applied</p>
-                  <p className="mt-1 font-mono text-4xl font-bold text-white">
-                    {formatCurrency((lastRedeemedPoints ?? 0) / 100)}
+                  <p className="text-sm font-medium text-emerald-400">Reward Redeemed</p>
+                  <p className="mt-1 text-2xl font-bold text-white">
+                    {rewardRedemptionResult.reward_label}
                   </p>
-                  <p className="mt-0.5 text-xs text-gray-500">discount applied to order</p>
+                  <p className="mt-0.5 text-xs text-gray-500">reward redemption recorded</p>
                 </div>
               </div>
 
@@ -1192,16 +1174,25 @@ export default function LoyaltyScan() {
                 </div>
 
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">Redeemed points</span>
+                  <span className="text-gray-500">Points used</span>
                   <span className="font-medium text-white">
-                    {Number(lastRedeemedPoints ?? 0).toLocaleString()} pts
+                    {Number(rewardRedemptionResult.points_spent ?? 0).toLocaleString()} pts
+                  </span>
+                </div>
+
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500">Status</span>
+                  <span className="font-medium text-white">
+                    {rewardRedemptionResult.status === 'staff_required'
+                      ? 'Staff required'
+                      : 'Applied'}
                   </span>
                 </div>
 
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-500">Remaining balance</span>
                   <span className="font-mono font-bold text-amber-400">
-                    {Number(redeemResult.new_balance ?? 0).toLocaleString()} pts
+                    {Number(rewardRedemptionResult.new_balance ?? 0).toLocaleString()} pts
                   </span>
                 </div>
               </div>
