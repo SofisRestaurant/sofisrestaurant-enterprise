@@ -90,14 +90,14 @@ const StandardTab = memo(function StandardTab({ tab }: StandardTabProps) {
           'relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
           'transition-colors duration-200',
           tab.isActive
-            ? 'bg-(--color-ember-50)'
+            ? 'bg-[var(--color-ember-50)]'
             : 'bg-transparent group-hover:bg-[var(--app-surface-hover)]',
         )}
       >
         <Icon
           className={cx(
             'h-5 w-5 transition-colors duration-200',
-            tab.isActive ? 'text-(--color-ember-600)' : 'text-(--color-ink-700)',
+            tab.isActive ? 'text-[var(--color-ember-600)]' : 'text-[var(--app-muted)]',
           )}
           strokeWidth={tab.isActive ? 2.25 : 1.8}
           aria-hidden="true"
@@ -105,8 +105,8 @@ const StandardTab = memo(function StandardTab({ tab }: StandardTabProps) {
 
         {tab.hasLivePulse && (
           <span className="absolute -right-0.5 -top-0.5 flex h-2.5 w-2.5" aria-hidden="true">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-(--color-ember-400) opacity-75" />
-            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-(--color-ember-500)" />
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--color-ember-400)] opacity-75" />
+            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[var(--color-ember-500)]" />
           </span>
         )}
       </span>
@@ -115,7 +115,7 @@ const StandardTab = memo(function StandardTab({ tab }: StandardTabProps) {
         className={cx(
           'max-w-full truncate text-[10px] font-semibold leading-none tracking-wide',
           'transition-colors duration-200',
-          tab.isActive ? 'text-(--color-ember-600)' : 'text-(--color-ink-700)',
+          tab.isActive ? 'text-[var(--color-ember-600)]' : 'text-[var(--app-muted)]',
         )}
       >
         {tab.label}
@@ -125,7 +125,7 @@ const StandardTab = memo(function StandardTab({ tab }: StandardTabProps) {
         className={cx(
           'absolute bottom-1 left-1/2 h-0.5 -translate-x-1/2 rounded-full',
           'transition-[width,opacity] duration-200',
-          tab.isActive ? 'w-6 bg-(--color-ember-500) opacity-100' : 'w-0 opacity-0',
+          tab.isActive ? 'w-6 bg-[var(--color-ember-500)] opacity-100' : 'w-0 opacity-0',
         )}
         aria-hidden="true"
       />
@@ -153,7 +153,7 @@ const CartButton = memo(function CartButton({ badge, onCartClick }: CartButtonPr
         style={CART_BUTTON_STYLE}
       >
         <ShoppingBag
-          className="h-5 w-5 text-[var(--color-stone-900)]"
+          className="h-5 w-5 text-[var(--color-stone-950)]"
           strokeWidth={2.25}
           aria-hidden="true"
         />
@@ -162,7 +162,7 @@ const CartButton = memo(function CartButton({ badge, onCartClick }: CartButtonPr
           <span
             className={cx(
               'absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center',
-              'rounded-full bg-(--color-ember-600) px-1',
+              'rounded-full bg-[var(--color-ember-600)] px-1',
               'text-[9px] font-bold leading-none text-white',
               'ring-2 ring-[var(--app-header)]',
             )}
@@ -203,7 +203,11 @@ export default function BottomNav() {
   );
 
   return (
-    <div data-bottom-nav-dock="true" className="w-full px-3 pt-2 min-[390px]:px-4">
+    <div
+      data-ui-component="bottom-nav"
+      data-bottom-nav-dock="true"
+      className="w-full px-3 pt-2 min-[390px]:px-4"
+    >
       <nav
         role="navigation"
         aria-label="App navigation"
@@ -213,6 +217,7 @@ export default function BottomNav() {
           'rounded-[2.5rem]',
           'border border-[var(--app-divider)] bg-[var(--app-header)]',
           'px-1 py-1',
+          'backdrop-blur-xl backdrop-saturate-150',
           'transition-colors duration-200',
           'motion-reduce:transition-none',
         )}

@@ -28,6 +28,8 @@ import {
   asTier,
   type LoyaltyTier,
 } from '@/domain/loyalty/tiers';
+import { getEarnedLoyaltyRewardsCount } from '@/domain/loyalty/rewards';
+import { CustomerRewardsCard } from '@/features/loyalty/components/CustomerRewardsCard';
 import type { LoyaltyProfile } from '@/modules/checkout/api/checkout.api';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -151,7 +153,14 @@ function cx(...classes: (string | false | null | undefined)[]): string {
 function mapEntryType(raw: unknown): LoyaltyTransactionType {
   const normalized = typeof raw === 'string' ? raw.toLowerCase() : '';
   if (normalized === 'earn' || normalized === 'earned') return 'earned';
-  if (normalized === 'redeem' || normalized === 'redeemed') return 'redeemed';
+  if (
+    normalized === 'redeem' ||
+    normalized === 'redeemed' ||
+    normalized === 'reward_redeem' ||
+    normalized === 'checkout_reserve'
+  ) {
+    return 'redeemed';
+  }
   if (normalized === 'bonus') return 'bonus';
   if (normalized === 'expired') return 'expired';
   return 'adjusted';
@@ -187,34 +196,6 @@ function buildTransactions(ledger: LoyaltyAccountEdgeResp['ledger']): LoyaltyTra
       reference_id: typeof row.reference_id === 'string' ? row.reference_id : null,
     };
   });
-}
-
-// ── Reward milestones (tangible rewards for points) ──────────────────────────
-// Maps points thresholds to real things customers can earn.
-
-const REWARD_MILESTONES = [
-  { points: 150, label: 'Free drink', icon: '☕' },
-  { points: 400, label: 'Free appetizer', icon: '🍽' },
-  { points: 750, label: 'Free entree', icon: '🥘' },
-  { points: 1200, label: 'Sofi\'s merch pack', icon: '👕' },
-  { points: 2000, label: 'Chef\'s table dinner', icon: '✦' },
-] as const;
-
-function getNextReward(balance: number) {
-  for (const milestone of REWARD_MILESTONES) {
-    if (balance < milestone.points) {
-      return { ...milestone, remaining: milestone.points - balance };
-    }
-  }
-  return null;
-}
-
-function getEarnedRewardsCount(balance: number): number {
-  let count = 0;
-  for (const milestone of REWARD_MILESTONES) {
-    if (balance >= milestone.points) count++;
-  }
-  return count;
 }
 
 // ── Shared card surface ──────────────────────────────────────────────────────
@@ -454,123 +435,6 @@ function LoyaltyQRCard({
             </button>
           </div>
         </div>
-      </div>
-    </section>
-  );
-}
-
-// ── Reward milestone progress ────────────────────────────────────────────────
-
-function RewardMilestones({ balance }: { balance: number }) {
-  const nextReward = getNextReward(balance);
-
-  return (
-    <section className={cx(CARD, 'px-5 py-5 sm:px-6')}>
-      <div className="flex items-center justify-between">
-        <div>
-          <p
-            className="text-[10px] font-semibold uppercase tracking-[0.14em]"
-            style={{ color: 'var(--color-ink-400)' }}
-          >
-            Earn meals & merch
-          </p>
-          <h2
-            className="mt-1 text-[15px] font-bold tracking-tight"
-            style={{ color: 'var(--color-ink-900)', fontFamily: 'var(--font-display)' }}
-          >
-            {nextReward
-              ? `${fmt(nextReward.remaining)} pts to ${nextReward.label.toLowerCase()}`
-              : 'All milestones unlocked'}
-          </h2>
-        </div>
-        {nextReward && (
-          <span className="text-2xl" aria-hidden>
-            {nextReward.icon}
-          </span>
-        )}
-      </div>
-
-      {/* Milestone track */}
-      <div className="mt-5 space-y-0">
-        {REWARD_MILESTONES.map((milestone, i) => {
-          const earned = balance >= milestone.points;
-          const isCurrent = !earned && (i === 0 || balance >= REWARD_MILESTONES[i - 1].points);
-          const progressInBand = isCurrent
-            ? Math.min(
-                ((balance - (i > 0 ? REWARD_MILESTONES[i - 1].points : 0)) /
-                  (milestone.points - (i > 0 ? REWARD_MILESTONES[i - 1].points : 0))) *
-                  100,
-                100,
-              )
-            : 0;
-
-          return (
-            <div key={milestone.points} className="flex items-start gap-3.5">
-              {/* Track line + dot */}
-              <div className="flex flex-col items-center">
-                <div
-                  className={cx(
-                    'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[14px] transition-all',
-                    earned
-                      ? 'bg-[var(--color-ember-500)] text-white shadow-[0_2px_10px_rgba(180,80,30,0.25)]'
-                      : isCurrent
-                        ? 'border-2 border-[var(--color-ember-300)] bg-[var(--color-ember-50)] text-[var(--color-ember-600)]'
-                        : 'border border-[var(--color-cream-300)] bg-[var(--color-cream-100)] text-[var(--color-ink-400)]',
-                  )}
-                >
-                  {earned ? '✓' : milestone.icon}
-                </div>
-                {i < REWARD_MILESTONES.length - 1 && (
-                  <div
-                    className="w-px flex-1 min-h-[1.5rem]"
-                    style={{
-                      background: earned ? 'var(--color-ember-300)' : 'var(--color-cream-300)',
-                    }}
-                  />
-                )}
-              </div>
-
-              {/* Label */}
-              <div className="min-w-0 pb-4">
-                <div className="flex items-baseline gap-2">
-                  <span
-                    className={cx(
-                      'text-[13.5px] font-semibold',
-                      earned ? 'text-[var(--color-ink-900)]' : 'text-[var(--color-ink-600)]',
-                    )}
-                  >
-                    {milestone.label}
-                  </span>
-                  <span
-                    className="text-[11px] tabular-nums font-medium"
-                    style={{ color: 'var(--color-ink-400)' }}
-                  >
-                    {fmt(milestone.points)} pts
-                  </span>
-                </div>
-
-                {/* Progress bar for current milestone */}
-                {isCurrent && (
-                  <div className="mt-2 h-1.5 w-full max-w-[12rem] overflow-hidden rounded-full bg-[var(--color-cream-200)]">
-                    <div
-                      className="h-full rounded-full bg-[var(--color-ember-500)] transition-all duration-500"
-                      style={{ width: `${progressInBand}%` }}
-                    />
-                  </div>
-                )}
-
-                {earned && (
-                  <span
-                    className="mt-1 inline-block text-[11px] font-semibold"
-                    style={{ color: 'var(--color-ember-600)' }}
-                  >
-                    Earned
-                  </span>
-                )}
-              </div>
-            </div>
-          );
-        })}
       </div>
     </section>
   );
@@ -831,7 +695,7 @@ export default function AccountHome() {
     return clean.split(' ')[0] ?? clean;
   }, [email, profile?.fullName, user?.name]);
 
-  const earnedCount = profile ? getEarnedRewardsCount(profile.points) : 0;
+  const earnedCount = profile ? getEarnedLoyaltyRewardsCount(profile.points) : 0;
 
   // ── Render ─────────────────────────────────────────────────────────────
 
@@ -1067,8 +931,13 @@ export default function AccountHome() {
               </div>
             </div>
 
-            {/* Reward milestones */}
-            <RewardMilestones balance={profile.points} />
+            {/* Reward redemption */}
+            <CustomerRewardsCard
+              balance={profile.points}
+              onBalanceChange={() => {
+                void refresh();
+              }}
+            />
 
             {/* Tier progress */}
             {progressToNextTier ? (
